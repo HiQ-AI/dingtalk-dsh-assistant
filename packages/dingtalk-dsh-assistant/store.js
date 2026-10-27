@@ -268,6 +268,9 @@ function reserveSourceDispatchRecord(group, message, unit) {
   return sourceDispatchSchema.parse({ reservationId: stableId('source-dispatch', `${group.groupId}:${unit.unitId}:${unit.unitRevision}`),
     unitId: unit.unitId, unitRevision: unit.unitRevision, generation: 1, dispatchOwner: 'coordination', semanticState: 'reserved', settled: false,
     sourceSnapshot: { messageId: message.messageId, messageVersion: message.messageVersion, text: message.text,
+      ...(message.quotedMessage ? { quotedMessage: JSON.parse(JSON.stringify(message.quotedMessage)) } : {}),
+      ...(message.resourceRefs ? { resourceRefs: JSON.parse(JSON.stringify(message.resourceRefs)) } : {}),
+      ...(message.imageRefs ? { imageRefs: JSON.parse(JSON.stringify(message.imageRefs)) } : {}),
       unitText: unit.sourceRanges.map(range => message.text.slice(range.start, range.end)).join('\n'),
       sourceRefs: unit.sourceRanges, unit: JSON.parse(JSON.stringify(unit)),
       ...(message.senderOpenDingTalkId ? { actorId: message.senderOpenDingTalkId } : {}),
@@ -490,18 +493,33 @@ export async function openResidentStore(storageDomain) {
       const value = group ? sourceDispatchOwnershipFor(group, { unitId, unitRevision }) : undefined
       return value ? JSON.parse(JSON.stringify(value)) : undefined
     },
-    retrySourceDispatch: ({ groupId, messageId, messageVersion, activeUnitRefs, reservationId }, retry) => serialize(groupId, async () => {
+    retrySourceDispatch: ({ groupId, messageId, messageVersion, activeUnitRefs, reservationId, phase }, retry) => serialize(groupId, async () => {
       const group = findGroupEntry(groupId)?.[1]
       const message = group?.messages.find(item => item.messageId === messageId)
       const keys = refs => refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision])).sort()
       const owner = group?.sourceDispatchOwnership.find(item => item.reservationId === reservationId)
       if (!message || message.messageVersion !== messageVersion || !Array.isArray(activeUnitRefs)
         || JSON.stringify(keys(message.activeUnitRefs ?? [])) !== JSON.stringify(keys(activeUnitRefs))
-        || !owner || owner.dispatchOwner !== 'coordination' || owner.frozen || owner.semanticState !== 'reserved'
+        || !owner || owner.dispatchOwner !== 'coordination' || owner.frozen
+        || owner.semanticState !== (phase === 'coordination-context' ? 'needs_clarification' : 'reserved')
+        || phase === 'coordination-context' && (owner.settled || owner.sourceSnapshot.quotedMessage !== undefined)
         || owner.sourceSnapshot.messageId !== messageId || owner.sourceSnapshot.messageVersion !== messageVersion
         || !message.activeUnitRefs?.some(ref => ref.unitId === owner.unitId && ref.unitRevision === owner.unitRevision)) throw new Error('MESSAGE_RETRY_STALE')
       // Hold the message-version queue until the separate source-ledger CAS commits; never dispatch under this lock.
-      return retry(JSON.parse(JSON.stringify(owner)))
+      const result = await retry(JSON.parse(JSON.stringify(owner)))
+      if (phase === 'coordination-context') {
+        const entry = findGroupEntry(groupId)
+        await groups.update(entry[0], latest => {
+          const previous = latest.sourceDispatchOwnership.find(item => item.reservationId === reservationId)
+          if (!previous || previous.generation !== owner.generation || previous.semanticState !== 'needs_clarification') throw new Error('MESSAGE_RETRY_STALE')
+          const at = new Date().toISOString()
+          const next = sourceDispatchSchema.parse({ ...previous, semanticState: 'reserved', updatedAt: at,
+            history: [...previous.history, { kind: 'context-reconsideration', question: previous.clarification ?? null,
+              generation: previous.generation, coordinationId: previous.coordinationId, at }] })
+          return { ...latest, sourceDispatchOwnership: latest.sourceDispatchOwnership.map(item => item.reservationId === reservationId ? next : item) }
+        })
+      }
+      return result
     }),
     listSourceDispatchOwnership: groupId => JSON.parse(JSON.stringify(findGroupEntry(groupId)?.[1].sourceDispatchOwnership ?? [])),
     reserveSourceDispatch: ({ groupId, unitId, unitRevision, expectedGeneration = 0, sourceSnapshot }) => serialize(groupId, async () => {

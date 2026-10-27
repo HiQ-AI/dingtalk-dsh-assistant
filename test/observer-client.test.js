@@ -95,6 +95,7 @@ test('收信箱只使用后端当前版本状态，不因缺少topics或routed�
   assert.equal(state({ routingStatus: 'failed' }), 'failed')
   assert.equal(state({ routingStatus: 'routed', processingState: 'processing' }), 'processing')
   assert.equal(state({ routingStatus: 'routed', processingState: 'processed' }), 'processed')
+  assert.equal(state({ routingStatus: 'routed', processingState: 'needs_clarification' }), 'needs_clarification')
   for (const sourceKind of ['dingtalk', 'workflow-v2', 'task-session', 'web', undefined]) {
     assert.equal(state({ routingStatus: 'routed', sourceKind, workflowStatus: 'completed' }), 'unknown')
   }
@@ -439,7 +440,7 @@ test('收信箱计时详情分开负时、缺失阶段、多回合请求和未�
     fmt: value => value ?? '未记录', fmtDuration: value => `${value}ms`,
   })
   const text = tree => typeof tree === 'string' ? tree : Array.isArray(tree) ? tree.map(text).join(' ') : (tree?.children ?? []).map(text).join(' ')
-  const rendered = Details({ message: { processingFacts: { sourceState: 'unsettled', notificationState: 'unconfirmed',
+  const rendered = Details({ message: { processingState: 'needs_clarification', processingConclusion: '要将哪项改动部署到UAT2？\n请核对已给材料。', processingFacts: { sourceState: 'unsettled', notificationState: 'unconfirmed',
     semantic: { quality: 'negative', durationMs: null }, notificationE2e: { quality: 'missing', durationMs: null },
     notifications: [{ notificationId: 'notice', state: 'delivered', versionMatched: false }],
     issues: [{ phase: 'decision', status: 'failed', requestId: 'd', attempt: 3 }, { phase: 'host', status: 'retrying', retryAt: 'retry-time', attempt: 1 }],
@@ -448,6 +449,7 @@ test('收信箱计时详情分开负时、缺失阶段、多回合请求和未�
   } } })
   assert.equal(rendered.type, 'details')
   const visible = text(rendered)
+  assert.match(visible, /待补充：要将哪项改动部署到UAT2？\n请核对已给材料。/)
   for (const expected of ['未收束', '时钟逆序', '未核实，不计端到端', '共享区间', '请求 request', '尝试 2', '时钟异常', '未记录阶段：Host接收、排队、Host动作、通知发送、送达回读', '不跨回合求包络']) assert.ok(visible.includes(expected), expected)
   assert.equal(rendered.children.flat().filter(item => item?.props?.key?.startsWith('turn-')).length, 2)
   assert.doesNotMatch(visible, /0ms/)

@@ -10,7 +10,7 @@ import { localSlot } from '../packages/dingtalk-dsh-assistant/coordination-time.
 import { formatCoordinationTime } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
 
 const clone = value => JSON.parse(JSON.stringify(value))
-async function fixture(t, { enabled = false, planner, failApplyAck = false, failResidentAcceptance = false, authenticated = true, actorId = 'author', seedTask = true, legacySummaryText } = {}) {
+async function fixture(t, { enabled = false, planner, failApplyAck = false, failResidentAcceptance = false, authenticated = true, actorId = 'author', seedTask = true, legacySummaryText, quote = null, resources = [] } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'independent-recovery-'))
   const options = { dbPath: join(directory, 'tasks.sqlite'), instanceId: 'independent-test', initialize: true }
   let store = await openDynamicTaskStore(options), service
@@ -46,7 +46,7 @@ async function fixture(t, { enabled = false, planner, failApplyAck = false, fail
     return receipt
   }
   if (authenticated) await command('source.record', { sourceId: 'source', groupId: 'group', messageId: 'message', version: 1,
-    actorId: 'author', text: entry.sourceSnapshot.text, timestamp: new Date().toISOString() })
+    actorId: 'author', text: entry.sourceSnapshot.text, quote, resources, timestamp: new Date().toISOString() })
   if (seedTask) await command('task.create', { taskId: 'A', groupId: 'group', ownerActorId: 'task-owner', request: 'original A', requirements: ['A accepted'] })
   const open = () => service = openIndependentCoordination({ config: enabled ? { enabled: true, provider: 'test', model: 'test' } : {},
     residentStore, query, command, ownerActorId: 'configured-owner', planner: planner ?? { plan: async () => {}, close: async () => {} },
@@ -83,6 +83,36 @@ for (const kind of ['clarify', 'schedule', 'arrangement', 'resolve']) test(`公�
   await f.service.submit(request, schedule)
   assert.equal((await f.query('coordination.schedule.list'))[0].action.text, schedule.reminderText)
   assert.match((await f.query('notification.list'))[0].payload.text, /订单 BIZ-413 https:\/\/example.test\/orders\/BIZ-413/)
+})
+
+test('旧预约缺引用字段仍从精确来源版本取得原作者与完整PR，目录分页不丢引用', async t => {
+  const quote = { messageId: 'delivery', senderName: '原交付作者', content: '后端 https://github.com/HiQ-AI/dataset/pull/417、前端 https://github.com/HiQ-AI/dataset-web/pull/389，尚未部署。' }
+  const resources = [{ type: 'fileId', resourceId: 'deployment-notes', name: '说明.sql' }]
+  const f = await fixture(t, { quote, resources })
+  assert.equal(f.entry.sourceSnapshot.quotedMessage, undefined)
+  for (const args of [{}, { offset: 1, limit: 1 }, { taskIds: ['A'] }]) {
+    const context = await f.service.context(f.request(), args)
+    assert.equal(context.source.original, f.entry.sourceSnapshot.text)
+    assert.equal(context.source.actorId, 'author')
+    assert.equal(context.source.quotedMessage.messageId, 'delivery')
+    assert.equal(context.source.quotedMessage.senderName, '原交付作者')
+    assert.equal(context.source.quotedMessage.content, quote.content)
+    assert.deepEqual(context.source.resourceRefs, resources)
+  }
+  assert.deepEqual(await f.query('coordination.list'), [])
+  await f.restart()
+  assert.equal((await f.service.context(f.request())).source.quotedMessage.content, quote.content)
+})
+
+test('无引用保持空事实，长引用显式分页且新版本不能补旧预约', async t => {
+  const plain = await fixture(t)
+  assert.equal((await plain.service.context(plain.request())).source.quotedMessage, null)
+  const f = await fixture(t, { quote: { messageId: 'long-delivery', content: '引用正文'.repeat(3000) } })
+  const quote = (await f.service.context(f.request())).source.quotedMessage
+  assert.equal(quote.content.length, 8000); assert.equal(quote.hasMore, true); assert.equal(quote.nextOffset, 0)
+  await f.command('source.record', { sourceId: 'source-v2', groupId: 'group', messageId: 'message', version: 2,
+    actorId: 'author', text: '部署到其他环境', quote: { messageId: 'other', content: '另一PR' }, timestamp: new Date().toISOString() })
+  await assert.rejects(f.service.context(f.request()), { code: 'COORDINATION_SOURCE_FENCED' })
 })
 
 test('recovery retains a previously frozen acknowledgement when the current reply template changed', async t => {
@@ -373,7 +403,7 @@ test('stale reservation fence, missing authenticated source and unauthorized tas
   assert.deepEqual(await f.query('coordination.list'), [])
   assert.equal((await f.query('task.get', { taskId: 'A' })).control, 'active')
   const missing = await fixture(t, { authenticated: false })
-  await missing.observe()
+  await assert.rejects(missing.observe(), { code: 'COORDINATION_SOURCE_FENCED' })
   await assert.rejects(missing.service.submit(missing.request(), missing.arrangement()), { code: 'COORDINATION_AUTHENTICATED_SOURCE_REQUIRED' })
   assert.deepEqual(await missing.query('coordination.list'), [])
 })

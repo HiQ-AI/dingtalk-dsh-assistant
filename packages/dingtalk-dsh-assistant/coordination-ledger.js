@@ -1,5 +1,5 @@
 import { assertTaskContextSemantics } from './task-input-contract.js'
-import { freezeCoordinationSourceOrder } from './coordination-changes.js'
+import { freezeCoordinationSourceOrder, coordinationContextRecoveryIdentity } from './coordination-changes.js'
 
 // Trusted Host adapter. All callbacks share the TaskStore connection and transaction.
 export const coordinationSchema = `
@@ -220,6 +220,7 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
     }
     if (kind.startsWith('coordination.source.')) {
       const source = get('dynamic_coordination_sources', a.sourceId)
+      let retiredNotification
       if (source.fence !== a.fence || source.dispatchOwner !== 'coordination') fail('DYNAMIC_COORDINATION_SOURCE_STALE')
       if (kind === 'coordination.source.freezeHandoff') {
         if (source.state !== 'rejected') fail('DYNAMIC_COORDINATION_SOURCE_STALE')
@@ -236,7 +237,43 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
         put('dynamic_coordination_sources', source); return { source }
       }
       if (source.frozen || source.state === 'accepted') fail('DYNAMIC_COORDINATION_SOURCE_STALE')
-      if (kind === 'coordination.source.retry') {
+      if (kind === 'coordination.source.reconsiderContext') {
+        const arrangement = get('dynamic_coordination', a.coordinationId), original = get('dynamic_sources', a.messageSourceId)
+        if (source.state !== 'needs_clarification' || source.resolvedBy || source.contextReconsideration
+          || source.coordinationId !== arrangement.id || arrangement.sourceId !== source.id || arrangement.state !== 'needs_clarification'
+          || arrangement.revision !== a.expectedRevision || source.reservationId !== a.reservationId
+          || source.reservationGeneration !== a.generation || a.quotedSnapshotMissing !== true
+          || original.groupId !== source.groupId || original.sourceId !== source.sourceRefs?.[0] || source.sourceRefs.length !== 1
+          || original.messageId !== source.sourceMessageId || original.version !== a.messageVersion || !source.actorId || original.actorId !== source.actorId || original.routed === true
+          || !original.quote?.messageId || typeof original.quote.content !== 'string' || !original.quote.content.trim()
+          || digest(array(a.activeUnitRefs).map(ref => [ref.unitId, ref.unitRevision]).sort())
+            !== digest((original.activeUnitRefs ?? original.processingCompleted?.activeUnitRefs ?? []).map(ref => [ref.unitId, ref.unitRevision]).sort())
+          || all('dynamic_sources').some(item => item.groupId === source.groupId && item.messageId === original.messageId && item.version > original.version)
+          || a.token !== digest(coordinationContextRecoveryIdentity(source, arrangement, original))) fail('DYNAMIC_COORDINATION_SOURCE_STALE')
+        if (arrangement.memberIds.length || source.acceptedProposal || source.acceptedRevision || source.settled
+          || ['members', 'schedules', 'occurrences', 'jobs'].some(name => all(`dynamic_coordination_${name}`).some(item => item.coordinationId === arrangement.id))
+          || all('dynamic_coordination_sources').some(item => item.id !== source.id && item.coordinationId === arrangement.id)) fail('DYNAMIC_COORDINATION_CONTEXT_RECONSIDERATION_UNSAFE')
+        const oldQuestion = get('dynamic_notifications', `coordination:${arrangement.id}:clarification:${source.reservationId}`, true)
+        if (oldQuestion && oldQuestion.state !== 'delivered') {
+          if (oldQuestion.state !== 'prepared' || oldQuestion.sendPermit || oldQuestion.dispatchToken || oldQuestion.sendStartedAt
+            || oldQuestion.sendAttemptCount > 0 || oldQuestion.ack || oldQuestion.receipt) fail('DYNAMIC_COORDINATION_CONTEXT_RECONSIDERATION_UNSAFE')
+          oldQuestion.state = 'superseded'; oldQuestion.reason = 'stale_question'; oldQuestion.updatedAt = now()
+          oldQuestion.retirement = { reason: 'context-reconsideration', at: oldQuestion.updatedAt }
+          retiredNotification = oldQuestion
+          put('dynamic_notifications', oldQuestion)
+        }
+        const stamp = now(), reason = '旧预约遗漏原消息引用，按同一原来源重新核对'
+        source.contextReconsideration = { coordinationId: arrangement.id, expectedRevision: arrangement.revision,
+          previousFence: source.fence, at: stamp, reason, question: source.question, quoteMessageId: original.quote.messageId,
+          messageSourceId: original.sourceId, messageVersion: original.version, reservationId: source.reservationId, generation: source.reservationGeneration }
+        ;(arrangement.history ??= []).push({ kind: 'context-reconsideration', revision: arrangement.revision,
+          sourceId: source.id, question: source.question, reason, at: stamp })
+        source.fence++; source.state = 'reserved'
+        if (original.processingCompleted) (original.processingHistory ??= []).push(original.processingCompleted)
+        delete original.processingCompleted
+        original.processingPending = true
+        put('dynamic_sources', original); put('dynamic_coordination', arrangement)
+      } else if (kind === 'coordination.source.retry') {
         const token = digest([source.id, source.fence, source.attemptCount ?? 0, source.retryEpoch ?? 0, source.nextRetryAt ?? null])
         if (source.state !== 'reserved' || source.resolvedBy || a.token !== token || !(source.attemptCount > 0)) fail('DYNAMIC_COORDINATION_SOURCE_STALE')
         source.retryEpoch = (source.retryEpoch ?? 0) + 1
@@ -252,10 +289,10 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
         source.coordinationId = text(a.coordinationId, 'coordinationId')
         const existing = get('dynamic_coordination', source.coordinationId, true)
         if (existing && (existing.sourceId !== source.id || existing.state !== 'needs_clarification')) fail('DYNAMIC_COORDINATION_EXISTS')
-        put('dynamic_coordination', { id: source.coordinationId, revision: 1, sourceId: source.id, sourceFence: source.fence,
+        put('dynamic_coordination', { ...existing, id: source.coordinationId, revision: existing?.revision ?? 1, sourceId: source.id, sourceFence: source.fence,
           groupId: source.groupId, topicRefs: [], memberIds: [], state: 'needs_clarification', question: source.question, createdAt: existing?.createdAt ?? now() })
       } else fail('DYNAMIC_COMMAND_UNKNOWN', kind)
-      put('dynamic_coordination_sources', source); return { source }
+      put('dynamic_coordination_sources', source); return { source, ...(retiredNotification ? { notification: retiredNotification } : {}) }
     }
     if (kind === 'coordination.accept') {
       const source = get('dynamic_coordination_sources', a.sourceId)

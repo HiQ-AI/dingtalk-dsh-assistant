@@ -5,12 +5,14 @@ import { localSlot, validateTimeRule } from './coordination-time.js'
 import { selectCoordinationInstructions, assertCoordinationHandoffProof, coordinationOrdinalInstructionIds } from './coordination-changes.js'
 import { coordinationSnapshot, formatCoordinationSnapshot, formatCoordinationAcceptance } from './coordination-summary.js'
 import { assertGroupReply } from './group-message.js'
+import { createCoordinationResourceTools } from './coordination-resources.js'
 
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const clone = value => JSON.parse(JSON.stringify(value))
 
 /** One Host-owned queue for independent source units; Topic is never its parent. */
 export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getModelSelection, agentPreset, config = {}, residentStore, query, command,
+  readMessage, readResource, readImage,
   ownerActorId, onApplied, onError, onStage = async () => {}, onRecovered = () => {}, onHandoff = () => {}, onChanged = () => {}, planner: suppliedPlanner }) {
   coordinationModelSelection(config)
   const observations = new Map(), catalogObservations = new Map(), arrangementObservations = new Map(), running = new Map(), admissions = new Set()
@@ -22,6 +24,24 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     return current
   }
   const isFrozen = async () => config.mode === 'frozen' || (await query('coordination.runtime'))?.mode === 'frozen'
+  // 来源版本是引用真源；旧预约缺字段时仍读原版本，绝不用当前消息的新引用补旧请求。
+  async function sourceMessage(request) {
+    assertOwned(request)
+    const snapshot = request.sourceSnapshot
+    const sources = await query('source.list', { groupId: request.groupId })
+    const source = sources.find(item => item.messageId === snapshot.messageId && item.version === snapshot.messageVersion)
+    if (!source || sources.some(item => item.messageId === snapshot.messageId && item.version > snapshot.messageVersion)
+      || source.actorId !== snapshot.actorId || source.text !== snapshot.text) fail('COORDINATION_SOURCE_FENCED')
+    return { groupId: request.groupId, messageId: source.messageId, messageVersion: source.version,
+      senderOpenDingTalkId: source.actorId, senderName: snapshot.senderName, occurredAt: snapshot.occurredAt,
+      sourceKind: source.channel, text: source.text, quotedMessage: source.quote ?? null,
+      resourceRefs: source.resources ?? [], imageRefs: snapshot.imageRefs ?? [] }
+  }
+  async function resourceTools(request) {
+    const message = await sourceMessage(request)
+    return createCoordinationResourceTools({ request: { groupId: request.groupId, messages: [message] },
+      assertCurrent: () => assertOwned(request), readMessage, readResource, readImage })
+  }
   /** 只用持久来源与送达回执关联引用；作者决定可关联事项，收件人始终来自已保存日程。 */
   async function quotedReminderContext({ groupId, messageId, messageVersion, actorId }) {
     if (!actorId || !messageId || !Number.isSafeInteger(messageVersion)) return null
@@ -84,6 +104,10 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     const offset = args.offset ?? 0, limit = args.limit ?? 20, sourceOffset = args.sourceOffset ?? 0, arrangementSourceOffset = args.arrangementSourceOffset ?? 0,
       arrangementOffset = args.arrangementOffset ?? 0, memberOffset = args.memberOffset ?? 0
     const group = residentStore.getGroup(request.groupId), snapshot = request.sourceSnapshot
+    const message = await sourceMessage(request)
+    const quoted = message.quotedMessage
+    const quoteText = quoted?.content ?? quoted?.text
+    const ledger = await query('coordination.source', { unitId: request.unitId, revision: request.unitRevision })
     const quotedReminder = await quotedReminderContext({ groupId: request.groupId, messageId: snapshot.messageId,
       messageVersion: snapshot.messageVersion, actorId: snapshot.actorId })
     const taskCatalog = !quotedReminder || args.offset !== undefined || args.limit !== undefined || args.taskIds?.length > 0
@@ -161,8 +185,13 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       source: { messageId: snapshot.messageId, messageVersion: snapshot.messageVersion, sourceRefs: snapshot.sourceRefs,
         occurredAt: snapshot.occurredAt ?? null,
         actorId: snapshot.actorId, unitId: request.unitId, unitRevision: request.unitRevision,
+        ...(ledger?.state === 'reserved' && ledger.contextReconsideration ? { contextReconsideration: ledger.contextReconsideration } : {}),
         unitText: snapshot.unitText, ...(snapshot.unit?.unitKey === 'quoted-reminder-followup' ? { admission: 'quoted-reminder-followup' } : {}),
         original: sourceText.slice(sourceOffset, sourceOffset + 16000),
+        quotedMessage: quoted ? { ...quoted, ...(typeof quoteText === 'string' ? { content: quoteText.slice(0, 8000),
+          ...(quoted.text !== undefined ? { text: quoteText.slice(0, 8000) } : {}),
+          totalChars: quoteText.length, hasMore: quoteText.length > 8000, nextOffset: quoteText.length > 8000 ? 0 : null } : {}) } : null,
+        resourceRefs: message.resourceRefs, imageRefs: message.imageRefs,
         sourceOffset, nextSourceOffset: sourceOffset + 16000 < sourceText.length ? sourceOffset + 16000 : null,
         truncated: sourceOffset > 0 || sourceText.length > sourceOffset + 16000 },
       tasks: page.map(t => ({ taskId: t.taskId, title: t.title,
@@ -387,7 +416,11 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     proposal = coordinationProposalSchema.parse(proposal)
     assertProposalPublicText(request, proposal)
     const { source, ledger } = await ensureSource(request)
-    const coordinationId = stableId('coordination', `${request.groupId}:${request.unitId}:${request.unitRevision}:${request.generation}`)
+    await sourceMessage(request)
+    const reconsidered = ledger.contextReconsideration
+    const coordinationId = reconsidered?.coordinationId ?? stableId('coordination', `${request.groupId}:${request.unitId}:${request.unitRevision}:${request.generation}`)
+    if (reconsidered && !['arrangement', 'schedule', 'clarify'].includes(proposal.kind)) fail('COORDINATION_CONTEXT_RECONSIDERATION_SCOPE')
+    if (reconsidered && proposal.kind === 'clarify' && proposal.question !== ledger.question) fail('COORDINATION_CONTEXT_RECONSIDERATION_SCOPE')
     if (proposal.kind === 'reject') return reject(request, ledger, proposal.reason)
     if (proposal.kind === 'query') {
       const snapshots = []
@@ -415,7 +448,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     if (['change','resolve','schedule-change','occurrence-control'].includes(proposal.kind)) return submitChange(request, proposal, source, ledger)
     if (proposal.kind === 'clarify') {
       await command('coordination.source.clarify', { sourceId: ledger.id, fence: ledger.fence, coordinationId,
-        question: proposal.question, candidates: proposal.candidates }, `coordination-clarify:${request.reservationId}:${request.generation}`)
+        question: proposal.question, candidates: proposal.candidates }, `coordination-clarify:${request.reservationId}:${request.generation}${reconsidered ? `:${ledger.fence}` : ''}`)
       await updateResident(request, 'needs_clarification', { coordinationId, clarification: proposal.question })
       await prepareSummary(request, coordinationId, `clarification:${request.reservationId}`, proposal.question)
       return { status: 'needs_clarification', coordinationId, question: proposal.question }
@@ -424,6 +457,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     // Persist the complete semantic proposal before accepting it; recovery never
     // asks a model to reinterpret already accepted business contents.
     await command('coordination.accept', { sourceId: ledger.id, fence: ledger.fence, coordinationId,
+      ...(reconsidered ? { replaceClarificationRevision: reconsidered.expectedRevision } : {}),
       members, readOnly: proposal.kind === 'schedule', proposal: clone(proposal), allTogether: proposal.allTogether ?? false,
       pendingClarifications: proposal.pendingClarifications ?? [],
       ...(proposal.sourceOrder ? {sourceOrder:proposal.sourceOrder} : {}),
@@ -446,7 +480,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
         sourceMessageId: snapshot.messageId, sourceVersion: snapshot.messageVersion, actorId: snapshot.actorId,
         fact: { coordinationId, eventId, sourceUnitId: request.unitId, sourceUnitRevision: request.unitRevision, ...fact } } }, `prepare:${notificationId}`)
   }
-  const planner = suppliedPlanner ?? createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir, getModelSelection, agentPreset, config, context, submit, onStage,
+  const planner = suppliedPlanner ?? createIndependentCoordinationPlanner({ ctx, root, getWorkspaceDir, getModelSelection, agentPreset, config, context, resourceTools, submit, onStage,
     isCurrent: request => { try { assertOwned(request); return true } catch { return false } } })
   async function acceptMemberTrigger(groupId, coordination, state, member) {
     if (coordination.allTogether && coordination.pendingClarifications?.length) return
@@ -583,6 +617,7 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       running.set(groupId, work); return work
     },
     context, submit, quotedReminderContext, reserveQuotedReminderFollowup,
+    isPlanning: groupId => running.has(groupId),
     async whenIdle() { await Promise.allSettled([...running.values()]) },
     async close() { closed = true; await planner.close?.(); await Promise.allSettled([...running.values()]) },
   }

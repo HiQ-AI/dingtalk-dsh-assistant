@@ -52,6 +52,19 @@ const sourceRows = [
   { sourceId: 'source-semantic', groupId: group.groupId, messageId: 'semantic', version: 1, channel: 'im', routed: false, processingCompleted: { at: done }, receivedAt: sent, notifications: [], stages: [{ spanId: 'fixture-turn-1', stage: 'turn', requestId: 'fixture-request', attempt: 2, startedAt: sent, completedAt: done, quality: 'observed', shared: true }] },
   { sourceId: 'source-pending', groupId: group.groupId, messageId: 'source-pending', version: 1, channel: 'im', routed: false, notifications: [] },
 ]
+// #313 的脱敏等价输入：语义已提交澄清不等于业务部署完成，已送达不覆盖等待。
+const deploymentUnit = { unitId: 'fixture-deploy-unit', unitRevision: 1 }
+const deploymentQuestion = '要将哪项改动部署到UAT2？请提供具体事项名称或PR编号。'
+const deploymentSent = '2026-10-27T04:15:53.180Z', deploymentDone = '2026-10-27T04:17:24.539Z'
+messages.push({ messageId: 'fixture-deploy-313', messageVersion: 1, sequence: 313, sourceKind: 'dingtalk',
+  text: '部署到UAT2', senderName: '合成发送人', routingStatus: 'routed', occurredAt: deploymentSent,
+  units: [{ ...deploymentUnit, dispatchOwner: 'coordination' }], activeUnitRefs: [deploymentUnit],
+  quotedMessage: { messageId: 'fixture-pr-delivery', senderName: '合成交付人', content: '后端 #417、前端 #389 已交付，尚未部署。' } })
+const deploymentSource = { sourceId: 'fixture-deployment-source', groupId: group.groupId, messageId: 'fixture-deploy-313', version: 1,
+  receivedAt: deploymentSent, routed: false, processingCompleted: { at: deploymentDone, activeUnitRefs: [deploymentUnit] },
+  coordination: [{ ...deploymentUnit, semanticState: 'needs_clarification', conclusion: deploymentQuestion }],
+  notifications: [{ notificationId: 'fixture-deployment-clarification', state: 'delivered', versionMatched: true, deliveredAt: '2026-10-27T04:20:09.644Z' }], stages: [] }
+sourceRows.push(deploymentSource)
 const runtime = { listRecoveryIssues: () => [], listGroups: () => [group], getGroup: () => group, listTopics: () => topics, listTaskView: () => [], listTasks: () => [], listAlerts: () => [],
   listAuthorizationRequests: () => [], messageProcessingSources: async () => sourceRows, messageProcessingRequests: () => [failedRequest],
   async retryDecisionFailedMessage(args) {
@@ -72,7 +85,7 @@ const runtime = { listRecoveryIssues: () => [], listGroups: () => [group], getGr
     notification.notificationRecovery = { action: null, expectedToken: 'b'.repeat(64), reason: 'terminal' }
     return { status: 'attempted', action }
   } }
-const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>收件箱隔离验收</title><style>body{margin:0;font:14px "Microsoft YaHei",sans-serif}button{font:inherit}#app{height:calc(100dvh - 48px)}</style><div id="sidebar"></div><div id="app"></div><script src="/react.js"></script><script src="/react-dom.js"></script><script>
+const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>收件箱隔离验收</title><style>body{margin:0;font:14px "Microsoft YaHei",sans-serif}button{font:inherit}#sidebar{overflow:hidden}#app{height:calc(100dvh - 48px)}</style><div id="sidebar"></div><div id="app"></div><script src="/react.js"></script><script src="/react-dom.js"></script><script>
 const h=React.createElement, primitives={Button:({variant,size,children,...props})=>h('button',props,children),Pill:({children,...props})=>h('span',props,children),StateDot:({state,size})=>h('span',{'data-state':state}),Menu:({anchor,open,items,onSelect})=>h('span',null,anchor,open?h('div',{role:'menu'},items.map(item=>h('button',{key:item.id,role:'menuitem',onClick:()=>onSelect(item.id)},item.label))):null)};
 for(const name of ['IconChecklistOutlineRegular','IconChevronDownOutlineRegular','IconChevronUpOutlineRegular'])primitives[name]=props=>h('svg',{...props,width:14,height:14,'aria-hidden':true});
 const roots={sidebar:ReactDOM.createRoot(document.getElementById('sidebar')),app:ReactDOM.createRoot(document.getElementById('app'))};
@@ -141,6 +154,52 @@ try {
     await row('旧话题尚在处理').waitFor()
     assert.match(await row('旧话题尚在处理').innerText(), /处理中/)
     checks.push('refresh-does-not-invent-success')
+    const deploymentRow = row('部署到UAT2')
+    assert.match(await deploymentRow.innerText(), /待澄清/)
+    assert.match(await deploymentRow.innerText(), /1 分 31 秒/)
+    assert.match(await deploymentRow.innerText(), /请提供具体事项名称或PR编号/)
+    assert.doesNotMatch(await deploymentRow.innerText(), /结论未记录/)
+    const deploymentFacts = deploymentRow.locator('details').filter({ hasText: '处理状态与计时' }).first()
+    await deploymentFacts.locator('summary').focus(); await page.keyboard.press('Enter')
+    assert.equal(await deploymentFacts.evaluate(node => node.open), true)
+    assert.ok((await deploymentFacts.innerText()).includes(deploymentQuestion))
+    assert.match(await deploymentFacts.innerText(), /未收束.*已回读送达/)
+    let deploymentSnapshot = (await (await fetch(url + '/state/groups')).json())[0].messages.find(message => message.messageId === 'fixture-deploy-313')
+    assert.equal(deploymentSnapshot.processingState, 'needs_clarification')
+    assert.equal(deploymentSnapshot.processingFacts.semantic.durationMs, 91359)
+    checks.push('quoted-deployment-clarification-complete-conclusion-independent-91359ms-and-delivered')
+    await filter.click(); await page.getByRole('menuitem', { name: '待澄清', exact: true }).click()
+    assert.equal(await deploymentRow.count(), 1)
+    assert.equal(await row('旧话题已经判断').count(), 0)
+    await page.getByRole('button', { name: /^(刷新|已刷新)$/ }).click()
+    assert.match(await deploymentRow.innerText(), /待澄清/)
+    await page.screenshot({ path: path.join(output, 'quoted-deployment-waiting-desktop.png'), fullPage: true })
+    await page.setViewportSize({ width: 390, height: 844 })
+    assert.ok((await deploymentFacts.innerText()).includes(deploymentQuestion))
+    await deploymentFacts.locator('summary').focus()
+    await deploymentFacts.scrollIntoViewIfNeeded()
+    assert.equal(await deploymentFacts.locator('summary').evaluate(node => document.activeElement === node), true)
+    const narrowLayout = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+      overflow: [...document.querySelectorAll('*')].filter(node => node.getBoundingClientRect().right > innerWidth)
+        .map(node => ({ tag: node.tagName, class: node.className, right: node.getBoundingClientRect().right, width: node.getBoundingClientRect().width })).slice(0, 12) }))
+    assert.ok(narrowLayout.scrollWidth <= narrowLayout.width, JSON.stringify(narrowLayout))
+    await page.screenshot({ path: path.join(output, 'quoted-deployment-waiting-narrow.png'), fullPage: true })
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    checks.push('quoted-deployment-waiting-filter-refresh-keyboard-and-narrow-full-conclusion')
+    deploymentSource.coordination[0] = { ...deploymentUnit, semanticState: 'accepted', conclusion: '已接纳安排，执行结果另行核验' }
+    deploymentSource.routed = true
+    await page.getByRole('button', { name: /^(刷新|已刷新)$/ }).click()
+    await deploymentRow.waitFor({ state: 'detached' })
+    await filter.click(); await page.getByRole('menuitem', { name: '全部处理状态', exact: true }).click()
+    assert.match(await deploymentRow.innerText(), /语义完成/)
+    assert.match(await deploymentRow.innerText(), /已接纳安排，执行结果另行核验/)
+    assert.match(await deploymentRow.innerText(), /1 分 31 秒/)
+    assert.doesNotMatch(await deploymentRow.innerText(), /请提供具体事项名称或PR编号/)
+    deploymentSnapshot = (await (await fetch(url + '/state/groups')).json())[0].messages.find(message => message.messageId === 'fixture-deploy-313')
+    assert.equal(deploymentSnapshot.processingState, 'processed')
+    assert.equal(deploymentSnapshot.processingFacts.semantic.durationMs, 91359)
+    await page.screenshot({ path: path.join(output, 'quoted-deployment-accepted.png'), fullPage: true })
+    checks.push('quoted-deployment-acceptance-replaces-question-without-business-completion-or-clock-invention')
     await filter.click(); await page.getByRole('menuitem', { name: '处理失败', exact: true }).click()
     assert.equal(await row('旧话题已经判断').count(), 0)
     assert.match(await row('协议耗尽消息').innerText(), /处理失败/)

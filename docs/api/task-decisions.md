@@ -37,7 +37,7 @@
 
 ## 消息处理投影与精确恢复
 
-`GET /state/groups` 及群详情的消息保留 `processingState`（`routing/failed/processing/processed/unknown`）与精确版本 `processingFacts`。新增 `issues[]` 仅含 `phase/code/status/requestId/attempt/retryAt`，phase 为 `routing/decision/host/coordination`，status 为 `failed/retrying`。请求耗尽、当前 Host 阻塞及协调耗尽按原消息版本、当前事项及原 owner 投影；startup 补偿与自动退避不冒充终态。后来完成覆盖旧失败，多话题未完成 owner 不被另一成功遮住。失败的 `processingCompletedAt=null`、`processingFacts.semantic.quality=missing`，不得补当前时间或数字完成历时。
+`GET /state/groups` 及群详情的消息保留 `processingState`（`routing/failed/processing/needs_clarification/processed/unknown`）与精确版本 `processingFacts`。独立协调当前仍有澄清项且其他事项已完成判断时为 `needs_clarification`；其他事项未完成判断仍为 `processing`。`processingConclusion` 合并当前事项的真实 Topic 结论及同版本、同预约代的协调问题/接纳事实，不使用通知正文。待澄清保留已有完整语义决策戳的 `processingCompletedAt` 和语义耗时，缺戳仍为 null；该时间不代表来源已收束、通知送达或业务完成。澄清被正式补齐后不再展示旧问题。新增 `issues[]` 仅含 `phase/code/status/requestId/attempt/retryAt`，phase 为 `routing/decision/host/coordination`，status 为 `failed/retrying`。请求耗尽、当前 Host 阻塞及协调耗尽按原消息版本、当前事项及原 owner 投影；startup 补偿与自动退避不冒充终态。后来完成覆盖旧失败，多话题未完成 owner 不被另一成功遮住。失败的 `processingCompletedAt=null`、`processingFacts.semantic.quality=missing`，不得补当前时间或数字完成历时。
 
 安全恢复描述符为 `processingFacts.recovery[]`：`{phase,requestId,token}`。描述符只表达当次可尝试路径，不是业务授权或成功承诺。Host 仅允许已知来源准入的副作用前失败，或动作全部落账且已存在原 Outbox 身份的冲突；未知效果不提供恢复描述符。
 
@@ -55,9 +55,11 @@
 }
 ```
 
-版本与事项 revision 为正整数；事项 pair 不能重复，未归类原消息可为 `[]`。`phase` 取上述四类，`token` 必须来自最新 GET 的 64 位小写十六进制凭据。禁止额外字段，不接收正文、群身份覆盖、payload、Task 或新请求身份。
+版本与事项 revision 为正整数；事项 pair 不能重复，未归类原消息可为 `[]`。`phase` 为 `routing/decision/host/coordination/coordination-context`，`token` 必须来自最新 GET 的 64 位小写十六进制凭据。禁止额外字段，不接收正文、群身份覆盖、payload、Task 或新请求身份。
 
 服务验证精确消息版本、activeUnitRefs、原请求/决策/预约及 CAS；Resident 同群串行队列在持久更新前复验。协调沿原 reservation generation 与 ledger fence 恢复，冻结、已接纳、已澄清、已解决或移交不能清预算重来。成功响应 200：`{groupId,messageId,requestId,status:"attempted"}`。不复制原消息，不重做已成功动作；完成、来源收束和通知仍从各自事实回读。
+
+`coordination-context` 是明确触发的旧引用遗漏修复，不使用协调失败重试预算。仅原预约未保存 quotedMessage、精确原来源确有完整 quote、当前仍待澄清且没有成员/日程/发生项/作业或接纳效果时允许。令牌绑定来源 ID/版本、原引用字节、activeUnitRefs、预约代、ledger fence 和原安排修订；本机接口再次核验来源作者与群，不接收调用人补写引用。事务将原 ledger fence 加一、改回 reserved，旧语义戳移入 processingHistory，并保留旧问题和所有通知回执；精确旧澄清若仍 prepared 且没有领取/发送/ACK/receipt 证据，同事务退休为 superseded 并保留 payload；已送达记录逐字不变；starting、unknown、已 ACK 或其他发送未明状态拒绝重判，先正常核验。新接纳通知独立发送，不因同来源修复退休。Resident 原预约变为 reserved，generation 不变并记审计。后续只重判同一来源并复用原安排，不重新入站、不全量扫描、不重复发送旧问题、不清 attemptCount 或 nextRetryAt。已规划中的群、运行冻结、CAS变化或已有业务效果均拒绝；200 只表示已请求重判。看板按钮为“重新核对引用”。
 
 ### 发件
 

@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ingestTaskResidentMessage, taskNotificationOutbound, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
+import { createHash } from 'node:crypto'
+import { coordinationContextRecoveryIdentity } from '../packages/dingtalk-dsh-assistant/coordination-changes.js'
 
 function memoryFacility(seed = new Map(), onWrite = () => {}) {
   const table = name => ({
@@ -21,7 +23,7 @@ test('coordination processing DTO fences source versions and reservation generat
   const ledger = { id: 'c', groupId: 'g', sourceMessageId: 'm', sourceRefs: ['s'], unitId: 'u', revision: 2, reservationId: 'r', reservationGeneration: 3,
     dispatchOwner: 'coordination', state: 'reserved', attemptCount: 3, nextRetryAt: null, original: 'private', actorId: 'private', lastError: 'private' }
   const read = () => messageProcessingSources([source], [], 'g', [ledger], [owner])[0].coordination
-  assert.deepEqual(read(), [{ ...ref, reservationId: 'r', generation: 3, state: 'reserved', attempt: 3, nextRetryAt: null, retryToken: read()[0].retryToken, resolved: false, frozen: false }])
+  assert.deepEqual(read(), [{ ...ref, reservationId: 'r', generation: 3, state: 'reserved', semanticState: 'reserved', conclusion: null, attempt: 3, nextRetryAt: null, retryToken: read()[0].retryToken, resolved: false, frozen: false }])
   assert.match(read()[0].retryToken, /^[a-f0-9]{64}$/)
   assert.equal(JSON.stringify(read()).includes('private'), false)
   for (const change of [() => ledger.reservationGeneration--, () => ledger.revision--, () => ledger.sourceRefs = ['old'], () => ledger.groupId = 'other',
@@ -31,6 +33,46 @@ test('coordination processing DTO fences source versions and reservation generat
   }
   ledger.resolvedBy = 'new'; assert.equal(read()[0].resolved, true)
   ledger.resolvedBy = undefined; owner.semanticState = 'accepted'; assert.equal(read()[0].resolved, true)
+})
+
+test('协调结论来自同版本预约账，澄清、部分接纳和补齐保持不同事实', () => {
+  const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 1 }
+  const owner = { unitId: 'u', unitRevision: 1, reservationId: 'r', generation: 1, dispatchOwner: 'coordination',
+    sourceSnapshot: { messageId: 'm', messageVersion: 1 } }
+  const ledger = { id: 'c', groupId: 'g', sourceMessageId: 'm', sourceRefs: ['s'], unitId: 'u', revision: 1,
+    reservationId: 'r', reservationGeneration: 1, dispatchOwner: 'coordination', state: 'needs_clarification', question: '要部署哪个改动？' }
+  const read = () => messageProcessingSources([source], [{ payload: { text: '不可用通知推断结论' } }], 'g', [ledger], [owner])[0].coordination[0]
+  assert.equal(read().semanticState, 'needs_clarification'); assert.equal(read().conclusion, ledger.question)
+  ledger.state = 'accepted'; ledger.pendingClarifications = [{ question: '第二项环境是什么？' }]
+  assert.equal(read().semanticState, 'needs_clarification'); assert.equal(read().conclusion, '第二项环境是什么？')
+  ledger.resolvedBy = 'new-source'
+  assert.equal(read().semanticState, 'accepted'); assert.equal(read().conclusion, '澄清已补齐，已接纳安排')
+  ledger.resolvedBy = undefined; ledger.pendingClarifications = []
+  assert.equal(read().conclusion, '已接纳安排，执行结果另行核验')
+  owner.generation++
+  assert.equal(read(), undefined)
+})
+
+test('引用缺失重判令牌绑定原引用、来源版本、预约代及原安排修订，当前新预约不开放', () => {
+  const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 1, actorId: 'author',
+    quote: { messageId: 'delivery', content: '后端#417和前端#389' }, activeUnitRefs: [{ unitId: 'u', unitRevision: 1 }] }
+  const owner = { unitId: 'u', unitRevision: 1, reservationId: 'r', generation: 1, dispatchOwner: 'coordination',
+    semanticState: 'needs_clarification', sourceSnapshot: { messageId: 'm', messageVersion: 1 } }
+  const ledger = { id: 'c', groupId: 'g', sourceMessageId: 'm', sourceRefs: ['s'], unitId: 'u', revision: 1,
+    reservationId: 'r', reservationGeneration: 1, fence: 1, dispatchOwner: 'coordination', state: 'needs_clarification', coordinationId: 'a' }
+  const arrangement = { id: 'a', sourceId: 'c', groupId: 'g', revision: 1, state: 'needs_clarification', memberIds: [] }
+  const read = () => messageProcessingSources([source], [], 'g', [ledger], [owner], [arrangement])[0].coordination[0]
+  const token = read().contextRecoveryToken
+  assert.equal(token, createHash('sha256').update(JSON.stringify(coordinationContextRecoveryIdentity(ledger, arrangement, source))).digest('hex'))
+  for (const change of [() => { source.quote.content += '（补充）' }, () => { arrangement.revision++ }, () => { ledger.fence++ }]) {
+    change(); assert.notEqual(read().contextRecoveryToken, token)
+  }
+  owner.sourceSnapshot.quotedMessage = source.quote
+  assert.equal(read().contextRecoveryToken, undefined, '新版本已保留引用不开放此修复路径')
+  delete owner.sourceSnapshot.quotedMessage; ledger.contextReconsideration = { at: 'already-requested' }
+  assert.equal(read().contextRecoveryToken, undefined, '一次修复不会反复重判')
+  delete ledger.contextReconsideration; delete source.actorId
+  assert.equal(read().contextRecoveryToken, undefined, '缺身份不能提供重判入口')
 })
 
 test('message processing DTO keeps exact source versions, unknown history and no private content', () => {

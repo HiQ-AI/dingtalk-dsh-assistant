@@ -8,6 +8,122 @@ import { coordinationContextSchema } from '../packages/dingtalk-dsh-assistant/in
 
 const model = { enabled: true, provider: 'native-task-test', model: 'coordination-controlled' }
 
+test('部署到UAT2携带原引用穿过预约和独立协调，分页找到并重开唯一原任务，不重复新建',
+  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'quoted-deployment-native-'))
+    let host, originalId, plans = 0
+    const quote = { messageId: 'original-delivery', senderName: '原交付作者',
+      content: '终审详情确认编辑修复已交付：后端 https://github.com/HiQ-AI/dataset/pull/417、前端 https://github.com/HiQ-AI/dataset-web/pull/389。尚未部署。' }
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
+        routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
+          units: [{ unitKey: 'deploy-uat2', summary: '引用交付部署到UAT2', sourceRefs: [{ quote: message.text }], dispatchOwner: 'coordination', topics: [], reason: '继续引用事项' }] })) } }]
+      if (names.includes('coordination_submit')) {
+        assert.equal(input.source.original, '部署到UAT2')
+        assert.equal(input.source.quotedMessage.content, quote.content)
+        assert.equal(input.source.quotedMessage.senderName, quote.senderName)
+        assert.ok(names.includes('group_message_get')); assert.ok(names.includes('group_resource_get'))
+        const full = modelToolValues(request).findLast(value => value.taskContexts?.length)
+        if (!full) {
+          const page = modelToolValues(request).findLast(value => Array.isArray(value.tasks)) ?? input
+          const target = page.tasks.find(task => task.taskId === originalId)
+          return [{ name: 'coordination_context_get', args: target ? { taskIds: [target.taskId] } : { offset: page.nextOffset, limit: 50 } }]
+        }
+        plans++
+        const task = full.taskContexts[0]
+        assert.equal(task.taskId, originalId); assert.equal(task.status, 'completed')
+        return [{ name: 'coordination_submit', args: { kind: 'arrangement', members: [{ action: 'task-reopen', taskId: originalId,
+          inputVersion: task.requirementRevision, runSequence: task.runSequence, progressImpact: 'replan',
+          impactReason: '当前作者明确要求原交付部署到UAT2', context: `当前授权：部署到UAT2。引用交付：${quote.content}`,
+          objective: '将终审编辑原交付的后端#417和前端#389部署到UAT2并核验', requirements: ['按runbook部署UAT2，核验版本与健康，不部署生产'] }] } }]
+      }
+      const topics = topicTaskCalls(request); if (topics) return topics
+      return [{ name: 'task_session_submit', args: { decision: { action: input.task.runSequence === 1 ? 'complete' : 'wait',
+        summary: input.task.runSequence === 1 ? '原交付已完成，尚未部署' : '已正确承接UAT2部署，等待实际执行验证', evidence: [], limitations: ['隔离合同测试不进行外部部署'] } } }]
+    }, { config: { coordination: model } })
+    for (let i = 0; i < 21; i++) await host.service.store.command({ id: `distractor:${i}`, kind: 'task.create',
+      args: { taskId: `other-${i}`, groupId: 'native-group', request: `其他独立事项${i}` } })
+    originalId = (await host.service.createTask({ groupId: 'native-group', requestId: 'original-delivery',
+      title: '修复终审详情确认编辑持久状态', objective: `终审详情确认编辑修复；${quote.content}` })).taskId
+    await host.service.whenIdle()
+    assert.equal((await host.query('task.get', { taskId: originalId })).status, 'completed')
+    await host.service.ingest({ groupId: 'native-group', messageId: 'quoted-deploy', senderOpenDingTalkId: 'native-user',
+      senderName: '当前部署人', text: '部署到UAT2', quotedMessage: quote, timestamp: '2026-10-27T04:15:53.180Z' })
+    await host.service.whenIdle()
+    const owner = host.residentStore.listSourceDispatchOwnership('native-group')[0]
+    assert.deepEqual(owner.sourceSnapshot.quotedMessage, quote)
+    assert.equal(owner.semanticState, 'accepted'); assert.equal(owner.settled, true); assert.equal(plans, 1)
+    const original = await host.query('task.get', { taskId: originalId })
+    assert.equal(original.runSequence, 2); assert.match(original.objective, /#417.*#389.*UAT2/)
+    assert.equal((await host.query('task.list')).length, 22)
+    assert.equal(host.sent.some(notice => /要将哪项|请提供.*PR/.test(notice.payload.text)), false)
+    await host.service.recover(); await host.service.whenIdle()
+    assert.equal(plans, 1); assert.equal((await host.query('task.get', { taskId: originalId })).runSequence, 2)
+  })
+
+test('旧误澄清通过精确恢复原生重判引用，复用原安排与Task且旧已送达问题不重发',
+  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'quoted-context-reconsider-native-'))
+    let host, originalId, recoveredPlans = 0
+    const quote = { messageId: 'delivery', senderName: '原交付作者', content: '原终审修复：后端 #417、前端 #389，尚未部署。' }
+    const question = '要将哪项改动部署到UAT2？'
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
+        routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
+          units: [{ unitKey: 'deploy-uat2', summary: '部署原交付', sourceRefs: [{ quote: message.text }], dispatchOwner: 'coordination', topics: [], reason: '原交付后续部署' }] })) } }]
+      if (names.includes('coordination_submit')) {
+        // 先生成真实待澄清账；下方显式移除预约引用字段，模拟修复前持久预约，而非生产恢复手段。
+        if (!input.source.contextReconsideration) return [{ name: 'coordination_submit', args: { kind: 'clarify', question } }]
+        assert.equal(input.source.quotedMessage.content, quote.content)
+        const full = modelToolValues(request).findLast(value => value.taskContexts?.some(task => task.taskId === originalId))
+        if (!full) return [{ name: 'coordination_context_get', args: { taskIds: [originalId] } }]
+        recoveredPlans++
+        const task = full.taskContexts.find(task => task.taskId === originalId)
+        return [{ name: 'coordination_submit', args: { kind: 'arrangement', members: [{ action: 'task-reopen', taskId: originalId,
+          inputVersion: task.requirementRevision, runSequence: task.runSequence, progressImpact: 'replan', impactReason: '原交付新增UAT2部署阶段',
+          context: '沿原交付部署UAT2', objective: '将原终审修复后端#417、前端#389部署到UAT2', requirements: ['部署并核对版本，不涉及生产'] }] } }]
+      }
+      const topics = topicTaskCalls(request); if (topics) return topics
+      return [{ name: 'task_session_submit', args: { decision: { action: input.task.runSequence === 1 ? 'complete' : 'wait',
+        summary: input.task.runSequence === 1 ? '交付完成，未部署' : '已承接原部署阶段，待实际执行', evidence: [], limitations: ['隔离测试不部署真实服务'] } } }]
+    }, { config: { coordination: model } })
+    originalId = (await host.service.createTask({ groupId: 'native-group', requestId: 'delivery', title: '终审确认编辑修复', objective: quote.content })).taskId
+    await host.service.whenIdle()
+    await host.service.ingest({ groupId: 'native-group', messageId: 'deployment', senderOpenDingTalkId: 'native-user', senderName: '当前部署人',
+      text: '部署到UAT2', quotedMessage: quote, timestamp: '2026-10-27T04:15:53.180Z' })
+    await host.service.whenIdle()
+    const owner = host.residentStore.getGroup('native-group').sourceDispatchOwnership[0]
+    delete owner.sourceSnapshot.quotedMessage
+    assert.equal(owner.semanticState, 'needs_clarification')
+    const originalCoordinationId = owner.coordinationId
+    const beforeNotices = await host.query('notification.list')
+    const oldQuestion = beforeNotices.find(notice => notice.payload.text === question)
+    assert.equal(oldQuestion.state, 'delivered')
+    const sourceBefore = (await host.query('source.list')).find(source => source.messageId === 'deployment')
+    const token = (await host.service.messageProcessingSources('native-group')).find(source => source.messageId === 'deployment').coordination[0].contextRecoveryToken
+    assert.match(token, /^[a-f0-9]{64}$/)
+    const message = host.residentStore.getGroup('native-group').messages.find(message => message.messageId === 'deployment')
+    const args = { groupId: 'native-group', messageId: 'deployment', messageVersion: message.messageVersion, activeUnitRefs: message.activeUnitRefs,
+      phase: 'coordination-context', requestId: owner.reservationId, token }
+    assert.equal((await host.service.retryMessageProcessing(args)).status, 'attempted')
+    await host.service.whenIdle()
+    const current = host.residentStore.listSourceDispatchOwnership('native-group')[0]
+    assert.equal(current.coordinationId, originalCoordinationId); assert.equal(current.semanticState, 'accepted'); assert.equal(current.generation, 1)
+    assert.equal(recoveredPlans, 1); assert.equal((await host.query('coordination.list')).length, 1)
+    assert.equal((await host.query('task.list')).length, 1); assert.equal((await host.query('task.get', { taskId: originalId })).runSequence, 2)
+    assert.deepEqual(await host.query('notification.get', { notificationId: oldQuestion.id }), oldQuestion)
+    assert.equal(host.sent.filter(notice => notice.payload.text === question).length, 1)
+    const originalSource = (await host.query('source.list')).find(source => source.sourceId === sourceBefore.sourceId)
+    assert.deepEqual(originalSource.processingHistory[0], sourceBefore.processingCompleted)
+    await assert.rejects(host.service.retryMessageProcessing(args), /MESSAGE_RETRY_STALE|MESSAGE_RETRY_IN_PROGRESS/)
+    await host.service.recover(); await host.service.whenIdle()
+    assert.equal(recoveredPlans, 1); assert.equal(host.sent.filter(notice => notice.payload.text === question).length, 1)
+  })
+
 test('coordination context shares exact bounded inputs, including paired source identity', () => {
   assert.ok(coordinationContextSchema.safeParse({ limit: 50, offset: 0, taskIds: Array.from({length:8}, (_, i) => `t${i}`),
     coordinationIds: ['a','b','c','d'], arrangementSourceUnitId: 'source', arrangementSourceUnitRevision: 1 }).success)

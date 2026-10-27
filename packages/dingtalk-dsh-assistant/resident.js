@@ -102,7 +102,18 @@ export async function apply(ctx, config = {}) {
     runner: dwsRunner,
   })
   const initialEnvironment = await inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile })
+  const readGroupMessage = async (groupId, messageId) => {
+    const message = await dwsAdapter.readMessage(groupId, messageId)
+    return { ...normalizeHistoryMessage(message, groupId), resourceRefs: message.resourceRefs ?? [] }
+  }
+  const readGroupResource = async (groupId, messageId, resource) => {
+    const value = await dwsAdapter.readMessageResource(groupId, messageId, resource)
+    if (!value.image) return value
+    const imageRefs = await ctx.attachments.saveImages([value.image])
+    return { imageRefs }
+  }
   const tasks = await openTaskSessionService({ ctx, config: { ...taskConfig, operatorUserId: initialEnvironment.dws.userId }, legacy: runtime, residentStore: store,
+    readMessage: readGroupMessage,
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
     notifications: {
       canDisclose: notification => dwsConfig.enabled === true && dwsConfig.writesAuthorized === true
@@ -166,16 +177,8 @@ export async function apply(ctx, config = {}) {
     } catch (error) { ctx.logger.error(error); throw error }
   })
   void recoverTasks()
-  runtime.setGroupMessageReader(async (groupId, messageId) => {
-    const message = await dwsAdapter.readMessage(groupId, messageId)
-    return { ...normalizeHistoryMessage(message, groupId), resourceRefs: message.resourceRefs ?? [] }
-  })
-  runtime.setGroupResourceReader(async (groupId, messageId, resource) => {
-    const value = await dwsAdapter.readMessageResource(groupId, messageId, resource)
-    if (!value.image) return value
-    const imageRefs = await ctx.attachments.saveImages([value.image])
-    return { imageRefs }
-  })
+  runtime.setGroupMessageReader(readGroupMessage)
+  runtime.setGroupResourceReader(readGroupResource)
   await runtime.recoverInterruptedDecisions()
   let dwsBridgeHealth = dwsConfig.enabled === true ? { healthy: false, groups: [] } : undefined
   stopDws = dwsConfig.enabled === true

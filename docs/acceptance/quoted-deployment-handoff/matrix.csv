@@ -1,0 +1,15 @@
+case,round,status,evidence
+quoted-source-context,1,PASS,round-1.md
+old-reservation-version-isolation,1,PASS,round-1.md
+native-original-task-reopen,1,PASS,round-1.md
+clarification-ui-and-conclusion,1,PASS,round-1-browser.json
+release-inventory,1,FAIL,round-1.md
+reconsider-notification-boundary,1,FAIL,round-1.md
+release-inventory,2,PASS,round-2.md
+reconsider-notification-boundary,2,PASS,round-2.md
+reconsider-audit-and-cas,2,PASS,round-2.md
+native-reconsider-same-task,2,PASS,round-2.md
+final-recovery-regression,2,PASS,round-2.md
+package-native-smoke,2,PASS,round-2.md
+actual-model-handoff,2,PENDING,round-2.md
+production-update-and-message313,2,BLOCKED,round-2.md
