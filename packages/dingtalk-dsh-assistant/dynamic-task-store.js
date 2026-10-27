@@ -179,6 +179,22 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     operations: ops(taskId).filter(item => operationBlocksRecovery(item)),
     legacy: legacy(),
   })
+  const restartReopenEligible = task => {
+    if (task.status !== 'cancelled' || task.control !== 'cancelled' || !task.drained || task.archivedAt) return false
+    const unresolved = ops(task.taskId).filter(operationBlocksRecovery)
+    return unresolved.length > 0
+            && unresolved.every(operation => operation.state === 'unknown' && operation.recoveryReason === 'host_restart'
+              && operation.result == null && ['running','stopping'].includes(operation.job?.status) && ['pwsh','bash'].includes(operation.definition?.toolName)
+              && execs(task.taskId).some(execution => execution.executionId === operation.executionId && execution.sessionBound && execution.cancelRequested
+                && operation.job.owner === execution.sessionId && operation.dispatchBinding?.sessionId === execution.sessionId))
+            && execs(task.taskId).every(execution => execution.drained || execution.cancelRequested && execution.recovering
+              && unresolved.some(operation => operation.executionId === execution.executionId))
+  }
+  const restartRecoveryPending = task => (task.restartRecoveryOperations ?? []).filter(id => { const operation = get('dynamic_operations', id, true); return operation && operationBlocksRecovery(operation) })
+  const assertRestartRecoveryDispatch = (task, a) => {
+    const pending = restartRecoveryPending(task)
+    if (pending.length && !(a.definition?.recoveryReadOnly === true && a.definition.executionBackend !== 'claude-code' && pending.includes(a.input?.readbackOperationId))) fail('DYNAMIC_RESTART_RECOVERY_READ_ONLY')
+  }
   const assertNoLegacy = taskId => { if (legacy().length) fail('DYNAMIC_LEGACY_EFFECT_UNRESOLVED') }
   const assertClear = taskId => { const value = blockers(taskId); if (Object.values(value).some(items => items.length)) fail('DYNAMIC_TASK_NOT_QUIESCENT', canonical(value)) }
   const assertScope = binding => {
@@ -730,7 +746,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (a.expectedRequirementRevision !== undefined && a.expectedRequirementRevision !== task.requirementRevision
           || a.expectedControlRevision !== undefined && a.expectedControlRevision !== task.controlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
         if (kind === 'task.reopen') {
-          if (task.status !== 'completed' || !task.drained || blockers(task.taskId).operations.length) fail('DYNAMIC_TASK_NOT_QUIESCENT')
+          const unresolved = blockers(task.taskId).operations
+          if (restartReopenEligible(task)) {
+            task.restartRecoveryOperations = unresolved.map(operation => operation.operationId)
+          } else if (task.status !== 'completed' || !task.drained || unresolved.length) fail('DYNAMIC_TASK_NOT_QUIESCENT')
           task.status = 'active'; task.control = 'active'; task.controlRevision++; task.runSequence = (task.runSequence ?? 1) + 1; task.completion = null
         } else if (task.status === 'completed' || task.control === 'cancelled') fail('DYNAMIC_TASK_TERMINAL')
         task.requirementRevision++
@@ -996,6 +1015,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'execution.dispatch') {
       const task = currentTask(a.binding)
+      assertRestartRecoveryDispatch(task, a)
       assertNoLegacy(task.taskId)
       const key = text(a.key, 'key')
       if (a.definition?.executionBackend !== undefined && !['dsh', 'claude-code'].includes(a.definition.executionBackend)) fail('TASK_EXECUTION_BACKEND_INVALID')
@@ -1019,6 +1039,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'execution.continue') {
       const task = currentTask(a.binding), execution = get('dynamic_executions', a.executionId)
+      assertRestartRecoveryDispatch(task, a)
       if (execution.taskId !== task.taskId) fail('DYNAMIC_EXECUTION_SCOPE_INVALID')
       if (!execution.drained || execution.leaseEpoch === 0) fail('DYNAMIC_EXECUTION_BUSY')
       const replyClaimed = wakes(task.taskId).some(item => item.kind === 'human.responded' && item.state === 'claimed' && item.leaseEpoch === task.leaseEpoch)
@@ -1271,6 +1292,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         fail('DYNAMIC_ISOLATED_OPERATION_REPLAY_FORBIDDEN')
       const keys = resourceKeys(a.resourceKeys)
       const execution = a.binding.executionId ? get('dynamic_executions', a.binding.executionId) : null
+      const restartPending = restartRecoveryPending(task)
+      if (restartPending.length && !(execution?.definition?.recoveryReadOnly === true && restartPending.includes(execution.input?.readbackOperationId))) fail('DYNAMIC_RESTART_RECOVERY_READ_ONLY')
       if (execution?.resourceKeys?.length && keys.some(key => !execution.resourceKeys.includes(key))) fail('DYNAMIC_RESOURCE_SCOPE_EXPANSION')
       const specificationDigest = digest({ definition, resourceKeys: keys, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision })
       const prior = ops(task.taskId).find(item => item.key === key)
@@ -1948,6 +1971,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         groups: all('dynamic_groups').filter(item => !item.drained), executions: all('dynamic_executions').filter(item => !item.drained || item.status === 'queued'),
         operations: ops().filter(item => operationBlocksRecovery(item)), notifications: all('dynamic_notifications').filter(item => !['delivered','failed'].includes(item.state)), legacy: legacy() }
       else fail('DYNAMIC_QUERY_UNKNOWN', q.kind)
+      if (q.kind === 'task.get' && value && restartReopenEligible(value)) value = { ...value, restartRecoveryEligible: true }
+      if (q.kind === 'task.list') value = value.map(task => restartReopenEligible(task) ? { ...task, restartRecoveryEligible: true } : task)
       return clone(value)
     },
     async close() {

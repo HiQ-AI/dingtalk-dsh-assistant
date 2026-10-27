@@ -549,3 +549,14 @@ test('DWS发送标记是传输元数据，补拉补齐不产生消息事实新�
   assert.equal(residentDomainSpec.tables.groups.valueSchema.parse(store.getGroup('send-flag')).messages[0].messageAiSendFlag, 'DWS')
   await store.close()
 })
+
+
+for (const eligible of [false,true]) test('Web reopen of cancelled task requires Host interrupted-recovery eligibility: '+eligible,async()=>{
+ const {facility}=memoryFacility(),store=await openResidentStore(facility)
+ await store.subscribe({groupId:'recovery'})
+ const task={taskId:'original',groupId:'recovery',state:'cancelled',inputVersion:2,runSequence:1,topicRefs:[],restartRecoveryEligible:eligible}
+ store.setTaskSessionReader({getTask:id=>id==='original'?task:undefined,listTasks:()=>[task]})
+ const result=await store.submitWebTaskInput({groupId:'recovery',requestId:'recover-original',text:'Restore the deployment-stopped original task through read-only investigation',action:{kind:'task-reopen',taskId:'original',inputVersion:2,runSequence:1,context:'Restore without replay',topicRefs:[]},topicRefs:[]})
+ assert.equal(result.status,eligible?'accepted':'task-state-invalid')
+ await store.close()
+})
