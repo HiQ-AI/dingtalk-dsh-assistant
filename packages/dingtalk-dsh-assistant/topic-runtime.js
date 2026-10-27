@@ -484,6 +484,20 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     })
     const quotedMessages = [...quoted].map(([quoteId, message]) => ({ ...message, quoteId }))
     const sourceMessages = [...sources.values()]
+    // Refresh exact linked Task facts for each revision, rather than carrying a previous
+    // session's reads or approvals forward. Oversized contexts remain explicit reads.
+    const linked = store.listTasks().filter(task => task.groupId === groupId
+      && task.topicRefs?.some(ref => ref.topicId === topic.topicId))
+    const linkedReads = boundedItems(linked.map(task => ({ taskId: task.taskId, inputVersion: task.inputVersion,
+      runSequence: task.runSequence, state: task.state,
+      readCall: { name: 'group_task_context_get', arguments: { taskIds: [task.taskId] } } })), 1_600, 8)
+    const linkedIds = new Set(linkedReads.map(task => task.taskId))
+    const linkedSnapshots = []
+    for (const task of linked.filter(task => linkedIds.has(task.taskId))) {
+      if (serializedBytes([...linkedSnapshots, task]) <= 3_000) linkedSnapshots.push(task)
+    }
+    const linkedTasks = { total: linked.length, reads: linkedReads, snapshots: linkedSnapshots,
+      hasMore: linkedReads.length < linked.length }
     request.hasSourceContext = quotedMessages.length > 0 || sourceMessages.length > 0
     request.sections = { promptIndex: JSON.stringify(promptCatalog), messages: JSON.stringify(projected), summary: JSON.stringify({ summary: topic.summary, openQuestions: topic.openQuestions }),
       removedUnitRefs: JSON.stringify(removedUnitRefs), rejectedDecisions: JSON.stringify(rejected.map(record => ({ decisionId: record.decisionId, error: record.error }))),
@@ -496,7 +510,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const envelope = { requestId, topicId: topic.topicId, revision: topic.revision, processedRevision: topic.processedRevision,
       readCalls: { topic: { name: 'group_topic_context_get', arguments: { topicId: topic.topicId, revision: topic.revision } },
         replyReview: { name: 'group_reply_review_get', arguments: { requestIds: [requestId] } } },
-      title: topic.title, promptIndex: promptCatalog, contextSections: DECISION_SECTIONS, summaryRevision: topic.summaryRevision, replyReviewCandidateCount: request.candidates.length,
+      title: topic.title, linkedTasks, promptIndex: promptCatalog, contextSections: DECISION_SECTIONS, summaryRevision: topic.summaryRevision, replyReviewCandidateCount: request.candidates.length,
       totalMessages: messages.length, historyAvailable: messages.length > deltaMessages.length,
       ownedDeltaUnitRefs: ownership.ownedDeltaUnitRefs, ownedDeltaMessageIds: ownership.ownedDeltaMessageIds,
       messages: projected, quotedMessages, sourceMessages, summary: topic.summary, openQuestions: topic.openQuestions,
@@ -504,6 +518,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         recoveryInstruction: '此前决策被拒绝，Task 动作未执行；先读取当前 Task 的 stagePlan，以真实 stageId 重新判断未处理输入。已发送回复仍须审阅，不重复确认。' } : {}) }
     const sectionFields = { promptIndex: ['promptIndex'], summary: ['summary', 'openQuestions'], quotedMessages: ['quotedMessages'], sourceMessages: ['sourceMessages'],
       removedUnitRefs: ['removedUnitRefs'], rejectedDecisions: ['rejectedDecisions'], ownership: ['ownedDeltaUnitRefs', 'ownedDeltaMessageIds'], messages: ['messages'] }
+    // Optional Task snapshots must not displace the new source/authorization facts.
+    if (serializedBytes(envelope) > DECISION_OUTPUT_MAX_BYTES - 1500) linkedTasks.snapshots = []
+    if (serializedBytes(envelope) > DECISION_OUTPUT_MAX_BYTES - 1500) delete envelope.linkedTasks
     while (serializedBytes(envelope) > DECISION_OUTPUT_MAX_BYTES - 1500) {
       const section = Object.entries(sectionFields).filter(([, fields]) => fields.some((field) => Object.hasOwn(envelope, field)))
         .map(([name, fields]) => ({ name, size: serializedBytes(fields.map((field) => envelope[field])) }))

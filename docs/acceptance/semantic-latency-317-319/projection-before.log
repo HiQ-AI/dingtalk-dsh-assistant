@@ -1,0 +1,19 @@
+鉁?鏉ユ簮璇箟鎴冲湪棣栨Topic瀹屾垚鍚庤惤璐︼紝涓嶇瓑寰呭悓缇ゅ叾浠栧垽鏂?(9758.5297ms)
+鈩?{"sources":[{"messageId":"fast-clock","processingPending":true},{"messageId":"slow-clock","processingPending":true}],"topics":[{"title":"鍘熸秷鎭氦鍔?,"revision":1,"processedRevision":1,"decisions":[{"status":"completed","completedAt":"2026-10-27T06:34:05.047Z"}]},{"title":"鍘熸秷鎭氦鍔?,"revision":1,"processedRevision":0,"decisions":[]}],"tools":[{"name":"group_topic_route_submit","sessionId":"session-coordination-da053ac64a61785edad227ea-d000095e","result":{"isError":false,"content":[{"type":"text","text":"{\"status\":\"accepted\",\"requestId\":\"coord-route-39579d6db790f4cb2035d57720f1c23e70ecb6d2ce75a51410924c75a0fc2d6f\"}"}],"value":{"status":"accepted","requestId":"coord-route-39579d6db790f4cb2035d57720f1c23e70ecb6d2ce75a51410924c75a0fc2d6f"}}},{"name":"group_topic_route_submit","sessionId":"session-coordination-98ba553cec5609e27bf74f49-ed1bcbf7","result":{"isError":false,"content":[{"type":"text","text":"{\"status\":\"accepted\",\"requestId\":\"coord-route-2c05cc6ab0b0c6b1a1635420ce5b394d7ef4cc835fde6bdc76e04bf737a253d1\"}"}],"value":{"status":"accepted","requestId":"coord-route-2c05cc6ab0b0c6b1a1635420ce5b394d7ef4cc835fde6bdc76e04bf737a253d1"}}},{"name":"group_decision_submit","sessionId":"session-coordination-6101e0ac06b03422159fc735-441c6c89","result":{"isError":false,"content":[{"type":"text","text":"{\"status\":\"accepted\",\"decisionId\":\"coord-decision-ff163f2ed3c3241a44e8079b3b646a954db4763a093ae3984664f0cfa4b60293\"}"}],"value":{"status":"accepted","decisionId":"coord-decision-ff163f2ed3c3241a44e8079b3b646a954db4763a093ae3984664f0cfa4b60293"}}}],"alerts":[]}
+鈩?tests 1
+鈩?suites 0
+鈩?pass 0
+鈩?fail 1
+鈩?cancelled 0
+鈩?skipped 0
+鈩?todo 0
+鈩?duration_ms 11501.5266
+
+鉁?failing tests:
+
+test at test\task-topic-routing-native.test.js:34:1
+鉁?鏉ユ簮璇箟鎴冲湪棣栨Topic瀹屾垚鍚庤惤璐︼紝涓嶇瓑寰呭悓缇ゅ叾浠栧垽鏂?(9758.5297ms)
+  Error: Timed out: 宸插畬鎴怲opic鐨勬潵婧愮嫭绔嬭惤鎴?      at waitUntil (file:///C:/Users/64554/Documents/Codex/2026-10-27/task-2/semantic-latency/test/fixtures/task-session-native-host.js:218:9)
+      at async TestContext.<anonymous> (file:///C:/Users/64554/Documents/Codex/2026-10-27/task-2/semantic-latency/test/task-topic-routing-native.test.js:62:7)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)

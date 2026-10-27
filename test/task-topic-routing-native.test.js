@@ -73,6 +73,7 @@ testRunner('来源语义戳在首次Topic完成后落账，不等待同群其他
     assert.equal(completedTopic.decisions[0].status, 'completed')
     assert.equal(completedTopic.summary, '记录独立反馈，未开展业务动作。')
     const at = (await host.query('source.list')).find(source => source.messageId === completedMessageId).processingCompleted.at
+    t.diagnostic(JSON.stringify({ metric: 'settled-topic-to-source-projection', delayMs: Date.parse(at) - Date.parse(completedTopic.decisions[0].completedAt), slowTopicStillBlocked: slowBlocked }))
     assert.ok(Date.parse(at) >= Date.parse(completedTopic.decisions[0].completedAt), '来源戳不能早于真实决策终态')
     assert.equal(host.sent.length, 0, '纯讨论无回复决策不产生通知')
     assert.equal((await host.query('source.list')).find(source => source.messageId === completedMessageId).processingCompleted.at, at)
@@ -163,6 +164,43 @@ testRunner('native request-bound review and Topic reads accept empty args while 
     assert.equal(h.residentStore.listTopics('native-group')[0].decisions[0].status, 'completed')
     assert.equal((await h.query('task.list')).length, 0)
     assert.equal(h.sent.length, 0)
+  })
+
+testRunner('native revised Topic supplies current linked Task reads without rescanning the catalogue',
+  { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+    let topicId, taskId, contextReads = 0, decisions = 0
+    const h = await extraHost(t, 'linked-task-reads-', async request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId,
+        routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ topicId }] })) })]
+      if (names.includes('group_decision_submit')) {
+        assert.equal(input.linkedTasks.total, 1)
+        assert.equal(input.linkedTasks.reads[0].taskId, taskId)
+        assert.deepEqual(input.linkedTasks.snapshots, [], '大正文不能被截成貌似完整的目标')
+        const full = modelToolValues(request).flatMap(value => value.tasks ?? []).find(task => task.taskId === taskId && task.objective)
+        if (!full) { contextReads++; return [call(input.linkedTasks.reads[0].readCall.name, input.linkedTasks.reads[0].readCall.arguments)] }
+        assert.equal(full.objective, '必须完整核验的原目标'.repeat(800))
+        decisions++
+        return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+          decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reason: '只核对讨论上下文，不执行新动作' } })]
+      }
+      return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续资料', evidence: [], limitations: [] } })]
+    })
+    const created = await h.service.createTask({ groupId: 'native-group', requestId: 'linked-original', title: '关联原任务', objective: '必须完整核验的原目标'.repeat(800) })
+    await h.service.whenIdle()
+    const task = await h.query('task.get', { taskId: created.taskId })
+    taskId = task.taskId; topicId = task.topicRefs[0].topicId
+    for (const id of ['linked-follow-317', 'linked-follow-318']) {
+      await h.service.ingest(message(id, '补充原事项讨论，只核对上下文，不执行新动作。'))
+      await h.service.whenIdle()
+    }
+    assert.equal(decisions, 2)
+    assert.equal(contextReads, 2, '每个新版本从当前账本核对全文，不沿用旧会话读过的许可')
+    assert.equal(h.toolResults.filter(item => item.name === 'group_task_list').length, 0)
+    assert.equal((await h.query('task.list')).length, 1)
+    assert.equal((await h.query('task.get', { taskId })).requirementRevision, task.requirementRevision)
+    assert.equal(h.sent.length, 0)
+    assert.equal(h.residentStore.listTopics('native-group').find(topic => topic.topicId === topicId).processedRevision, 3)
   })
 
 testRunner('native batch followup reopens each original completed task and session once from one coordination topic', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {

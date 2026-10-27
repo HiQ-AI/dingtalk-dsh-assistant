@@ -1,4 +1,7 @@
 node_modules/
+.pnpm-store/
+.pnpm-cache/
+docs/tmp/semantic-latency/
 .dsh/profiles/node_modules/
 .dsh/profiles/resident/node_modules/
 .dsh/profiles/*/pnpm-lock.yaml

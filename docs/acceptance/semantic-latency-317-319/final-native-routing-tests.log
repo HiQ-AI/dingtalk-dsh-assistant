@@ -1,0 +1,22 @@
+鉁?鏉ユ簮璇箟鎴冲湪棣栨Topic瀹屾垚鍚庤惤璐︼紝涓嶇瓑寰呭悓缇ゅ叾浠栧垽鏂?(4359.6128ms)
+鈩?{"metric":"settled-topic-to-source-projection","delayMs":14,"slowTopicStillBlocked":true}
+鉁?completed task catalogue stays within the tool budget and advances by returned entries without losing tasks (11.8574ms)
+鉁?task catalogue continuation carries the exact normalized query and current snapshot identity (5.4861ms)
+鉁?native request-bound review and Topic reads accept empty args while routing never guesses a Topic (1222.6084ms)
+鉁?native revised Topic supplies current linked Task reads without rescanning the catalogue (3619.8398ms)
+鉁?native batch followup reopens each original completed task and session once from one coordination topic (5327.0098ms)
+鉁?native task service preserves Topic routing, task association, ignored input and recovery idempotency (3256.2186ms)
+鉁?Topic澶栧彂鏍囪瘑鍦ㄦ帴绾冲墠琚嫆缁濓紝鍘熻疆淇敼鍚庡彧鍒涘缓涓€椤逛换鍔′笖淇濈暀涓氬姟缂栧彿閾炬帴 (1511.6425ms)
+鉁?native Topic handoff keeps the explicit requester as task and completion notification owner (2595.4532ms)
+鉁?native Web Topic edits reject stale requirement and control revisions without changing task or topics (4830.3623ms)
+鉁?native proposal prompt preserves original authorization and asks without claiming task execution (1164.9708ms)
+鉁?native Web reopen preserves task identity and rejects stale input; HTTP retry is idempotent (4509.0308ms)
+鉁?mixed native source waits for blocked legacy Host but not coordinated business settlement (2635.8589ms)
+鈩?tests 13
+鈩?suites 0
+鈩?pass 13
+鈩?fail 0
+鈩?cancelled 0
+鈩?skipped 0
+鈩?todo 0
+鈩?duration_ms 36538.1034
