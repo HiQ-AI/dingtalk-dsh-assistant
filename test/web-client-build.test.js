@@ -108,7 +108,7 @@ test('official DSH client registry serves the built resource and its real browse
   assert.equal(typeof module.apply, 'function')
   assert.equal(typeof module.DingTalkDshAssistantCard, 'function')
   assert.equal(typeof module.readResidentOverview, 'function')
-  assert.deepEqual(Array.from(module.inject), ['slots', 'locale', 'remote.session'])
+  assert.deepEqual(Array.from(module.inject), ['slots', 'locale', 'remote', 'remote.session'])
   // The official browser system may use the combined graph revision instead of the entry revision.
   const resourcePath = url => url.replace(/&rev=[^&]*/u, '')
   assert.ok(loadedResources.some(url => resourcePath(url) === resourcePath(entry.url)), 'official import must actually request this module resource')

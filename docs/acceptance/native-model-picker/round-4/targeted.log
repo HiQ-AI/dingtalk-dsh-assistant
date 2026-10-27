@@ -1,0 +1,25 @@
+✔ 概览在已移除任务表格同步接口后仍加载完整状态 (44.4708ms)
+✔ Web client使用dsh原生插件页签slot注册唯一状态卡 (0.676ms)
+✔ Web bundle patch只挂载无副作用host face，不启动第二份resident Runtime (14.4491ms)
+✔ 设置页异步展示版本状态且版本检查不阻塞核心配置加载 (5.3804ms)
+✔ 设置页清退工作流与参数编辑，仍保留Agent与群连接配置 (6.9454ms)
+✔ 插件设置页提供统一视觉尺度、窄屏表单布局和可见键盘焦点 (1.2558ms)
+✔ 执行后端沿用唯一Agent保存入口并在部分失败时准确说明未保存选择 (2.8159ms)
+✔ 添加常驻群在操作位置反馈前置条件、进度和请求结果 (1.6989ms)
+✔ 原生选择桥共用全提供方目录、保留同名模型身份且不调用会话选择 (3.4008ms)
+✔ 真实 Cordis sibling 服务要求同时声明 remote 父级与 session 门面 (49.1279ms)
+✔ unset task depth defaults low; explicit inheritance and model default remain distinct (3.1566ms)
+✔ HTTP task settings validate, persist, refresh and reopen without touching native default (317.7643ms)
+✔ unified save preflights both models and reports readback on independent-store failures without compensation (16.6286ms)
+✔ execution backend defaults to DSH and validates, persists and reopens through the existing Agent HTTP configuration (230.6451ms)
+✔ actual Web build emits one valid module, loads its factory, and matches the checked-in artifact (982.6465ms)
+✔ actual Web build rejects invalid generated JavaScript before overwriting a usable artifact (315.0941ms)
+✔ official DSH client registry serves the built resource and its real browser module system imports it (180.4318ms)
+ℹ tests 17
+ℹ suites 0
+ℹ pass 17
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1798.5542

@@ -1,0 +1,50 @@
+
+> dingtalk-dsh-assistant@2.2.1 test:release-smoke D:\codex\worktrees\model-field-consistency\dingtalk-dsh-assistant
+> node --test test/release-workflow.test.js test/release-artifacts.test.js test/task-session-package-native.test.js
+
+✔ three actual tgz and source identity round-trip; publish retry reuses identical bytes (3047.2726ms)
+✔ different run/SHA/tag, lock/profile/environment and manifest hashes all fail closed (10568.4592ms)
+✔ missing, extra and modified tarballs cannot reach publication (2286.5066ms)
+✔ dirty tracked source and untracked package content cannot claim a commit identity (2640.8568ms)
+✔ manual compatibility CI has no push, PR, schedule or publication side effects (9.8981ms)
+✔ release exact SHA validates all lanes before immutable build and same-run publication (8.9027ms)
+✔ every test file is mapped once; only reviewed historical registrations leave Release (1482.0137ms)
+✔ release publishes three tgz plus identity manifest and verifies every attachment (2.3625ms)
+✔ 当前正式版本在 CHANGELOG 中有对应章节和 Release 链接 (3.7128ms)
+✔ resident profile 只解析到最新版 DSH 依赖边界 (1.9374ms)
+✔ 常驻启动优先读取用户代理，避免为启动解析完整 resident 状态 (2.2245ms)
+✔ Web 启动优先使用当前 profile 的 DSH 入口 (1.4984ms)
+✔ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (17142.1662ms)
+ℹ package begin: 0ms
+ℹ package staged: 347ms
+ℹ package packed: 2992ms
+ℹ package extracted: 3182ms
+ℹ package bytes-and-imports-verified: 7234ms
+ℹ package dependency-links-ready: 7438ms
+ℹ package runtime-imports-ready: 8133ms
+ℹ package native-host-ready: 11388ms
+ℹ package message-ingested: 11409ms
+ℹ package native-task-idle: 16163ms
+ℹ package native-task-verified: 16875ms
+ℹ package native-host-closed: 16904ms
+ℹ package temporary-files-removed: 17140ms
+✔ actual extracted resident starts and serves health without legacy entrypoints or personal assets (7056.6986ms)
+ℹ package begin: 0ms
+ℹ package staged: 296ms
+ℹ package packed: 2601ms
+ℹ package extracted: 2788ms
+ℹ package bytes-and-imports-verified: 6087ms
+ℹ package dependency-links-ready: 6117ms
+ℹ package resident-host-ready: 6514ms
+ℹ package resident-listening: 6910ms
+ℹ package resident-health-verified: 6919ms
+ℹ package resident-closed: 6932ms
+ℹ package temporary-files-removed: 7056ms
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 25289.2841
