@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { zstdDecompressSync } from 'node:zlib'
-import { isolationDigest as hash, isolationBinding } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
+import { isolationDigest as hash, isolationBinding, hasRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 import { restartScopeProbePlan } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
 
 export function readNativeHistory(workspace, row) {
@@ -46,7 +46,7 @@ export function inspectRetainedRestart({ tables, workspace, proposal, ownerPid, 
     || tables.tasks.some(row => row.drained !== true) || tables.groups.some(row => row.drained !== true)
     || tables.operations.some(row => row.state === 'starting') || tables.notifications.some(row => row.state === 'starting')) fail()
   const retained = tables.operations.filter(row => row.state === 'unknown' && row.recoveryReason === 'host_restart'
-    && row.job && ['running', 'stopping'].includes(row.job.status))
+    && !hasRestartIsolation(row) && row.job && ['running', 'stopping'].includes(row.job.status))
   if (retained.length !== proposal.operations.length || new Set(proposal.operations.map(row => row.operationId)).size !== retained.length) fail()
   const sessions = [], observations = []
   for (const operation of retained) {

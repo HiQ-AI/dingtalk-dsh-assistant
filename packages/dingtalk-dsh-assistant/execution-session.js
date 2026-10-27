@@ -46,6 +46,14 @@ const hasRunningJob = value => {
     ? /^\s*(?:job[_ -]?id\s*[:=]|(?:process|command) still running(?:\s|$))/im.test(item) || (() => { try { return hasRunningJob(JSON.parse(item)) } catch { return false } })()
     : item && typeof item === 'object' && hasRunningJob(item))
 }
+const foregroundShellOutput = result => {
+  const value = result?.value
+  if (value?.kind !== 'foreground' || !(Number.isSafeInteger(value.exitCode) || value.exitCode === null)
+    || !(typeof value.signal === 'string' || value.signal === null) || typeof value.timedOut !== 'boolean'
+    || typeof value.aborted !== 'boolean' || typeof value.stdout?.text !== 'string' || typeof value.stderr?.text !== 'string') return false
+  const { stdout, stderr, ...metadata } = value
+  return !hasRunningJob(metadata)
+}
 const hasDetachedRequest = value => value && typeof value === 'object' && Object.entries(value).some(([key, item]) =>
   /^(?:run_in_background|background|detached|detach)$/i.test(key) && item !== false && item !== null
   || key === 'onExpiry' && item === 'none' || item && typeof item === 'object' && hasDetachedRequest(item))
@@ -361,6 +369,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       // alpha2's filesystem and web read tools lack effect metadata. Pin the mounted
       // definitions, so a later same-name shadow cannot acquire read privileges.
       const readonlyTools = new Map(['read', 'read_image', 'glob', 'grep', 'ls', 'skill', 'web_fetch', 'web_search', 'job_list', 'job_output'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool && (tool.effectClass === undefined || ['read', 'pure'].includes(tool.effectClass))))
+      const shellTools = new Map(['bash', 'pwsh'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool))
       const isReadonly = exec => {
         const tool = agentCtx.tools.get(exec.name, exec.agent)
         return !!tool && (readonlyTools.get(exec.name) === tool || ['read', 'pure'].includes(tool.effectClass))
@@ -406,7 +415,11 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
             // Native file reads may contain serialized historical job receipts.
             // Their data is not a new process launch. The structured native job
             // identity above is still collected and validated for every tool.
-            if (!(exec.name === 'read' && isReadonly(exec)) && hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
+            // A pinned native foreground shell envelope has terminal status;
+            // its stdout/stderr and rendered text may serialize historical jobs.
+            // Real structured job identities were validated above, including reads.
+            const foreground = !background && shellTools.has(exec.name) && shellTools.get(exec.name) === toolDefinition && foregroundShellOutput(result)
+            if (!(exec.name === 'read' && isReadonly(exec)) && !foreground && hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
             return result
           })
           const result = await (entry.fileScope ? entry.fileScope.run(dispatch, { readOnly: isReadonly(exec) }) : dispatch())

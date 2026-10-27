@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { inspectRetainedRestart } from '../scripts/native-restart-maintenance.mjs'
 import { restartFixture } from './fixtures/native-restart-isolation.js'
-import { isolationDigest as hash } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
+import { isolationDigest as hash, isolationBinding, hasRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 function fixture(acknowledged = false) {
  const f = restartFixture(acknowledged, '& D:\\pg\\bin\\postgres.exe -D D:\\agent\\artifacts\\retained -h 127.0.0.1 -p 25428')
  f.execution.sessionBound = true; f.execution.cancelRequested = true
@@ -49,3 +49,21 @@ for (const [name, mutate] of [
  const f = fixture(); mutate(f)
  assert.throws(() => inspectRetainedRestart(f.args), /DEPLOY_RESTART_ISOLATION_UNPROVEN/)
 })
+
+for (const corrupt of [false, true]) test('maintenance retains only unaudited restart work; corrupt audit rejects: '+corrupt, () => {
+ const f=fixture(), g=fixture(true), op=g.operation;
+ op.operationId='already-audited'; op.executionId='audited-execution';
+ op.dispatchBinding={...op.dispatchBinding,executionId:op.executionId};op.ownerBinding=op.dispatchBinding;
+ const proof={kind:'native-host-restart-isolated',operationId:op.operationId,taskId:op.taskId,executionId:op.executionId,
+  sessionId:op.dispatchBinding.sessionId,callId:'original-call',argumentsDigest:op.definition.argumentsDigest,
+  operationDigest:hash(op),observations:[{sequence:3}],isolation:{...g.receipt,binding:isolationBinding(op,'original-call')}};
+ op.recoverySettlement={kind:'host-restart-isolated',exitStatus:'unknown',noReplay:true,partialEffectsPossible:true,
+  operatorSourceId:'operator-source',humanRequestId:'operator-question',proof};
+ assert.equal(hasRestartIsolation(op),true);
+ if(corrupt)op.recoverySettlement.proof.operationDigest='stale';
+ f.tables.operations.push(op);f.tables.executions.push({...g.execution,executionId:op.executionId,drained:true});
+ const before=JSON.stringify(f.tables);
+ if(corrupt)assert.throws(()=>inspectRetainedRestart(f.args),/DEPLOY_RESTART_ISOLATION_UNPROVEN/);
+ else {const result=inspectRetainedRestart(f.args);assert.equal(result.retained.length,1);assert.equal(result.writes,0);}
+ assert.equal(JSON.stringify(f.tables),before);assert.equal(op.state,'unknown');assert.equal(op.job.status,'running');
+});

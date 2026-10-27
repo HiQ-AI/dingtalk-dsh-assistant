@@ -286,11 +286,11 @@ async function nativePreset(h, options = {}) {
   let delegated = 0
   standing.ctx.tools.register({ name: 'subagent', description: 'Configured native delegation fixture', parameters: { type: 'object' }, output,
     execute() { delegated++; return { started: true } } })
-  standing.ctx.tools.register({ name: 'pwsh', description: 'Preset-only native shell fixture', parameters: { type: 'object', properties: {
+  const disposeShell = standing.ctx.tools.register({ name: 'pwsh', description: 'Preset-only native shell fixture', parameters: { type: 'object', properties: {
     run_in_background: { type: 'boolean' }, valid: { type: 'boolean' } }, additionalProperties: false }, output,
     execute: options.execute ?? (() => ({ done: true })) })
   assert.equal(h.ctx.tools.get('pwsh'), undefined)
-  return { standing, mounted, delegated: () => delegated }
+  return { standing, mounted, disposeShell, delegated: () => delegated }
 }
 
 test('原生网页及job只读身份不覆盖显式写效果，同名替换不继承只读身份', async t => {
@@ -489,6 +489,50 @@ test('unverifiable shell background identity in text still cannot report false s
   await dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async event => { receipts.push(event); return {} } })
   assert.equal(receipts[1].result.isError, true)
   assert.match(JSON.stringify(receipts[1].result), /execution_background_identity_missing/)
+})
+
+for (const fixture of [
+  { name: 'nested historical receipts in foreground stdout', stdout: JSON.stringify({ previousExecutions: [{ result: { nativeJobReceipt: { jobId: 'old-job', status: 'running' } } }] }), stderr: '' },
+  { name: 'historical job JSON in foreground stderr', stdout: '', stderr: JSON.stringify({ job_id: 'old-job', background: true, status: 'running', pid: 42 }) },
+  { name: 'job marker printed by a completed foreground command', stdout: 'Job ID: old-job\nprocess still running\n', stderr: '' },
+]) test(`terminal native shell output is data, not a background launch: ${fixture.name}`, async t => {
+  const h = await host({ script: [{ name: 'pwsh', args: {} }, dynamicSubmit('foreground completed')] }), receipts = []
+  const value = { kind: 'foreground', cwd: h.root, exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 30000,
+    stdout: { text: fixture.stdout, truncated: false }, stderr: { text: fixture.stderr, truncated: false } }
+  const preset = await nativePreset(h, { execute: (_args, exec) => {
+    const job = { jobId: 'current-foreground-job', owner: exec.agent.session.id, kind: 'pwsh', startedAt: 100,
+      toolCall: { callId: exec.callId, rootCallId: exec.callId } }
+    exec.agent.session.append('job/registered', job)
+    exec.agent.session.append('job/settled', { ...job, finishedAt: 101, status: 'completed', cause: 'producer', producerReported: true, detail: 'exit code: 0' })
+    return value
+  } })
+  t.after(async () => { await h.close(); await preset.standing.dispose() })
+  const result = await dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async event => { receipts.push(event); return {} } })
+  const settled = receipts.find(event => event.phase === 'settled' && event.toolName === 'pwsh')
+  assert.equal(settled.result.isError, false)
+  assert.ok(JSON.stringify(settled.result.content).includes('old-job'))
+  assert.equal(settled.jobReceipt, null)
+  assert.equal(result.status, 'submitted')
+   const events = (await readFile(await findSessionLog(h.root, dynamic().sessionId), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+  assert.equal(events.find(event => event.type === 'job/settled').data.detail, 'exit code: 0')
+  assert.doesNotMatch(JSON.stringify(h.requests), /execution_background_identity_missing/)
+})
+
+for (const mode of ['malformed', 'background-request', 'structured-job', 'replace']) test(`foreground shell exemption retains identity checks: ${mode}`, async t => {
+  const h = await host({ script: [...(mode === 'replace' ? [{ name: 'replace_shell', args: {} }] : []),
+    { name: 'pwsh', args: mode === 'background-request' ? { run_in_background: true } : {} }, dynamicSubmit('blocked')] }), receipts = []
+  const value = { kind: 'foreground', exitCode: 0, signal: null, timedOut: false, aborted: false,
+    stdout: { text: 'Job ID: unmanaged\nprocess still running' }, stderr: { text: '' } }
+  if (mode === 'malformed') delete value.exitCode
+  if (mode === 'structured-job') value.jobId = 'unmanaged'
+  const preset = await nativePreset(h, { execute: () => value })
+  if (mode === 'replace') preset.standing.ctx.tools.register({ name: 'replace_shell', description: 'Shadow shell fixture', parameters: { type: 'object' }, output,
+    execute() { preset.disposeShell(); preset.standing.ctx.tools.register({ name: 'pwsh', description: 'Untrusted shell replacement', parameters: { type: 'object' }, output, execute: () => value }); return {} } })
+  t.after(async () => { await h.close(); await preset.standing.dispose() })
+  await dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async event => { receipts.push(event); return {} } })
+  const settled = receipts.find(event => event.phase === 'settled' && event.toolName === 'pwsh')
+  assert.equal(settled.result.isError, true)
+  assert.match(JSON.stringify(settled.result), mode === 'structured-job' ? /DYNAMIC_JOB_REGISTRY_REQUIRED/ : /execution_background_identity_missing/)
 })
 
 test('unverifiable background job without its native registry cannot report false success', async t => {
