@@ -1,0 +1,176 @@
+{
+  "allThreeContentEqual": true,
+  "allThreeStylesEqual": true,
+  "matchesNativeComposer": true,
+  "default": {
+    "choices": [
+      {
+        "model": "cortex-cowork",
+        "provider": "cortex-gateway",
+        "text": "GPT-6.1 Sol"
+      },
+      {
+        "model": "gpt-5.3-codex-spark",
+        "provider": "openai-codex",
+        "text": "GPT-5.3 Codex Spark"
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "provider": "openai-codex",
+        "text": "GPT-5.6 Luna"
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "provider": "openai-codex",
+        "text": "GPT-5.6 Sol"
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "provider": "openai-codex",
+        "text": "GPT-5.6 Terra"
+      },
+      {
+        "model": "gpt-6-astra",
+        "provider": "openai-codex",
+        "text": "GPT-6 Astra"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "provider": "openai-codex",
+        "text": "GPT-6.1-Sol"
+      },
+      {
+        "model": "gpt-6-sol",
+        "provider": "openai-codex",
+        "text": "GPT-6-Sol"
+      },
+      {
+        "model": "gpt-6-luna",
+        "provider": "openai-codex",
+        "text": "GPT-6-Luna"
+      }
+    ],
+    "style": {
+      "borderRadius": "16px",
+      "className": "_surface_ri079_1 _7KE1Ra_menu",
+      "color": "rgb(15, 17, 21)",
+      "fontSize": "16px",
+      "material": "rgba(248, 249, 250, 0.58)",
+      "width": "240px"
+    }
+  },
+  "task": {
+    "choices": [
+      {
+        "model": "cortex-cowork",
+        "provider": "cortex-gateway",
+        "text": "GPT-6.1 Sol"
+      },
+      {
+        "model": "gpt-5.3-codex-spark",
+        "provider": "openai-codex",
+        "text": "GPT-5.3 Codex Spark"
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "provider": "openai-codex",
+        "text": "GPT-5.6 Luna"
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "provider": "openai-codex",
+        "text": "GPT-5.6 Sol"
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "provider": "openai-codex",
+        "text": "GPT-5.6 Terra"
+      },
+      {
+        "model": "gpt-6-astra",
+        "provider": "openai-codex",
+        "text": "GPT-6 Astra"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "provider": "openai-codex",
+        "text": "GPT-6.1-Sol"
+      },
+      {
+        "model": "gpt-6-sol",
+        "provider": "openai-codex",
+        "text": "GPT-6-Sol"
+      },
+      {
+        "model": "gpt-6-luna",
+        "provider": "openai-codex",
+        "text": "GPT-6-Luna"
+      }
+    ],
+    "style": {
+      "borderRadius": "16px",
+      "className": "_surface_ri079_1 _7KE1Ra_menu",
+      "color": "rgb(15, 17, 21)",
+      "fontSize": "16px",
+      "material": "rgba(248, 249, 250, 0.58)",
+      "width": "240px"
+    }
+  },
+  "coordination": {
+    "choices": [
+      {
+        "model": "cortex-cowork",
+        "provider": "cortex-gateway",
+        "text": "GPT-6.1 Sol"
+      },
+      {
+        "model": "gpt-5.3-codex-spark",
+        "provider": "openai-codex",
+        "text": "GPT-5.3 Codex Spark"
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "provider": "openai-codex",
+        "text": "GPT-5.6 Luna"
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "provider": "openai-codex",
+        "text": "GPT-5.6 Sol"
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "provider": "openai-codex",
+        "text": "GPT-5.6 Terra"
+      },
+      {
+        "model": "gpt-6-astra",
+        "provider": "openai-codex",
+        "text": "GPT-6 Astra"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "provider": "openai-codex",
+        "text": "GPT-6.1-Sol"
+      },
+      {
+        "model": "gpt-6-sol",
+        "provider": "openai-codex",
+        "text": "GPT-6-Sol"
+      },
+      {
+        "model": "gpt-6-luna",
+        "provider": "openai-codex",
+        "text": "GPT-6-Luna"
+      }
+    ],
+    "style": {
+      "borderRadius": "16px",
+      "className": "_surface_ri079_1 _7KE1Ra_menu",
+      "color": "rgb(15, 17, 21)",
+      "fontSize": "16px",
+      "material": "rgba(248, 249, 250, 0.58)",
+      "width": "240px"
+    }
+  }
+}

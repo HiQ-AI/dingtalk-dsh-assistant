@@ -1,0 +1,41 @@
+{
+  "triggerStyleRows": [
+    {
+      "label": "默认处理模型",
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderRadius": "8px",
+        "className": "_7KE1Ra_trigger",
+        "color": "rgb(97, 102, 107)",
+        "fontSize": "13px",
+        "height": "28px",
+        "padding": "0px 4px 0px 8px"
+      }
+    },
+    {
+      "label": "统筹模型",
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderRadius": "8px",
+        "className": "_7KE1Ra_trigger",
+        "color": "rgb(97, 102, 107)",
+        "fontSize": "13px",
+        "height": "28px",
+        "padding": "0px 4px 0px 8px"
+      }
+    },
+    {
+      "label": "协调模型",
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderRadius": "8px",
+        "className": "_7KE1Ra_trigger",
+        "color": "rgb(97, 102, 107)",
+        "fontSize": "13px",
+        "height": "28px",
+        "padding": "0px 4px 0px 8px"
+      }
+    }
+  ],
+  "freshErrors": []
+}

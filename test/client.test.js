@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { apply, name, readResidentOverview, agentSaveSummary, createNativeModelBridge, createPickerDirectory } from '../packages/dingtalk-dsh-assistant/client.js'
+import { apply, name, readResidentOverview, agentSaveSummary, createNativeModelBridge, createPickerDirectory, inject } from '../packages/dingtalk-dsh-assistant/client.js'
 
 test('概览在已移除任务表格同步接口后仍加载完整状态', async (t) => {
   const responses = {
@@ -54,7 +54,7 @@ test('Web bundle patch只挂载无副作用host face，不启动第二份residen
   assert.equal(manifest.exports['./client'], './web-client.js')
   assert.match(patch, /id: dingtalk-dsh-assistant-web/)
   assert.match(patch, /name: '@zzusp\/dingtalk-dsh-assistant'/)
-  assert.match(bundle, /const inject = \['slots', 'locale', 'remote.session'\]/)
+  assert.match(bundle, /const inject = \['slots', 'locale', 'remote', 'remote.session'\]/)
 })
 
 test('设置页异步展示版本状态且版本检查不阻塞核心配置加载', async () => {
@@ -155,4 +155,25 @@ test('原生选择桥共用全提供方目录、保留同名模型身份且不�
   assert.equal(bridge.snapshot().status, 'error')
   assert.equal(bridge.snapshot().groups, groups)
   assert.doesNotMatch(bridge.snapshot().error, /secret/)
+})
+
+
+test('真实 Cordis sibling 服务要求同时声明 remote 父级与 session 门面', async t => {
+  const { Context } = await import('@deepseek-ai/cordis')
+  const root = new Context()
+  t.after(() => root.fiber.dispose())
+  const groups = [{ id: 'provider', name: 'Provider', models: [{ id: 'model', name: 'Model' }] }]
+  await root.plugin(ctx => {
+    ctx.provide('slots', { entriesOfSlot: () => [] })
+    ctx.provide('locale', { bind: () => key => key })
+    ctx.provide('remote', { session: { modelCatalog: async () => ({ ok: true, value: { groups, failures: [] } }) } })
+    ctx.provide('remote.session', {})
+  })
+  let broken, actual
+  await root.plugin({ inject: inject.filter(name => name !== 'remote'), apply: ctx => { broken = createNativeModelBridge(ctx) } })
+  assert.throws(() => broken.load(), /cannot get property "remote" without inject/)
+  await root.plugin({ inject, apply: ctx => { actual = createNativeModelBridge(ctx) } })
+  await actual.load()
+  assert.equal(actual.snapshot().status, 'ready')
+  assert.deepEqual(actual.snapshot().groups, groups)
 })

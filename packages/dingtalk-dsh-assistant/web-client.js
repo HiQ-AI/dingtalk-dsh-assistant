@@ -6,7 +6,7 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useState, useRef } = React
 
     const name = 'dingtalk-dsh-assistant-client'
-    const inject = ['slots', 'locale', 'remote.session']
+    const inject = ['slots', 'locale', 'remote', 'remote.session']
     const ENDPOINT = 'http://127.0.0.1:18998'
     const colors = { border: 'var(--dsw-alias-stroke-border-2, rgba(127,127,127,.28))', muted: 'var(--dsw-alias-label-secondary, #737373)', accent: 'var(--dsw-alias-brand-primary, #4d6bfe)', danger: 'var(--dsw-alias-status-error, #c33)' }
     const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
