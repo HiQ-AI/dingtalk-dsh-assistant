@@ -4,6 +4,8 @@ import { join, resolve, dirname } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
+const localRequire = createRequire(import.meta.url)
 // 复用旧部署 checker 的逐文件算法；旧入口无条件打开退役控制库，不能直接调用。
 export function inspectPackage(packagePath, source, installed) {
   const hash = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -94,14 +96,16 @@ function inspectClaudeHistory(workspace, row) {
   fail('DRAIN_BINDING_MISMATCH')
 }
 
-export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerPid) {
+export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerPid, maintenanceProposal) {
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
     if (db.prepare('PRAGMA quick_check').get().quick_check !== 'ok') throw Error('DEPLOY_DATABASE_CORRUPT')
     const owner = db.prepare("SELECT value FROM dynamic_meta WHERE key='owner'").get()?.value
     const tables = Object.fromEntries(['tasks','executions','groups','operations','notifications'].map(name => [name, db.prepare(`SELECT body FROM dynamic_${name}`).all().map(row => JSON.parse(row.body))]))
+    const maintenance = maintenanceProposal ? localRequire('../../../../scripts/native-restart-maintenance.mjs').inspectRetainedRestart({ tables, workspace, proposal: maintenanceProposal, ownerPid: expectedOwnerPid ?? Number(owner?.split(':')[0]) }) : null
+    const preserved = new Set(maintenance?.preservedSessionIds ?? [])
     const busy = ['executions','groups'].flatMap(name => tables[name].filter(row => row.drained === false).map(row => ({ table: name, id: row.taskId ?? row.executionId ?? row.groupId })))
-    if (busy.length || tables.operations.some(row => row.state === 'starting') || tables.notifications.some(row => row.state === 'starting')) throw Error('DEPLOY_NOT_DRAINED')
+    if (busy.some(row => row.table !== 'executions' || !tables.executions.some(execution => preserved.has(execution.sessionId) && execution.taskId === row.id)) || tables.operations.some(row => row.state === 'starting') || tables.notifications.some(row => row.state === 'starting')) throw Error('DEPLOY_NOT_DRAINED')
     let ownerProcessExited = !owner
     const processExited = pid => { try { process.kill(pid, 0); return false } catch (error) { if (error.code === 'ESRCH') return true; throw error } }
     if (offline) {
@@ -123,6 +127,7 @@ export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerP
     const unstartedTaskClaims = []
     if (tables.tasks.some(row => row.drained === false && !row.sessionBound)) throw Error('DEPLOY_NOT_DRAINED')
     for (const row of [...tables.tasks, ...tables.executions].filter(row => row.sessionBound)) {
+      if (tables.executions.includes(row) && preserved.has(row.sessionId)) { verifiedSessions++; continue }
       if (tables.executions.includes(row) && row.definition?.executionBackend==='claude-code') {
         const unstarted=inspectClaudeHistory(workspace,row)
         if (unstarted) unstartedCliExecutions.push(unstarted)
@@ -171,7 +176,7 @@ export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerP
       verifiedSessions++
     }
     return { quiescent: true, candidateOnly: !offline, ownerReleased: !owner, ownerProcessExited, staleOwner: !!owner && ownerProcessExited,
-      drained: unstartedTaskClaims.length === 0, unstartedTaskClaims, unstartedCliExecutions, verifiedSessions, unknownOperations: tables.operations.filter(row => row.state === 'unknown').length, unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').length }
+      drained: unstartedTaskClaims.length === 0 && !busy.length, maintenanceCutoverReady: !!maintenance && unstartedTaskClaims.length === 0, maintenance, unstartedTaskClaims, unstartedCliExecutions, verifiedSessions, unknownOperations: tables.operations.filter(row => row.state === 'unknown').length, unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').length }
   } finally { db.close() }
 }
 // 冷启动走正式 Host 的恢复事务，不把部署要求的 turn/end 当作崩溃恢复前提。
@@ -197,6 +202,6 @@ export function inspectStartup(dbPath) {
   } finally { db.close() }
 }
 if (process.argv[1]?.endsWith('inspect-quiescent-ledger.mjs')) {
-  try { console.log(JSON.stringify(process.argv[2] === 'startup' ? inspectStartup(process.argv[3]) : process.argv[2] === 'package' ? inspectPackage(...process.argv.slice(3)) : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline', process.argv[5] === undefined ? undefined : Number(process.argv[5])))) }
+  try { console.log(JSON.stringify(process.argv[2] === 'startup' ? inspectStartup(process.argv[3]) : process.argv[2] === 'package' ? inspectPackage(...process.argv.slice(3)) : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline', process.argv[5] === undefined ? undefined : Number(process.argv[5]), process.argv[6] === undefined ? undefined : JSON.parse(readFileSync(process.argv[6], 'utf8'))))) }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }
