@@ -1,4 +1,5 @@
 import { executionSessionTitle } from './session-workspaces.js'
+import { operationBlocksRecovery, hasRestartIsolation, isolationBinding, validIsolationReceipt } from './native-restart-isolation.js'
 import { quotedSendRejectionProof } from './group-message.js'
 import { taskNotificationRecovery } from './notification-delivery.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
@@ -175,7 +176,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   }
   const blockers = taskId => ({
     executions: executionViews(execs(taskId).filter(item => !item.drained || !terminalExecutions.has(item.status))).map(taskExecutionContext),
-    operations: ops(taskId).filter(item => !terminalOperations.has(item.state)),
+    operations: ops(taskId).filter(item => operationBlocksRecovery(item)),
     legacy: legacy(),
   })
   const assertNoLegacy = taskId => { if (legacy().length) fail('DYNAMIC_LEGACY_EFFECT_UNRESOLVED') }
@@ -194,7 +195,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   const releaseExecution = executionId => {
     if (!executionId) return
     const execution = get('dynamic_executions', executionId, true)
-    if (!execution?.resourceLease || !execution.drained || ops(execution.taskId).some(operation => operation.executionId === executionId && !terminalOperations.has(operation.state))) return
+    if (!execution?.resourceLease || !execution.drained || ops(execution.taskId).some(operation => operation.executionId === executionId && operationBlocksRecovery(operation))) return
     release(executionHolder(execution))
     execution.resourceLease = null
     put('dynamic_executions', execution)
@@ -322,7 +323,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         // Identity and ingress bindings have already been validated; an active old
         // writer is rejected above. DDL and capability bump roll back together.
         if (all('dynamic_tasks').some(task => !task.drained) || all('dynamic_groups').some(group => !group.drained) || all('dynamic_executions').some(execution => !execution.drained)
-          || ops().some(operation => !terminalOperations.has(operation.state))
+          || ops().some(operation => operationBlocksRecovery(operation))
           || all('dynamic_notifications').some(notification => ['starting','unknown'].includes(notification.state))) fail('DYNAMIC_MIGRATION_NOT_QUIESCENT')
         if (migrationExpectedDigest !== undefined && migrationStateDigest(db) !== migrationExpectedDigest) fail('DYNAMIC_MIGRATION_STATE_CHANGED')
         db.exec(coordinationSchema)
@@ -365,11 +366,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const keys = resourceKeys(execution.resourceKeys), held = heldKeys(executionHolder(execution))
         if (execution.resourceLease) {
           if (digest(held) !== digest(keys)) fail('DYNAMIC_RESOURCE_INVARIANT')
-        } else if (held.length || keys.length && (!execution.drained || ops(execution.taskId).some(operation => operation.executionId === execution.executionId && !terminalOperations.has(operation.state)))) {
+        } else if (held.length || keys.length && (!execution.drained || ops(execution.taskId).some(operation => operation.executionId === execution.executionId && operationBlocksRecovery(operation)))) {
           fail('DYNAMIC_EXECUTION_RESOURCE_UNGUARDED')
         }
       }
-      for (const operation of ops()) if (['starting','unknown'].includes(operation.state)) {
+      for (const operation of ops()) if (['starting','unknown'].includes(operation.state) && operationBlocksRecovery(operation)) {
         const held = heldKeys(operation.resourceHolder ?? operation.operationId)
         if (operation.resourceHolder ? operation.resourceKeys.some(key => !held.includes(key)) : digest(held) !== digest(operation.resourceKeys)) fail('DYNAMIC_RESOURCE_INVARIANT')
       }
@@ -902,7 +903,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       // One outer command transaction owns source, all releases and the human answer.
       // Any stale second item or competing reply rolls back every prior write/wake.
       reduce('source.record', record(a.source), `${commandId}:source`)
-      for (const resolution of resolutions) reduce('operation.resolve-investigated-failure', {
+      for (const resolution of resolutions) reduce(resolution.proof?.kind === 'native-host-restart-isolated' ? 'operation.record-restart-isolation' : 'operation.resolve-investigated-failure', {
         ...a, ...resolution, operatorSourceId: a.source.sourceId, humanRequestId: a.requestId,
       }, `${commandId}:${resolution.operationId}`)
       const result = reduce('task.human.respond', { ...a, sourceId: a.source.sourceId }, `${commandId}:reply`)
@@ -1023,7 +1024,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const replyClaimed = wakes(task.taskId).some(item => item.kind === 'human.responded' && item.state === 'claimed' && item.leaseEpoch === task.leaseEpoch)
       if (execution.providerRecovery?.nextAttemptAt && !replyClaimed) fail('DYNAMIC_EXECUTION_RECOVERY_PENDING')
       assertNoLegacy(task.taskId)
-      if (a.definition?.recoveryReadOnly !== true && ops(task.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
+      if (a.definition?.recoveryReadOnly !== true && ops(task.taskId).some(item => item.executionId === execution.executionId && operationBlocksRecovery(item))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       const key = text(a.key, 'key')
       const previous = (execution.continuations ?? []).find(item => item.key === key)
       const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {}, resourceKeys: resourceKeys(a.resourceKeys ?? previous?.resourceKeys ?? execution.resourceKeys) }
@@ -1033,7 +1034,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         return changed({ execution })
       }
       if (digest(payload.resourceKeys) !== digest(resourceKeys(execution.resourceKeys)) && (execution.resourceLease
-        || ops(execution.taskId).some(operation => operation.executionId === execution.executionId && !terminalOperations.has(operation.state)))) fail('DYNAMIC_EXECUTION_RESOURCES_HELD')
+        || ops(execution.taskId).some(operation => operation.executionId === execution.executionId && operationBlocksRecovery(operation)))) fail('DYNAMIC_EXECUTION_RESOURCES_HELD')
       if (execution.result?.payload.error?.code === 'EXECUTION_PROVIDER_TRANSIENT' && execution.providerRecovery?.exhausted) {
         if (Date.parse(stamp) < Date.parse(execution.providerRecovery.retryNotBefore)) fail('DYNAMIC_PROVIDER_COOLDOWN_REQUIRED')
         execution.providerRecovery.coldAttempts = (execution.providerRecovery.coldAttempts ?? 0) + 1
@@ -1061,7 +1062,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         || execution.status !== 'queued' || !execution.providerRecovery?.nextAttemptAt || task.humanRequests?.some(item => item.status === 'waiting-reply')) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       if (wakes(task.taskId).some(item => item.kind === 'human.responded' && item.state !== 'acked')) fail('DYNAMIC_OWNER_INPUT_PENDING')
       assertNoLegacy(task.taskId)
-      if (ops(task.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
+      if (ops(task.taskId).some(item => item.executionId === execution.executionId && operationBlocksRecovery(item))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       if (Date.parse(stamp) < Date.parse(execution.providerRecovery.nextAttemptAt)) fail('DYNAMIC_EXECUTION_RETRY_NOT_DUE')
       execution.inputHistory.push({ inputVersion: execution.inputVersion, inputDigest: execution.inputDigest,
         requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision, instructionScope: clone(execution.instructionScope) })
@@ -1082,7 +1083,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         || execution.controlRevision !== task.controlRevision || execution.cancelRequested || execution.status !== 'failed'
         || !execution.providerRecovery?.nextReviewAt || task.humanRequests?.some(item => item.status === 'waiting-reply')) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       if (Date.parse(stamp) < Date.parse(execution.providerRecovery.nextReviewAt)) fail('DYNAMIC_EXECUTION_RETRY_NOT_DUE')
-      if (ops(task.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
+      if (ops(task.taskId).some(item => item.executionId === execution.executionId && operationBlocksRecovery(item))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       const reviews = (execution.providerRecovery.reviewAttempts ?? 0) + 1
       if (reviews > 3) fail('DYNAMIC_PROVIDER_REVIEW_LIMIT')
       execution.providerRecovery.reviewAttempts = reviews
@@ -1135,7 +1136,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (execution.result || execution.providerRecovery?.nextAttemptAt) fail('DYNAMIC_EXECUTION_RECOVERY_PENDING')
       if (!execution.drained || terminalExecutions.has(execution.status)) fail('DYNAMIC_EXECUTION_BUSY')
       if (!executionCurrent(execution)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
-      if (!execution.definition?.recoveryReadOnly && ops(execution.taskId).some(item => item.executionId === execution.executionId && ['starting','unknown'].includes(item.state))) fail('DYNAMIC_OPERATION_UNRESOLVED')
+      if (!execution.definition?.recoveryReadOnly && ops(execution.taskId).some(item => item.executionId === execution.executionId && ['starting','unknown'].includes(item.state) && operationBlocksRecovery(item))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       // 同一事务全取或全不取，禁止持有部分资源后等待另一部分。
       const keys = resourceKeys(execution.resourceKeys)
       lock(keys, executionHolder(execution))
@@ -1186,6 +1187,16 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (kind === 'execution.sessionBound') execution.sessionBound = true
       if (kind === 'execution.cancel') { execution.cancelRequested = true; if (execution.drained) execution.status = 'cancelled' }
       if (kind === 'execution.drained') {
+        if (a.isolationAuditRefs !== undefined) {
+          const refs = array(a.isolationAuditRefs)
+          if (!refs.length || new Set(refs.map(item => item.operationId)).size !== refs.length || refs.some(ref => {
+            const operation = get('dynamic_operations', ref.operationId, true)
+            return !operation || operation.executionId !== execution.executionId || operation.taskId !== execution.taskId
+              || operation.dispatchBinding?.sessionId !== execution.sessionId || !hasRestartIsolation(operation)
+              || digest(operation.recoverySettlement) !== ref.auditDigest
+          })) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
+          execution.recoveryDrainAudit = { kind: 'host-restart-isolated', refs: clone(refs), recordedAt: stamp }
+        }
         const wasDrained = execution.drained
         stopExecutionTiming(execution, stamp)
         execution.drained = true; execution.recovering = false
@@ -1218,7 +1229,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           const recoverable = current && a.error?.code === 'EXECUTION_PROVIDER_TRANSIENT'
             && terminal?.sessionId === execution.sessionId && terminal.inputVersion === execution.inputVersion
             && terminal.reason === 'error' && Number.isSafeInteger(terminal.endSeq) && terminal.endSeq >= 0
-            && execution.sessionBound && !ops(execution.taskId).some(item => item.executionId === execution.executionId && !terminalOperations.has(item.state))
+            && execution.sessionBound && !ops(execution.taskId).some(item => item.executionId === execution.executionId && operationBlocksRecovery(item))
             && !get('dynamic_tasks', execution.taskId).humanRequests?.some(item => item.status === 'waiting-reply')
           const attempts = execution.providerRecovery?.attempts ?? 0
           if (recoverable && attempts < 3) {
@@ -1255,6 +1266,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const task = assertScope(a.binding)
       assertNoLegacy(task.taskId)
       const key = text(a.key, 'key'), definition = clone(record(a.definition))
+      if (definition.commandDigest && ops(task.taskId).some(operation => hasRestartIsolation(operation)
+        && operation.definition.toolName === definition.toolName && operation.recoverySettlement.proof.commandDigest === definition.commandDigest))
+        fail('DYNAMIC_ISOLATED_OPERATION_REPLAY_FORBIDDEN')
       const keys = resourceKeys(a.resourceKeys)
       const execution = a.binding.executionId ? get('dynamic_executions', a.binding.executionId) : null
       if (execution?.resourceKeys?.length && keys.some(key => !execution.resourceKeys.includes(key))) fail('DYNAMIC_RESOURCE_SCOPE_EXPANSION')
@@ -1381,6 +1395,47 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         instruction: investigated ? 'The original native call returned an error and its turn ended. Bound read-only investigation completed; partial effects remain possible. Retain the failed receipt and limitations. This is not success, noEffect, permission to replay, or authorization for new effects.' : 'The original operation was stopped and may have partial effects. Review the recorded readback before further work. This is not success or authorization to replay.' }
       put('dynamic_operations', operation); releaseOperation(operation)
       wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: 'failed', partialEffectsPossible: true }, `wake:${commandId}`)
+      return changed({ operation })
+    }
+    if (kind === 'operation.record-restart-isolation') {
+      const task = get('dynamic_tasks', a.taskId), operation = get('dynamic_operations', a.operationId), proof = record(a.proof)
+      const execution = get('dynamic_executions', operation.executionId), source = get('dynamic_sources', a.operatorSourceId)
+      const request = task.humanRequests?.find(item => item.requestId === a.humanRequestId)
+      if (typeof webActorId !== 'string' || !webActorId.trim() || source.channel !== 'web' || source.actorId !== webActorId
+        || source.groupId !== task.groupId || source.requestIdentity?.humanRequestId !== a.humanRequestId
+        || !source.requestIdentity.nativeRestartResolutions?.some(item => item.operationId === operation.operationId && item.expectedOperationDigest === proof.operationDigest
+          && item.expectedIsolationDigest === digest(proof.isolation))
+        || task.status !== 'active' || task.control !== 'active' || !task.drained || task.recovering
+        || request?.status !== 'waiting-reply' || request.audience !== 'operator'
+        || request.requirementRevision !== task.requirementRevision || request.controlRevision !== task.controlRevision
+        || a.expectedRequirementRevision !== task.requirementRevision || a.expectedControlRevision !== task.controlRevision)
+        fail('DYNAMIC_OPERATION_OPERATOR_RESOLUTION_REQUIRED')
+      if (operation.taskId !== task.taskId || operation.state !== 'unknown' || operation.recoveryReason !== 'host_restart'
+        || operation.result != null || operation.recoverySettlement || digest(operation) !== proof.operationDigest
+        || proof.kind !== 'native-host-restart-isolated' || proof.operationId !== operation.operationId
+        || proof.taskId !== task.taskId || proof.executionId !== execution.executionId || proof.sessionId !== execution.sessionId
+        || operation.dispatchBinding?.sessionId !== execution.sessionId || operation.job?.owner !== execution.sessionId
+        || !['running', 'stopping'].includes(operation.job?.status) || operation.job.finishedAt !== undefined
+        || !execution.drained && !execution.recovering || !['pwsh', 'bash'].includes(operation.definition?.toolName)
+        || proof.argumentsDigest !== operation.definition.argumentsDigest || proof.exitStatus !== 'unknown'
+        || proof.partialEffectsPossible !== true || proof.noReplay !== true || typeof proof.callId !== 'string'
+        || !Number.isSafeInteger(proof.callSequence) || proof.callSequence < 0
+        || !Number.isSafeInteger(proof.registeredSequence) || proof.registeredSequence <= proof.callSequence
+        || !validIsolationReceipt(proof.isolation, isolationBinding(operation, proof.callId))
+        || !Array.isArray(proof.observations) || !proof.observations.length
+        || proof.observations.some(observation => {
+          const readback = get('dynamic_executions', observation.executionId, true)
+          return !readback || readback.taskId !== task.taskId || readback.sessionId !== observation.sessionId
+            || readback.status !== 'succeeded' || !readback.drained || readback.recovering
+            || readback.definition?.recoveryReadOnly !== true || readback.input?.readbackOperationId !== operation.operationId
+            || readback.inputVersion !== observation.inputVersion || Date.parse(readback.updatedAt) < Date.parse(operation.updatedAt)
+        })) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
+      // This adds an audit decision, never an outcome, exit code or tool result.
+      operation.recoverySettlement = { kind: 'host-restart-isolated', exitStatus: 'unknown', partialEffectsPossible: true,
+        noReplay: true, operatorSourceId: a.operatorSourceId, humanRequestId: a.humanRequestId, recordedAt: stamp, proof: clone(proof) }
+      if (!hasRestartIsolation(operation)) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
+      put('dynamic_operations', operation); releaseOperation(operation)
+      wake(task.taskId, 'operation.isolation-audited', { operationId: operation.operationId, state: 'unknown', exitStatus: 'unknown', noReplay: true }, `wake:${commandId}`)
       return changed({ operation })
     }
     if (kind === 'operation.reconcile-job') {
@@ -1891,7 +1946,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'receipt.get') { const row = db.prepare('SELECT body FROM dynamic_receipts WHERE id=?').get(q.id); value = row ? JSON.parse(row.body) : null }
       else if (q.kind === 'recovery.pending') value = { tasks: all('dynamic_tasks').filter(item => !item.drained),
         groups: all('dynamic_groups').filter(item => !item.drained), executions: all('dynamic_executions').filter(item => !item.drained || item.status === 'queued'),
-        operations: ops().filter(item => !terminalOperations.has(item.state)), notifications: all('dynamic_notifications').filter(item => !['delivered','failed'].includes(item.state)), legacy: legacy() }
+        operations: ops().filter(item => operationBlocksRecovery(item)), notifications: all('dynamic_notifications').filter(item => !['delivered','failed'].includes(item.state)), legacy: legacy() }
       else fail('DYNAMIC_QUERY_UNKNOWN', q.kind)
       return clone(value)
     },

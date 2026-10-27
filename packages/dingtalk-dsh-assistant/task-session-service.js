@@ -1,6 +1,8 @@
 import { deliverTaskNotification, recallTaskOperatorNotification, retryTaskNotification, taskNotificationRecovery } from './notification-delivery.js'
 import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
 import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
+import { inspectIsolatedHostRestart } from './dynamic-operation-readback.js'
+import { hasRestartIsolation, operationBlocksRecovery, verifyRestartIsolation, readAuditedRestartDrain } from './native-restart-isolation.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
@@ -198,6 +200,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const dshExecutionSessions = suppliedExecutionSessions ?? createExecutionSessions({ ctx, withPersistenceWriter: (binding, action) => persistence.runOwned(binding, action), registerPersistence: value => persistence.register(value),
     isCurrent: binding => query('execution.current', { binding }),
     getWorkspaceDir: ({ binding }) => taskExecutionWorkspace(root, binding.taskId, binding.sessionId),
+    readRestartDrainProof: args => readAuditedRestartDrain({ ctx, query, ...args }),
   })
   const claudeExecutionSessions = suppliedClaudeExecutionSessions ?? createClaudeExecutionSessions({ ctx,
     isCurrent: binding => query('execution.current', { binding }),
@@ -818,9 +821,21 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return { accepted: true, sourceId: currentSourceId, processing: stored.result.source.routed ? 'routed' : 'pending' }
   }
 
+  async function verifyTaskRestartIsolations(taskId) {
+    for (const operation of await query('operation.list', { taskId })) if (operation.recoverySettlement && !await verifyRestartIsolation(ctx, operation)) fail('DYNAMIC_ISOLATION_FENCE_UNVERIFIED')
+  }
+
   async function nativeOperation(event) {
     const { binding, callId, toolName, arguments: args } = event
     if (event.effectClass === 'read' || event.effectClass === 'pure') return { readOnly: true }
+    if (event.phase === 'started') {
+      await verifyTaskRestartIsolations(binding.taskId)
+      if (typeof args.command === 'string') for (const operation of await query('operation.list')) {
+        const scope = operation.recoverySettlement?.proof?.isolation?.provenance?.scope
+        if (hasRestartIsolation(operation) && scope?.kind === 'local-postgres'
+          && args.command.replaceAll('/', '\\').toLowerCase().includes(scope.directory.toLowerCase())) fail('DYNAMIC_ISOLATED_SOURCE_REUSE_FORBIDDEN')
+      }
+    }
     const key = `native:${binding.executionId}:${binding.inputVersion ?? 1}:${binding.leaseEpoch}:${callId}`
     const operationId = `operation-${hash(key).slice(0, 40)}`
     if (event.phase === 'job') {
@@ -828,7 +843,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       return { operationId }
     }
     if (event.phase === 'started') {
-      await command('operation.prepare', { binding, operationId, key, definition: { toolName, argumentsDigest: hash(args), effectClass: event.effectClass ?? 'unknown',
+      await command('operation.prepare', { binding, operationId, key, definition: { toolName, argumentsDigest: hash(args), ...(['pwsh', 'bash'].includes(toolName) ? { commandDigest: hash(args.command) } : {}), effectClass: event.effectClass ?? 'unknown',
         ...(['job_output', 'job_list'].includes(toolName) ? { nativeJobRead: false } : {}) },
         authorizationRef: `task:${binding.taskId}:requirement:${binding.requirementRevision}`, resourceKeys: [] }, `prepare:${key}`)
       const receipt = await command('operation.start', { binding, operationId }, `start:${key}`)
@@ -852,6 +867,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const candidate = await query('execution.get', { executionId })
       if (!candidate || candidate.status !== 'queued' || candidate.providerRecovery?.nextAttemptAt || !candidate.drained || candidate.cancelRequested || candidate.resources?.state === 'waiting' || !reserveTask(candidate.taskId)) return
       if ((await requireTask(candidate.taskId)).archivedAt) return
+      await verifyTaskRestartIsolations(candidate.taskId)
       let claimed
       try { claimed = await command('execution.claim', { executionId }) }
       catch (error) {
@@ -1328,8 +1344,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         try {
           const jobs = ctx.get?.('jobs')
           if (jobs?.list?.(execution.sessionId).some(job => ['running','stopping'].includes(job.status))) fail('DYNAMIC_JOB_DRAIN_UNPROVEN')
-          await executionSessions.recoverDrained({ binding, input: execution.input })
-          await command('execution.drained', { binding }, `recovered-drained:${execution.executionId}:${binding.leaseEpoch}`)
+          const drainProof = await executionSessions.recoverDrained({ binding, input: execution.input })
+          await command('execution.drained', { binding, ...(drainProof?.isolationAuditRefs ? { isolationAuditRefs: drainProof.isolationAuditRefs } : {}) }, `recovered-drained:${execution.executionId}:${binding.leaseEpoch}`)
         } catch (error) { failures.set(execution.executionId, { id: execution.executionId, code: error.code ?? error.message }) }
       }
       await refreshTasks()
@@ -1464,6 +1480,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (prior && !args.checkOnly) {
       const originalSource = await query('source.get', { sourceId })
       if (originalSource?.text !== args.reply || hash(originalSource.requestIdentity?.nativeFailureResolutions ?? []) !== hash(args.nativeFailureResolutions ?? [])
+        || hash(originalSource.requestIdentity?.nativeRestartResolutions ?? []) !== hash(args.nativeRestartResolutions ?? [])
         || hash(originalSource.requestIdentity?.artifactScopeCorrectionRequest ?? null) !== hash(args.artifactScopeCorrection ?? null)) fail('DYNAMIC_COMMAND_ID_CONFLICT')
       return taskDTO(prior.result.task)
     }
@@ -1485,8 +1502,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         artifactRoot: taskFilePath(root, correction.coordinationId, 'outputs'), reason: correction.reason.trim(), actorId: config.webActorId }
     }
     const resolutions = args.nativeFailureResolutions ?? []
-    if (resolutions.length && request.audience !== 'operator') fail('TASK_OPERATION_OPERATOR_REQUIRED')
-    const proofs = []
+    const restartResolutions = args.nativeRestartResolutions ?? []
+    const allResolutions = [...resolutions, ...restartResolutions]
+    if (allResolutions.length > 8 || new Set(allResolutions.map(item => item.operationId)).size !== allResolutions.length) fail('DYNAMIC_ARGUMENT_INVALID')
+    if (allResolutions.length && request.audience !== 'operator') fail('TASK_OPERATION_OPERATOR_REQUIRED')
+    const proofs = [], requiredScopeProbes = []
     for (const resolution of resolutions) {
       const operation = await query('operation.get', { operationId: resolution.operationId })
       if (operation?.taskId !== task.taskId) fail('TASK_OPERATION_SCOPE_MISMATCH')
@@ -1500,21 +1520,49 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (!proof) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
       proofs.push({ operationId: operation.operationId, proof })
     }
-    if (args.checkOnly) return { checkOnly: true, writes: 0, taskId: task.taskId, ...(artifactScopeCorrection ? { artifactScopeCorrection } : {}),
-      resolutions: proofs.map(({ operationId, proof }) => ({ operationId, operationDigest: proof.operationDigest,
+    for (const resolution of restartResolutions) {
+      const operation = await query('operation.get', { operationId: resolution.operationId })
+      if (operation?.taskId !== task.taskId) fail('TASK_OPERATION_SCOPE_MISMATCH')
+      if (hasRestartIsolation(operation) && operation.recoverySettlement.operatorSourceId === sourceId
+        && operation.recoverySettlement.proof.operationDigest === resolution.expectedOperationDigest) continue
+      if (hash(operation) !== resolution.expectedOperationDigest) fail('DYNAMIC_OPERATION_SCOPE_STALE')
+      const executions = await query('execution.list', { taskId: task.taskId })
+      const execution = executions.find(item => item.executionId === operation.executionId)
+      if (executionBackend(execution) !== 'dsh') fail('CLAUDE_OPERATION_READBACK_REQUIRED')
+      if (resolution.scopeEvidence && (!resolution.scopeEvidence.probeExecutionId || !resolution.scopeEvidence.probeCallId)) {
+        if (!args.checkOnly) fail('DYNAMIC_SCOPE_ISOLATION_PROBE_REQUIRED')
+        const plan = await inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence: resolution.scopeEvidence, planOnly: true })
+        if (!plan) fail('DYNAMIC_SCOPE_ISOLATION_UNSUPPORTED')
+        requiredScopeProbes.push({ operationId: operation.operationId, readbackOperationId: operation.operationId,
+          command: plan.probe.command, scriptDigest: plan.probe.scriptDigest, scope: plan.probe.spec.scope })
+        continue
+      }
+      if (!resolution.scopeEvidence && !ctx.get?.('nativeJobRecovery')) fail('DYNAMIC_SCOPED_ISOLATION_EVIDENCE_REQUIRED')
+      const proof = await inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence: resolution.scopeEvidence })
+      if (!proof) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
+      if (!args.checkOnly && resolution.expectedIsolationDigest !== hash(proof.isolation)) fail('DYNAMIC_ISOLATION_EVIDENCE_STALE')
+      proofs.push({ operationId: operation.operationId, proof })
+    }
+    if (args.checkOnly) return { checkOnly: true, writes: 0, taskId: task.taskId, ready: requiredScopeProbes.length === 0, requiredScopeProbes,
+      ...(artifactScopeCorrection ? { artifactScopeCorrection } : {}),
+      resolutions: proofs.filter(({ proof }) => proof.kind !== 'native-host-restart-isolated').map(({ operationId, proof }) => ({ operationId, operationDigest: proof.operationDigest,
         resultSequence: proof.resultSequence, turnEndSequence: proof.turnEndSequence,
         investigationCount: new Set(proof.observations.map(item => item.executionId)).size,
-        outcome: 'failed', partialEffectsPossible: true })) }
+        outcome: 'failed', partialEffectsPossible: true })),
+      restartResolutions: proofs.filter(({ proof }) => proof.kind === 'native-host-restart-isolated').map(({ operationId, proof }) => ({ operationId,
+        operationDigest: proof.operationDigest, isolationDigest: hash(proof.isolation), outcome: 'unknown', partialEffectsPossible: true, noReplay: true,
+        unblocksRecovery: true, isolationReceiptId: proof.isolation.receiptId })) }
     const source = { sourceId, groupId: task.groupId, messageId: sourceId, actorId: config.webActorId,
       text: args.reply, timestamp: '', channel: 'web',
-      ...(resolutions.length || artifactScopeCorrection ? { requestIdentity: { humanRequestId: args.humanRequestId,
+      ...(allResolutions.length || artifactScopeCorrection ? { requestIdentity: { humanRequestId: args.humanRequestId,
         ...(resolutions.length ? { nativeFailureResolutions: resolutions } : {}),
+        ...(restartResolutions.length ? { nativeRestartResolutions: restartResolutions } : {}),
         ...(artifactScopeCorrection ? { artifactScopeCorrectionRequest: args.artifactScopeCorrection, artifactScopeCorrection } : {}) } } : {}) }
     const response = { taskId: task.taskId, requestId: args.humanRequestId, sourceId,
       expectedRequirementRevision: args.expectedRequirementRevision, expectedControlRevision: args.expectedControlRevision,
       ...(artifactScopeCorrection ? { artifactScopeCorrection } : {}) }
     let result
-    if (resolutions.length) result = await command('task.human.resolve-failures', { ...response, source, resolutions: proofs }, receiptId)
+    if (allResolutions.length) result = await command('task.human.resolve-failures', { ...response, source, resolutions: proofs }, receiptId)
     else {
       await command('source.record', source, `source:${sourceId}`)
       result = await command('task.human.respond', response, receiptId)

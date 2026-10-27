@@ -258,3 +258,22 @@ test('原生edit值校验以绑定参数和精确拒绝回执对账，歧义错�
  }
  assert.equal(isNativeFilePrecondition('write',{code:'NATIVE_EDIT_ARGUMENT_REJECTED'}),false)
 })
+
+test('blocked drained turn preserves an earlier failed receipt for operator investigation, without granting automatic recovery', async () => {
+ const make=()=>{const f=webFailure();f.end.data.reason.kind='blocked';return f}
+ const f=make(),proof=await inspectInvestigatedNativeFailure(f)
+ assert.equal(proof.kind,'native-investigated-failure')
+ assert.equal(proof.partialEffectsPossible,true)
+ assert.equal(proof.noEffect,undefined)
+ assert.equal(proof.turnEndSequence,f.end.seq)
+ assert.equal(proof.observations[0].executionId,'readback')
+ assert.equal(await inspectFailedNativeWebRead(make()),null)
+ for(const mutate of [
+  x=>{x.execution.drained=false},x=>{x.execution.recovering=true},x=>{x.live.add('session')},
+  x=>{x.jobs.push({status:'running'})},x=>{x.jobs.push({status:'stopping'})},
+  x=>{x.operation.result.cancelled=true},x=>{x.result.data.message.isError=false},
+  x=>{x.readback.input.readbackOperationId='other'},x=>{x.readEvents.pop()},
+  x=>{x.end.data.reason.kind='aborted'},x=>{x.end.data.turn=2},x=>{x.original.pop()},
+  x=>{x.original.splice(-1,0,{seq:4.5,type:'turn/start',data:{turn:2}})},
+ ]){const bad=make();mutate(bad);assert.equal(await inspectInvestigatedNativeFailure(bad),null)}
+})
