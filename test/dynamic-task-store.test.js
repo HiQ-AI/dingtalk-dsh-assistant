@@ -2056,3 +2056,38 @@ test('failed round freezes at its first result, not at repeated receipt, drain o
   await f.reopen()
   assert.deepEqual(await round(), failed)
 })
+
+
+test('cancelled Host-interrupted task reopens only into bound readonly recovery, then audit permits business without replay', async t => {
+ const f=await isolatedRestartLedger(t,false)
+ await f.command('task.control',{taskId:f.binding.taskId,control:'cancelled',expectedControlRevision:1})
+ const original=await f.query({kind:'operation.get',operationId:f.operationId})
+ assert.equal((await f.query({kind:'task.get',taskId:f.binding.taskId})).restartRecoveryEligible,true)
+ const reopened=(await f.command('task.reopen',{taskId:f.binding.taskId,request:'Resume stopped deployment task',expectedRequirementRevision:1,expectedControlRevision:2})).result.task
+ assert.equal(reopened.control,'active');assert.equal(reopened.requirementRevision,2);assert.equal(reopened.controlRevision,3)
+ assert.deepEqual(reopened.restartRecoveryOperations,[f.operationId])
+ const owner=(await f.command('task.claim',{taskId:f.binding.taskId})).result
+ await assert.rejects(f.command('execution.dispatch',{binding:owner.binding,key:'business',prompt:'write'}),{code:'DYNAMIC_RESTART_RECOVERY_READ_ONLY'})
+ await assert.rejects(f.command('execution.dispatch',{binding:owner.binding,key:'foreign-read',prompt:'inspect',definition:{recoveryReadOnly:true},input:{readbackOperationId:'other'}}),{code:'DYNAMIC_RESTART_RECOVERY_READ_ONLY'})
+ await assert.rejects(f.command('operation.prepare',{binding:owner.binding,operationId:'owner-write',key:'owner-write',definition:{toolName:'pwsh'}}),{code:'DYNAMIC_RESTART_RECOVERY_READ_ONLY'})
+ const probe=(await f.command('execution.dispatch',{binding:owner.binding,key:'bound-probe',prompt:'fixed readonly probe',definition:{recoveryReadOnly:true},input:{readbackOperationId:f.operationId}})).result.execution
+ const pb=(await f.command('execution.claim',{executionId:probe.executionId})).result.binding
+ await f.command('execution.result',{binding:pb,output:{observed:true}});await f.command('execution.drained',{binding:pb})
+ await f.command('task.wait',{binding:owner.binding,action:'blocked',summary:'Confirm scoped isolation',question:'Confirm audit',humanRequest:{requestId:'after-stop',audience:'operator',reason:'Host restart',attemptedActions:['Bound investigation']}})
+ await f.command('task.drained',{binding:owner.binding})
+ const confirm=structuredClone(f.confirm);confirm.requestId='after-stop';confirm.expectedRequirementRevision=2;confirm.expectedControlRevision=3;confirm.source.requestIdentity.humanRequestId='after-stop'
+ await f.command('task.human.resolve-failures',confirm)
+ const audited=await f.query({kind:'operation.get',operationId:f.operationId});assert.equal(audited.state,'unknown');assert.equal(audited.result,original.result)
+ assert.deepEqual({...audited,recoverySettlement:undefined},{...original,recoverySettlement:undefined})
+ const next=(await f.command('task.claim',{taskId:f.binding.taskId})).result
+ assert.equal((await f.command('execution.dispatch',{binding:next.binding,key:'new-step',prompt:'new authorized business step'})).result.execution.status,'queued')
+})
+
+
+test('ordinary cancelled task cannot be reopened through interrupted recovery exception', async t => {
+ const f=await fixture(t),owner=await f.task()
+ await f.command('task.wait',{binding:owner.binding,action:'wait',summary:'No interrupted operations'})
+ await f.command('task.drained',{binding:owner.binding})
+ await f.command('task.control',{taskId:'task',control:'cancelled',expectedControlRevision:1})
+ await assert.rejects(f.command('task.reopen',{taskId:'task',request:'Not a Host recovery',expectedRequirementRevision:1,expectedControlRevision:2}),{code:'DYNAMIC_TASK_NOT_QUIESCENT'})
+})

@@ -979,7 +979,7 @@ export async function openResidentStore(storageDomain) {
         if (action.kind !== 'new-task') {
           if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) { result = { status: 'task-stale', taskId: action.taskId }; return latest }
           if (latest.taskReservations.some((reservation) => reservation.taskId === task.taskId) && !(action.kind === 'task-cancel' && blockedReservationsOnly(latest, task.taskId))) { result = { status: 'task-busy', taskId: task.taskId }; return latest }
-          if ((action.kind === 'task-reopen' && task.state !== 'completed') || (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed')) { result = { status: 'task-state-invalid', taskId: task.taskId }; return latest }
+          if ((action.kind === 'task-reopen' && task.state !== 'completed' && !(taskSessionReader && task.state === 'cancelled' && task.restartRecoveryEligible === true)) || (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed')) { result = { status: 'task-state-invalid', taskId: task.taskId }; return latest }
           const basisIds = new Set([messageId, ...taskRevisionBasis(latest, task, { ...action, topicRefs })])
           if (!taskSessionReader) assertTaskContextRevision(task, action, basisIds)
         }

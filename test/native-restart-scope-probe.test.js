@@ -1,7 +1,8 @@
 import test from 'node:test'
+import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import { restartFixture } from './fixtures/native-restart-isolation.js'
-import { restartScopeProbePlan, localRestartScope } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
+import { restartScopeProbePlan, localRestartScope, restartProducerFilter } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
 import { inspectIsolatedHostRestart } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
 import { isolationBinding, verifyRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 
@@ -73,4 +74,26 @@ for (const [name, alter] of Object.entries({
  const oldHome = process.env.DSH_HOME; process.env.DSH_HOME = 'D:\\host'
  try { const f = probeFixture(pg, true); alter(f); f.updateOutput(); assert.equal(await inspectIsolatedHostRestart(f), null) }
  finally { if (oldHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = oldHome }
+})
+
+
+test('actual PowerShell producer filter excludes unrelated Claude and retains DSH ownership and original-source descendants', {skip:process.platform!=='win32'}, () => {
+ const created = '2026-10-27T07:10:00Z', root = 'D:\\host\\profiles\\web\node_modules\\@deepseek-ai'
+ const rows = [
+  {ProcessId:1,ParentProcessId:100,Name:'pwsh.exe',CommandLine:'pwsh -File C:\\other\\cc-pool.ps1',CreationDate:created},
+  {ProcessId:2,ParentProcessId:1,Name:'claude.exe',CommandLine:'claude --session-id unrelated',CreationDate:created},
+  {ProcessId:3,ParentProcessId:100,Name:'node.exe',CommandLine:root+'\\dsh-subprocess-local\\lib\\runner.js',CreationDate:created},
+  {ProcessId:4,ParentProcessId:900,Name:'pwsh.exe',CommandLine:'pwsh -Command work',CreationDate:created},
+  {ProcessId:5,ParentProcessId:4,Name:'java.exe',CommandLine:'java compiler',CreationDate:created},
+  {ProcessId:6,ParentProcessId:991,Name:'python.exe',CommandLine:'python worker',CreationDate:created},
+  {ProcessId:7,ParentProcessId:100,Name:'java.exe',CommandLine:'java unrelated-project',CreationDate:created},
+  {ProcessId:8,ParentProcessId:100,Name:'node.exe',CommandLine:root+'\\dsh\\lib\\bin.js',CreationDate:'2026-10-27T08:00:00Z'},
+  {ProcessId:11,ParentProcessId:100,Name:'postgres.exe',CommandLine:'D:\\other-pg\\postgres.exe -D D:\\other-db',CreationDate:created},
+  {ProcessId:9,ParentProcessId:100,Name:'pwsh.exe',CommandLine:root+'\\dsh-provider\\entry.js',CreationDate:null},
+  {ProcessId:10,ParentProcessId:100,Name:'pwsh.exe',CommandLine:'pwsh -EncodedCommand '+Buffer.from(root+'\\dsh-provider\\entry.js','utf16le').toString('base64'),CreationDate:created},
+ ]
+ const encoded=Buffer.from(JSON.stringify(rows)).toString('base64')
+ const script=restartProducerFilter+`\n$rows=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))|ConvertFrom-Json\n$spec=[pscustomobject]@{hostPid=900;managedProviderRoot='${root}'}\n@(Get-RestartRelatedProducer $rows $spec ([DateTimeOffset]::Parse('2026-10-27T07:00:00Z').UtcDateTime) ([DateTimeOffset]::Parse('2026-10-27T07:32:00Z').UtcDateTime) 991)|Select-Object -ExpandProperty ProcessId|ConvertTo-Json -Compress`
+ const output=execFileSync('pwsh',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true})
+ assert.deepEqual(JSON.parse(output),[3,4,5,6,9,10])
 })
