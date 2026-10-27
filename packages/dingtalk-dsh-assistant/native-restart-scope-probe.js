@@ -23,15 +23,45 @@ export function localRestartScope(command) {
  return { kind: 'local-maven-compile', wrapper: compile[1], directory: compile[2], evidenceFile: win32.join(compile[3], compile[4] + '.json') }
 }
 
+// Shared by the actual probe and executable PowerShell classification tests.
+export const restartProducerFilter = `
+function Get-RestartSourceText($Entry) {
+ $text = [string]$Entry.CommandLine
+ if ($text -match '(?i)-EncodedCommand\\s+"?([A-Za-z0-9+/=]+)') {
+  try { $text += ' ' + [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1])) } catch {}
+ }
+ return $text.Replace('/','\\')
+}
+function Get-RestartRelatedProducer($Processes, $Spec, $WindowStart, $WindowEnd, $OriginalSourcePid) {
+ $related = [Collections.Generic.HashSet[long]]::new()
+ [void]$related.Add([long]$Spec.hostPid)
+ if ($OriginalSourcePid -gt 0) { [void]$related.Add([long]$OriginalSourcePid) }
+ do {
+  $changed = $false
+  foreach ($entry in $Processes) {
+   if ($related.Contains([long]$entry.ParentProcessId) -and $related.Add([long]$entry.ProcessId)) { $changed = $true }
+  }
+ } while ($changed)
+ $providerRoot = $Spec.managedProviderRoot.Replace('/','\\')
+ foreach ($entry in $Processes) {
+  if ($related.Contains([long]$entry.ProcessId)) { $entry; continue }
+  $sourceText = Get-RestartSourceText $entry
+  $inWindow = $null -eq $entry.CreationDate -or ($entry.CreationDate.ToUniversalTime() -ge $WindowStart -and $entry.CreationDate.ToUniversalTime() -le $WindowEnd)
+  if ($inWindow -and $sourceText.IndexOf($providerRoot,[StringComparison]::OrdinalIgnoreCase) -ge 0) { $entry }
+ }
+}
+`
+
 export function restartScopeProbePlan({ command, binding, evidence, dshHome = process.env.DSH_HOME }) {
  const scope = localRestartScope(command)
  if (!scope || !safePath(dshHome) || !safePath(evidence?.hostLogPath) || !/^[a-f0-9]{64}$/u.test(evidence.hostLogSha256 ?? '')
   || !Number.isSafeInteger(evidence.hostPid) || evidence.hostPid < 1
   || evidence.producerScopeReviewed !== true || evidence.localEffectsOnlyConfirmed !== true || evidence.excludeOriginalSourcesConfirmed !== true) return null
  const spec = { schema: 'native-restart-scope-v1', binding, scope, hostPid: evidence.hostPid, hostLogPath: evidence.hostLogPath,
-  hostLogSha256: evidence.hostLogSha256, providerFiles: providerFiles.map(([path, sha256]) => ({ path: win32.join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai', path), sha256 })) }
+  hostLogSha256: evidence.hostLogSha256, managedProviderRoot: win32.join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai'), providerFiles: providerFiles.map(([path, sha256]) => ({ path: win32.join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai', path), sha256 })) }
  const encoded = Buffer.from(JSON.stringify(spec)).toString('base64')
  const probe = `$ErrorActionPreference = 'Stop'
+${restartProducerFilter}
 $s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')) | ConvertFrom-Json
 $log = Get-Item -LiteralPath $s.hostLogPath -ErrorAction Stop
 if ($log.PSIsContainer -or ($log.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'HOST_LOG_NOT_REGULAR' }
@@ -48,23 +78,22 @@ $hostCount = @($all | Where-Object { $_.ProcessId -eq $s.hostPid }).Count
 $hostChildren = @($all | Where-Object { $_.ParentProcessId -eq $s.hostPid }).Count
 $windowStart = [DateTimeOffset]::FromUnixTimeMilliseconds($s.binding.startedAt - 5000).UtcDateTime
 $windowEnd = $log.LastWriteTimeUtc
-$producerNames = @('node.exe','cmd.exe','pwsh.exe','powershell.exe','python.exe','python3.exe','java.exe','javac.exe','postgres.exe','pg_ctl.exe')
-$legacySourceCount = @($all | Where-Object { $producerNames -contains $_.Name -and ($null -eq $_.CreationDate -or ($_.CreationDate.ToUniversalTime() -ge $windowStart -and $_.CreationDate.ToUniversalTime() -le $windowEnd)) }).Count
 $portCount = 0; $preserved = $false; $sourceProcessId = 0; $artifactState = $null
 if ($s.scope.kind -eq 'local-postgres') {
  $sourcePidFile = Join-Path $s.scope.directory 'postmaster.pid'
  $sourcePidLines = @([IO.File]::ReadAllLines($sourcePidFile)); $sourceProcessId = [int]$sourcePidLines[0]
  $preserved = $sourcePidLines.Count -ge 4 -and [IO.Path]::GetFullPath($sourcePidLines[1]) -eq [IO.Path]::GetFullPath($s.scope.directory) -and [int]$sourcePidLines[3] -eq $s.scope.port
  $portCount = @(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.LocalPort -eq $s.scope.port }).Count
- $writers = @($all | Where-Object { $_.ProcessId -eq $sourceProcessId -or @('postgres.exe','pg_ctl.exe') -contains $_.Name -or ($_.CommandLine -and $_.CommandLine.IndexOf($s.scope.directory,[StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count
+ $writers = @($all | Where-Object { $_.ProcessId -eq $sourceProcessId -or ((Get-RestartSourceText $_).IndexOf($s.scope.directory.Replace('/','\\'),[StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count
  $artifactState = 'retained-unverified-database'
 } else {
  $record = [IO.File]::ReadAllText($s.scope.evidenceFile) | ConvertFrom-Json
  $sourceProcessId = [int]$record.pid
  $preserved = $sourceProcessId -gt 0 -and $record.cwd -eq $s.scope.directory -and $record.state -eq 'running' -and $null -eq $record.exitCode
- $writers = @($all | Where-Object { $_.ProcessId -eq $sourceProcessId -or ($_.CommandLine -and $_.CommandLine.IndexOf($s.scope.directory,[StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count
+ $writers = @($all | Where-Object { $_.ProcessId -eq $sourceProcessId -or ((Get-RestartSourceText $_).IndexOf($s.scope.directory.Replace('/','\\'),[StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count
  $artifactState = 'retained-unverified-build'
 }
+$legacySourceCount = @(Get-RestartRelatedProducer $all $s $windowStart $windowEnd $sourceProcessId).Count
 [ordered]@{schema=$s.schema;specDigest='${hash(spec)}';observedAt=[DateTimeOffset]::UtcNow.ToString('o');hostFatal=$fatal;hostFatalTime=$log.LastWriteTimeUtc.ToString('o');providerContractVerified=$providerOk;originalHostCount=$hostCount;originalHostChildCount=$hostChildren;legacySourceCount=$legacySourceCount;sourceWriterCount=$writers;listeningCount=$portCount;originalArtifactsPreserved=$preserved;artifactState=$artifactState} | ConvertTo-Json -Compress
 `
  return { command: probe, spec, specDigest: hash(spec), scriptDigest: hash({ command: probe }) }
