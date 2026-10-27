@@ -32,4 +32,3 @@ export function restartFixture(launchAcknowledged = true, commandOverride) {
  return { operation, execution, executions: [execution, readback], readback, ctx, original, reads, receipt, authority, live, jobs,
   revoke: () => { verified = false } }
 }
-

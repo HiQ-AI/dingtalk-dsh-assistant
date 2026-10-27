@@ -50,19 +50,19 @@ $windowStart = [DateTimeOffset]::FromUnixTimeMilliseconds($s.binding.startedAt -
 $windowEnd = $log.LastWriteTimeUtc
 $producerNames = @('node.exe','cmd.exe','pwsh.exe','powershell.exe','python.exe','python3.exe','java.exe','javac.exe','postgres.exe','pg_ctl.exe')
 $legacySourceCount = @($all | Where-Object { $producerNames -contains $_.Name -and ($null -eq $_.CreationDate -or ($_.CreationDate.ToUniversalTime() -ge $windowStart -and $_.CreationDate.ToUniversalTime() -le $windowEnd)) }).Count
-$portCount = 0; $preserved = $false; $pid = 0; $artifactState = $null
+$portCount = 0; $preserved = $false; $sourceProcessId = 0; $artifactState = $null
 if ($s.scope.kind -eq 'local-postgres') {
- $pidFile = Join-Path $s.scope.directory 'postmaster.pid'
- $pidLines = @([IO.File]::ReadAllLines($pidFile)); $pid = [int]$pidLines[0]
- $preserved = $pidLines.Count -ge 4 -and [IO.Path]::GetFullPath($pidLines[1]) -eq [IO.Path]::GetFullPath($s.scope.directory) -and [int]$pidLines[3] -eq $s.scope.port
+ $sourcePidFile = Join-Path $s.scope.directory 'postmaster.pid'
+ $sourcePidLines = @([IO.File]::ReadAllLines($sourcePidFile)); $sourceProcessId = [int]$sourcePidLines[0]
+ $preserved = $sourcePidLines.Count -ge 4 -and [IO.Path]::GetFullPath($sourcePidLines[1]) -eq [IO.Path]::GetFullPath($s.scope.directory) -and [int]$sourcePidLines[3] -eq $s.scope.port
  $portCount = @(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.LocalPort -eq $s.scope.port }).Count
- $writers = @($all | Where-Object { $_.ProcessId -eq $pid -or @('postgres.exe','pg_ctl.exe') -contains $_.Name -or ($_.CommandLine -and $_.CommandLine.IndexOf($s.scope.directory,[StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count
+ $writers = @($all | Where-Object { $_.ProcessId -eq $sourceProcessId -or @('postgres.exe','pg_ctl.exe') -contains $_.Name -or ($_.CommandLine -and $_.CommandLine.IndexOf($s.scope.directory,[StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count
  $artifactState = 'retained-unverified-database'
 } else {
  $record = [IO.File]::ReadAllText($s.scope.evidenceFile) | ConvertFrom-Json
- $pid = [int]$record.pid
- $preserved = $pid -gt 0 -and $record.cwd -eq $s.scope.directory -and $record.state -eq 'running' -and $null -eq $record.exitCode
- $writers = @($all | Where-Object { $_.ProcessId -eq $pid -or ($_.CommandLine -and $_.CommandLine.IndexOf($s.scope.directory,[StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count
+ $sourceProcessId = [int]$record.pid
+ $preserved = $sourceProcessId -gt 0 -and $record.cwd -eq $s.scope.directory -and $record.state -eq 'running' -and $null -eq $record.exitCode
+ $writers = @($all | Where-Object { $_.ProcessId -eq $sourceProcessId -or ($_.CommandLine -and $_.CommandLine.IndexOf($s.scope.directory,[StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count
  $artifactState = 'retained-unverified-build'
 }
 [ordered]@{schema=$s.schema;specDigest='${hash(spec)}';observedAt=[DateTimeOffset]::UtcNow.ToString('o');hostFatal=$fatal;hostFatalTime=$log.LastWriteTimeUtc.ToString('o');providerContractVerified=$providerOk;originalHostCount=$hostCount;originalHostChildCount=$hostChildren;legacySourceCount=$legacySourceCount;sourceWriterCount=$writers;listeningCount=$portCount;originalArtifactsPreserved=$preserved;artifactState=$artifactState} | ConvertTo-Json -Compress

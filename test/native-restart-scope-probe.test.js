@@ -44,6 +44,7 @@ for (const [command, acknowledged] of [[pg, true], [maven, false]]) test(`existi
   const f = probeFixture(command, acknowledged)
   const plan = await inspectIsolatedHostRestart({ ...f, planOnly: true })
   assert.equal(plan.probe.command, f.plan.command)
+  assert.doesNotMatch(plan.probe.command, /\$(?:pid|home|host|error|pshome)\s*=/iu, 'fixed probe must not assign PowerShell automatic variables')
   const proof = await inspectIsolatedHostRestart(f)
   assert.equal(proof.isolation.issuer, 'native-windows-scope-evidence-v1')
   assert.equal(proof.exitStatus, 'unknown')
