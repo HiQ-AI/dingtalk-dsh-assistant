@@ -7,6 +7,21 @@ import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 // Reproduce the a5 nativeOperation ledger's canonical arguments/content digest.
 const canonical = value => value && typeof value==='object' ? Array.isArray(value) ? value.map(canonical) : Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])) : value
 const hash = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex')
+test('investigated Host shell identity rejection matches its exact pre-render ledger digest', async () => {
+ const make=()=>{const f=webFailure();f.operation.definition.toolName=f.operation.result.toolName=f.call.data.name='pwsh'
+  f.operation.result.errorCode='execution_background_identity_missing'
+  f.result.data.message.content=[{type:'text',text:'Error: execution_background_identity_missing'}]
+  f.operation.result.resultDigest=hash([{type:'text',text:'execution_background_identity_missing'}]);return f}
+ const proof=await inspectInvestigatedNativeFailure(make())
+ assert.equal(proof?.kind,'native-investigated-failure');assert.equal(proof.partialEffectsPossible,true);assert.equal(proof.noEffect,undefined)
+ assert.equal(await readNativeOperationContext(make()),null)
+ for(const mutate of [f=>{f.operation.result.errorCode='different'},f=>{f.operation.result.resultDigest='wrong'},
+  f=>{f.result.data.message.content[0].text='Error: different'},f=>{f.result.data.message.content.push({type:'text',text:'extra'})},
+  f=>{f.operation.definition.toolName=f.operation.result.toolName=f.call.data.name='send_message'},f=>{f.readback.status='running'},
+  f=>{f.readback.input.readbackOperationId='other'},f=>{f.execution.drained=false},f=>{f.end.data.reason.kind='aborted'}]){
+  const f=make();mutate(f);assert.equal(await inspectInvestigatedNativeFailure(f),null)
+ }
+})
 function fixture(){
  const binding={kind:'task-execution',taskId:'task',executionId:'execution',sessionId:'session',inputVersion:1,leaseEpoch:1,inputDigest:'original'}
  const operation={operationId:'operation',taskId:'task',executionId:'execution',dispatchBinding:binding,state:'unknown',key:'native:execution:1:1:call-1',definition:{toolName:'pwsh',argumentsDigest:hash({command:'git fetch origin --prune',timeoutMs:20000})},result:{toolName:'pwsh',callId:'call-1',isError:true,resultDigest:hash([{type:'text',text:legacyDrainedError}])},updatedAt:'2026-10-14T01:00:00Z'}
