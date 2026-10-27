@@ -9,11 +9,11 @@
 | SG1 | 等待中事实追问 | 原问题保留、事实回复送达路径及无越权回归通过 | 完成 |
 | SG2 | 相关技能刷新 | 实际版本变化对原会话可见，旧审计保留、无全量灌入 | 完成 |
 | SG3 | 现有技能预检与收尾 | 安装内容精确更新、结构/脚本/行为验证及摘要回读 | 完成 |
-| SG4 | 整合交付 | 定向回归、文档、精确 diff、提交和 PR 回读 | 进行中 |
+| SG4 | 整合交付 | 定向回归、文档、精确 diff、提交和 PR 回读 | 完成 |
 
 ## 当前检查点
 
-复用隔离检出，分支 worktree-task-followup-efficiency，基线 17491783。前置方案见 docs/spec/task-followup-efficiency.md。121 项存储、6 项技能观察单元、24 项相关原生/打包用例最终均通过；一项打包用例初次超时，同候选单独复验通过。当前只剩提交与 PR 独立回读。尚未修改运行实例或业务库；不合并、部署或真实发信。
+复用隔离检出，分支 worktree-task-followup-efficiency，基线 17491783。前置方案见 docs/spec/task-followup-efficiency.md。121 项存储、6 项技能观察单元、24 项相关原生/打包用例最终均通过；一项打包用例初次超时，同候选单独复验通过。源码提交 fda06440 已推送，PR [#268](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/268) 已独立回读为 OPEN，main ← worktree-task-followup-efficiency，标题/正文/源码提交一致；CI 检查列表为空。尚未修改运行实例或业务库；未合并、部署或真实发信。
 
 ## 决策和证据
 
