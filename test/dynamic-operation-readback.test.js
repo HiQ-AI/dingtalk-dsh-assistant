@@ -38,6 +38,24 @@ function webFailure() {
  return f
 }
 
+for (const drained of [true, false]) test(`Host restart running acknowledgement and successful investigation do not invent a terminal result: drained=${drained}`, async () => {
+ const f = fixture()
+ f.operation.result = null
+ f.operation.recoveryReason = 'host_restart'
+ f.operation.job = { jobId: 'original-owned-job', owner: f.execution.sessionId, startedAt: 100, status: 'running' }
+ f.execution.drained = drained
+ // Draft retained a successful launch acknowledgement; material retained only registration.
+ if (drained) f.original[3].data.message = { role: 'tool', toolCallId: 'call-1', isError: false,
+  content: [{ type: 'text', text: JSON.stringify({ nativeJobReceipt: f.operation.job }) }] }
+ else f.original.pop()
+ assert.equal(await inspectStoppedNativeOperation(f), null)
+ assert.equal(await inspectInvestigatedNativeFailure(f), null)
+ assert.equal(await inspectFailedNativeWebRead(f), null)
+ assert.equal(f.operation.state, 'unknown')
+ assert.equal(f.operation.job.status, 'running')
+ assert.equal(f.operation.job.finishedAt, undefined)
+})
+
 test('历史原生job读取仅凭精确missing-job拒绝和完整终态结算，写工具与替换身份仍拒绝', async()=>{
  const make=()=>{
   const f=webFailure()

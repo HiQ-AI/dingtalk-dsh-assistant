@@ -428,6 +428,69 @@ test('native recovery validates durable identity and refuses missing bound sessi
   await assert.rejects(next.manager.recoverDrained({ binding: dynamic({ sessionId: 'missing-session', sessionBound: true }) }), { code: 'execution_session_missing' })
 })
 
+for (const fixture of [
+  { name: 'draft registered and running acknowledgement', lines: [
+    { type: 'job/registered', seq: 1178, data: { jobId: 'pwsh-redacted-draft', owner: 'original-draft-session', kind: 'pwsh', startedAt: 100, toolCall: { callId: 'original-draft-call' } } },
+    { type: 'tool/result', seq: 1179, data: { message: { role: 'tool', toolCallId: 'original-draft-call', isError: false, content: [{ type: 'text', text: JSON.stringify({ nativeJobReceipt: { jobId: 'pwsh-redacted-draft', status: 'running' } }) }] } } },
+  ] },
+  { name: 'material registered without result', lines: [
+    { type: 'tool/call', seq: 1099, data: { callId: 'original-material-call', name: 'pwsh', arguments: '{}' } },
+    { type: 'job/registered', seq: 1100, data: { jobId: 'pwsh-redacted-material', owner: 'original-material-session', kind: 'pwsh', startedAt: 200, toolCall: { callId: 'original-material-call' } } },
+  ] },
+]) test(`trusted native read preserves historical job data without treating it as a launch: ${fixture.name}`, async t => {
+  const h = await host({ script: [{ name: 'read', args: {} }, dynamicSubmit('history inspected')] })
+  const preset = await nativePreset(h), receipts = []
+  const value = { kind: 'text', path: 'history.jsonl', offset: 1,
+    lines: fixture.lines.map((line, index) => ({ number: index + 1, text: JSON.stringify(line) })), totalLines: fixture.lines.length }
+  preset.standing.ctx.tools.register({ name: 'read', description: 'Native historical file read fixture', parameters: { type: 'object' }, output, execute: () => value })
+  t.after(async () => { await h.close(); await preset.standing.dispose() })
+  const result = await dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async event => { receipts.push(event); return {} } })
+  assert.equal(result.status, 'submitted')
+  const started = receipts.find(event => event.phase === 'started' && event.toolName === 'read')
+  const settled = receipts.find(event => event.phase === 'settled' && event.toolName === 'read')
+  assert.equal(started.effectClass, 'read')
+  assert.equal(settled.result.isError, false)
+  assert.equal(settled.jobReceipt, null)
+  assert.match(JSON.stringify(h.requests[1]), /pwsh-redacted-/)
+  assert.doesNotMatch(JSON.stringify(h.requests), /execution_background_identity_missing/)
+})
+
+for (const mode of ['write', 'replace']) test(`read name does not exempt a side-effecting or replaced tool from background identity guard: ${mode}`, async t => {
+  const h = await host({ script: [...(mode === 'replace' ? [{ name: 'replace_read', args: {} }] : []), { name: 'read', args: {} }, dynamicSubmit('blocked')] })
+  const preset = await nativePreset(h), receipts = []
+  const tool = { name: 'read', description: 'Untrusted replacement fixture', parameters: { type: 'object' }, output,
+    execute: () => ({ lines: [{ number: 1, text: JSON.stringify({ jobId: 'unmanaged', status: 'running' }) }] }) }
+  const dispose = preset.standing.ctx.tools.register({ ...tool, ...(mode === 'write' ? { effectClass: 'write' } : {}) })
+  if (mode === 'replace') preset.standing.ctx.tools.register({ name: 'replace_read', description: 'Replace the original read definition', parameters: { type: 'object' }, output,
+    execute() { dispose(); preset.standing.ctx.tools.register(tool); return {} } })
+  t.after(async () => { await h.close(); await preset.standing.dispose() })
+  await dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async event => { receipts.push(event); return {} } })
+  const settled = receipts.find(event => event.phase === 'settled' && event.toolName === 'read')
+  assert.equal(settled.result.isError, true)
+  assert.match(JSON.stringify(settled.result), /execution_background_identity_missing/)
+})
+
+test('real structured native job identity is validated even when returned by a trusted read', async t => {
+  const h = await host({ script: [{ name: 'read', args: {} }, dynamicSubmit('blocked')] })
+  const preset = await nativePreset(h), receipts = []
+  preset.standing.ctx.tools.register({ name: 'read', description: 'Unexpected actual job fixture', parameters: { type: 'object' }, output,
+    execute: () => ({ jobId: 'unexpected-real-job', status: 'running' }) })
+  t.after(async () => { await h.close(); await preset.standing.dispose() })
+  await dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async event => { receipts.push(event); return {} } })
+  const settled = receipts.find(event => event.phase === 'settled' && event.toolName === 'read')
+  assert.equal(settled.result.isError, true)
+  assert.match(JSON.stringify(settled.result), /DYNAMIC_JOB_REGISTRY_REQUIRED/)
+})
+
+test('unverifiable shell background identity in text still cannot report false success', async t => {
+  const h = await host({ script: [{ name: 'pwsh', args: {} }, dynamicSubmit('blocked')] })
+  const preset = await nativePreset(h, { execute: () => ({ text: JSON.stringify({ jobId: 'unmanaged-shell', status: 'running' }) }) }), receipts = []
+  t.after(async () => { await h.close(); await preset.standing.dispose() })
+  await dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async event => { receipts.push(event); return {} } })
+  assert.equal(receipts[1].result.isError, true)
+  assert.match(JSON.stringify(receipts[1].result), /execution_background_identity_missing/)
+})
+
 test('unverifiable background job without its native registry cannot report false success', async t => {
   const h = await host({ script: [{ name: 'pwsh', args: {} }, dynamicSubmit('blocked')] })
   const preset = await nativePreset(h, { execute: () => ({ jobId: 'background-build', status: 'running' }) })

@@ -403,7 +403,10 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
             if (background && call.jobReceipt && ['running', 'stopping'].includes(call.jobReceipt.status)) {
               (entry.backgroundJobs ??= []).push({ call, result, jobs, startedAt })
             }
-            if (hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
+            // Native file reads may contain serialized historical job receipts.
+            // Their data is not a new process launch. The structured native job
+            // identity above is still collected and validated for every tool.
+            if (!(exec.name === 'read' && isReadonly(exec)) && hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
             return result
           })
           const result = await (entry.fileScope ? entry.fileScope.run(dispatch, { readOnly: isReadonly(exec) }) : dispatch())
