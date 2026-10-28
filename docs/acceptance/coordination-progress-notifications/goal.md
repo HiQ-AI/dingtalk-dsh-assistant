@@ -1,6 +1,6 @@
 # 进度询问与协调通知全路径修复
 
-> 状态：ACTIVE
+> 状态：COMPLETE
 > Goal ID：coordination-progress-notifications-20261028
 > 最近维护：2026-10-28T11:29:21+08:00
 > 权威目标：D:/codex/worktrees/coordination-progress-notifications/dingtalk-dsh-assistant/docs/acceptance/coordination-progress-notifications/goal.md
@@ -25,12 +25,12 @@
 | SG1 | 现场与全路径分析 | 四事项及重复通知完整来源链、反证和根因 | 已完成 | round-1.md、round-1-live.json |
 | SG2 | 查询与协调边界修复 | 查询零业务变更，真实指令回归通过 | 已完成 | round-2.md、round-3.md |
 | SG3 | 通知生成与触发修复 | 具体事项、准确状态、无无价值重复 | 已完成 | round-3.md，41项摘要测试通过 |
-| SG4 | 集成验证与交付 | 定向测试、文档、PR 独立回读 | 进行中 | 302项集成及127项最终回归通过；PR待创建 |
+| SG4 | 集成验证与交付 | 定向测试、文档、PR 独立回读 | 已完成 | 302项集成及127项最终回归通过；PR #281 OPEN独立回读 |
 
 ## 当前检查点
 - 当前子目标：SG4
-- 唯一下一步：提交并推送已验证改动，创建PR并独立回读状态。
-- 未闭环项：PR交付；正式安装和真实模型/渠道未验证。
+- 唯一下一步：本轮源码交付已完成；上线时按更新runbook安装并独立核验。
+- 未闭环项：本轮源码交付无；正式安装和真实模型/渠道未验证，不能声称线上已修复。
 
 ## 进展
 - 2026-10-28：主检出较旧，已 fetch 并创建最新 main 独立 worktree。最新 coordination-summary.js 有固定“原事项”和版本变化文案，但递归来源尚未证实。
@@ -43,3 +43,5 @@
 ## 重要信息
 - 四事项：修复终审只读数据UPR导入覆盖并部署UAT2；修复新建未保存草稿UPR导入受限；修复草稿UPR导入物料名称回显并部署UAT2；按v4实现合并数据集UPR替换与来源保留并提测UAT2。
 - 正式 profile：D:/dsh_home/profiles/web/cordis.patch.yml；存储配置指向 D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116；Assistant 端口 18998；当前动态账本为 D:/baibu-agent/.dsh/task-sessions.sqlite。
+
+- PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/281；2026-10-28独立回读 number=281,state=OPEN。
