@@ -124,3 +124,15 @@ test('page hydration reads selected IDs only and summary execution pages read no
  observerPage(db,{collection:'executions',taskId:'t',summary:true,limit:1},'test',hydrate)
  assert.equal(reads.length,3)
 })
+
+
+test('authorization pages hydrate selected task/request details rather than SQL-assembled projections',t=>{
+ const {db,put}=fixture(t),reads=[]
+ for(let n=0;n<25;n++) put('tasks',`t${n}`,{taskId:`t${n}`,objective:'preview',humanRequests:[{requestId:`r${n}`,status:'waiting-reply',createdAt:'same'}]})
+ const result=observerPage(db,{collection:'authorizations',filter:'pending',limit:2,offset:5},'test',(table,id)=>{
+  reads.push([table,id]);return {objective:'full objective',humanRequests:[{requestId:'r'+id.slice(1),status:'waiting-reply',question:'full question '.repeat(100)}]}
+ })
+ assert.equal(result.total,25)
+ assert.equal(reads.length,2)
+ assert(result.items.every(item=>item.objective==='full objective'&&item.humanRequests.length===1&&item.humanRequests[0].question.length>400))
+})

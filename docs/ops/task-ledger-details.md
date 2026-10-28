@@ -47,7 +47,11 @@ Reads/writes validate the canonical workspace and descendant paths, reject unsaf
 IDs, links/junctions and substituted container files, and verify hashes and record
 identity. Handle caching is capped at 32 containers. Transaction-local decoded
 cache is capped at 256 entries / 8 MiB and cleared after each transaction; detail
-traversal is bounded by depth 128 and 100,000 nodes. No directory-wide enumeration
+traversal is bounded by depth 128 and 100,000 storage references (inline business
+values do not consume that budget). Long arrays use 128-item leaf chunks; a tree
+exceeding 8,192 references falls back atomically to 32,768-character JSON chunks,
+so the writer cannot publish a graph exceeding the reader's reference budget.
+Legacy array-node records remain readable. No directory-wide enumeration
 or verification scan runs on a list request.
 
 ## Polling is not a permanent command history

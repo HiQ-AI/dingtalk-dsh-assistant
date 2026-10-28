@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 const error = code => { throw Object.assign(new Error(code), { code }) }
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
+const treeFallback = new Error('TASK_DETAIL_TREE_FALLBACK')
 const sorted = value => Array.isArray(value) ? value.map(sorted) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sorted(value[key])])) : value
 const controlDigest = value => hash(JSON.stringify(sorted(value)))
@@ -120,6 +121,7 @@ export function createTaskLedgerDetails(root) {
   }
   function publish(owner, node) {
     const body = JSON.stringify(node), digest = hash(body), db = active.db
+    if (Buffer.byteLength(body) > 64 * 1024 * 1024) throw treeFallback
     db.prepare('INSERT OR IGNORE INTO objects(digest,body) VALUES (?,?)').run(digest, body)
     readObject(owner, digest)
     return { ref: digest }
@@ -130,20 +132,33 @@ export function createTaskLedgerDetails(root) {
     if (size <= 2048) return { value }
     // A content-addressed tree shares unchanged history entries and snapshot
     // subtrees. It does not copy native session logs or append whole snapshots.
-    const node = Array.isArray(value) ? { type: 'array', items: value.map(v => storeValue(owner, v, depth + 1)) }
+    const node = Array.isArray(value) && value.length > 128
+      ? { type: 'array-chunks', parts: Array.from({ length: Math.ceil(value.length / 128) }, (_, i) => storeValue(owner, value.slice(i * 128, (i + 1) * 128), depth + 1)) }
+      : Array.isArray(value) ? { type: 'array', items: value.map(v => storeValue(owner, v, depth + 1)) }
       : value && typeof value === 'object' ? { type: 'object', entries: Object.entries(value).map(([k,v]) => [k, storeValue(owner, v, depth + 1)]) }
         : typeof value === 'string' && value.length > 32768 ? { type: 'string', parts: Array.from({ length: Math.ceil(value.length / 32768) }, (_, i) => storeValue(owner, value.slice(i * 32768, (i + 1) * 32768), depth + 1)) }
           : { type: 'value', value }
+    // Count encoded references, not business values. If a fragmented tree would
+    // exceed the reader's work budget, use bounded JSON text chunks instead.
+    if (++active.treeNodes > 8192) throw treeFallback
     return publish(owner, node)
   }
+  function storeJson(owner, value) {
+    const text = JSON.stringify(value), parts = []
+    for (let i = 0; i < text.length; i += 32768) parts.push(publish(owner, { type: 'value', value: text.slice(i, i + 32768) }))
+    return publish(owner, { type: 'json', parts })
+  }
   function loadValue(owner, pointer, budget, depth = 0) {
-    if (++budget.nodes > 100000 || depth > 128) error('TASK_DETAIL_DEPTH_INVALID')
+    if (depth > 128) error('TASK_DETAIL_DEPTH_INVALID')
     if (Object.hasOwn(pointer, 'value')) return pointer.value
+    if (++budget.nodes > 100000) error('TASK_DETAIL_DEPTH_INVALID')
     const node = readObject(owner, pointer.ref)
     if (node.type === 'value') return node.value
     if (node.type === 'array') return node.items.map(p => loadValue(owner, p, budget, depth + 1))
+    if (node.type === 'array-chunks') return node.parts.flatMap(p => loadValue(owner, p, budget, depth + 1))
     if (node.type === 'object') return Object.fromEntries(node.entries.map(([k,p]) => [k, loadValue(owner, p, budget, depth + 1)]))
     if (node.type === 'string') return node.parts.map(p => loadValue(owner, p, budget, depth + 1)).join('')
+    if (node.type === 'json') return JSON.parse(node.parts.map(p => loadValue(owner, p, budget, depth + 1)).join(''))
     error('TASK_DETAIL_REFERENCE_INVALID')
   }
   function ownerOf(table, value, hint) {
@@ -162,12 +177,19 @@ export function createTaskLedgerDetails(root) {
       if (!Object.keys(detail).length) return value
       const owner = ownerOf(table, value, hint), compact = { ...value }
       const db = database(owner, true)
-      db.exec('BEGIN IMMEDIATE'); active = { db }
+      db.exec('BEGIN IMMEDIATE'); active = { db, treeNodes: 0 }
       try {
         for (const key of Object.keys(detail)) { delete compact[key]; const p = projection(key, detail[key], table); if (p !== undefined) compact[key] = p }
         // Root always lives on disk, including small receipts; central rows remain
         // bounded by control metadata rather than carrying an inline second copy.
-        const pointer = storeValue(owner, detail)
+        let pointer
+        db.exec('SAVEPOINT detail_tree')
+        try { pointer = storeValue(owner, detail); db.exec('RELEASE detail_tree') }
+        catch (e) {
+          db.exec('ROLLBACK TO detail_tree; RELEASE detail_tree')
+          if (e !== treeFallback) throw e
+          pointer = storeJson(owner, detail)
+        }
         const id = value.id ?? hint?.id ?? null
         const cleanCompact = JSON.parse(JSON.stringify(compact))
         const ref = publish(owner, { type: 'record', table, id, owner, controlDigest: controlDigest(cleanCompact), data: pointer })

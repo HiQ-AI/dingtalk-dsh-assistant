@@ -213,3 +213,46 @@ test('observer task page restores only selected externalized records without dec
  assert.equal(summary.items.length,2)
  assert.equal(summary.items[0].detailStorage,'external')
 })
+
+for (const length of [99999,100000,100001,100129]) test(`large metadata arrays remain readable and replayable across restart: ${length}`,async t=>{
+  const f=await fixture(t), metadata={items:Array.from({length},(_,n)=>n)}
+  const command={id:'create',kind:'task.create',args:{taskId:'task',request:'synthetic',metadata}}
+  await f.store.command(command)
+  assert.deepEqual((await f.store.query({kind:'task.get',taskId:'task'})).metadata,metadata)
+  assert.deepEqual((await f.store.command(command)).result.task.metadata,metadata)
+  await f.close();await f.reopen()
+  assert.deepEqual((await f.store.query({kind:'task.get',taskId:'task'})).metadata,metadata)
+  assert.equal((await f.store.command(command)).replayed,true)
+})
+
+test('legacy array nodes count storage references rather than every inline scalar',async t=>{
+  const f=await fixture(t), codec=createTaskLedgerDetails(f.root)
+  try {
+    const encoded=codec.encode('dynamic_tasks',{id:'task',taskId:'task',metadata:{items:[]}})
+    const path=join(f.root,'tasks','task','.dsh','ledger-details','objects.sqlite'), db=new DatabaseSync(path)
+    const items=Array.from({length:100001},(_,n)=>n)
+    try {
+      const put=node=>{const body=JSON.stringify(node),digest=createHash('sha256').update(body).digest('hex');db.prepare('INSERT OR IGNORE INTO objects VALUES (?,?)').run(digest,body);return {ref:digest}}
+      const array=put({type:'array',items:items.map(value=>({value}))})
+      const metadata=put({type:'object',entries:[['items',array]]})
+      const data=put({type:'object',entries:[['metadata',metadata]]})
+      const record=JSON.parse(db.prepare('SELECT body FROM objects WHERE digest=?').get(encoded._hostDetail.ref).body)
+      encoded._hostDetail.ref=put({...record,data}).ref
+    } finally {db.close()}
+    assert.deepEqual(codec.decode(encoded).metadata.items,items)
+  } finally {codec.close()}
+})
+
+test('fragmented trees fall back to bounded JSON chunks without publishing unreadable records',async t=>{
+  const f=await fixture(t), codec=createTaskLedgerDetails(f.root)
+  try {
+    const value={id:'task',taskId:'task',metadata:{items:Array(8193).fill('x'.repeat(2050))}}
+    const encoded=codec.encode('dynamic_tasks',value)
+    const type=inspect(join(f.root,'tasks','task','.dsh','ledger-details','objects.sqlite'),db=>{
+      const root=JSON.parse(db.prepare('SELECT body FROM objects WHERE digest=?').get(encoded._hostDetail.ref).body)
+      return JSON.parse(db.prepare('SELECT body FROM objects WHERE digest=?').get(root.data.ref).body).type
+    })
+    assert.equal(type,'json')
+    assert.deepEqual(codec.decode(encoded),value)
+  } finally {codec.close()}
+})

@@ -52,3 +52,12 @@
 - First release smoke attempt could not create fixtures under `C:/dsh-release-tests` (EPERM). No ACL changes were made; retry uses the authorized system temporary directory. Preserve both logs and distinguish environment failures from completed verification.
 
 - Release smoke retry under the authorized elevated execution context completed: 14/14 passed, zero skipped (`startup-pagination-release-smoke-elevated.log`). It covered actual packed bytes/import closure, native task flow, and extracted resident health. No global Git/ACL settings changed. This is startup + pagination only; storage/latest-main final verification remains pending.
+
+## Final integration candidate
+
+- Main #272 is included by ancestry (`644ff90c694e19f661177ffd7b5e595d452a9fae`). The extracted message projection uses first `completedAt`, not mutable decision `updatedAt`.
+- Storage commits `2b98e8a7` and `2c5bc918` are integrated. Startup recovery hydrates nonterminal operations and selected executions; it reuses central execution projections for resource invariants. Observer pages select IDs before loading verified details; summary execution pages do not load detail objects. Group message contexts decode only the selected message IDs' raw stored rows, never an SQL-assembled envelope.
+- Initial combined checks: 28/28, zero skipped (`three-module-first.log`). Complete store plus page connection checks are running; these are not final whole-suite results.
+- Local review candidate: `224003c366fdf14c95506fda99c1f852349291d9`. Codec node-count mismatch is being repaired in the original storage worktree; no duplicate codec edit is made here.
+- New-main synthetic benchmark (`observer-benchmark-main644.json`): 1000 rows 1,698,951 to 17,148 bytes, warm median 23.355 to 13.732 ms; 10000 rows 17,007,952 to 17,169 bytes, 152.495 to 32.429 ms. Same limitations as the earlier benchmark apply; concurrency with regression work makes timings observational.
+- Remaining startup limitation: service compatibility caches still use normal full-record task/operation/execution/notification list APIs. Mandatory integrity no longer blocks Host timers and ledger recovery avoids terminal detail hydration, but this change does not prove all startup work independent of history size. No real-profile latency or migration has been measured.
