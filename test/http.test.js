@@ -816,6 +816,28 @@ test('任务修订和取消携带CAS版本，路径身份不可覆盖，历史�
     cancelTask: async value => { if (value.expectedControlRevision !== 3) throw Error('TASK_CONTROL_REVISION_CONFLICT'); calls.push(value); return value } } })
 })
 
+test('任务写入身份预检不依赖观察分页索引，空身份不回退重详情且历史仍只读', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const post = (id, action, body) => fetch(`${base}/tasks/${id}/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const input = { requestId: 'technical-context', context: '纠正原调用参数', progressImpact: 'preserve', expectedRequirementRevision: 13, expectedControlRevision: 13 }
+    assert.equal((await post('current', 'context', input)).status, 200)
+    assert.equal((await post('current', 'archive', {})).status, 200)
+    assert.equal((await post('legacy', 'context', input)).status, 410)
+    assert.equal((await post('legacy', 'archive', {})).status, 410)
+    assert.equal((await post('missing', 'context', input)).status, 404)
+    assert.deepEqual(calls, ['context:current', 'archive:current'])
+  }, { overrides: {
+    isTaskSessionMode: () => true,
+    getTaskSessionIdentity: async id => id === 'current' ? { taskId: id, legacyReadonly: false } : null,
+    getTaskSessionDetail: async () => { throw Error('OBSERVER_PAGINATION_MIGRATION_REQUIRED') },
+    isWorkflowTask: async id => id === 'legacy',
+    getTask: async () => null,
+    appendTaskContext: async value => { if (value.taskId === 'missing') throw Error('TASK_SESSION_NOT_FOUND'); calls.push(`context:${value.taskId}`); return value },
+    archiveTask: async value => { calls.push(`archive:${value.taskId}`); return value },
+  } })
+})
+
 test('Agent设置不再读取或修改流程提示词，但保留连接配置', async () => {
   const calls = []
   await withServer(false, async base => {

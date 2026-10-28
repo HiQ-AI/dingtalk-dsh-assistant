@@ -1,6 +1,6 @@
 # 进度询问与协调通知全路径修复
 
-> 状态：COMPLETE
+> 状态：ACTIVE
 > Goal ID：coordination-progress-notifications-20261028
 > 最近维护：2026-10-28T11:29:21+08:00
 > 权威目标：D:/codex/worktrees/coordination-progress-notifications/dingtalk-dsh-assistant/docs/acceptance/coordination-progress-notifications/goal.md
@@ -33,9 +33,16 @@
 
 | SG7 | 原v4 Owner模式故障恢复 | 原会话模式纠正并真实接续，原成果保留 | 已完成 | report.md；原生seq7446/7449，lease165，工具成功回包 |
 
+| SG8 | 同类目录前置保障 | tasks根一次性权限准备并继承，新建目录不再逐项审批 | 已完成 | round-7.md；现场根及新目录原生验证 |
+| SG9 | 能力判断与等待依据 | 不把未尝试能力说成不可用，保留实际失败工具/路径 | 已完成 | round-9.md；PID33984已安装 |
+| SG10 | 系统回归与交付 | 各目录/恢复/续办场景正反例及现场恢复 | 部分完成 | round-7.md；额外资源组超时、提示待安装 |
+| SG11 | 原发布执行权限恢复 | 原c5受信权限纠正、Git与辅助进程成功并续办剩余交付 | 已完成 | round-9.md；input9同session、原生Git提交推送成功 |
+
+| SG12 | 本地运行看板恢复 | 索引就绪、原任务/执行保持、分页API及真实列表详情通过 | 已完成 | round-10.md；PID13436、8API200、Chrome截图 |
+
 ## 当前检查点
-- 当前子目标：SG7
-- 唯一下一步：本轮技术修复完成；原v4 Owner继续原授权业务交付。
+- 当前子目标：SG12 已完成，本地看板真实恢复
+- 唯一下一步：交付本轮索引恢复与部署就绪校验；原任务已正式完成，无需再唤醒或发布。
 - 未闭环项：原UAT2业务交付由原任务继续；历史wakes尚未全部ack，全局recover耗时阶段未收敛。
 
 ## 进展
@@ -62,3 +69,13 @@
 - 去全扫版本已安装，新PID5600，57.5秒健康，入站/DWS正常，原协调已正式退役；v4模式RPC被Host writer拒绝，正在受信绑定路径内修复，未改原会话历史。
 
 - 最终现场：PID44064在线，错误观察原工作卡已正式退役；原v4会话workspace-write事件seq7446及新轮次seq7449实际工具回包。需求/控制13不变。原wakes尚未ack，UAT2业务未完成；全局恢复历史登记慢的确切阶段未收敛。见report.md。
+
+- 用户追加：不能只修本次，要杜绝同类。原生官方诊断证实原outputs有效WRITE_DAC=true/WRITE_OWNER=false；授权后仅该根补当前用户FullControl，verification verified，未改文件/所有者。Owner所谓入口不存在已被tool schema及无delegate尝试反证。
+
+- SG11（进行中）：原发布c5/input8已真实接续，但Git common-dir写入与MSYS命名对象分别被受限环境拒绝。新增受信operator对精确原execution的权限纠正，复用原生mode，保留原检出/凭据/验证；不再把统一产物归档误作业务写根。方案docs/spec/publish-execution-native-permissions.md。
+
+- 最新现场：round-9已证明原c5 input9、同session完整模式和真实Git读/暂存/提交/推送成功，独立PR392回读head=c56df87d。PID33984；技术阻塞修复完成，UAT业务仍在原任务进行。
+
+- SG12（进行中）：用户反馈本地看板仍503。已实证动态库无observer_*索引，原始HTTP任务/待答复/详情503、群/话题200，实际Chrome看板可见原错误。索引only脚本29项相关验证通过，原c5发布已排空，等待最后只读核验与Owner自然排空后处理。方案docs/spec/local-observer-index-recovery.md。
+
+- SG12完成：同包恢复PID13436，indexes-only迁移887ms，原正文/身份/schema不变；真实8API200及Chrome列表/原详情已恢复，原v4任务显示已结束。新部署验收增加observer-readiness，防止health正常但看板503误报成功。证据round-10.md。

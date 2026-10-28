@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { available, reason, nativeTaskHost, latestInput, modelToolValues, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
-import { requestSystemText } from './fixtures/session-persistence.js'
+import { requestSystemText, findSessionLog } from './fixtures/session-persistence.js'
 const call = (name, args) => ({ name, args })
 const requestHuman = (audience = 'operator') => call('task_request_human', { audience, reason: '目标环境尚未明确，不能自行扩大授权', question: '请明确本次允许的环境和操作范围', evidence: ['已读取原始交办'], attemptedActions: ['核对现有需求，未执行外部修改'] })
 const finish = summary => call('task_session_submit', { decision: { action: 'complete', summary, evidence: ['已核对人工原文和原执行结果'], limitations: [] } })
@@ -274,7 +274,7 @@ for (const batched of [true, false]) test(`积压的两条事实追问均送达�
   assert.equal(h.sent.filter(item => item.id.startsWith('human-followup:')).length, 2)
 })
 
-test('operator technical reply retains business sources and shared scope protocol in the same resumed execution', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+for (const permission of [false, true]) test(`operator technical reply retains business sources and shared scope protocol in the same resumed execution permission=${permission}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const objective = '测试助手，修复后部署到UAT2，隔离验证，不操作真实申请'
   const reply = '技术已恢复；本答复不新增部署批准，不撤销此前明确交办范围。用户纠正：说了部署到UAT就部署到UAT，这个申请不应该提。'
   const seen = [], scopes = []
@@ -297,8 +297,26 @@ test('operator technical reply retains business sources and shared scope protoco
   await h.service.ingest({ groupId: 'native-group', messageId: 'business-authorization', senderOpenDingTalkId: 'native-user', text: objective, occurredAt: new Date().toISOString() })
   await h.service.whenIdle()
   const before = (await h.query('task.list'))[0], original = (await h.query('execution.list'))[0], request = await pending(h)
-  await h.service.respondHumanRequest({ taskId: before.taskId, humanRequestId: request.requestId, requestId: 'scope-continuation', reply,
-    expectedRequirementRevision: before.requirementRevision, expectedControlRevision: before.controlRevision })
+  const responseArgs = { taskId: before.taskId, humanRequestId: request.requestId, requestId: 'scope-continuation', reply,
+    expectedRequirementRevision: before.requirementRevision, expectedControlRevision: before.controlRevision,
+    ...(permission ? { executionPermissionCorrection: { executionId: original.executionId, expectedInputVersion: original.inputVersion,
+      mode: 'danger-full-access', reason: '原发布成员原生权限纠正，保留原交付范围' } } : {}) }
+  if (permission) {
+    const server = createServer((req, res) => handleRequest(req, res, { respondTaskHumanRequest: args => h.service.respondHumanRequest(args) }))
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+    t.after(() => new Promise(resolve => server.close(resolve)))
+    const url = `http://127.0.0.1:${server.address().port}/tasks/${before.taskId}/human-requests/${encodeURIComponent(request.requestId)}/reply/check`
+    const wakes = await h.query('wake.list', { taskId: before.taskId })
+    const { taskId, humanRequestId, ...body } = responseArgs
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    assert.equal(response.status, 200, JSON.stringify(await response.json()))
+    assert.deepEqual(await h.query('task.get', { taskId: before.taskId }), before)
+    assert.deepEqual((await h.query('execution.list'))[0], original)
+    assert.deepEqual(await h.query('wake.list', { taskId: before.taskId }), wakes)
+    await assert.rejects(h.service.respondHumanRequest({ ...responseArgs, checkOnly: true,
+      executionPermissionCorrection: { ...responseArgs.executionPermissionCorrection, expectedInputVersion: 99 } }), /TASK_EXECUTION_PERMISSION_CORRECTION_SCOPE/)
+  }
+  await h.service.respondHumanRequest(responseArgs)
   await h.service.whenIdle()
   const after = await h.query('task.get', { taskId: before.taskId }), executions = await h.query('execution.list')
   assert.equal(executions.length, 1)
@@ -315,7 +333,22 @@ test('operator technical reply retains business sources and shared scope protoco
     assert.ok(Buffer.byteLength(message.content[0].text) <= 3000, '恢复后仍保留Host的UTF8预算')
   assert.equal(seen.at(-1).sources.find(source => source.messageId === 'business-authorization').text, objective)
   assert.equal(seen.at(-1).sources.find(source => source.text === reply).actorId, 'operator-user')
+  if (permission) {
+    assert.notEqual(before.ownerActorId, 'operator-user', '技术操作人不同于业务发起人仍可恢复原执行')
+    assert.equal(executions[0].permissionCorrection.mode, 'danger-full-access')
+    const events = (await readFile(await findSessionLog(h.root, original.sessionId), 'utf8')).trim().split('\n').map(JSON.parse)
+    const modes = events.filter(event => event.type === 'sandbox/mode')
+    assert.equal(modes.at(-1).data.mode, 'danger-full-access', '受信 Host 在原会话持久化纠正，不仅记录 ledger')
+    assert.equal(events[0].id, original.sessionId)
+    await h.service.respondHumanRequest(responseArgs)
+    await assert.rejects(h.service.respondHumanRequest({ ...responseArgs,
+      executionPermissionCorrection: { ...responseArgs.executionPermissionCorrection, mode: 'read-only' } }), /DYNAMIC_COMMAND_ID_CONFLICT/)
+  }
   assert.equal(seen.at(-1).task.objective, after.objective)
+  assert.deepEqual(seen.map(input => input.objective), ['准备原交付', '按原来源继续完整UAT交付'], '技术恢复只续办剩余阶段，不重跑已完成准备')
+  const continuations = h.toolResults.filter(result => result.name === 'task_delegate')
+  assert.equal(continuations.length, 2, '初次委派和原执行续办各一次，不重复派发')
+  assert.ok(continuations.every(result => !result.result.isError), '续办依据真实工具接收回执，不凭模型声明能力恢复')
   for (const scope of scopes) {
     assert.match(scope, /不自动撤销此前已明确授予的范围/)
     assert.match(scope, /明确暂停、撤销、仅准备或改变目标环境则优先/)

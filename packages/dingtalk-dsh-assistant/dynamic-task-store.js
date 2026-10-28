@@ -1031,6 +1031,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       return result
     }
     if (kind === 'task.human.resolve' || kind === 'task.human.respond') {
+      if (kind === 'task.human.respond' && a.executionPermissionCorrection && a.source) reduce('source.record', record(a.source), `${commandId}:source`)
       const reviewed = kind === 'task.human.resolve'
       const task = reviewed ? currentTask(a.binding, { allowHumanReview: true }) : get('dynamic_tasks', text(a.taskId, 'taskId'))
       if (reviewed && task.humanReviewLease !== a.binding.leaseEpoch) fail('DYNAMIC_HUMAN_REVIEW_NOT_PENDING')
@@ -1059,6 +1060,21 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         request.resolution = { reason: text(a.reason, 'reason'), evidence, sessionId: a.binding.sessionId,
           leaseEpoch: a.binding.leaseEpoch, recordedAt: stamp }
       }
+      const permission = a.executionPermissionCorrection
+      if (permission) {
+        const execution = get('dynamic_executions', text(permission.executionId, 'executionId'))
+        if (!webReply || request.audience !== 'operator' || permission.actorId !== source.actorId
+          || source.requestIdentity?.humanRequestId !== request.requestId
+          || permission.requirementRevision !== task.requirementRevision || permission.controlRevision !== task.controlRevision
+          || canonical(source.requestIdentity?.executionPermissionCorrection ?? null) !== canonical(permission)
+          || execution.taskId !== task.taskId || execution.inputVersion !== permission.expectedInputVersion
+          || !execution.drained || !terminalExecutions.has(execution.status) || execution.recovering
+          || (execution.definition?.executionBackend ?? 'dsh') !== 'dsh'
+          || !['read-only', 'workspace-write', 'danger-full-access'].includes(permission.mode) || !permission.reason?.trim()
+          || ops(task.taskId).some(operation => operation.executionId === execution.executionId && !['succeeded', 'failed', 'cancelled'].includes(operation.state))) fail('TASK_EXECUTION_PERMISSION_CORRECTION_SCOPE')
+        execution.permissionCorrection = { ...clone(permission), sourceId: source.sourceId, recordedAt: stamp }
+        put('dynamic_executions', execution)
+      }
       const correction = a.artifactScopeCorrection
       if (correction) {
         const coordination = get('dynamic_coordination', text(correction.coordinationId, 'coordinationId'))
@@ -1085,6 +1101,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (a.operationId) task.appliedOperations = [...new Set([...(task.appliedOperations ?? []), text(a.operationId, 'operationId')])]
       saveTask(task)
       const wakeId = wake(task.taskId, 'human.responded', { requestId: request.requestId, sourceId: source.sourceId }, `wake:${commandId}`)
+      if (permission && a.source) reduce('source.routed', { sourceId: source.sourceId, receipt: [{ taskId: task.taskId, humanRequestId: request.requestId }] }, `${commandId}:routed`)
       return changed({ task, request, wakeId })
     }
     if (kind === 'task.complete') {

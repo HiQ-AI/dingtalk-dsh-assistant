@@ -6212,6 +6212,15 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
+      "file": "test/prepare-task-directories.test.js",
+      "lane": "compat-0",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
       "file": "test/project-root.test.js",
       "lane": "unit",
       "category": "unit",
@@ -6222,7 +6231,7 @@
     },
     {
       "file": "test/pty-package-upgrade.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -6231,7 +6240,7 @@
     },
     {
       "file": "test/read-uat-delivery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6261,7 +6270,7 @@
     },
     {
       "file": "test/reconcile-data-change-approval.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6328,7 +6337,7 @@
     },
     {
       "file": "test/reconcile-prepare-failure.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6350,7 +6359,7 @@
     },
     {
       "file": "test/reconcile-workspace-collision.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6376,7 +6385,7 @@
     },
     {
       "file": "test/recover-quarantined-echo.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6429,7 +6438,7 @@
     },
     {
       "file": "test/recover-verification-drain.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6484,15 +6493,6 @@
     },
     {
       "file": "test/release-artifacts.test.js",
-      "lane": "compat-1",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [],
-      "retainedCompatibilityImports": [],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/release-preflight.test.js",
       "lane": "compat-2",
       "category": "compat",
       "release": true,
@@ -6501,7 +6501,7 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/release-workflow.test.js",
+      "file": "test/release-preflight.test.js",
       "lane": "compat-0",
       "category": "compat",
       "release": true,
@@ -6510,8 +6510,17 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/repair-release-target-policy.test.js",
+      "file": "test/release-workflow.test.js",
       "lane": "compat-1",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/repair-release-target-policy.test.js",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6534,7 +6543,7 @@
     },
     {
       "file": "test/report-native-lifecycle.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6552,7 +6561,7 @@
     },
     {
       "file": "test/restart-web.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -6610,7 +6619,7 @@
     },
     {
       "file": "test/runtime-startup-observation.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6631,7 +6640,7 @@
     },
     {
       "file": "test/runtime.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6680,7 +6689,7 @@
     },
     {
       "file": "test/sandbox-artifact-policy-upgrade.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -6722,7 +6731,7 @@
     },
     {
       "file": "test/sg20-planner-correction.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6743,7 +6752,7 @@
     },
     {
       "file": "test/sg20-real-http-evidence.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -6752,7 +6761,7 @@
     },
     {
       "file": "test/single-task-run-scope.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6811,7 +6820,7 @@
     },
     {
       "file": "test/status-query.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6850,7 +6859,7 @@
     },
     {
       "file": "test/task-actions.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6863,7 +6872,7 @@
     },
     {
       "file": "test/task-archive-scheduling.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6978,7 +6987,7 @@
     },
     {
       "file": "test/task-artifact-files.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7089,7 +7098,7 @@
     },
     {
       "file": "test/task-artifact-write.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7191,7 +7200,7 @@
     },
     {
       "file": "test/task-checks.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7284,7 +7293,7 @@
     },
     {
       "file": "test/task-completion-context.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7318,7 +7327,7 @@
     },
     {
       "file": "test/task-completion-notification.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7339,7 +7348,7 @@
     },
     {
       "file": "test/task-delivery-manifest.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7368,7 +7377,7 @@
     },
     {
       "file": "test/task-delivery-project-evidence.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7389,7 +7398,7 @@
     },
     {
       "file": "test/task-delivery-review.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7494,7 +7503,7 @@
     },
     {
       "file": "test/task-discovery.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7541,7 +7550,7 @@
     },
     {
       "file": "test/task-execution-backends.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7697,7 +7706,7 @@
     },
     {
       "file": "test/task-execution-timeline.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7777,7 +7786,7 @@
     },
     {
       "file": "test/task-file-storage.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7909,7 +7918,7 @@
     },
     {
       "file": "test/task-general-workflow.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7951,7 +7960,7 @@
     },
     {
       "file": "test/task-group-file-delivery.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8063,7 +8072,7 @@
     },
     {
       "file": "test/task-group-file-runtime.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -8072,7 +8081,7 @@
     },
     {
       "file": "test/task-ingress-epoch.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8118,7 +8127,7 @@
     },
     {
       "file": "test/task-installed-profile-entry.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -8127,7 +8136,7 @@
     },
     {
       "file": "test/task-maintenance-constraint.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8363,7 +8372,7 @@
     },
     {
       "file": "test/task-notification-delivery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8398,7 +8407,7 @@
     },
     {
       "file": "test/task-notification-readback.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8491,7 +8500,7 @@
     },
     {
       "file": "test/task-operator-notification-recall.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8584,7 +8593,7 @@
     },
     {
       "file": "test/task-owner-context.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8608,7 +8617,7 @@
     },
     {
       "file": "test/task-owner-delivery-manifest.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8645,7 +8654,7 @@
     },
     {
       "file": "test/task-owner-paused-delivery-review.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8683,7 +8692,7 @@
     },
     {
       "file": "test/task-owner-recovery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8720,7 +8729,7 @@
     },
     {
       "file": "test/task-owner-store.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8757,7 +8766,7 @@
     },
     {
       "file": "test/task-permits.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8797,7 +8806,7 @@
     },
     {
       "file": "test/task-purge-start.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8838,7 +8847,7 @@
     },
     {
       "file": "test/task-readonly-workflows.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8950,7 +8959,7 @@
     },
     {
       "file": "test/task-release-workflows.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8989,7 +8998,7 @@
     },
     {
       "file": "test/task-reports.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9004,7 +9013,7 @@
     },
     {
       "file": "test/task-requirement-notifications.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9139,43 +9148,6 @@
     },
     {
       "file": "test/task-session-control-host-admission.test.js",
-      "lane": "compat-0",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [
-        "packages/dingtalk-dsh-assistant/group-message.js",
-        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
-        "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js"
-      ],
-      "retainedCompatibilityImports": [
-        "packages/dingtalk-dsh-assistant/agent-work.js",
-        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
-        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
-        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
-        "packages/dingtalk-dsh-assistant/execution-candidate.js",
-        "packages/dingtalk-dsh-assistant/execution-check-job.js",
-        "packages/dingtalk-dsh-assistant/execution-controller.js",
-        "packages/dingtalk-dsh-assistant/execution-delivery.js",
-        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
-        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
-        "packages/dingtalk-dsh-assistant/execution-store.js",
-        "packages/dingtalk-dsh-assistant/execution-workspace.js",
-        "packages/dingtalk-dsh-assistant/node-output-readout.js",
-        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
-        "packages/dingtalk-dsh-assistant/task-owner-context.js",
-        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
-        "packages/dingtalk-dsh-assistant/task-owner-session.js",
-        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
-        "packages/dingtalk-dsh-assistant/task-workflow.js",
-        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
-        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
-      ],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/task-session-control-six-scenarios.test.js",
       "lane": "compat-1",
       "category": "compat",
       "release": true,
@@ -9212,8 +9184,45 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/task-session-control.test.js",
+      "file": "test/task-session-control-six-scenarios.test.js",
       "lane": "compat-2",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js"
+      ],
+      "retainedCompatibilityImports": [
+        "packages/dingtalk-dsh-assistant/agent-work.js",
+        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
+        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
+        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
+        "packages/dingtalk-dsh-assistant/execution-candidate.js",
+        "packages/dingtalk-dsh-assistant/execution-check-job.js",
+        "packages/dingtalk-dsh-assistant/execution-controller.js",
+        "packages/dingtalk-dsh-assistant/execution-delivery.js",
+        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
+        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
+        "packages/dingtalk-dsh-assistant/execution-store.js",
+        "packages/dingtalk-dsh-assistant/execution-workspace.js",
+        "packages/dingtalk-dsh-assistant/node-output-readout.js",
+        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
+        "packages/dingtalk-dsh-assistant/task-owner-context.js",
+        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
+        "packages/dingtalk-dsh-assistant/task-owner-session.js",
+        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
+        "packages/dingtalk-dsh-assistant/task-workflow.js",
+        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
+        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
+      ],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/task-session-control.test.js",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9406,7 +9415,7 @@
     },
     {
       "file": "test/task-session-http-integration.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -10069,7 +10078,7 @@
     },
     {
       "file": "test/task-session-persistence-native.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -10238,7 +10247,7 @@
     },
     {
       "file": "test/task-session-real-model-isolated.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -10599,7 +10608,7 @@
     },
     {
       "file": "test/task-stage-contracts.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -10789,7 +10798,7 @@
     },
     {
       "file": "test/task-stage-target.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11029,7 +11038,7 @@
     },
     {
       "file": "test/task-workflow-contracts.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11141,7 +11150,7 @@
     },
     {
       "file": "test/task-workflow.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11253,7 +11262,7 @@
     },
     {
       "file": "test/task-worktree-archive.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -11264,7 +11273,7 @@
     },
     {
       "file": "test/test-suite-contracts.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11277,7 +11286,7 @@
     },
     {
       "file": "test/tool-schema.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11314,7 +11323,7 @@
     },
     {
       "file": "test/topic-migration.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11391,7 +11400,7 @@
     },
     {
       "file": "test/uat-acceptance-policy.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11415,7 +11424,7 @@
     },
     {
       "file": "test/verify-dataset-unit-tests.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11472,7 +11481,7 @@
     },
     {
       "file": "test/web-client-build.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -11481,7 +11490,7 @@
     },
     {
       "file": "test/workflow-agent-service.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11593,7 +11602,7 @@
     },
     {
       "file": "test/workflow-approval.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11616,7 +11625,7 @@
     },
     {
       "file": "test/workflow-bytebase-platform.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11727,7 +11736,7 @@
     },
     {
       "file": "test/workflow-cutover.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11770,7 +11779,7 @@
     },
     {
       "file": "test/workflow-data-change-external.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11833,7 +11842,7 @@
     },
     {
       "file": "test/workflow-data-change.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11917,7 +11926,7 @@
     },
     {
       "file": "test/workflow-engineering.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11964,7 +11973,7 @@
     },
     {
       "file": "test/workflow-entry.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12064,7 +12073,7 @@
     },
     {
       "file": "test/workflow-file-delivery-integration.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12176,7 +12185,7 @@
     },
     {
       "file": "test/workflow-managed-query-native.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12289,7 +12298,7 @@
     },
     {
       "file": "test/workflow-migration.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12314,7 +12323,7 @@
     },
     {
       "file": "test/workflow-notification-obligations.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12335,7 +12344,7 @@
     },
     {
       "file": "test/workflow-platform-clients.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12360,7 +12369,7 @@
     },
     {
       "file": "test/workflow-postgres-production-host.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12384,7 +12393,7 @@
     },
     {
       "file": "test/workflow-postgres-uat-host.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12406,7 +12415,7 @@
     },
     {
       "file": "test/workflow-postgres-uat-platform.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12427,7 +12436,7 @@
     },
     {
       "file": "test/workflow-recovery.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12539,7 +12548,7 @@
     },
     {
       "file": "test/workflow-release-platform.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12560,7 +12569,7 @@
     },
     {
       "file": "test/workflow-source-evidence.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -12571,7 +12580,7 @@
     },
     {
       "file": "test/workflow-source-upload.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -12582,7 +12591,7 @@
     },
     {
       "file": "test/workflow-trusted-platforms.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12635,7 +12644,7 @@
     },
     {
       "file": "test/workflow-uat-build-authorization.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12688,7 +12697,7 @@
     },
     {
       "file": "test/workflow-uat-failure-continuation.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12806,7 +12815,7 @@
     },
     {
       "file": "test/workflow-uat-merge-platform.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12861,59 +12870,6 @@
     },
     {
       "file": "test/workflow-uat-proof.test.js",
-      "lane": "compat-2",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [
-        "packages/dingtalk-dsh-assistant/group-message.js",
-        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
-        "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js",
-        "packages/dingtalk-dsh-assistant/task-input-contract.js"
-      ],
-      "retainedCompatibilityImports": [
-        "packages/dingtalk-dsh-assistant/agent-work.js",
-        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
-        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
-        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
-        "packages/dingtalk-dsh-assistant/execution-candidate.js",
-        "packages/dingtalk-dsh-assistant/execution-check-job.js",
-        "packages/dingtalk-dsh-assistant/execution-controller.js",
-        "packages/dingtalk-dsh-assistant/execution-delivery.js",
-        "packages/dingtalk-dsh-assistant/execution-development-branch.js",
-        "packages/dingtalk-dsh-assistant/execution-edit.js",
-        "packages/dingtalk-dsh-assistant/execution-git.js",
-        "packages/dingtalk-dsh-assistant/execution-inline-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
-        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-pr.js",
-        "packages/dingtalk-dsh-assistant/execution-project-config.js",
-        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
-        "packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-workspace.js",
-        "packages/dingtalk-dsh-assistant/execution-worktree-acceptance.js",
-        "packages/dingtalk-dsh-assistant/node-output-readout.js",
-        "packages/dingtalk-dsh-assistant/task-delivery-review.js",
-        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
-        "packages/dingtalk-dsh-assistant/task-owner-context.js",
-        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
-        "packages/dingtalk-dsh-assistant/task-owner-session.js",
-        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
-        "packages/dingtalk-dsh-assistant/task-workflow.js",
-        "packages/dingtalk-dsh-assistant/uat-acceptance-policy.js",
-        "packages/dingtalk-dsh-assistant/workflow-bytebase-platform.js",
-        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
-        "packages/dingtalk-dsh-assistant/workflow-engineering.js",
-        "packages/dingtalk-dsh-assistant/workflow-notifications.js",
-        "packages/dingtalk-dsh-assistant/workflow-release-platform.js",
-        "packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js",
-        "packages/dingtalk-dsh-assistant/workflow-uat-merge-platform.js",
-        "packages/dingtalk-dsh-assistant/workflow-uat-schema-migration.js"
-      ],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/workflow-uat-rebuild-proof.test.js",
       "lane": "compat-0",
       "category": "compat",
       "release": true,
@@ -12966,8 +12922,61 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/workflow-uat-schema-migration.test.js",
+      "file": "test/workflow-uat-rebuild-proof.test.js",
       "lane": "compat-1",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js"
+      ],
+      "retainedCompatibilityImports": [
+        "packages/dingtalk-dsh-assistant/agent-work.js",
+        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
+        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
+        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
+        "packages/dingtalk-dsh-assistant/execution-candidate.js",
+        "packages/dingtalk-dsh-assistant/execution-check-job.js",
+        "packages/dingtalk-dsh-assistant/execution-controller.js",
+        "packages/dingtalk-dsh-assistant/execution-delivery.js",
+        "packages/dingtalk-dsh-assistant/execution-development-branch.js",
+        "packages/dingtalk-dsh-assistant/execution-edit.js",
+        "packages/dingtalk-dsh-assistant/execution-git.js",
+        "packages/dingtalk-dsh-assistant/execution-inline-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
+        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-pr.js",
+        "packages/dingtalk-dsh-assistant/execution-project-config.js",
+        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
+        "packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-workspace.js",
+        "packages/dingtalk-dsh-assistant/execution-worktree-acceptance.js",
+        "packages/dingtalk-dsh-assistant/node-output-readout.js",
+        "packages/dingtalk-dsh-assistant/task-delivery-review.js",
+        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
+        "packages/dingtalk-dsh-assistant/task-owner-context.js",
+        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
+        "packages/dingtalk-dsh-assistant/task-owner-session.js",
+        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
+        "packages/dingtalk-dsh-assistant/task-workflow.js",
+        "packages/dingtalk-dsh-assistant/uat-acceptance-policy.js",
+        "packages/dingtalk-dsh-assistant/workflow-bytebase-platform.js",
+        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
+        "packages/dingtalk-dsh-assistant/workflow-engineering.js",
+        "packages/dingtalk-dsh-assistant/workflow-notifications.js",
+        "packages/dingtalk-dsh-assistant/workflow-release-platform.js",
+        "packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js",
+        "packages/dingtalk-dsh-assistant/workflow-uat-merge-platform.js",
+        "packages/dingtalk-dsh-assistant/workflow-uat-schema-migration.js"
+      ],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/workflow-uat-schema-migration.test.js",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13032,7 +13041,7 @@
     },
     {
       "file": "test/workspace-terminal-reconciliation.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [

@@ -149,6 +149,7 @@ export async function apply(ctx, config = {}) {
   runtime.messageProcessingSources = tasks.messageProcessingSources
   runtime.messageProcessingRequests = tasks.messageProcessingRequests
   runtime.getTaskSessionDetail = tasks.taskDetail
+  runtime.getTaskSessionIdentity = tasks.taskIdentity
   runtime.getTaskSessionExecutions = tasks.taskExecutions
   runtime.getTaskSessionDecisions = tasks.taskDecisions
   runtime.coordinationSources = tasks.coordinationSources

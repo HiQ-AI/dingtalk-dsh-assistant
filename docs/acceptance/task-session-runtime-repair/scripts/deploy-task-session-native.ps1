@@ -42,12 +42,39 @@ if($PtyUpgradeProposal -and $ArtifactPolicyProposal){throw 'DEPLOY_PATCH_MODES_C
 if($ArtifactPolicyProposal){$ArtifactPolicyProposal=[IO.Path]::GetFullPath($ArtifactPolicyProposal)}
 if($PtyUpgradeProposal){$PtyUpgradeProposal=[IO.Path]::GetFullPath($PtyUpgradeProposal)}
 function Hash([string]$file){(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()}
+$packageCacheRoot='D:/dsh_home/packages/by-sha256'
+function AssertPackagePath([string]$path){
+ for($cursor=[IO.Path]::GetFullPath($path);$cursor;$cursor=[IO.Path]::GetDirectoryName($cursor)){
+  if(Test-Path -LiteralPath $cursor){if((Get-Item -LiteralPath $cursor -Force).Attributes-band[IO.FileAttributes]::ReparsePoint){throw 'DEPLOY_PACKAGE_REPARSE'}}
+ }
+}
+function ImmutablePackage([string]$path,[string]$expectedSha256){
+ $digest=$expectedSha256.ToLowerInvariant()
+ if($digest-notmatch'^[a-f0-9]{64}$'){throw 'DEPLOY_PACKAGE_DIGEST_INVALID'}
+ $destination=Join-Path (Join-Path $packageCacheRoot $digest) 'package.tgz'
+ AssertPackagePath $path;AssertPackagePath $destination
+ if((Hash $path)-ne$digest){throw 'DEPLOY_PACKAGE_CHANGED'}
+ [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination))|Out-Null
+ AssertPackagePath $destination
+ if(-not(Test-Path -LiteralPath $destination)){[IO.File]::Copy($path,$destination,$false)}
+ if((Hash $destination)-ne$digest){throw 'DEPLOY_IMMUTABLE_PACKAGE_MISMATCH'}
+ return $destination
+}
 function RunNode([string[]]$Arguments){
  $output=& $node @Arguments 2>$null
  if($LASTEXITCODE){throw "DEPLOY_NODE_CHECK_FAILED:$($Arguments[0]):$($Arguments[1])"}
  return ($output -join "`n")
 }
 function Record([string]$Name,$Value){$Value|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $EvidenceDirectory "$Name.json") -Encoding utf8}
+function ReadObserverReadiness([string]$BaseUrl='http://127.0.0.1:18998') {
+ $totals=@{}
+ foreach($entry in @(@{name='tasks';path='/state/tasks?offset=0&limit=1'},@{name='pending';path='/state/authorizations?offset=0&limit=1&filter=pending'})){
+  $page=Invoke-RestMethod ($BaseUrl+$entry.path) -NoProxy -TimeoutSec 10
+  if($null-eq$page -or $page.items -isnot [array] -or $page.total -isnot [long] -and $page.total -isnot [int] -or $page.total-lt0 -or $page.offset-ne0 -or $page.limit-ne1 -or $page.items.Count-gt1 -or $page.revision -isnot [string]){throw 'DEPLOY_OBSERVER_PAGE_INVALID'}
+  $totals[$entry.name]=$page.total
+ }
+ return @{ready=$true;taskTotal=$totals.tasks;pendingTotal=$totals.pending}
+}
 function ReadConsoleProof {
  $psi=[Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
  $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
@@ -181,23 +208,33 @@ try{
   Record 'backup' ($backupProof|ConvertFrom-Json)
  }
  $phase='install'
+ $assistantInstallPackage=ImmutablePackage $Package $ExpectedPackageSha256
+ $observerInstallPackage=ImmutablePackage $ObserverPackage $ExpectedObserverPackageSha256
+ $installationPolicyProposal=$ArtifactPolicyProposal
+ if($ArtifactPolicyProposal){
+  if((Hash $ArtifactPolicyProposal)-ne$artifactPolicyProposalSha256){throw 'DEPLOY_ARTIFACT_POLICY_PROPOSAL_CHANGED'}
+  $policyInput=Get-Content -LiteralPath $ArtifactPolicyProposal -Raw|ConvertFrom-Json
+  $policyInput.packagePath=ImmutablePackage $policyInput.packagePath $policyInput.packageSha256
+  $installationPolicyProposal=Join-Path $EvidenceDirectory 'artifact-policy-install-proposal.json'
+  $policyInput|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $installationPolicyProposal
+ }
  if($PtyUpgradeProposal){if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'};Record 'pty-manifest-applied' ((RunNode @($ptyHelper,'apply',$profile,$PtyUpgradeProposal))|ConvertFrom-Json)}
  if($ArtifactPolicyProposal){
   if((Hash $ArtifactPolicyProposal)-ne$artifactPolicyProposalSha256){throw 'DEPLOY_ARTIFACT_POLICY_PROPOSAL_CHANGED'}
-  Record 'artifact-policy-manifest-applied' ((RunNode @($artifactPolicyHelper,'apply',$profile,$ArtifactPolicyProposal))|ConvertFrom-Json)
+  Record 'artifact-policy-manifest-applied' ((RunNode @($artifactPolicyHelper,'apply',$profile,$installationPolicyProposal))|ConvertFrom-Json)
  }
  if((Hash $Package)-ne$ExpectedPackageSha256.ToLowerInvariant()){throw 'DEPLOY_PACKAGE_CHANGED'}
  # 官方CLI输出可能带登录链接，仅保留退出码；失败现场保留停机和禁用状态。
  $previousDshHome=$env:DSH_HOME
  try{
   $env:DSH_HOME='D:/dsh_home'
-  $installPackages=@("@zzusp/dingtalk-dsh-assistant@file:$Package")
+  $installPackages=@("@zzusp/dingtalk-dsh-assistant@file:$assistantInstallPackage")
   if($ObserverPackage){
    if((Hash $ObserverPackage)-ne$ExpectedObserverPackageSha256.ToLowerInvariant()){throw 'DEPLOY_OBSERVER_PACKAGE_CHANGED'}
-   $installPackages+="@zzusp/dingtalk-dsh-observer@file:$ObserverPackage"
+   $installPackages+="@zzusp/dingtalk-dsh-observer@file:$observerInstallPackage"
   }
   if($ArtifactPolicyProposal){
-   $policyInput=Get-Content -LiteralPath $ArtifactPolicyProposal -Raw|ConvertFrom-Json
+   $policyInput=Get-Content -LiteralPath $installationPolicyProposal -Raw|ConvertFrom-Json
    $installPackages+="@deepseek-ai/dsh-sandbox-policy@file:$($policyInput.packagePath)"
   }
   & $node $entry plugin --profile web add @installPackages *> $null;$installExit=$LASTEXITCODE
@@ -207,7 +244,7 @@ try{
  if($PtyUpgradeProposal){if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'};Record 'pty-installed' ((RunNode @($ptyHelper,'verify',$profile,$PtyUpgradeProposal))|ConvertFrom-Json)}
  if($ArtifactPolicyProposal){
   if((Hash $ArtifactPolicyProposal)-ne$artifactPolicyProposalSha256){throw 'DEPLOY_ARTIFACT_POLICY_PROPOSAL_CHANGED'}
-  Record 'artifact-policy-installed' ((RunNode @($artifactPolicyHelper,'verify',$profile,$ArtifactPolicyProposal))|ConvertFrom-Json)
+  Record 'artifact-policy-installed' ((RunNode @($artifactPolicyHelper,'verify',$profile,$installationPolicyProposal))|ConvertFrom-Json)
  }
  $installedProof=RunNode @($checker,'package',$Package,(Join-Path $workspace 'packages/dingtalk-dsh-assistant'),$installed)
  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_INSTALL_CHANGED_UNRELATED_INPUT'}
@@ -222,6 +259,8 @@ try{
  WaitFor {
   try{$script:health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 10;return $health.inboundProcessing -and $health.dwsBridge.healthy}catch{return $false}
  } 'DEPLOY_TRANSPORT_NOT_READY' 60
+ $phase='observer-readiness'
+ Record 'observer-readiness' (ReadObserverReadiness)
  Record 'readback' @{newPid=$newPid;creationDate=(Get-CimInstance Win32_Process -Filter "ProcessId=$newPid").CreationDate;health=$health;profileSha256=Hash $patch;packageSha256=Hash $Package;installedVersion=(Get-Content "$installed/package.json" -Raw|ConvertFrom-Json).version;taskEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled;backupCreated=[bool]$RestartMaintenanceProposal}
  @{installed=$true;transportReady=$true;newPid=$newPid;health=$health.status;recoveryIssueCount=$health.recoveryIssueCount;evidenceDirectory=$EvidenceDirectory}|ConvertTo-Json
 }catch{

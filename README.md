@@ -23,6 +23,8 @@
 - 每个执行会话每轮都有独立执行文档：`tasks/<taskId>/outputs/<executionId>/round-<inputVersion>.md`。Host 根据委派、阶段报告和结果账生成职责、计划、进展、证据、产物与限制；执行首次阶段报告提供简短 `plan`，同轮省略时保留，新轮重新制定。当前轮可持续更新，续办或模型恢复进入新输入版本前保存旧轮，随后写新路径，旧轮保持不变；恢复不覆盖历史。统筹日常从 `document.path` 读取，证据不足、版本矛盾或异常时再查原始记录。报告本身不等于独立验收，活动只表示报告时活动。
 - 任务统筹与 DSH 原生执行会话挂载实际配置的 DSH Agent preset，恢复时沿已持久选择；统筹每次创建和恢复都重新落实上述职责边界，DSH 原生执行保留该配置的业务工具。工作区指引、沙箱、审批及操作账身份仍以宿主和当前真实授权为准。统筹只经 `task_delegate` 委派，执行会话可使用实际已配置的原生委派工具，具体操作仍须有当前用户授权。Claude Code CLI 的工具与配置边界见下节。
 
+Owner 依据本轮真实工具目录和对应调用回执判断能力；目录 ACL 导致的原生命令失败不等于业务授权或未尝试的委派入口失效。终态执行仍有已授权待办时沿同一 executionId、新稳定 key 续办，复用有效验证；不新增等待分类、审批或审核轮次。
+
 话题决策先落原话题账，任务与用户来源再落 SQLite 账，然后创建会话。每任务沿配置工作区的 tasks/<taskId> 使用固定工作区，原生 workspaceRegistry 以任务标题显示；统筹与 DSH 原生执行会话登记到同一任务根目录。同一任务的任务会话与两种后端的全部执行会话也在同一任务根目录实际运行，文件可共享；不同任务使用不同根目录。恢复保留相同工作区、运行目录、后端和会话身份。任务会话标题使用任务标题，执行会话标题使用受托小目标名称。执行结果与唤醒任务会话的事件在同一事务提交；旧需求的迟到结果只作为历史证据，不能改变新要求。暂停或取消使旧分派权限失效，只有真实工具、会话及受管进程排空后才能释放执行占位。“取消请求已记录”不代表外部动作已撤销。
 
 ## 执行后端选择
@@ -136,7 +138,7 @@ DSH 模型故障冷却期间补充需求后，到期复核仍会沿原执行身�
   groups/<groupId的摘要>/             群会话 cwd
 ```
 
-协调团队由受信协调账的唯一成员关系确定，共同产物根复用 `taskFilePath(workspaceRoot, coordinationId, 'outputs')`，不由消息路径、标题或模型自行选择。Owner 与 DSH 执行成员均通过原生 `sandboxPolicy.bindArtifactRoot` 绑定同一个根，shell 和 nativeFS 使用相同的受限写边界；原 Task 的 cwd、会话 ID、日志和 Host 阅读投影不搬迁。缺少原生 API、多协调归属、周期范围或外部执行后端无法承载该合同均明确拒绝，不退回全权限。历史会话若仍为 danger-full-access，仅在受信 Host 恢复且原生绑定校验通过后追加 workspace-write 模式事件；已有 read-only 和审批策略保持，原会话及产物绑定不重建。旧来源中的测试路径需要纠正时，沿原 operator 人工申请的 `reply/check` 与正式 `reply` 提交 `artifactScopeCorrection`（coordinationId、expectedRevision、reason）；Host 派生正式根、核验同团队同所有者，并把受信纠正来源提供给全队，不修改完成账本或手动释放后继。
+协调团队由受信协调账的唯一成员关系确定，共同产物根复用 `taskFilePath(workspaceRoot, coordinationId, 'outputs')`，不由消息路径、标题或模型自行选择。Owner 与 DSH 执行成员均通过原生 `sandboxPolicy.bindArtifactRoot` 绑定同一个根，shell 和 nativeFS 使用相同的受限写边界；原 Task 的 cwd、会话 ID、日志和 Host 阅读投影不搬迁。缺少原生 API、多协调归属、周期范围或外部执行后端无法承载该合同均明确拒绝，不退回全权限。产物归档根与原生执行权限分别管理：默认 workspace-write/只读使用固定产物边界，原生显式模式及审批保留，不能把归档规范当作已授权代码/Git操作的禁止。原发布受限失败时，operator可在既有reply/check与reply附executionPermissionCorrection（executionId、expectedInputVersion、mode、reason），经同所有者/版本/排空/效果核验，只纠正原执行原会话的原生模式，不改变全局配置、Owner或其他成员；源码检出及真实Git元数据仍按原业务授权使用，已有验证复用。旧来源中的测试路径需要纠正时，沿原 operator 人工申请的 `reply/check` 与正式 `reply` 提交 `artifactScopeCorrection`（coordinationId、expectedRevision、reason）；Host 派生正式根、核验同团队同所有者，并把受信纠正来源提供给全队，不修改完成账本或手动释放后继。
 
 统筹与 DSH 原生执行的日志由官方 JSONL 后端直接写入任务目录，保持原生 replay、恢复和压缩能力；不是日志副本。CLI 的受管输入、工具回执和排空记录保存在上述 `claude-events.jsonl`，CLI 自身会话续办沿原身份处理，不能当作 DSH Session replay。群会话使用新 profile 配置的原生持久化根；旧会话不接入当前运行时，不能一概认定在 `%DSH_HOME%/sessions`。会话 ID、后端、路由、控制库与工作目录需一致恢复。在线更换 Agent 工作区被拒绝；离线搬迁与恢复要求见[清洁启动 Runbook](docs/ops/task-session-clean-start.md#回退)。
 
@@ -145,6 +147,8 @@ DSH 原生子 Agent 会话在创建或恢复前核验存活父 Agent 的真实�
 日志目录在每次公共访问前重新核验。目录校验逐层拒绝链接，已有路径仅在末端解析真实路径一次，创建缺目录前另外解析真实父链；缓存后端不重复执行同一次访问的全树检查，也不复用上次访问的安全结论。
 
 ## Web 看板与 HTTP 接口
+
+已有实例若提示 `OBSERVER_PAGINATION_MIGRATION_REQUIRED`，须按[索引恢复规程](docs/ops/task-archive.md)在原生停机后显式执行 `--indexes-only` 迁移；仅补看板派生索引，不搬历史正文，也不放进普通启动。部署完成须同时验证任务/待答复分页 API 与实际列表、详情页面，不能只核验进程或 health。
 
 任务页展示一项完整任务、唯一任务会话和动态执行列表；支持独立新建任务，不把内部执行拆成多个业务任务。详情包含结果、执行状态、日志入口和未决阻塞，不展示补充需求与取消任务控件；群消息续办和后端控制 API 仍保留。Claude 执行带有后端标签，保留标题、状态、耗时、工作目录及每轮文档/日志路径，不提供 DSH 会话跳转或自制终端。DSH 模型会话入口是阅读上下文，不是绕过 Host 直接修改任务的控制口；显示文档路径也不证明文件已成功写入。
 

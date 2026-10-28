@@ -11,3 +11,7 @@
 验证：相关协调回归210、原生HTTP1、Store146、部署57、模式scope19+原生5各自通过；不相加冒充唯一用例数。详见round-1至round-6和docs/tmp/no-full-startup-20261028、coordination-mode-fix-20261028的独立现场回读。
 
 PR #285 保持OPEN，代码已在本地验证部署，尚未合并、未运行CI。
+
+## 追加迭代：目录权限源头治理
+
+第7轮已在当前tasks根落地可继承当前用户FullControl，并通过原outputs与新目录原生正反例验证；本项即时生效，无须重启。源码新增一次性准备脚本、Owner能力事实提示及文档。此追加迭代尚未全绿：额外资源组两项超时，提示包尚未安装；原任务已通过preserve context恢复lease169，尚不代表剩余业务发布完成。准确状态以matrix.csv第7轮及round-7.md为准，不沿用前面阶段完成结论。

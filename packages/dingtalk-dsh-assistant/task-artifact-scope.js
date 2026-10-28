@@ -1,6 +1,5 @@
 import { isAbsolute } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { checkedTaskDirectory, taskFilePath } from './session-workspaces.js'
 
 const fail = code => { throw Object.assign(new Error(code), { code }) }
@@ -34,15 +33,10 @@ export async function bindTaskArtifactScope(ctx, { root, scope, taskId, session 
   const policy = ctx.get?.('sandboxPolicy') ?? ctx.sandboxPolicy
   if (typeof policy?.bindArtifactRoot !== 'function') fail('TASK_ARTIFACT_POLICY_API_REQUIRED')
   const bound = policy.bindArtifactRoot(session, { ownerId: scope.ownerId, artifactRoot: scope.artifactRoot })
-  // 先由原生绑定校验身份和目录，再收紧历史全权限；保留已有只读模式及审批策略。
-  if ((policy.overrideOf?.(session) ?? policy.defaultMode) === 'danger-full-access') setSandboxMode(session, 'workspace-write')
   const resolved = policy.resolve({ session })
   if (bound.ownerId !== scope.ownerId || bound.artifactRoot !== scope.artifactRoot
     || bound.sessionCwd !== session.header.cwd || resolved.workspaceRoot !== scope.artifactRoot
-    || !['read-only', 'workspace-write'].includes(resolved.mode)) fail('TASK_ARTIFACT_POLICY_BINDING_MISMATCH')
-  // Native permission escalation runs after standing-policy resolution; do not widen this binding.
-  ctx.tools.guard(exec => exec.agent?.session?.id === session.id && exec.arguments?.sandbox_permissions === 'danger-full-access'
-    ? 'task_artifact_scope_escalation_forbidden' : undefined)
+    || !['read-only', 'workspace-write', 'danger-full-access'].includes(resolved.mode)) fail('TASK_ARTIFACT_POLICY_BINDING_MISMATCH')
   return bound
 }
 

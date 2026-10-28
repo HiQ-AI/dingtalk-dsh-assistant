@@ -154,7 +154,10 @@ export function residentErrorStatus(error) {
 async function submitWebTask(request, response, runtime, kind, taskId) {
   try {
     if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
-    if (taskId && ((await runtime.getTaskSessionDetail?.(taskId))?.legacyReadonly || !runtime.getTaskSessionDetail && await runtime.isWorkflowTask?.(taskId))) return send(response, 410, { error: 'LEGACY_TASK_READONLY' })
+    if (taskId) {
+      const task = runtime.getTaskSessionIdentity ? await runtime.getTaskSessionIdentity(taskId) : await runtime.getTaskSessionDetail?.(taskId)
+      if (task?.legacyReadonly || !task && await runtime.isWorkflowTask?.(taskId)) return send(response, 410, { error: 'LEGACY_TASK_READONLY' })
+    }
     const body = await readJson(request)
     const parsed = (kind === 'createTask' ? createTaskInputSchema : kind === 'cancelTask' ? cancelTaskInputSchema : kind === 'reopenTask' ? reopenTaskInputSchema : contextTaskInputSchema).safeParse(body)
     if (!parsed.success) return send(response, 400, { error: 'web_task_request_invalid', issues: parsed.error.issues.map(({ path, message }) => ({ path, message })) })
@@ -173,7 +176,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     try {
       if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
       const taskId = decodeURIComponent(url.pathname.slice('/tasks/'.length, -'/archive'.length))
-      const task = await store.getTaskSessionDetail(taskId)
+      const task = store.getTaskSessionIdentity ? await store.getTaskSessionIdentity(taskId) : await store.getTaskSessionDetail(taskId)
       if (task?.legacyReadonly || !task && (await store.getTask?.(taskId) || await store.isWorkflowTask?.(taskId))) return send(response, 410, { error: 'LEGACY_TASK_READONLY' })
       if (!z.strictObject({}).safeParse(await readJson(request)).success) return send(response, 400, { error: 'web_task_request_invalid' })
       return send(response, 200, await store.archiveTask({ taskId }))
@@ -486,6 +489,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const parsed = z.strictObject({ requestId: requiredText.max(200), reply: requiredText.max(20000),
         expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
         artifactScopeCorrection: z.strictObject({ coordinationId: requiredText, expectedRevision: z.number().int().positive(), reason: requiredText.max(2000) }).optional(),
+        executionPermissionCorrection: z.strictObject({ executionId: requiredText, expectedInputVersion: z.number().int().positive(), mode: z.enum(['read-only', 'workspace-write', 'danger-full-access']), reason: requiredText.max(2000) }).optional(),
         nativeFailureResolutions: z.array(z.strictObject({ operationId: requiredText, expectedOperationDigest: z.string().regex(/^[a-f0-9]{64}$/u) })).min(1).max(8)
           .refine(items => new Set(items.map(item => item.operationId)).size === items.length).optional(),
         nativeRestartResolutions: z.array(z.strictObject({ operationId: requiredText, expectedOperationDigest: z.string().regex(/^[a-f0-9]{64}$/u),

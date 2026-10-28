@@ -19,10 +19,10 @@ async function fixture(t) {
   const code = 'export const fixture = true\n'
   await writeFile(join(stage, 'lib/index.js'), code)
   await writeFile(join(stage, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-sandbox-policy',
-    version: '0.2.1-rc.2.artifact.2', dsh: { originalEntrySha256: '772ca58f0f786d6cb4d839deb621634c31097c13228d81b14e3f3153d0524924' } }))
+    version: '0.2.1-rc.2.artifact.3', dsh: { originalEntrySha256: '772ca58f0f786d6cb4d839deb621634c31097c13228d81b14e3f3153d0524924' } }))
   const packagePath = join(root, 'policy.tgz')
   execFileSync('tar', ['-czf', packagePath, '-C', join(root, 'stage'), 'package'], { windowsHide: true })
-  const input = { schemaVersion: 1, name: '@deepseek-ai/dsh-sandbox-policy', version: '0.2.1-rc.2.artifact.2',
+  const input = { schemaVersion: 1, name: '@deepseek-ai/dsh-sandbox-policy', version: '0.2.1-rc.2.artifact.3',
     expectedManifestSha256: sha(original), packagePath, packageSha256: sha(await readFile(packagePath)), entrySha256: sha(code) }
   const proposal = join(root, 'proposal.json')
   await writeFile(proposal, JSON.stringify(input))
