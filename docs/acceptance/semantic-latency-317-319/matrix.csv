@@ -1,0 +1,10 @@
+case,round,status,evidence
+PR272既有协调及完成时钟,1,PASS,pr272-baseline-tests.log 188/188
+完整定向回归,1,PASS,final-unit-tests.log 381/381
+原生版本重复输入与独立完成,1,PASS,final-native-routing-tests.log 13/13
+原适配器同群等待反例,1,EXPECTED_FAIL,projection-before.log 5秒超时
+即时来源完成投影,1,PASS,projection-after.log 11ms且慢话题仍阻塞
+关联目录前后工具读取,1,PASS,linked-read-comparison.json 5次到1次
+真实模型提速秒数,1,NOT_RUN,没有本轮真实模型实验
+现场部署与原消息验证,1,NOT_RUN,不在本轮执行范围
+单PR整合交付,1,PASS,代码61330414远端及PR272 head回读一致 OPEN Draft CI无run

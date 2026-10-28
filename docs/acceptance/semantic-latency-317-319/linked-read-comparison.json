@@ -1,0 +1,26 @@
+{
+  "baseline": "122c1ce66a89a7b9d52f714aeceed5b3245080f0",
+  "kind": "deterministic-tool-plan-not-real-model",
+  "results": [
+    {
+      "label": "PR272-before-linked-context",
+      "catalogueReads": 4,
+      "contextReads": 1,
+      "totalReads": 5,
+      "sourceCount": 3,
+      "taskCount": 27,
+      "taskEffects": 0,
+      "sends": 0
+    },
+    {
+      "label": "with-linked-context",
+      "catalogueReads": 0,
+      "contextReads": 1,
+      "totalReads": 1,
+      "sourceCount": 3,
+      "taskCount": 27,
+      "taskEffects": 0,
+      "sends": 0
+    }
+  ]
+}

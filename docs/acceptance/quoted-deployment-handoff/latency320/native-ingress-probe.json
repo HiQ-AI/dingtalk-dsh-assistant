@@ -1,0 +1,61 @@
+{
+  "startedAt": "2026-10-27T05:57:29.522Z",
+  "realTaskWrites": 0,
+  "channelSends": 0,
+  "wallMs": 2149.5964000000004,
+  "accepted": true,
+  "stages": [
+    {
+      "stage": "ingress",
+      "startedAt": "2026-10-27T05:57:33.105Z",
+      "completedAt": "2026-10-27T05:57:35.228Z",
+      "durationMs": 2123,
+      "loopDelayMs": 183.107583
+    },
+    {
+      "phase": "source-read",
+      "stage": "ingress",
+      "startedAt": "2026-10-27T05:57:33.108Z",
+      "completedAt": "2026-10-27T05:57:33.109Z",
+      "durationMs": 1
+    },
+    {
+      "phase": "resource-read",
+      "stage": "ingress",
+      "startedAt": "2026-10-27T05:57:33.110Z",
+      "completedAt": "2026-10-27T05:57:34.848Z",
+      "durationMs": 1738
+    },
+    {
+      "phase": "image-save",
+      "stage": "ingress",
+      "startedAt": "2026-10-27T05:57:34.848Z",
+      "completedAt": "2026-10-27T05:57:35.179Z",
+      "durationMs": 331
+    },
+    {
+      "phase": "resident-store",
+      "stage": "ingress",
+      "startedAt": "2026-10-27T05:57:35.179Z",
+      "completedAt": "2026-10-27T05:57:35.201Z",
+      "durationMs": 22
+    },
+    {
+      "phase": "source-record",
+      "stage": "ingress",
+      "startedAt": "2026-10-27T05:57:35.202Z",
+      "completedAt": "2026-10-27T05:57:35.228Z",
+      "durationMs": 26
+    }
+  ],
+  "attachment": [
+    {
+      "attachmentId": "sha256:256569caee3a1187f2376b56c6ab56ad40c22e0f79449f629e310baa7b44c98d",
+      "bytes": 91098,
+      "width": 1275,
+      "height": 970
+    }
+  ],
+  "passed": true,
+  "finishedAt": "2026-10-27T05:57:35.316Z"
+}

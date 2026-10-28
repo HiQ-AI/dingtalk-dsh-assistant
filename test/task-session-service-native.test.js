@@ -1733,3 +1733,42 @@ test('execution document publication failure after claim drains the committed ex
   assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'active')
   assert.ok(h.service.listAlerts().some(item => item.alertId === `failure:execution-document:${execution.executionId}` && item.detail === 'EXECUTION_DOCUMENT_PATH_INVALID'))
 })
+
+testRunner('入站细分时钟记录失败读取及重试新版本，重复投影不漂移', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  const { openResidentStore } = await import('../packages/dingtalk-dsh-assistant/store.js')
+  const { openTaskSessionService } = await import('../packages/dingtalk-dsh-assistant/task-session-service.js')
+  const root = await mkdtemp(join(tmpdir(), 'native-ingress-phases-'))
+  let h, reads = 0
+  t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
+  h = await nativeTaskHost(root, request => {
+    const input = latestInput(request)
+    return request.tools.some(tool => tool.name === 'group_topic_route_submit') ? [{ name: 'group_topic_route_submit', args: {
+      requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
+        ignoredRefs: [{ quote: item.text, reason: '隔离入站时钟验证，无业务执行' }], units: [] })) } }] : []
+  }, { resident: true })
+  h.residentStore = await openResidentStore(h.ctx.storageDomain)
+  await h.residentStore.subscribe({ groupId: 'phase-group', name: '隔离计时群' })
+  h.service = await openTaskSessionService({ ctx: h.ctx, residentStore: h.residentStore,
+    legacy: { getGroup: id => h.residentStore.getGroup(id), getAgentConfig: () => ({ workspaceDir: root, provider: 'native-task-test', model: 'controlled', agentPreset: 'native-test', agentNames: ['测试助手'] }) },
+    config: { workspaceDir: root, dbPath: join(root, 'dynamic.db'), instanceId: 'native-ingress', initialize: true, ownerActorId: 'native-user', webActorId: 'native-user', provider: 'native-task-test' },
+    readResource: async () => {
+      await new Promise(resolve => setTimeout(resolve, 25))
+      if (++reads === 1) throw Object.assign(new Error('offline'), { code: 'OFFLINE' })
+      return { image: { mediaType: 'image/png', data: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOQy7vzHwAEfgJodQLI1QAAAABJRU5ErkJggg==', 'base64') } }
+    }, notifications: { send: () => assert.fail('不得发送消息'), readback: () => assert.fail('不得读取渠道回执') } })
+  const message = { groupId: 'phase-group', messageId: 'image-message', occurredAt: '2026-10-27T05:30:27.636Z', senderOpenDingTalkId: 'native-user', text: '图片入站计时', resourceRefs: [{ type: 'mediaId', resourceId: 'private-media' }] }
+  const first = await h.service.ingest(message)
+  const failed = await h.service.store.query({ kind: 'source.get', sourceId: first.sourceId })
+  assert.deepEqual(failed.stages.filter(stage => stage.phase).map(stage => stage.phase), ['source-read', 'resource-read', 'resident-store', 'source-record'])
+  const retry = await h.service.ingest(message)
+  const success = await h.service.store.query({ kind: 'source.get', sourceId: retry.sourceId })
+  assert.notEqual(retry.sourceId, first.sourceId)
+  assert.deepEqual(success.stages.filter(stage => stage.phase).map(stage => stage.phase), ['source-read', 'resource-read', 'image-save', 'resident-store', 'source-record'])
+  assert.ok(success.stages.find(stage => !stage.phase).loopDelayMs > 0)
+  assert.equal(h.residentStore.getGroup('phase-group').messages[0].imageRefs.length, 1)
+  assert.equal(JSON.stringify(success.stages).includes('private-media'), false)
+  const persisted = structuredClone(success.stages)
+  await h.service.ingest({ ...message, imageRefs: h.residentStore.getGroup('phase-group').messages[0].imageRefs })
+  assert.deepEqual((await h.service.store.query({ kind: 'source.get', sourceId: retry.sourceId })).stages, persisted)
+  assert.equal(reads, 2)
+})

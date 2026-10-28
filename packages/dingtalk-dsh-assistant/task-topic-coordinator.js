@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { topicDecisionRecovery } from './topic-model.js'
+import { fingerprint, topicDecisionRecovery } from './topic-model.js'
 import { createTopicCoordinator } from './topic-runtime.js'
 import { createCoordinationSessions, createCoordinationStepGate, coordinationTools } from './coordination-sessions.js'
 import { createCoordinationResourceTools } from './coordination-resources.js'
@@ -12,14 +12,19 @@ const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 
 const sameStringSet = (a, b) => a.length === b.length && a.every(value => b.includes(value))
 const taskContinuationInstructions = '先判断当前交付属于哪个 Task，再选择动作。完成表示已交付，不证明用户认可。收到明确关联原交付的具体异议、遗漏指出或纠正时，结合引用和原需求判断是否需要核查或修订；不能仅因没有“请修改”或Task已完成就当纯情绪忽略。确需处理时沿已有原任务接纳，范围限于该异议，不自动开发、重发文件或重放业务操作；纯评价且没有可核实问题或处理诉求时保留话题事实，不一律重开，也不新增统一审批。旧任务完成后的核查、审查修订、返工和重新提测是原交付的增量：completed 用 task-reopen，未完成用 task-context 并明确 progressImpact；保留原 Task、会话和有效证据，只追加新要求，不重放已成功步骤。涉及“已完成的项目”“逐个检查”等批量跟进时，路由和决策都先用 group_task_list 查候选，hasMore=true 按 nextOffset 续读，用 group_task_context_get 逐项核对必要详情、原交付及当前 inputVersion/runSequence，不能把目录摘要当完整正文。未列具体编号、跨多个事项或需要先核查条件，不构成新建总执行任务的理由；将各自范围交回原 Owner，先核验条件，无新评论或已不适用则如实结束，不重复修改或提测。一个 decision.actions 可以分别对多个原 Task 提交动作，每个 taskId 仅一次；唯一 effectOwner 约束事项由哪个 Topic 发起动作，不限制只能操作一个 Task。单事项沿原 Topic；批量事项即使由新协调 Topic 承接，也应操作已查明的原 Task，不能由新 Topic 推导 new-task。仅引用旧资料的独立新交付、查无对应原任务或用户明确要求另建任务时，才选择 new-task；不要将无关任务重开。'
 
-export function taskIndexPage(tasks, offset, limit) {
+export function taskIndexPage(tasks, offset, limit, query = '') {
+  const entries = tasks.map(({ taskId, title, state, inputVersion, runSequence, topicRefs, objective, completion, result }) => ({
+    taskId, title, state, inputVersion, runSequence, topicRefs,
+    objectivePreview: (objective ?? '').slice(0, 400), resultPreview: (completion?.result?.summary ?? result?.summary ?? '').slice(0, 600) }))
+  const snapshotFingerprint = fingerprint(entries)
   const page = []
-  const output = () => ({ tasks: page, total: tasks.length, offset, limit, nextOffset: offset + page.length, hasMore: offset + page.length < tasks.length })
-  for (const task of tasks.slice(offset, offset + limit)) {
-    const { taskId, title, state, inputVersion, runSequence, topicRefs } = task
-    page.push({ taskId, title, state, inputVersion, runSequence, topicRefs,
-      objectivePreview: (task.objective ?? '').slice(0, 400),
-      resultPreview: (task.completion?.result?.summary ?? task.result?.summary ?? '').slice(0, 600) })
+  const output = () => {
+    const nextOffset = offset + page.length, hasMore = nextOffset < tasks.length
+    return { tasks: page, total: tasks.length, query, snapshotFingerprint, offset, limit, nextOffset, hasMore,
+      nextCall: hasMore ? { name: 'group_task_list', arguments: { query, offset: nextOffset, limit } } : null }
+  }
+  for (const task of entries.slice(offset, offset + limit)) {
+    page.push(task)
     if (Buffer.byteLength(JSON.stringify(output()), 'utf8') <= 12 * 1024) continue
     page.pop()
     if (!page.length) throw new Error('group_task_index_entry_too_large')
@@ -29,7 +34,7 @@ export function taskIndexPage(tasks, offset, limit) {
 }
 
 // Topic owns routing and decision receipts; this adapter only supplies native request sessions.
-export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, validateReply, quotedReminderContext, coordinationEnabled = false, onRouted = async () => {}, onStage = async () => {}, onError = () => {} }) {
+export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, validateReply, quotedReminderContext, coordinationEnabled = false, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
   // The original Topic protocol is retained, but retired workflow prompt catalogs
   // must not leak back into the generic task-session boundary.
   store = new Proxy(store, { get(target, key) {
@@ -78,14 +83,14 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
           if (preset?.id !== undefined && preset.id !== agentPreset) throw new Error('coordination_agent_preset_invalid')
           const assert = exec => sessions.assert(exec.agent, request.groupId, request.requestId)
           topics.register(agentCtx, request.groupId, request)
-          agentCtx.tools.register({ name: 'group_task_list', description: '分页查询当前群未归档任务的轻量目录，包含已完成任务；目标和结果仅为摘要，完整正文用 group_task_context_get。hasMore=true 时按 nextOffset 继续，不用请求的 limit 推算偏移。',
+          agentCtx.tools.register({ name: 'group_task_list', description: '分页查询当前群未归档任务的最新轻量目录，包含已完成任务；目标和结果仅为摘要，完整正文用 group_task_context_get。同一请求当前可见的已读目录可直接复用，不重复从offset=0读取；hasMore=true 时直接使用nextCall，保留query和limit，不用请求的limit推算偏移。改变query须从offset=0查询；snapshotFingerprint变化表示当前目录已变化，需重新核对关联。',
             parameters: { type: 'object', properties: { query: { type: 'string' }, offset: { type: 'integer' }, limit: { type: 'integer' } }, additionalProperties: false }, output,
             execute: ({ query = '', offset = 0, limit = 50 }, exec) => {
               assert(exec)
               if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('group_task_page_invalid')
               const needle = query.trim().toLowerCase()
               const tasks = store.listTasks().filter(task => task.groupId === request.groupId && (!needle || `${task.title ?? ''} ${task.objective ?? ''}`.toLowerCase().includes(needle)))
-              return taskIndexPage(tasks, offset, limit)
+              return taskIndexPage(tasks, offset, limit, needle)
             } })
           agentCtx.tools.register({ name: 'group_task_context_get', description: '读取当前群任务的完整关联上下文。',
             parameters: { type: 'object', properties: { taskIds: { type: 'array', items: { type: 'string' } } }, required: ['taskIds'], additionalProperties: false }, output,
@@ -107,8 +112,10 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
           agentCtx.tools.restrict({ allow: [...allowed].filter(name => agentCtx.tools.get(name)) })
           agentCtx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'coordination_tool_outside_role')
           agentCtx.systemPrompt.section({ name: 'dingtalk-group-reply', order: 119, text: groupReplyInstructions })
-          agentCtx.systemPrompt.section({ name: 'dingtalk-task-continuation', order: 121, text: taskContinuationInstructions })
+          agentCtx.systemPrompt.section({ name: 'dingtalk-task-continuation', order: 121, text: `${taskContinuationInstructions}\n同一请求当前上下文中已读的Task目录可直接复用，不重复读同一查询第一页。group_task_list返回query、snapshotFingerprint和nextCall；续页照用nextCall，改变query从offset=0重新查询，当前目录指纹变化后重新核对。目录只有摘要，提交已有任务动作前仍须核对完整目标和版本；本轮linkedTasks.snapshots是Host重新读取的未截断正文，未内联的任务按group_task_context_get读取。group_reply_review_get在固定决策/审阅会话中由Host绑定本请求，{}即可读取，不能填写别的requestIds。${role === 'decision' ? '本决策会话group_topic_context_get可用{}读取Host绑定的当前固定版本。' : '当前会话没有唯一当前Topic；候选摘要足以排除不同业务目标时直接路由，不因关键词相近强读历史。确需历史时原样复制候选readCall.arguments，不得传空参数，不从标题猜topicId。'}` })
           agentCtx.systemPrompt.section({ name: 'dingtalk-task-boundary', order: 123, text: taskBoundaryInstructions })
+          if (role === 'decision') agentCtx.systemPrompt.section({ name: 'dingtalk-linked-task-context', order: 124,
+            text: '输入linkedTasks只包含Host在本轮话题版本创建时重新读取的本群关联任务，不沿用旧会话审批。snapshots内是未截断的完整任务，可直接核对目标和inputVersion/runSequence，避免重复目录或正文读取；reads内但未出现在snapshots的任务只有身份和版本，按readCall读取完整上下文。hasMore=true或业务目标指向其他任务时再查询目录；输入未含linkedTasks时使用原查询工具。提交前仍由Host校验当前来源、Topic和Task版本；新消息与新授权必须重新判断。' })
           agentCtx.systemPrompt.section({ name: 'dingtalk-task-progress-query', order: 124,
             text: '普通进度询问只读取原任务当前事实并一次答复，不能作为任务补充、恢复、重开、依赖或持续观察；提到多个任务不等于批量执行授权。单项在原Topic用actions:[]和reply回答；多个任务需要统一查询时可交独立协调的query/taskIds，不能创建task-observe安排。明确催办或追加要求才按原文范围选择任务动作，不能仅因问“修复了没”而唤醒Owner。' })
           if (role === 'route') agentCtx.systemPrompt.section({ name: 'dingtalk-independent-task-coordination', order: 122,
@@ -175,7 +182,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     }
     return normalized
   }
-  topics = createTopicCoordinator({ store, quotedReminderContext,
+  topics = createTopicCoordinator({ store, quotedReminderContext, onInputSettled,
     getAgent: (groupId, request) => request ? sessions.get(groupId, request) : !closed && store.getGroup(groupId) ? presence : undefined,
     dispatchRequest: (request, message) => {
       const work = sessions.dispatch(request, message)

@@ -1824,7 +1824,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         requestId: text(value.requestId, 'requestId'), attempt: integer(value.attempt + 1, 'attempt') - 1,
         startedAt: text(value.startedAt, 'startedAt'), completedAt: value.completedAt ?? null,
         quality: value.completedAt ? 'observed' : 'open', shared: value.shared === true,
-        ...(value.sessionId ? { sessionId: text(value.sessionId, 'sessionId') } : {}) }
+        ...(value.sessionId ? { sessionId: text(value.sessionId, 'sessionId') } : {}),
+        ...(value.phase !== undefined ? { phase: value.phase } : {}),
+        ...(value.loopDelayMs !== undefined ? { loopDelayMs: value.loopDelayMs } : {}) }
+      if (stage.phase !== undefined && (stage.stage !== 'ingress' || !['source-read', 'resource-read', 'image-save', 'resident-store', 'source-record'].includes(stage.phase))
+        || stage.loopDelayMs !== undefined && (stage.stage !== 'ingress' || stage.phase !== undefined || typeof stage.loopDelayMs !== 'number' || !Number.isFinite(stage.loopDelayMs) || stage.loopDelayMs < 0)) fail('DYNAMIC_SOURCE_STAGE_INVALID')
       if (!['ingress', 'queue', 'turn', 'host', 'send', 'readback'].includes(stage.stage)
         || !ingressTimestamp(stage.startedAt) || stage.completedAt !== null && !ingressTimestamp(stage.completedAt)) fail('DYNAMIC_SOURCE_STAGE_INVALID')
       if (stage.completedAt !== null && Date.parse(stage.completedAt) < Date.parse(stage.startedAt)) stage.quality = 'negative'

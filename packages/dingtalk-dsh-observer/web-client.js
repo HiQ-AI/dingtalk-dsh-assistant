@@ -372,6 +372,7 @@ window.__ModuleLoader__.load({
       const labels = { settled: '已收束', unsettled: '未收束', unknown: '未记录' }
       const notification = { prepared: '待发送', starting: '发送中', acknowledged: '已确认发送，待回读', unknown: '效果待核对', delivered: '已回读送达', failed: '失败', superseded: '已失效', unconfirmed: '未全部回读' }
       const elapsed = value => value?.quality === 'negative' ? '时钟逆序，异常' : value?.quality === 'valid' ? fmtDuration(value.durationMs) : '未记录'
+      const phaseLabels = { 'source-read': '来源读取', 'resource-read': '图片资源读取', 'image-save': '图片准备与保存', 'resident-store': '消息存储（含串行等待）', 'source-record': '来源记录' }
       const stageLabels = { ingress: 'Host接收', queue: '排队', turn: '原生回合（含模型/工具）', host: 'Host动作', send: '通知发送', readback: '送达回读' }
       return React.createElement('details', { style: { marginTop: 6, fontSize: 12, overflowWrap: 'anywhere' } },
         React.createElement('summary', { style: { color: colors.accent, cursor: 'pointer' } }, '处理状态与计时'),
@@ -382,7 +383,7 @@ window.__ModuleLoader__.load({
         React.createElement('p', null, `发生至语义完成：${elapsed(facts.semantic)}；接收至关联通知全部送达：${elapsed(facts.notificationE2e)}`),
         ...(facts.issues ?? []).map((issue, index) => React.createElement('p', { key: `issue-${issue.requestId || index}` }, `${issue.phase === 'host' ? 'Host动作' : issue.phase === 'coordination' ? '独立协调' : issue.phase === 'decision' ? '语义判断' : '归类'}：${issue.status === 'retrying' ? '等待自动重试' : '处理失败'}${issue.retryAt ? `；预计重试 ${fmt(issue.retryAt)}` : ''}${issue.attempt ? `；尝试 ${issue.attempt}` : ''}`)),
         ...(facts.notifications ?? []).map(notice => React.createElement('p', { key: notice.notificationId }, `通知：${notification[notice.state] || '未记录'}${notice.versionMatched !== true ? '（消息版本未核实，不计端到端）' : ''}；回读送达：${fmt(notice.deliveredAt)}`)),
-        ...(facts.stages ?? []).map((stage, index) => React.createElement('p', { key: stage.spanId || `${stage.stage}:${stage.requestId}:${index}` }, `${stageLabels[stage.stage] || stage.stage}：${fmt(stage.startedAt)} → ${fmt(stage.completedAt)}${stage.quality === 'negative' ? '（时钟异常）' : ''}${stage.shared ? '（共享区间）' : ''}${stage.attempt ? `；尝试 ${stage.attempt}` : ''}；请求 ${stage.requestId}`)),
+        ...(facts.stages ?? []).map((stage, index) => React.createElement('p', { key: stage.spanId || `${stage.stage}:${stage.requestId}:${index}` }, `${stageLabels[stage.stage] || stage.stage}${stage.phase ? ` · ${phaseLabels[stage.phase] || stage.phase}` : ''}：${fmt(stage.startedAt)} → ${fmt(stage.completedAt)}${stage.quality === 'negative' ? '（时钟异常）' : ''}${stage.shared ? '（共享区间）' : ''}${stage.attempt ? `；尝试 ${stage.attempt}` : ''}${stage.loopDelayMs !== undefined ? `；事件循环最大延迟 ${Math.round(stage.loopDelayMs)} 毫秒` : ''}；请求 ${stage.requestId}`)),
         React.createElement('p', null, `未记录阶段：${Object.entries(stageLabels).filter(([key]) => !facts.stages?.some(stage => stage.stage === key)).map(([, label]) => label).join('、') || '无'}；原生回合不是纯模型用时，不跨回合求包络。`))
     }
     const traceReason = (reason) => {

@@ -627,6 +627,76 @@ async function taskFixture(h, message = {}) {
   return { task, request }
 }
 
+test('连续话题版本刷新关联Task完整快照，保留未答来源并拒绝旧决策', async t => {
+  const h = await setup(t)
+  const { task, request } = await taskFixture(h)
+  await ingest(h, 'follow-317')
+  const pending = (await route(h, { 'follow-317': request.topicId })).pendingDecisions[0]
+  const first = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(first.linkedTasks.total, 1)
+  assert.deepEqual(first.linkedTasks.snapshots, [h.store.getTask(task.taskId)])
+  assert.deepEqual(first.linkedTasks.reads[0].readCall, { name: 'group_task_context_get', arguments: { taskIds: [task.taskId] } })
+  await h.store.updateTask(task.taskId, current => ({ ...current, inputVersion: current.inputVersion + 1, objective: '更新后的完整验收目标' }))
+  await ingest(h, 'follow-318')
+  const next = (await route(h, { 'follow-318': request.topicId })).pendingDecisions[0]
+  const second = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(second.linkedTasks.snapshots[0].inputVersion, task.inputVersion + 1)
+  assert.equal(second.linkedTasks.snapshots[0].objective, '更新后的完整验收目标')
+  assert.equal(first.linkedTasks.snapshots[0].inputVersion, task.inputVersion, '旧输入不能被新缓存原位改写')
+  assert.ok(second.messages.some(message => message.messageId === 'follow-317'), '新版本保留未答来源')
+  assert.ok(second.messages.some(message => message.messageId === 'follow-318'))
+  assert.equal((await h.call('group_decision_submit', submission(pending))).status, 'topic-stale')
+  await complete(h, next)
+  assert.equal(h.store.getTopic('g', request.topicId).processedRevision, next.revision)
+  assert.equal(h.applications.length, 0, '预取上下文不应用任何Task动作')
+})
+
+test('关联Task上下文有界且不截断正文，跨群不泄露，超量显式续查', async t => {
+  const h = await setup(t)
+  const { request } = await taskFixture(h)
+  const large = '完整原始目标'.repeat(3000)
+  const { task } = await h.store.createTask({ groupId: 'g', topicRefs: [{ topicId: request.topicId, revision: 1 }],
+    title: '超长任务', objective: large, acceptanceCriteria: ['完整核验'] })
+  for (let index = 0; index < 12; index++) await h.store.createTask({ groupId: 'g', topicRefs: [{ topicId: request.topicId, revision: 1 }],
+    title: `关联任务${index}`, objective: `目标${index}`, acceptanceCriteria: ['证据'] })
+  await h.store.subscribe({ groupId: 'private-group' })
+  await h.store.ingest({ groupId: 'private-group', messageId: 'private', text: '私有来源', occurredAt: '2026-10-27T06:00:00Z' })
+  const privateRoute = await h.store.routeMessages({ groupId: 'private-group', routeId: 'private-route', routingRevision: 0,
+    routes: [{ messageId: 'private', messageVersion: 1, topics: [{ newTopicKey: 'private', title: '私有话题' }] }] })
+  await h.store.createTask({ groupId: 'private-group', topicRefs: [{ topicId: privateRoute.topicIdsByKey.private, revision: 1 }],
+    title: '跨群私有目标', objective: '不得泄露', acceptanceCriteria: ['私有'] })
+  await ingest(h, 'bounded-follow')
+  await route(h, { 'bounded-follow': request.topicId })
+  const next = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(next.linkedTasks.total, 14)
+  assert.equal(next.linkedTasks.hasMore, true)
+  assert.ok(next.linkedTasks.reads.length <= 8)
+  assert.ok(Buffer.byteLength(JSON.stringify(next.linkedTasks.snapshots), 'utf8') <= 3000)
+  assert.equal(next.linkedTasks.snapshots.some(snapshot => snapshot.taskId === task.taskId), false)
+  assert.ok(next.linkedTasks.reads.some(read => read.taskId === task.taskId), '大正文只提供精确读回，不用摘要冒充完整目标')
+  assert.equal(h.store.getTask(task.taskId).objective, large)
+  assert.equal(JSON.stringify(next).includes('跨群私有目标'), false)
+  assert.ok(Buffer.byteLength(h.sent.findLast(text => text.startsWith('[GROUP_TOPIC_DECISION]')), 'utf8') <= 12000)
+})
+
+test('关联Task内联后发生版本变化，旧快照不能放行Task动作', async t => {
+  const h = await setup(t)
+  const { task, request } = await taskFixture(h)
+  await h.store.updateTask(task.taskId, current => ({ ...current, state: 'running' }))
+  await ingest(h, 'task-fence')
+  const next = (await route(h, { 'task-fence': request.topicId })).pendingDecisions[0]
+  const inline = h.envelope('[GROUP_TOPIC_DECISION]').linkedTasks.snapshots[0]
+  await h.store.updateTask(task.taskId, current => ({ ...current, inputVersion: current.inputVersion + 1 }))
+  const result = await h.call('group_decision_submit', submission(next, { reply: '收到本次补充', reason: undefined,
+    actions: [{ kind: 'task-context', taskId: task.taskId,
+    inputVersion: inline.inputVersion, runSequence: inline.runSequence, context: '需要保留的新要求', progressImpact: 'preserve',
+    topicRefs: [{ topicId: next.topicId, revision: next.revision }] }] }))
+  assert.equal(result.status, 'task-stale', JSON.stringify(result))
+  assert.equal(h.applications.length, 0)
+  assert.ok(h.store.getTopic('g', next.topicId).processedRevision < next.revision, '旧快照被拒后来源仍未答')
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+})
+
 test('归类 exact batch 零副作用拒绝漏项，新增消息进入下一批', async (t) => {
   const h = await setup(t)
   await ingest(h, 'a'); await ingest(h, 'b'); await h.coordinator.schedule('g')
@@ -1385,6 +1455,7 @@ test('Topic 按需搜索分页及固定版本读回，跨群与越界拒绝', as
   await assert.rejects(h.call('group_topic_context_get',{topicId:request.topicId,offset:-1}),/topic_page_invalid/)
   const index = await h.call('group_topic_list', { query: '导出', offset: 0, limit: 1 })
   assert.equal(index.total, 1)
+  assert.deepEqual(index.topics[0].readCall, { name: 'group_topic_context_get', arguments: { topicId: request.topicId, revision: request.revision } })
   const page = await h.call('group_topic_context_get', { topicId: request.topicId, revision: 1, offset: 0, limit: 1 })
   assert.equal(page.total, 1)
   assert.equal(page.messages[0].messageId, 'a')
@@ -2320,7 +2391,8 @@ test('紧凑目录连续分页无漏项，引用同消息全部旧事项保留�
   await ingest(h, 'catalog-current', { quotedMessage: { messageId: 'catalog-seed', content: '历史引用' } })
   await h.coordinator.schedule('g')
   const request = h.envelope('[GROUP_TOPIC_ROUTE]')
-  assert.ok(request.topics.every(topic => !Object.hasOwn(topic, 'summary') && !Object.hasOwn(topic, 'processedRevision')))
+  assert.ok(request.topics.every(topic => (topic.summary?.length ?? 0) <= 240 && !Object.hasOwn(topic, 'processedRevision')))
+  for (const topic of request.topics) assert.deepEqual(topic.readCall, { name: 'group_topic_context_get', arguments: { topicId: topic.topicId, revision: topic.revision } })
   assert.ok(JSON.stringify(request.relatedTopics).length <= 3000)
   const relatedIds = request.relatedTopics.map(topic => topic.topicId)
   let relatedOffset = request.nextRelatedTopicOffset
@@ -2405,6 +2477,41 @@ test('决策首包提供固定流程索引、合法 section 与批量正文读�
   assert.notEqual(current.requestId, request.requestId)
   assert.equal((await h.call('group_task_prompt_get', { requestId: current.requestId, ids: ['investigate'] })).prompts[0].prompt, '新版')
   await assert.rejects(h.call('group_task_prompt_get', { requestId: request.requestId, ids: ['investigate'] }), /task_review_request_unknown/)
+})
+
+test('固定请求绑定审阅身份与当前Topic，路由缺Topic明确拒绝且不猜测其他事项', async t => {
+  const h = await setup(t)
+  await ingest(h, 'bound-read')
+  await h.coordinator.schedule('g')
+  const route = h.envelope('[GROUP_TOPIC_ROUTE]'), routeTools = new Map()
+  h.coordinator.register({ tools: { register(tool) { routeTools.set(tool.name, tool) } } }, 'g', route)
+  assert.deepEqual(routeTools.get('group_topic_context_get').parameters.required, ['topicId'])
+  const missing = await routeTools.get('group_topic_context_get').execute({}, { groupId: 'g' })
+  assert.equal(missing.status, 'invalid-arguments')
+  assert.equal(missing.issues[0].code, 'topic_id_required')
+  assert.deepEqual(missing.nextCall, { name: 'group_topic_list', arguments: { offset: 0, limit: 50 } })
+  assert.deepEqual(missing.choices, [])
+  await h.call('group_topic_route_submit', { requestId: route.requestId, routes: [{ messageId: 'bound-read', messageVersion: 1,
+    topics: [{ newTopicKey: 'bound', title: '固定请求读取' }] }] })
+  const request = h.envelope('[GROUP_TOPIC_DECISION]'), scoped = new Map()
+  h.coordinator.register({ tools: { register(tool) { scoped.set(tool.name, tool) } } }, 'g', request)
+  assert.deepEqual(scoped.get('group_reply_review_get').parameters.required, [])
+  assert.deepEqual(scoped.get('group_topic_context_get').parameters.required, [])
+  const review = await scoped.get('group_reply_review_get').execute({}, { groupId: 'g' })
+  assert.deepEqual(review.requestIds, [request.requestId])
+  assert.deepEqual(review.candidates, [])
+  const context = await scoped.get('group_topic_context_get').execute({}, { groupId: 'g' })
+  assert.equal(context.topic.topicId, request.topicId); assert.equal(context.topic.revision, request.revision)
+  assert.equal(context.messages[0].messageId, 'bound-read')
+  await assert.rejects(scoped.get('group_reply_review_get').execute({ requestIds: ['different-request'] }, { groupId: 'g' }), /coordination_tool_wrong_request/)
+  await assert.rejects(scoped.get('group_reply_review_get').execute({}, { groupId: 'other' }), /wrong_session/)
+  await assert.rejects(scoped.get('group_topic_context_get').execute({ revision: request.revision + 1 }, { groupId: 'g' }), /decision_context_topic_stale/)
+  await assert.rejects(scoped.get('group_topic_context_get').execute({ topicId: 'other-group-topic' }, { groupId: 'g' }), /topic_not_found/)
+  await assert.rejects(h.rawCall('group_reply_review_get', {}), /topic_review_request_invalid/)
+  await ingest(h, 'changed-topic')
+  await h.store.routeMessages({ groupId: 'g', routeId: 'changed-after-fixed-read', routingRevision: h.store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'changed-topic', messageVersion: 1, topics: [{ topicId: request.topicId }] }] })
+  await assert.rejects(scoped.get('group_topic_context_get').execute({}, { groupId: 'g' }), /decision_context_topic_stale/)
 })
 
 test('超长流程索引通过声明的 promptIndex 分页完整读取且保持决策首包预算', async (t) => {

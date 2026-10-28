@@ -1083,6 +1083,9 @@ export async function openResidentStore(storageDomain) {
     completeTopicDecision: ({ groupId, topicId, decisionId }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      const previous = entry[1].topics.find(item => item.topicId === topicId)?.decisions.find(item => item.decisionId === decisionId)
+      // 重复恢复不是新的语义完成；历史缺少首次时钟也不能以本次恢复时间补写。
+      if (previous?.status === 'completed') return previous
       let result
       await groups.update(entry[0], (latest) => {
         const topic = latest.topics.find((item) => item.topicId === topicId)
@@ -1090,7 +1093,8 @@ export async function openResidentStore(storageDomain) {
         if (!record) throw new Error(`topic_decision_not_found:${decisionId}`)
         if (record.status === 'rejected') throw new Error('topic_decision_rejected')
         if (record.operations.some((operation) => operation.status !== 'applied')) throw new Error('topic_decision_operations_pending')
-        result = { ...record, status: 'completed', updatedAt: new Date().toISOString() }
+        const completedAt = new Date().toISOString()
+        result = { ...record, status: 'completed', completedAt, updatedAt: completedAt }
         const update = record.decision.topicUpdate ?? {}
         const topics = latest.topics.map((item) => item.topicId !== topicId ? item : {
           ...item, ...(update.summary !== undefined ? { summary: update.summary, summaryRevision: record.revision } : {}), ...(update.status && item.revision === record.revision ? { status: update.status } : {}), ...(update.openQuestions ? { openQuestions: update.openQuestions } : {}),

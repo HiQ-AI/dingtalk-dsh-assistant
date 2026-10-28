@@ -31,6 +31,58 @@ function jsonValues(value) {
 const message = (messageId, text) => ({ groupId: 'native-group', messageId, senderOpenDingTalkId: 'native-user', senderName: '真实用户', sourceKind: 'dingtalk', text,
   occurredAt: '2026-10-13T10:00:00Z', timestamp: '2026-10-13T10:00:00Z' })
 
+testRunner('来源语义戳在首次Topic完成后落账，不等待同群其他判断',
+  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'source-clock-immediate-'))
+    let host, firstDecision, completedMessageId, slowBlocked = false
+    const slowEntered = Promise.withResolvers(), releaseSlow = Promise.withResolvers()
+    t.after(async () => { releaseSlow.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, async request => {
+      const input = latestInput(request), names = request.tools.map(tool => tool.name)
+      const calls = topicTaskCalls(request)
+      if (names.includes('group_decision_submit')) {
+        firstDecision ??= input.requestId
+        if (input.requestId === firstDecision) completedMessageId = input.messages[0].messageId
+        else {
+          slowBlocked = true; slowEntered.resolve(); await releaseSlow.promise; slowBlocked = false
+        }
+        for (const item of calls) {
+          item.args.decision.actions = []; item.args.decision.reason = '只记录独立反馈，不开展业务动作'
+          item.args.decision.topicUpdate = { summary: '记录独立反馈，未开展业务动作。' }
+          delete item.args.decision.reply
+          delete item.args.decision.replyReview
+        }
+      }
+      return calls ?? []
+    })
+    await Promise.all([host.service.ingest(message('fast-clock', '测试助手，记录物料名称显示反馈。')),
+      host.service.ingest(message('slow-clock', '测试助手，记录另一个独立事项。'))])
+    await slowEntered.promise
+    try {
+      await waitUntil(async () => (await host.query('source.list')).find(source => source.messageId === completedMessageId)?.processingCompleted,
+        '已完成Topic的来源独立落戳', 5000)
+    } catch (error) {
+      t.diagnostic(JSON.stringify({ sources: (await host.query('source.list')).map(source => ({ messageId: source.messageId, routed: source.routed,
+        processingPending: source.processingPending, processingCompleted: source.processingCompleted })),
+        topics: host.residentStore.listTopics('native-group').map(topic => ({ title: topic.title, revision: topic.revision, processedRevision: topic.processedRevision,
+          decisions: topic.decisions.map(record => ({ status: record.status, error: record.error, completedAt: record.completedAt })) })), tools: host.toolResults, alerts: host.service.listAlerts() }))
+      throw error
+    }
+    assert.equal(slowBlocked, true)
+    const completedTopic = host.residentStore.listTopics('native-group').find(topic => topic.entries.some(entry => entry.messageId === completedMessageId))
+    assert.equal(completedTopic.decisions[0].status, 'completed')
+    assert.equal(completedTopic.summary, '记录独立反馈，未开展业务动作。')
+    const at = (await host.query('source.list')).find(source => source.messageId === completedMessageId).processingCompleted.at
+    t.diagnostic(JSON.stringify({ metric: 'settled-topic-to-source-projection', delayMs: Date.parse(at) - Date.parse(completedTopic.decisions[0].completedAt), slowTopicStillBlocked: slowBlocked }))
+    assert.ok(Date.parse(at) >= Date.parse(completedTopic.decisions[0].completedAt), '来源戳不能早于真实决策终态')
+    assert.equal(host.sent.length, 0, '纯讨论无回复决策不产生通知')
+    assert.equal((await host.query('source.list')).find(source => source.messageId === completedMessageId).processingCompleted.at, at)
+    releaseSlow.resolve(); await host.service.whenIdle()
+    await host.service.recover(); await host.service.whenIdle()
+    assert.equal((await host.query('source.list')).find(source => source.messageId === completedMessageId).processingCompleted.at, at)
+    assert.equal((await host.query('task.list')).length, 0)
+  })
+
 testRunner('completed task catalogue stays within the tool budget and advances by returned entries without losing tasks', () => {
   const tasks = Array.from({ length: 14 }, (_, index) => ({ taskId: `task-${index}`, title: `原任务${index}`, state: 'completed',
     inputVersion: index + 1, runSequence: 2, topicRefs: [{ topicId: `topic-${index}`, revision: 3 }],
@@ -59,6 +111,97 @@ testRunner('completed task catalogue stays within the tool budget and advances b
   assert.equal(taskIndexPage([], 0, 100).nextOffset, 0)
   assert.ok(tasks[0].request.length > 20000, '目录缩减不得改写原任务正文')
 })
+
+testRunner('task catalogue continuation carries the exact normalized query and current snapshot identity', () => {
+  const tasks = Array.from({ length: 18 }, (_, index) => ({ taskId: `task-${index}`, title: `数据集${index}`, state: 'completed',
+    inputVersion: 1, runSequence: 1, objective: '完整目标'.repeat(300), result: { summary: '实际结果'.repeat(300) } }))
+  const first = taskIndexPage(tasks, 0, 50, '数据集')
+  assert.equal(first.hasMore, true); assert.equal(first.query, '数据集')
+  assert.deepEqual(first.nextCall, { name: 'group_task_list', arguments: { query: '数据集', offset: first.nextOffset, limit: 50 } })
+  const next = taskIndexPage(tasks, first.nextCall.arguments.offset, first.nextCall.arguments.limit, first.nextCall.arguments.query)
+  assert.equal(next.snapshotFingerprint, first.snapshotFingerprint)
+  assert.equal(next.tasks[0].taskId, tasks[first.nextOffset].taskId)
+  assert.deepEqual(taskIndexPage(tasks, 0, 50, '数据集'), first)
+  tasks[0].inputVersion++
+  assert.notEqual(taskIndexPage(tasks, 0, 50, '数据集').snapshotFingerprint, first.snapshotFingerprint)
+  assert.equal(taskIndexPage([], 0, 50, '数据集').nextCall, null)
+})
+
+testRunner('native request-bound review and Topic reads accept empty args while routing never guesses a Topic',
+  { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+    let routed = false, reviewed = false, readTopic = false, wrongRequestChecked = false
+    const h = await extraHost(t, 'bound-topic-read-', async request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+      if (names.includes('group_topic_route_submit')) {
+        assert.deepEqual(request.tools.find(tool => tool.name === 'group_topic_context_get').parameters.required, ['topicId'])
+        if (!routed) { routed = true; return [call('group_topic_context_get', {})] }
+        const missing = values.find(value => value.issues?.some(issue => issue.code === 'topic_id_required'))
+        assert.equal(missing?.status, 'invalid-arguments')
+        assert.deepEqual(missing.nextCall, { name: 'group_topic_list', arguments: { offset: 0, limit: 50 } })
+        return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId,
+          messageVersion: item.messageVersion, topics: [{ newTopicKey: 'bound-read', title: '只读承接合同核验' }] })) })]
+      }
+      if (names.includes('group_decision_submit')) {
+        assert.deepEqual(request.tools.find(tool => tool.name === 'group_reply_review_get').parameters.required, [])
+        assert.deepEqual(request.tools.find(tool => tool.name === 'group_topic_context_get').parameters.required, [])
+        if (!wrongRequestChecked) { wrongRequestChecked = true; return [call('group_reply_review_get', { requestIds: ['cross-request'] })] }
+        if (!reviewed) { reviewed = true; return [call('group_reply_review_get', {})] }
+        const review = values.find(value => Array.isArray(value.requestIds) && Array.isArray(value.candidates))
+        assert.deepEqual(review?.requestIds, [input.requestId])
+        if (!readTopic) { readTopic = true; return [call('group_topic_context_get', {})] }
+        const context = values.find(value => value.topic?.topicId === input.topicId && Array.isArray(value.messages))
+        assert.equal(context?.topic.revision, input.revision)
+        assert.equal(context.messages[0].messageId, 'contract-source')
+        return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+          decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reason: '仅核验固定请求读取合同，无业务交办' } })]
+      }
+      return topicTaskCalls(request) ?? []
+    })
+    await h.service.ingest(message('contract-source', '固定请求读取合同核验，无需办理业务。'))
+    await h.service.whenIdle()
+    assert.ok(routed && reviewed && readTopic && wrongRequestChecked)
+    assert.ok(h.toolResults.filter(item => item.name === 'group_reply_review_get').some(item => JSON.stringify(item.result).includes('coordination_tool_wrong_request')))
+    assert.equal(h.residentStore.listTopics('native-group')[0].decisions[0].status, 'completed')
+    assert.equal((await h.query('task.list')).length, 0)
+    assert.equal(h.sent.length, 0)
+  })
+
+testRunner('native revised Topic supplies current linked Task reads without rescanning the catalogue',
+  { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+    let topicId, taskId, contextReads = 0, decisions = 0
+    const h = await extraHost(t, 'linked-task-reads-', async request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId,
+        routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ topicId }] })) })]
+      if (names.includes('group_decision_submit')) {
+        assert.equal(input.linkedTasks.total, 1)
+        assert.equal(input.linkedTasks.reads[0].taskId, taskId)
+        assert.deepEqual(input.linkedTasks.snapshots, [], '大正文不能被截成貌似完整的目标')
+        const full = modelToolValues(request).flatMap(value => value.tasks ?? []).find(task => task.taskId === taskId && task.objective)
+        if (!full) { contextReads++; return [call(input.linkedTasks.reads[0].readCall.name, input.linkedTasks.reads[0].readCall.arguments)] }
+        assert.equal(full.objective, '必须完整核验的原目标'.repeat(800))
+        decisions++
+        return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+          decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reason: '只核对讨论上下文，不执行新动作' } })]
+      }
+      return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续资料', evidence: [], limitations: [] } })]
+    })
+    const created = await h.service.createTask({ groupId: 'native-group', requestId: 'linked-original', title: '关联原任务', objective: '必须完整核验的原目标'.repeat(800) })
+    await h.service.whenIdle()
+    const task = await h.query('task.get', { taskId: created.taskId })
+    taskId = task.taskId; topicId = task.topicRefs[0].topicId
+    for (const id of ['linked-follow-317', 'linked-follow-318']) {
+      await h.service.ingest(message(id, '补充原事项讨论，只核对上下文，不执行新动作。'))
+      await h.service.whenIdle()
+    }
+    assert.equal(decisions, 2)
+    assert.equal(contextReads, 2, '每个新版本从当前账本核对全文，不沿用旧会话读过的许可')
+    assert.equal(h.toolResults.filter(item => item.name === 'group_task_list').length, 0)
+    assert.equal((await h.query('task.list')).length, 1)
+    assert.equal((await h.query('task.get', { taskId })).requirementRevision, task.requirementRevision)
+    assert.equal(h.sent.length, 0)
+    assert.equal(h.residentStore.listTopics('native-group').find(topic => topic.topicId === topicId).processedRevision, 3)
+  })
 
 testRunner('native batch followup reopens each original completed task and session once from one coordination topic', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
   let followup = false

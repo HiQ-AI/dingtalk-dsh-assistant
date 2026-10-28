@@ -2057,6 +2057,22 @@ test('failed round freezes at its first result, not at repeated receipt, drain o
   assert.deepEqual(await round(), failed)
 })
 
+test('ingress phase metadata is host validated and preserved without changing old span identity', async t => {
+  const f = await fixture(t)
+  await f.command('source.record', { sourceId: 'phased', groupId: 'g', messageId: 'm', actorId: 'a', text: 'private' })
+  const base = { spanId: 'ingress', stage: 'ingress', requestId: 'request', attempt: 0, startedAt: '2026-10-27T05:30:00.000Z', completedAt: '2026-10-27T05:30:01.000Z' }
+  await f.command('source.stage', { sourceId: 'phased', stage: { ...base, loopDelayMs: 35.5 } })
+  await f.command('source.stage', { sourceId: 'phased', stage: { ...base, spanId: 'media', phase: 'resource-read', resourceId: 'secret' } })
+  for (const metadata of [{ phase: 'anything' }, { phase: null }, { loopDelayMs: -1 }, { loopDelayMs: '1' }, { phase: 'image-save', loopDelayMs: 1 }, { stage: 'turn', phase: 'source-read' }]) {
+    await assert.rejects(f.command('source.stage', { sourceId: 'phased', stage: { ...base, spanId: `invalid-${JSON.stringify(metadata)}`, ...metadata } }), { code: 'DYNAMIC_SOURCE_STAGE_INVALID' })
+  }
+  await f.reopen()
+  const stages = (await f.query({ kind: 'source.get', sourceId: 'phased' })).stages
+  assert.equal(stages[0].loopDelayMs, 35.5)
+  assert.equal(stages[1].phase, 'resource-read')
+  assert.equal(stages[1].resourceId, undefined)
+  await assert.rejects(f.command('source.stage', { sourceId: 'phased', stage: { ...base, loopDelayMs: 36 } }), { code: 'DYNAMIC_SOURCE_STAGE_CONFLICT' })
+})
 
 test('cancelled Host-interrupted task reopens only into bound readonly recovery, then audit permits business without replay', async t => {
  const f=await isolatedRestartLedger(t,false)

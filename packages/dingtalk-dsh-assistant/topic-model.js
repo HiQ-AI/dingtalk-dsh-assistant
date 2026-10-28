@@ -15,7 +15,7 @@ export const topicDecisionSchema = z.object({
   decisionId: z.string().min(1), revision: z.number().int().positive(), decision: z.record(z.string(), z.unknown()), fingerprint: z.string(),
   status: z.enum(['accepted', 'applying', 'failed', 'blocked', 'completed', 'rejected']), operations: z.array(topicOperationSchema),
   attempt: z.number().int().nonnegative().optional(), retryBaseAttempt: z.number().int().nonnegative().optional(), nextRetryAt: z.string().optional(), recoveryReason: z.string().optional(), failureOperationId: z.string().min(1).optional(),
-  outboundId: z.string().min(1), createdAt: z.string(), updatedAt: z.string(), error: z.string().optional(),
+  outboundId: z.string().min(1), createdAt: z.string(), updatedAt: z.string(), completedAt: z.string().datetime({ offset: true }).optional(), error: z.string().optional(),
   progress: z.record(z.string(), z.unknown()).optional(),
 })
 export const topicSchema = z.object({

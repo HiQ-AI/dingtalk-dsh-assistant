@@ -34,6 +34,46 @@ async function route(store, id, items) {
 }
 const decision = (id, topicId, revision, extra = {}) => ({ groupId: 'g', topicId, revision, decisionId: id, decision: { actions: [], reason: '无需回复' }, ...extra })
 
+test('首次完成时钟不可变，重复complete与通知送达/重启不改语义终态', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-27T05:36:12Z') })
+  const snapshot = { tables: {}, global: null }
+  let writes = 0, store = await openResidentStore(facility(snapshot, () => { writes++ }))
+  t.after(() => store.close())
+  await store.subscribe({ groupId: 'g' }); await ingest(store, 'message-320')
+  const topicId = (await route(store, 'route-320', [['message-320', { newTopicKey: 'case-320', title: '消息承接' }]])).topicIdsByKey['case-320']
+  const target = { groupId: 'g', topicId, decisionId: 'decision-320' }
+  await store.acceptTopicDecision(decision(target.decisionId, topicId, 1))
+  const first = await store.completeTopicDecision(target)
+  assert.equal(first.completedAt, '2026-10-27T05:36:12.000Z')
+  const completedTopic = structuredClone(store.getTopic('g', topicId)), completedWrites = writes
+  t.mock.timers.tick(57_000)
+  assert.deepEqual(await store.completeTopicDecision(target), first)
+  assert.equal(writes, completedWrites, '重复完成不产生持久写')
+  await store.appendOutbox({ groupId: 'g', outboundId: 'notification-320', sourceMessageId: 'message-320', text: '承接结论' })
+  await store.acknowledge({ groupId: 'g', outboundId: 'notification-320', deliveredMessageId: 'sent-320' })
+  assert.deepEqual(await store.completeTopicDecision(target), first)
+  assert.deepEqual(store.getTopic('g', topicId), completedTopic)
+  await store.close(); store = await openResidentStore(facility(snapshot))
+  t.mock.timers.tick(60_000)
+  assert.deepEqual(await store.completeTopicDecision(target), first)
+  assert.equal(store.getTopic('g', topicId).decisions[0].completedAt, first.completedAt)
+})
+
+test('历史已完成但缺少首次时钟不以重试当前时间或updatedAt回填', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-27T06:00:00Z') })
+  const { store, snapshot } = await setup()
+  await ingest(store, 'historical')
+  const topicId = (await route(store, 'legacy', [['historical', { newTopicKey: 'legacy', title: '历史' }]])).topicIdsByKey.legacy
+  const target = { groupId: 'g', topicId, decisionId: 'historical-completed' }
+  await store.acceptTopicDecision(decision(target.decisionId, topicId, 1)); await store.completeTopicDecision(target)
+  await store.close()
+  const record = snapshot.tables.groups.g.topics[0].decisions[0]
+  delete record.completedAt; record.updatedAt = '2026-10-27T05:37:09Z'
+  const reopened = await openResidentStore(facility(snapshot)); t.after(() => reopened.close())
+  assert.deepEqual(await reopened.completeTopicDecision(target), record)
+  assert.equal(reopened.getTopic('g', topicId).decisions[0].completedAt, undefined)
+})
+
 test('明确发送阻塞重启保留，普通错误不清阻塞，真实晚回执清阻塞但保留替换终态', async () => {
   const { store, snapshot } = await setup()
   for (const id of ['blocked', 'replaced']) {
