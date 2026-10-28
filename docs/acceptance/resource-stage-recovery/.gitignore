@@ -1,0 +1,6 @@
+# 原生运行缓存及私人旧版快照留在本机；提交场景、摘要、补丁和重放脚本。
+skill-update/before/
+round-*/model/.dsh/
+round-*/model/legacy-sessions/
+round-*/model/storage/
+round-*/model/case-*/

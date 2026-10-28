@@ -75,7 +75,7 @@ test('native personal skills are discovered cheaply, loaded independently by bot
       assert.ok(tools.includes('skill'))
       for (const name of names) assert.ok(rendered.includes(`Routing summary for ${name}.`))
       assert.ok(!rendered.includes('BODY_ONLY_') && !rendered.includes('REFERENCE_ONLY_'))
-      if (role === 'owner') assert.ok(tools.includes(nativeShell) && tools.includes('read') && tools.includes('write'))
+      if (role === 'owner') assert.ok(!tools.includes(nativeShell) && tools.includes('read') && !tools.includes('write'))
       else assert.deepEqual(input.skillNames, [names[0]])
       return [call('skill', { name: names[0] })]
     }
@@ -135,24 +135,35 @@ test('an unavailable native skill is a correctable read and does not leave unkno
   assert.deepEqual((await h.service.recover()).failures, [])
 })
 
-test('task session permits late native tools and configured read and shell alongside skills', async t => {
+test('task session rejects business tools and late replacements while keeping the original evidence reader', async t => {
   const f = await fixture(t); let ownerStep = 0, effects = 0
   const h = await f.host(async (request, host) => {
     const input = latestInput(request), tools = request.tools.map(tool => tool.name)
     const topicCalls = topicTaskCalls(request)
     if (topicCalls) return topicCalls
     if (ownerStep++ === 0) {
+      for (const name of [nativeShell, 'write', 'edit', 'glob', 'grep']) assert.ok(!tools.includes(name), `${name} must not be advertised to the owner`)
       const agent = host.ctx.agents.get(input.task.sessionId)
-      agent.ctx.tools.register({ name: 'skill', description: 'Configured native replacement', parameters: { type: 'object' },
+      const effect = name => ({ name, description: 'Untrusted late capability', effectClass: 'read', parameters: { type: 'object' },
         output: { schema: { type: 'object' }, render: () => [] }, execute() { effects++; return {} } })
-      return [call('skill', {}), call(nativeShell, { command: nativeShell === 'pwsh' ? "Write-Output 'owner-native-shell'" : "printf 'owner-native-shell'", description: 'Use the configured native shell' }), call('read', { file_path: join(f.skillRoot, names[0], 'SKILL.md') })]
+      host.ctx.tools.register(effect('late_global_business'))
+      agent.ctx.tools.register(effect('late_scoped_business'))
+      agent.ctx.tools.register(effect('skill'))
+      return [call('skill', {}), call('late_global_business', {}), call('late_scoped_business', {}),
+        call('write', { file_path: join(f.root, 'forbidden.txt'), content: 'must not write' }),
+        call(nativeShell, { command: nativeShell === 'pwsh' ? "Write-Output 'forbidden-shell'" : "printf 'forbidden-shell'", description: 'Must not execute' }),
+        call('read', { file_path: join(f.skillRoot, names[0], 'SKILL.md') })]
     }
-    return [finish('complete', 'Native skills and tools are available.'), call('skill', {})]
+    assert.ok(!tools.includes('late_global_business'))
+    return [finish('complete', '已读取证据，业务操作均被拒绝。'), call('skill', {})]
   })
   await h.service.ingest(message); await h.service.whenIdle()
-  assert.equal(effects, 1)
+  assert.equal(effects, 0)
   assert.equal((await h.query('task.list'))[0].status, 'completed')
-  assert.equal(h.toolResults.filter(result => result.result.isError).length, 1, '提交本轮结论后不能继续执行工具')
+  assert.ok(h.toolResults.some(result => result.name === 'read' && !result.result.isError))
+  for (const name of ['skill', 'late_global_business', 'late_scoped_business', 'write', nativeShell])
+    assert.ok(h.toolResults.some(result => result.name === name && result.result.isError), `${name} was denied`)
+  assert.equal(h.toolResults.filter(result => result.name === 'skill' && result.result.isError).length, 2, '提交后仍拒绝被替换的工具')
 })
 
 test('unconfigured native profiles expose no bundled personal skills', async t => {
@@ -212,7 +223,9 @@ test('已读技能和引用变化只提示相关路径，原生重读后消除�
       case 2:
         await writeFile(reference, 'UPDATED_REFERENCE')
         await writeFile(join(f.skillRoot, names[1], 'SKILL.md'), `---\nname: ${names[1]}\ndescription: Routing summary.\n---\nUNRELATED_BODY\n`)
-        return [call('write', { file_path: join(f.skillRoot, names[0], 'SKILL.md'), content: `---\nname: ${names[0]}\ndescription: Routing summary.\n---\nUPDATED_BODY\n` })]
+        // 模拟管理员在外部更新技能；统筹自身没有写权限。
+        await writeFile(join(f.skillRoot, names[0], 'SKILL.md'), `---\nname: ${names[0]}\ndescription: Routing summary.\n---\nUPDATED_BODY\n`)
+        return [call('task_decisions_read', {})]
       case 3:
         assert.ok(rendered.includes('本会话已读技能或引用有变化'))
         assert.ok(rendered.includes(reference.replaceAll('\\', '\\\\')))

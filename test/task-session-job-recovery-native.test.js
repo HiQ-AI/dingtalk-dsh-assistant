@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
-import { available, reason, nativeShell, nativeTaskHost, nativeVerificationTeam, latestInput, waitUntil, modelToolValues } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeShell, nativeTaskHost, nativeVerificationTeam, latestInput, waitUntil, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
 const test = (name, fn) => testRunner(name, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, fn)
 const call = (name, args) => ({ name, args })
 const decide = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
@@ -34,6 +34,40 @@ async function fixture(t, model, { verifyTeam = false } = {}) {
  t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
  return h
 }
+test('native file read accepts historical draft and material job records without launching or reconciling a job', async t => {
+ let step = 0
+ const historical = [
+  { type: 'job/registered', seq: 1178, data: { jobId: 'pwsh-redacted-draft', owner: 'historical-draft-session', startedAt: 100 } },
+  { type: 'tool/result', seq: 1179, data: { message: { role: 'tool', toolCallId: 'historical-draft-call', isError: false,
+   content: [{ type: 'text', text: JSON.stringify({ nativeJobReceipt: { jobId: 'pwsh-redacted-draft', status: 'running' } }) }] } } },
+  { type: 'job/registered', seq: 1100, data: { jobId: 'pwsh-redacted-material', owner: 'historical-material-session', startedAt: 200 } },
+ ]
+ const h = await fixture(t, async (request, host) => {
+  const input = latestInput(request)
+  if (!request.tools.some(tool => ['task_delegate', 'execution_submit'].includes(tool.name))) return topicTaskCalls(request)
+  if (request.tools.some(tool => tool.name === 'task_delegate')) return !input.executions.length && !input.task.lastDecision
+   ? [call('task_delegate', { key: 'read-history', objective: 'Read existing history only' }), decide('wait', 'reading history')]
+   : [decide('wait', 'history retained; no terminal inference')]
+  if (step++ === 0) {
+   const execution = (await host.query('execution.list'))[0]
+   await writeFile(join(host.root, 'tasks', execution.taskId, 'history.jsonl'), historical.map(row => JSON.stringify(row)).join('\n') + '\n')
+   return [call('read', { file_path: 'history.jsonl' })]
+  }
+  const observed = host.toolResults.findLast(row => row.name === 'read')
+  assert.ok(observed && observed.result.isError === false, JSON.stringify(observed))
+  assert.match(JSON.stringify(observed.result), /pwsh-redacted-draft/)
+  assert.match(JSON.stringify(observed.result), /pwsh-redacted-material/)
+  return [call('execution_submit', { output: { status: 'completed', summary: 'Historical records read without replay', evidence: ['history.jsonl'], limitations: ['Historical running acknowledgement is not a terminal result'], artifacts: [] } })]
+ })
+ await h.service.createTask({ groupId: 'native-group', requestId: 'historical-job-file-read', objective: 'Inspect history without starting work' })
+ await h.service.whenIdle()
+ assert.equal(step, 2)
+ const executed = (await h.query('execution.list'))[0]
+ assert.equal(executed.status, 'succeeded', JSON.stringify(executed.result, (_key, value) => typeof value === 'string' ? value.slice(0, 400) : value))
+ assert.equal((await h.query('operation.list')).length, 0)
+ assert.ok(h.toolResults.some(row => row.name === 'read' && row.result.isError === false))
+})
+
 test('native execution consumes serial tool results and wakes the coordinator only for a reported stage and final result', async t => {
  let step = 0, ownerTurns = 0
  const h = await fixture(t, async (request, host) => {
@@ -63,8 +97,13 @@ test('native execution consumes serial tool results and wakes the coordinator on
  const wakes = await h.query('wake.list', { taskId: task.taskId })
  assert.equal(wakes.filter(item => item.kind === 'operation.result').length, 0)
  assert.equal(wakes.filter(item => item.kind === 'execution.stage.progress').length, 1)
- assert.equal(wakes.filter(item => item.kind === 'execution.result' && item.payload.executionId === executions[0].executionId).length, 1)
- assert.equal(wakes.filter(item => item.kind === 'execution.result').length, 3, '三个实际成员各有一次最终结果，原执行没有重复结果')
+ const results = wakes.filter(item => item.kind === 'execution.result' && item.payload.drained !== true)
+ assert.equal(results.filter(item => item.payload.executionId === executions[0].executionId).length, 1)
+ assert.equal(results.length, 3, '三个实际成员各有一次真实结果；已消费结果后的排空跟进独立计数')
+ // The store deliberately wakes once more if an Owner consumed the result before drain.
+ const drains = wakes.filter(item => item.kind === 'execution.result' && item.payload.drained === true)
+ assert.equal(new Set(drains.map(item => item.payload.executionId)).size, drains.length, '每个执行至多一次稳定排空跟进')
+ assert.ok(drains.every(item => executions.some(execution => execution.executionId === item.payload.executionId && execution.drained && execution.status === 'succeeded')))
  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
  assert.deepEqual((await readFile(join(h.root, 'tasks', task.taskId, 'serial-results.txt'), 'utf8')).trim().split(/\r?\n/), ['1', '2', '3'])
 })
@@ -214,6 +253,7 @@ test('restart reconciles an original persisted native terminal receipt and resum
  }}
  const first=await nativeTaskHost(root,async request=>{
   const input=latestInput(request)
+  if(!request.tools.some(tool=>['task_delegate','execution_submit'].includes(tool.name)))return topicTaskCalls(request)
   if(request.tools.some(tool=>tool.name==='task_delegate'))return input.executions.length?[decide('wait','Await original receipt reconciliation')]:[call('task_delegate',{key:'one-command',objective:'original'}),decide('wait','waiting')]
   if(step++===0)return [call(nativeShell,{command:nativeShell==='pwsh'?"Add-Content once.txt once; Start-Sleep -Milliseconds 300; Write-Output done":"printf 'once\\n' >> once.txt; sleep 0.3; printf done",timeoutMs:80,description:'Execute exactly once'})]
   return [call('execution_submit',{output:{status:'blocked',summary:'receipt interrupted',evidence:[],limitations:['reconcile original receipt'],artifacts:[]}})]
@@ -226,6 +266,7 @@ test('restart reconciles an original persisted native terminal receipt and resum
  let ownerStep=0,readStep=0
  const second=await nativeTaskHost(root,async request=>{
   const input=latestInput(request)
+  if(!request.tools.some(tool=>['task_delegate','execution_submit'].includes(tool.name)))return topicTaskCalls(request)
   if(request.tools.some(tool=>tool.name==='task_delegate')){
    if(ownerStep++===0){assert.equal(input.operations[0].state,'unknown');return [call('task_operation_reconcile',{operationId:before.operationId})]}
    if(ownerStep===2)return [call('task_delegate',{key:'verify-no-replay',objective:'verify',executionId:original.executionId,readOnly:true}),decide('wait','verify original result')]

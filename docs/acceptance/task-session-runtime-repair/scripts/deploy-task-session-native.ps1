@@ -8,7 +8,8 @@ param(
  [Parameter(Mandatory)][string]$ObserverPackage,
  [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedObserverPackageSha256,
  [string]$PtyUpgradeProposal,
- [string]$ArtifactPolicyProposal
+ [string]$ArtifactPolicyProposal,
+ [string]$RestartMaintenanceProposal
 )
 $ErrorActionPreference='Stop'
 $workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../..'))
@@ -84,7 +85,13 @@ $wasEnabled=[bool]$task.Settings.Enabled
 $consoleProof=ReadConsoleProof
 $packageProof=RunNode @($checker,'package',$Package,(Join-Path $workspace 'packages/dingtalk-dsh-assistant'))
 if($ObserverPackage){$observerProof=RunNode @($checker,'package',$ObserverPackage,(Join-Path $workspace 'packages/dingtalk-dsh-observer'))}
-$ledgerProof=RunNode @($ledger,$db,$agentWorkspace)
+$maintenanceArgs=@()
+if($RestartMaintenanceProposal){
+ $RestartMaintenanceProposal=[IO.Path]::GetFullPath($RestartMaintenanceProposal)
+ $maintenanceProposalHash=Hash $RestartMaintenanceProposal
+ $maintenanceArgs=@('online',[string]$ExpectedPid,$RestartMaintenanceProposal)
+}
+$ledgerProof=RunNode (@($ledger,$db,$agentWorkspace)+$maintenanceArgs)
 if($PtyUpgradeProposal){$ptyProposalSha256=Hash $PtyUpgradeProposal;$ptyCheck=RunNode @($ptyHelper,'check',$profile,$PtyUpgradeProposal);if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'}}
 $artifactPolicyCheck=$null
 if($ArtifactPolicyProposal){
@@ -111,6 +118,10 @@ try{
  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_PROFILE_CHANGED'}
  $phase='disable-autostart';Disable-ScheduledTask -TaskName $taskName|Out-Null
  if((Get-ScheduledTask -TaskName $taskName).Settings.Enabled){throw 'DEPLOY_AUTOSTART_STILL_ENABLED'}
+ if($RestartMaintenanceProposal){
+  if((Hash $RestartMaintenanceProposal)-ne$maintenanceProposalHash){throw 'DEPLOY_MAINTENANCE_PROPOSAL_CHANGED'}
+   Record 'restart-maintenance-preflight' ($ledgerProof|ConvertFrom-Json)
+ }
  $phase='native-dispose'
  $signalOut=Join-Path $EvidenceDirectory 'signal.json';$signalErr=Join-Path $EvidenceDirectory 'signal.stderr.log'
  $signalArgs=@('-NoProfile','-File',(Join-Path $PSScriptRoot 'stop-web-console.ps1'),'-ExpectedPid',[string]$ExpectedPid)
@@ -119,10 +130,23 @@ try{
  WaitFor {
   if(Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue){return $false}
   if((PortOwners 3080).Count-or(PortOwners 18998).Count){return $false}
-  try{$script:offlineProof=RunNode @($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid);return $true}catch{return $false}
+  try{$offlineArgs=@($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid);if($RestartMaintenanceProposal){$offlineArgs+=$RestartMaintenanceProposal};$script:offlineProof=RunNode $offlineArgs;return $true}catch{return $false}
  } 'DEPLOY_NATIVE_NOT_QUIESCENT'
  if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
  Record 'quiescent' @{ledger=($offlineProof|ConvertFrom-Json);pid=$ExpectedPid;creationDate=$original.CreationDate;remainingDescendants=0;runtimePortClosed=$true;observedAt=[DateTime]::UtcNow.ToString('o');shutdown='SIGINT'}
+ if($RestartMaintenanceProposal){
+  if((Hash $RestartMaintenanceProposal)-ne$maintenanceProposalHash){throw 'DEPLOY_MAINTENANCE_PROPOSAL_CHANGED'}
+  $beforeMaintenance=($ledgerProof|ConvertFrom-Json).maintenance
+  $afterMaintenance=($offlineProof|ConvertFrom-Json).maintenance
+  if($beforeMaintenance.ledgerDigest-ne$afterMaintenance.ledgerDigest){throw 'DEPLOY_RETAINED_LEDGER_CHANGED'}
+  $phase='backup'
+  $backupDirectory=Join-Path $EvidenceDirectory 'backup';New-Item -ItemType Directory -Path $backupDirectory|Out-Null
+  $backupProof=RunNode @((Join-Path $workspace 'scripts/backup-native-maintenance.mjs'),$db,(Join-Path $backupDirectory 'task-sessions.sqlite'))
+  foreach($file in @($patch,"$profile/package.json","$profile/pnpm-lock.yaml",$starter,"$db.initialized")){
+   if(Test-Path -LiteralPath $file -PathType Leaf){Copy-Item -LiteralPath $file -Destination (Join-Path $backupDirectory ([IO.Path]::GetFileName($file)))}
+  }
+  Record 'backup' ($backupProof|ConvertFrom-Json)
+ }
  $phase='install'
  if($PtyUpgradeProposal){if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'};Record 'pty-manifest-applied' ((RunNode @($ptyHelper,'apply',$profile,$PtyUpgradeProposal))|ConvertFrom-Json)}
  if($ArtifactPolicyProposal){
@@ -165,7 +189,7 @@ try{
  WaitFor {
   try{$script:health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 10;return $health.inboundProcessing -and $health.dwsBridge.healthy}catch{return $false}
  } 'DEPLOY_TRANSPORT_NOT_READY' 60
- Record 'readback' @{newPid=$newPid;creationDate=(Get-CimInstance Win32_Process -Filter "ProcessId=$newPid").CreationDate;health=$health;profileSha256=Hash $patch;packageSha256=Hash $Package;installedVersion=(Get-Content "$installed/package.json" -Raw|ConvertFrom-Json).version;taskEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled;backupCreated=$false}
+ Record 'readback' @{newPid=$newPid;creationDate=(Get-CimInstance Win32_Process -Filter "ProcessId=$newPid").CreationDate;health=$health;profileSha256=Hash $patch;packageSha256=Hash $Package;installedVersion=(Get-Content "$installed/package.json" -Raw|ConvertFrom-Json).version;taskEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled;backupCreated=[bool]$RestartMaintenanceProposal}
  @{installed=$true;transportReady=$true;newPid=$newPid;health=$health.status;recoveryIssueCount=$health.recoveryIssueCount;evidenceDirectory=$EvidenceDirectory}|ConvertTo-Json
 }catch{
  Record 'failure' @{phase=$phase;error=$_.Exception.Message;profileSha256=Hash $patch;autostartEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled}

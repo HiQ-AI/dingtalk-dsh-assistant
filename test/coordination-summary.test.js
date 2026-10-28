@@ -4,7 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { coordinationSnapshot, formatCoordinationSnapshot, formatCoordinationAcceptance, formatCoordinationTime } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
+import { DatabaseSync } from 'node:sqlite'
+import { coordinationSnapshot, coordinationNotificationState, formatCoordinationSnapshot, formatCoordinationAcceptance, formatCoordinationTime } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 
 const member = (id, state) => ({ id, taskId: id, state, control: state === 'cancelled' ? 'cancelled' : 'active',
@@ -12,6 +13,37 @@ const member = (id, state) => ({ id, taskId: id, state, control: state === 'canc
 const snapshot = members => coordinationSnapshot({ coordination: { id: 'coordination', revision: 2, state: 'active' },
   members, tasks: members.map(m => ({ taskId: m.taskId, status: m.state === 'fulfilled' ? 'completed' : 'active' })),
   schedules: [], occurrences: [], jobs: [] })
+
+test('四个观察事项显示各自名称，失效版本不冒充需求变化或拼接当前诊断', () => {
+  const titles = ['修复终审只读数据UPR导入覆盖并部署UAT2', '修复新建未保存草稿UPR导入受限',
+    '修复草稿UPR导入物料名称回显并部署UAT2', '按v4实现合并数据集UPR替换与来源保留并提测UAT2']
+  const result = coordinationSnapshot({ coordination: { id: 'coordination', revision: 1, state: 'active' },
+    members: titles.map((_, index) => ({ ...member(String(index), index ? 'observing' : 'fulfilled'), observation: true,
+      ...(index ? { waitingReason: { code: 'target_version_changed' } } : {}) })),
+    tasks: titles.map((title, index) => ({ taskId: String(index), title, status: index ? 'active' : 'completed',
+      lastDecision: { action: 'blocked', summary: '底座失败结算校验未结算' } })), schedules: [], occurrences: [], jobs: [] })
+  const text = formatCoordinationSnapshot(result), lines = text.split('\n')
+  assert.equal(lines.length, 4)
+  titles.forEach((title, index) => assert.ok(lines[index].startsWith(`${title}：`)))
+  assert.match(lines[0], /已完成/)
+  assert.equal(lines.slice(1).every(line => line.endsWith('当前状态需重新核对。')), true)
+  assert.doesNotMatch(text, /原事项|任务要求已变化|底座|结算/)
+  assert.equal(result.members.every(item => item.blocker === null), true)
+})
+
+test('通知意义忽略版本、回执和诊断改写，但保留真实阻塞及澄清变化', () => {
+  const first = snapshot([{ ...member('A', 'applied'), effectiveVersion: { contextRevision: 1 } }])
+  first.members[0].blocker = '等待构建回包'
+  const internal = structuredClone(first)
+  internal.revision++; internal.members[0].effectiveVersion.contextRevision++
+  internal.members[0].receiptRef = 'new-receipt'; internal.members[0].blocker = '内部再次核对构建回包'
+  assert.deepEqual(coordinationNotificationState(first), coordinationNotificationState(internal))
+  internal.members[0].blocker = null
+  assert.notDeepEqual(coordinationNotificationState(first), coordinationNotificationState(internal))
+  const question = structuredClone(first)
+  question.pendingClarifications = [{ clarificationId: 'question', question: '需要哪个环境？' }]
+  assert.notDeepEqual(coordinationNotificationState(first), coordinationNotificationState(question))
+})
 
 for (const [actionState, deliveryState, expected] of [
   ['expired', 'none', '已过期，本次未执行'], ['failed', 'none', '未能完成'], ['blocked', 'none', '暂时受阻'],
@@ -302,4 +334,121 @@ test('unsent summary A superseded by active facts B can freeze A again, while an
   assert.equal(frozen.state,'unknown')
   assert.equal(frozen.payloadDigest,second.payloadDigest)
   assert.deepEqual((await store.query({kind:'notification.list'})).map(n=>n.id),[first.id,second.id])
+})
+
+async function summaryFixture(t) {
+  const directory = await mkdtemp(join(tmpdir(), 'coordination-significance-'))
+  const options = { dbPath: join(directory, 'tasks.sqlite'), instanceId: 'significance-test', initialize: true }
+  let store = await openDynamicTaskStore(options)
+  t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }) })
+  const command = (kind, args) => store.command({ id: randomUUID(), kind, args })
+  await command('task.create', { taskId: 'A', groupId: 'group', request: '核查UPR导入' })
+  const source = (await command('coordination.reserve', { unitId: 'unit', revision: 1, groupId: 'group', original: '补充材料' })).result.source
+  await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'coordination', members: [{
+    instructionId: 'instruction', taskId: 'A', progressImpact: 'preserve', dependencies: [],
+    command: { id: 'coordination-command:coordination:instruction', kind: 'task.supplement',
+      args: { taskId: 'A', expectedRequirementRevision: 1, expectedControlRevision: 1, messageId: 'material', text: '补充材料', request: '核查UPR导入及材料' } } }] })
+  const binding = (await command('task.claim', { taskId: 'A' })).result.binding
+  return { command, query: args => store.query(args), binding,
+    restart: async () => { await store.close(); store = await openDynamicTaskStore(options) } }
+}
+
+test('已送达摘要不因内部诊断改写、重启或未通知的 A→B→A 重复发送', async t => {
+  const f = await summaryFixture(t)
+  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '等待只读核对结果' })
+  const first = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
+  const permitted = (await f.command('notification.start', { notificationId: first.id })).result.notification
+  await f.command('notification.receipt', { notificationId: first.id, dispatchToken: permitted.dispatchToken, state: 'delivered' })
+  for (const summary of ['已检查内部回包，仍待校验', '已排空调查，仍待结算']) {
+    await f.command('task.wait', { binding: f.binding, action: 'blocked', summary })
+    const result = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result
+    assert.equal(result.notification, undefined)
+    assert.equal(result.changed, true, '审计快照仍完整反映内部事实变化')
+    await f.command('task.drained', { binding: f.binding })
+    await f.restart()
+    f.binding = (await f.command('task.claim', { taskId: 'A', force: true })).result.binding
+  }
+  await f.command('task.wait', { binding: f.binding, action: 'wait', summary: '核对中' })
+  assert.equal((await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification, undefined)
+  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '仍待校验' })
+  assert.equal((await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification, undefined)
+  assert.deepEqual((await f.query({ kind: 'notification.list' })).map(item => item.id), [first.id])
+})
+
+test('相同业务意义不能绕过发送前完整事实 fence，未发送候选可重新准备', async t => {
+  const f = await summaryFixture(t)
+  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '旧核对事实' })
+  const first = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
+  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '最新核对事实' })
+  const start = await f.command('notification.start', { notificationId: first.id })
+  assert.equal(start.dispatchEligible, false)
+  assert.equal(start.result.notification.state, 'superseded')
+  const next = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
+  assert.ok(next)
+  assert.notEqual(next.id, first.id)
+  assert.equal(next.payload.fact.significanceDigest, first.payload.fact.significanceDigest)
+  assert.notEqual(next.payload.fact.snapshotDigest, first.payload.fact.snapshotDigest)
+  assert.match(next.payload.text, /最新核对事实/)
+})
+
+test('发送中聚合不能提前记为已通知：确定未发送后允许准备同业务状态的新事实', async t => {
+  const f = await summaryFixture(t)
+  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '旧核对事实' })
+  const first = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
+  const permit = (await f.command('notification.start', { notificationId: first.id })).result.notification
+  assert.equal((await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification, undefined)
+  await f.command('notification.receipt', { notificationId: first.id, dispatchToken: permit.dispatchToken, state: 'failed',
+    error: { phase: 'send', knownNotSent: true, retryable: true, message: '发送前已确定拒绝' } })
+  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '最新核对事实' })
+  const next = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
+  assert.ok(next, '从未送达不能永久抑制相同业务状态的通知')
+  assert.notEqual(next.id, first.id)
+  assert.equal(next.payload.fact.significanceDigest, first.payload.fact.significanceDigest)
+  assert.match(next.payload.text, /最新核对事实/)
+})
+
+for (const phase of ['aggregate', 'permit', 'unknown', 'delivered']) test(`历史纯观察保留可读记录并停止自动群通知：${phase}`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'coordination-historical-observation-'))
+  const options = { dbPath: join(directory, 'tasks.sqlite'), instanceId: 'observation-test', initialize: true }
+  let store = await openDynamicTaskStore(options)
+  t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }) })
+  const command = (kind, args) => store.command({ id: randomUUID(), kind, args })
+  await command('task.create', { taskId: 'A', groupId: 'group', request: '原任务' })
+  const task = await store.query({ kind: 'task.get', taskId: 'A' })
+  const source = (await command('coordination.reserve', { unitId: 'unit', revision: 1, groupId: 'group', original: '修复了没' })).result.source
+  await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'coordination', members: [{
+    instructionId: 'observe', taskId: 'A', observation: true, dependencies: [],
+    command: { id: 'coordination-command:coordination:observe', kind: 'coordination.observe', args: { taskId: 'A',
+      expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision,
+      expectedContextRevision: task.contextRevision ?? 0, expectedRunSequence: task.runSequence } } }] })
+  const aggregate = (await command('coordination.aggregate', { coordinationId: 'coordination' })).result
+  assert.equal(aggregate.notification, undefined)
+  const notificationId = 'coordination:coordination:summary:1'
+  await command('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
+    payload: { kind: 'coordination', conversationId: 'group', text: '旧观察摘要', fact: { coordinationId: 'coordination',
+      eventId: 'summary:1', snapshotDigest: aggregate.coordination.aggregateDigest, summaryRevision: 1 } } })
+  await store.close()
+  // 只在隔离库播种升级前已存在的通知状态；不调用新版本的发送许可来伪造旧行为。
+  const db = new DatabaseSync(options.dbPath)
+  const coordination = JSON.parse(db.prepare('SELECT body FROM dynamic_coordination WHERE id=?').get('coordination').body)
+  coordination.summaryNotificationId = notificationId; coordination.summaryRevision = 1
+  db.prepare('UPDATE dynamic_coordination SET body=? WHERE id=?').run(JSON.stringify(coordination), 'coordination')
+  if (['unknown', 'delivered'].includes(phase)) {
+    const notice = JSON.parse(db.prepare('SELECT body FROM dynamic_notifications WHERE id=?').get(notificationId).body)
+    notice.state = phase; notice.sendPermit = { notificationId }; notice.dispatchToken = 'old-permit'
+    db.prepare('UPDATE dynamic_notifications SET body=? WHERE id=?').run(JSON.stringify(notice), notificationId)
+  }
+  db.close(); store = await openDynamicTaskStore(options)
+  if (phase === 'permit') {
+    const start = await command('notification.start', { notificationId })
+    assert.equal(start.dispatchEligible, false)
+    assert.equal(start.result.notification.retirement.reason, 'coordination-observation-only')
+  }
+  const observed = (await command('coordination.aggregate', { coordinationId: 'coordination' })).result
+  assert.equal(observed.notification, undefined)
+  assert.equal(observed.snapshot.members[0].observation, true)
+  const notices = await store.query({ kind: 'notification.list' })
+  assert.equal(notices.length, 1)
+  assert.equal(notices[0].state, ['unknown', 'delivered'].includes(phase) ? phase : 'superseded')
+  assert.deepEqual(await store.query({ kind: 'task.get', taskId: 'A' }), task)
 })

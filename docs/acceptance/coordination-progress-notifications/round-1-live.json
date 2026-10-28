@@ -1,0 +1,376 @@
+{
+  "observedAt": "2026-10-28T03:17:01.138Z",
+  "coordination": {
+    "id": "coordination-7b4d4a667b1dc14fbc3f1d4517e80162",
+    "state": "active",
+    "createdAt": "2026-10-28T01:44:09.716Z",
+    "proposal": {
+      "allTogether": false,
+      "commonContext": "本次仅询问此前UPR导入相关问题是否修复。只观察原事项当前正式交付事实，区分修复、验证、部署及取消，不能把取消视为业务完成，不恢复或重新派发任何工作。",
+      "kind": "arrangement",
+      "members": [
+        {
+          "action": "task-observe",
+          "inputVersion": 2,
+          "runSequence": 2,
+          "taskId": "task-8d5870f6c884b9d177fa29571a56da1a"
+        },
+        {
+          "action": "task-observe",
+          "inputVersion": 2,
+          "runSequence": 2,
+          "taskId": "task-c4a23ad8e0b774915ed5276f47a4e840"
+        },
+        {
+          "action": "task-observe",
+          "inputVersion": 3,
+          "runSequence": 3,
+          "taskId": "task-12c21ec59b045ba6de06719999ec1bf7"
+        },
+        {
+          "action": "task-observe",
+          "inputVersion": 10,
+          "runSequence": 9,
+          "taskId": "task-919269e0a12b67f8977cd8329b00e839"
+        }
+      ],
+      "pendingClarifications": []
+    },
+    "summaryRevision": 7,
+    "lifecycleState": "partially_completed"
+  },
+  "sources": [
+    {
+      "id": "62759719eaf34f292c69770f883428f58ddc37edeb8c76e737bc67f59481a2a8",
+      "original": "@孙鹏(孙鹏)  昨天关于导入的其他问题 修复了没",
+      "createdAt": "2026-10-28T01:43:36.172Z",
+      "kind": "arrangement",
+      "coordinationId": "coordination-7b4d4a667b1dc14fbc3f1d4517e80162"
+    },
+    {
+      "id": "9f71e419bc2b63919637ab08cbdf73bab54b236dd700ffa14670c0a52a5f73ad",
+      "original": "直接查询任务进展就行",
+      "createdAt": "2026-10-28T01:46:58.189Z",
+      "kind": "query",
+      "coordinationId": "coordination-4e80144f0118251e91936dd26a5b8fd2"
+    }
+  ],
+  "members": [
+    {
+      "id": "coordination-7b4d4a667b1dc14fbc3f1d4517e80162:member:1",
+      "taskId": "task-8d5870f6c884b9d177fa29571a56da1a",
+      "observation": true,
+      "commandKind": "coordination.observe",
+      "dependencies": [],
+      "state": "fulfilled",
+      "effectiveVersion": {
+        "contextRevision": 2,
+        "controlRevision": 2,
+        "requirementRevision": 2,
+        "runSequence": 2
+      },
+      "hasTaskMutationReceipt": false
+    },
+    {
+      "id": "coordination-7b4d4a667b1dc14fbc3f1d4517e80162:member:2",
+      "taskId": "task-c4a23ad8e0b774915ed5276f47a4e840",
+      "observation": true,
+      "commandKind": "coordination.observe",
+      "dependencies": [],
+      "state": "observing",
+      "effectiveVersion": {
+        "contextRevision": 4,
+        "controlRevision": 3,
+        "requirementRevision": 2,
+        "runSequence": 2
+      },
+      "hasTaskMutationReceipt": false
+    },
+    {
+      "id": "coordination-7b4d4a667b1dc14fbc3f1d4517e80162:member:3",
+      "taskId": "task-12c21ec59b045ba6de06719999ec1bf7",
+      "observation": true,
+      "commandKind": "coordination.observe",
+      "dependencies": [],
+      "state": "observing",
+      "effectiveVersion": {
+        "contextRevision": 8,
+        "controlRevision": 5,
+        "requirementRevision": 3,
+        "runSequence": 3
+      },
+      "hasTaskMutationReceipt": false
+    },
+    {
+      "id": "coordination-7b4d4a667b1dc14fbc3f1d4517e80162:member:4",
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "observation": true,
+      "commandKind": "coordination.observe",
+      "dependencies": [],
+      "state": "observing",
+      "effectiveVersion": {
+        "contextRevision": 13,
+        "controlRevision": 10,
+        "requirementRevision": 10,
+        "runSequence": 9
+      },
+      "hasTaskMutationReceipt": false
+    }
+  ],
+  "tasks": [
+    {
+      "taskId": "task-8d5870f6c884b9d177fa29571a56da1a",
+      "title": "修复终审只读数据UPR导入覆盖并部署UAT2",
+      "status": "completed",
+      "control": "active",
+      "requirementRevision": 2,
+      "contextRevision": 2,
+      "controlRevision": 2,
+      "runSequence": 2,
+      "completion": {
+        "at": "2026-10-26T06:59:50.840Z",
+        "summary": "已修复并部署到UAT2：终审数据集点击编辑即持久化为待提交，未修改、刷新或重新计算后不再恢复终审只读；未点击编辑前，新旧UPR入口都会拒绝覆盖导入。前后端运行版本和健康检查已通过独立复核。"
+      }
+    },
+    {
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "title": "按v4实现合并数据集UPR替换与来源保留并提测UAT2",
+      "status": "active",
+      "control": "active",
+      "requirementRevision": 11,
+      "contextRevision": 14,
+      "controlRevision": 11,
+      "runSequence": 10,
+      "completion": null
+    },
+    {
+      "taskId": "task-c4a23ad8e0b774915ed5276f47a4e840",
+      "title": "修复新建未保存草稿UPR导入受限",
+      "status": "active",
+      "control": "active",
+      "requirementRevision": 3,
+      "contextRevision": 4,
+      "controlRevision": 4,
+      "runSequence": 3,
+      "completion": null
+    },
+    {
+      "taskId": "task-12c21ec59b045ba6de06719999ec1bf7",
+      "title": "修复草稿UPR导入物料名称回显并部署UAT2",
+      "status": "completed",
+      "control": "active",
+      "requirementRevision": 4,
+      "contextRevision": 8,
+      "controlRevision": 6,
+      "runSequence": 4,
+      "completion": {
+        "at": "2026-10-28T03:02:07.748Z",
+        "summary": "10月27日报的“草稿导入UPR后物料名称没有即时显示”这项，已修复并部署到UAT2。\n\n原文件的表格解析和替换服务链验证通过，定向回归56项全部通过。UAT PR #422已合入，Woodpecker #329完成构建部署；运行镜像、全部当前Pod及健康检查均已核对，部署后只读查询的四个物料名称正确，原草稿仍为v2。\n\n交付版本：dae63b9537c7c73495cfd84766bdae11cd615975；镜像摘要：sha256:a9be51d2c30ba5e22d5198e90aabcf599eb59ae8c62a600c1f23fda7931f93c4。发布资源已释放，开发PR #421仍OPEN，未合main、未发布生产。\n\n验证边界：未在共享UAT执行真实写入导入或浏览器视觉验收；直接替换响应由隔离服务测试验证，引用解析和存储使用测试替身。本次完成结论仅对应物料名称回显这项。"
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "task-completed:complete:task-8d5870f6c884b9d177fa29571a56da1a:1",
+      "taskId": "task-8d5870f6c884b9d177fa29571a56da1a",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T02:02:36.054Z",
+      "requirementRevision": 1,
+      "contextRevision": 0,
+      "controlRevision": 1,
+      "runSequence": 1
+    },
+    {
+      "id": "task-completed:complete:task-8d5870f6c884b9d177fa29571a56da1a:2",
+      "taskId": "task-8d5870f6c884b9d177fa29571a56da1a",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T06:59:50.879Z",
+      "requirementRevision": 2,
+      "contextRevision": 2,
+      "controlRevision": 2,
+      "runSequence": 2
+    },
+    {
+      "id": "task-completed:complete:task-919269e0a12b67f8977cd8329b00e839:1",
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T07:16:13.356Z",
+      "requirementRevision": 1,
+      "contextRevision": 0,
+      "controlRevision": 1,
+      "runSequence": 1
+    },
+    {
+      "id": "task-completed:complete:task-919269e0a12b67f8977cd8329b00e839:2",
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T07:20:55.258Z",
+      "requirementRevision": 2,
+      "contextRevision": 0,
+      "controlRevision": 2,
+      "runSequence": 2
+    },
+    {
+      "id": "task-completed:complete:task-919269e0a12b67f8977cd8329b00e839:3",
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T07:34:56.043Z",
+      "requirementRevision": 3,
+      "contextRevision": 0,
+      "controlRevision": 3,
+      "runSequence": 3
+    },
+    {
+      "id": "task-completed:complete:task-919269e0a12b67f8977cd8329b00e839:4",
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T07:46:29.095Z",
+      "requirementRevision": 4,
+      "contextRevision": 0,
+      "controlRevision": 4,
+      "runSequence": 4
+    },
+    {
+      "id": "task-completed:complete:task-919269e0a12b67f8977cd8329b00e839:6",
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T08:50:09.560Z",
+      "requirementRevision": 6,
+      "contextRevision": 0,
+      "controlRevision": 5,
+      "runSequence": 5
+    },
+    {
+      "id": "task-completed:complete:task-919269e0a12b67f8977cd8329b00e839:7",
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T09:43:27.032Z",
+      "requirementRevision": 7,
+      "contextRevision": 1,
+      "controlRevision": 6,
+      "runSequence": 6
+    },
+    {
+      "id": "task-completed:complete:task-919269e0a12b67f8977cd8329b00e839:8",
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T09:52:47.170Z",
+      "requirementRevision": 8,
+      "contextRevision": 1,
+      "controlRevision": 7,
+      "runSequence": 7
+    },
+    {
+      "id": "task-completed:complete:task-919269e0a12b67f8977cd8329b00e839:9",
+      "taskId": "task-919269e0a12b67f8977cd8329b00e839",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-26T10:31:56.624Z",
+      "requirementRevision": 9,
+      "contextRevision": 1,
+      "controlRevision": 8,
+      "runSequence": 8
+    },
+    {
+      "id": "task-completed:complete:task-c4a23ad8e0b774915ed5276f47a4e840:1",
+      "taskId": "task-c4a23ad8e0b774915ed5276f47a4e840",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-27T04:01:51.776Z",
+      "requirementRevision": 1,
+      "contextRevision": 0,
+      "controlRevision": 1,
+      "runSequence": 1
+    },
+    {
+      "id": "task-completed:complete:task-12c21ec59b045ba6de06719999ec1bf7:1",
+      "taskId": "task-12c21ec59b045ba6de06719999ec1bf7",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-27T06:29:35.056Z",
+      "requirementRevision": 1,
+      "contextRevision": 2,
+      "controlRevision": 1,
+      "runSequence": 1
+    },
+    {
+      "id": "task-completed:complete:task-12c21ec59b045ba6de06719999ec1bf7:4",
+      "taskId": "task-12c21ec59b045ba6de06719999ec1bf7",
+      "kind": "task.completed",
+      "recordedAt": "2026-10-28T03:02:07.807Z",
+      "requirementRevision": 4,
+      "contextRevision": 8,
+      "controlRevision": 6,
+      "runSequence": 4
+    }
+  ],
+  "notifications": [
+    {
+      "id": "coordination:coordination-7b4d4a667b1dc14fbc3f1d4517e80162:accepted:source-dispatch-951494bc7a4dfd9848e03e1133b95df1",
+      "state": "delivered",
+      "createdAt": "2026-10-28T01:44:10.461Z",
+      "text": "已记录你的安排。",
+      "deliveredAt": "2026-10-28T01:44:15.477Z",
+      "hasDeliveryReceipt": true
+    },
+    {
+      "id": "coordination:coordination-7b4d4a667b1dc14fbc3f1d4517e80162:summary:1",
+      "state": "superseded",
+      "createdAt": "2026-10-28T02:45:27.565Z",
+      "text": "原事项：已完成。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：等待原事项完成。还在等待完成结果。\n原事项：等待原事项完成。还在等待完成结果。",
+      "summaryRevision": 1,
+      "hasDeliveryReceipt": false
+    },
+    {
+      "id": "coordination:coordination-7b4d4a667b1dc14fbc3f1d4517e80162:summary:2",
+      "state": "delivered",
+      "createdAt": "2026-10-28T02:46:15.939Z",
+      "text": "原事项：已完成。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：任务要求已变化，需要重新核对。UPR物料名称修复已在UAT2完成交付，独立核对通过，11个共享资源也已正式释放。提交完成时，被一条历史只读预检的工具身份错误拦住；原生对账仍判证据不足，不能伪造结果或重放，需要技术侧正式处理这条失败记录。\n原事项：等待原事项完成。还在等待完成结果。",
+      "summaryRevision": 2,
+      "deliveredAt": "2026-10-28T02:46:53.299Z",
+      "hasDeliveryReceipt": true
+    },
+    {
+      "id": "coordination:coordination-7b4d4a667b1dc14fbc3f1d4517e80162:summary:3",
+      "state": "delivered",
+      "createdAt": "2026-10-28T02:52:41.663Z",
+      "text": "原事项：已完成。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：任务要求已变化，需要重新核对。UPR物料名称修复已在UAT2完成交付，独立核对通过，11个共享资源也已正式释放。提交完成时，被一条历史只读预检的工具身份错误拦住；原生对账仍判证据不足，不能伪造结果或重放，需要技术侧正式处理这条失败记录。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。",
+      "summaryRevision": 3,
+      "deliveredAt": "2026-10-28T02:53:33.280Z",
+      "hasDeliveryReceipt": true
+    },
+    {
+      "id": "coordination:coordination-7b4d4a667b1dc14fbc3f1d4517e80162:summary:4",
+      "state": "delivered",
+      "createdAt": "2026-10-28T02:54:34.754Z",
+      "text": "原事项：已完成。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：任务要求已变化，需要重新核对。物料名称修复和UAT2部署已完成，发布资源已释放。任务重新恢复后，正式完成登记仍有一条历史只读预检的工具身份错误需要核销；原命令输出缺失，不能自行补造或重放。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。",
+      "summaryRevision": 4,
+      "deliveredAt": "2026-10-28T02:55:07.468Z",
+      "hasDeliveryReceipt": true
+    },
+    {
+      "id": "coordination:coordination-7b4d4a667b1dc14fbc3f1d4517e80162:summary:5",
+      "state": "delivered",
+      "createdAt": "2026-10-28T03:00:46.802Z",
+      "text": "原事项：已完成。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。",
+      "summaryRevision": 5,
+      "deliveredAt": "2026-10-28T03:01:15.997Z",
+      "hasDeliveryReceipt": true
+    },
+    {
+      "id": "coordination:coordination-7b4d4a667b1dc14fbc3f1d4517e80162:summary:6",
+      "state": "delivered",
+      "createdAt": "2026-10-28T03:02:28.121Z",
+      "text": "原事项：已完成。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：任务要求已变化，需要重新核对。恢复后已核对剩余的只读取证回包异常，原执行已结束、绑定调查也已排空，但正式自动核对仍未结算。现在缺当前底座的失败结算校验，不缺业务授权；未重放命令、消息或发布。",
+      "summaryRevision": 6,
+      "deliveredAt": "2026-10-28T03:03:25.962Z",
+      "hasDeliveryReceipt": true
+    },
+    {
+      "id": "coordination:coordination-7b4d4a667b1dc14fbc3f1d4517e80162:summary:7",
+      "state": "delivered",
+      "createdAt": "2026-10-28T03:12:41.661Z",
+      "text": "原事项：已完成。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。\n原事项：任务要求已变化，需要重新核对。任务要求已变化，需要核对后继续。",
+      "summaryRevision": 7,
+      "deliveredAt": "2026-10-28T03:13:20.495Z",
+      "hasDeliveryReceipt": true
+    }
+  ]
+}

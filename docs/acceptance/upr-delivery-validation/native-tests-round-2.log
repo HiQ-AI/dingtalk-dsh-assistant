@@ -1,0 +1,35 @@
+✖ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (30022.1194ms)
+ℹ package begin: 0ms
+ℹ package staged: 230ms
+✔ actual extracted resident starts and serves health without legacy entrypoints or personal assets (20325.1462ms)
+ℹ package begin: 0ms
+ℹ package staged: 604ms
+ℹ package packed: 9313ms
+ℹ package extracted: 9417ms
+ℹ package bytes-and-imports-verified: 12496ms
+ℹ package dependency-links-ready: 12877ms
+ℹ package resident-host-ready: 19479ms
+ℹ package resident-listening: 20223ms
+ℹ package resident-health-verified: 20231ms
+ℹ package resident-closed: 20245ms
+ℹ package temporary-files-removed: 20323ms
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (0.8974ms)
+✔ native execution documents keep each input round and the owner reads the new duty and plan (4071.1516ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: false (5075.4297ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: true (6623.5739ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=false (15663.203ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=true (7703.495ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 60497.6894
+
+✖ failing tests:
+
+test at test\task-session-package-native.test.js:16:29
+✖ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (30022.1194ms)
+  'test timed out after 30000ms'

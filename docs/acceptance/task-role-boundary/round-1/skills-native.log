@@ -1,0 +1,15 @@
+✔ native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned (29817.4268ms)
+✔ an unavailable native skill is a correctable read and does not leave unknown external effects (5795.3431ms)
+✔ task session rejects business tools and late replacements while keeping the original evidence reader (785.327ms)
+✔ unconfigured native profiles expose no bundled personal skills (636.9844ms)
+✔ an execution same-name replacement does not inherit the native loader read-only accounting (3649.5548ms)
+✔ 已读技能和引用变化只提示相关路径，原生重读后消除提示且保留旧版本审计 (636.7889ms)
+✔ 执行会话续办恢复已读版本，入口未变而引用改变也能在首次模型步骤看到 (4517.7028ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 50501.3956

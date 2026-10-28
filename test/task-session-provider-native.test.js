@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
-import { available, reason, nativeTaskHost, topicSummaryResponse, waitUntil, latestInput } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, topicSummaryResponse, topicTaskCalls, waitUntil, latestInput } from './fixtures/task-session-native-host.js'
 import { createTaskSessions, isTaskProviderTransient } from '../packages/dingtalk-dsh-assistant/task-session.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
@@ -112,6 +112,50 @@ async function providerServiceHost(root, { legacyNoSubmission = false, transient
     } })
   return Object.assign(h, { providerRequests: () => requests })
 }
+
+test('stale owner no-submission drains and resumes the same session with the supplement without technical backoff', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'owner-stale-context-'))
+  const evidence = join(root, 'evidence.txt')
+  await writeFile(evidence, 'verified existing artifact')
+  let h, injected = false, firstSession
+  t.after(async () => { try { await h?.close() } finally { await rm(root, { recursive: true, force: true }) } })
+  h = await nativeTaskHost(root, async request => {
+    const topicCalls = topicTaskCalls(request); if (topicCalls) return topicCalls
+    const input = latestInput(request)
+    firstSession ??= input.task.sessionId
+    assert.equal(input.task.sessionId, firstSession)
+    if (!injected) return [{ name: 'read', args: { file_path: evidence } }]
+    assert.equal((await h.query('task.get', { taskId: input.task.taskId })).contextRevision, 1)
+    assert.ok(input.wakes.some(wake => wake.kind === 'task.supplement'))
+    return [{ name: 'task_session_submit', args: { decision: { action: 'complete', summary: '已按补充核对已有证据', evidence: [evidence], limitations: [] } } }]
+  }, { config: { retryIntervalMs: 60000 } })
+  h.ctx.on('tools/post-execute', async (exec, result, next) => {
+    const outcome = await next()
+    if (exec.name === 'read' && !result.isError && !injected) {
+      injected = true
+      const task = (await h.query('task.list'))[0]
+      await h.service.store.command({ id: 'supplement-after-read', kind: 'task.supplement', args: { taskId: task.taskId,
+        expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision,
+        messageId: 'supplement-after-read', text: '只核对已有证据，不重复操作', request: task.request + '\n只核对已有证据，不重复操作' } })
+    }
+    return outcome
+  })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'stale-owner', objective: '读取已有证据并确认结果' })
+  // 不调用 recover、不等待一分钟退避：原上下文排空后须由既有队列直接接续。
+  await h.service.whenIdle()
+  const task = await h.query('task.get', { taskId: created.taskId })
+  assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal(task.sessionId, firstSession)
+  assert.equal(task.leaseEpoch, 2)
+  assert.equal(task.providerRecovery ?? null, null)
+  assert.equal(h.toolResults.filter(result => result.name === 'read' && !result.result.isError).length, 1, '已成功读取不会在续办中重放')
+  assert.ok((await h.query('wake.list', { taskId: task.taskId })).every(wake => wake.state === 'acked'))
+  assert.deepEqual(h.service.listAlerts().filter(alert => alert.taskId === task.taskId), [])
+  assert.equal((await h.query('execution.list')).length, 0)
+  const events = (await inspectSession(h.ctx.sessionPersistence, task.sessionId)).events
+  assert.equal(events.filter(event => event.type === 'plugin:dingtalk/task-session').length, 1)
+  assert.deepEqual(events.filter(event => event.type === 'user/message' && event.data.source?.taskSession).map(event => event.data.source.taskSession.leaseEpoch), [1, 2])
+})
 
 test('service retries a transient native owner with its claimed wake and same session after cooldown', { skip: !available ? reason : false, timeout: 30000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-provider-service-')), hosts = []

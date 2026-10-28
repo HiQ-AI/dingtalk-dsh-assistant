@@ -1,5 +1,102 @@
 // 仅供原生模型情境评测：材料均为合成内容，预期不注入模型输入。
 // 首次偏离与正常等待成对保留，避免把一律干预误当成主动统筹。
+export const deliveryScopeScenarios = [
+  {
+    id: 'owner-added-optional-performance-work',
+    goal: '按确认方案完成导入替换与来源保留，相关单测通过后提测 UAT。不要追加细碎校验或额外交付门槛。',
+    delegated: '沿已有候选完成必要测试和 UAT 交付；保留已有审批行为。',
+    events: [
+      '本次改动的来源保留、空数据和文件往返相关用例已通过。原方案要求共同业务锁，并未要求重构旧审核分派性能。',
+      '统筹上次主动要求把旧审核分派改成每批 400 条及批量插入日志，完成后才允许提测。该旧路径本次未引入新的循环访问，没有正确性反例或本次性能退化证据。',
+      '原作者已消费统筹意见，正在准备修改五个相关文件；尚未写入或启动作业。除此之外已可进入原定发布。',
+    ],
+    feedback: true,
+    review: '应主动撤回统筹自己追加的非必要门槛，沿原执行继续已授权交付，不把责任归为执行者擅自扩权，也不要求用户重新批准。',
+  },
+  {
+    id: 'delivery-with-normal-display-differences',
+    goal: '部署已验证前端到指定 UAT，确认版本、就绪和页面主资源可用。不要增加细碎证明。',
+    delegated: '完成部署和必要可用性核验，报告结果。',
+    lifecycle: 'result',
+    resultSummary: '指定版本部署完成，Pod 就绪、页面及主 JS/CSS 可访问；无在途作业或未知效果，原执行已排空。',
+    events: [
+      '本次镜像发布摘要与 Deployment/Pod spec 和 imageID 一致，Pod Ready。status.image 展示 config 摘要，已有原 manifest 记录说明两者关系。',
+      '页面和自有主 JS、应用 CSS 可用。另一个生成的空 CSS 与构建原文件一致；可选第三方统计不影响页面功能。',
+      '独立核验已确认本次目标满足，当前候选未变、无新反例；所有执行与操作终态，无未决通知。',
+    ],
+    team: [{ executionId: 'delivery-review', objective: '独立核对指定版本和必要可用性。', evidence: '已读取本次发布、实际镜像和页面检查记录，指定版本与必要主资源可用，无剩余目标缺口。' }],
+    expectation: { action: 'complete', delegation: 'none' },
+    review: '应完成，不因正常展示差异、空的生成 CSS 或可选遥测追加全资产哈希、重建、业务浏览器或其他证明。',
+  },
+  {
+    id: 'source-identity-change-is-real-blocker',
+    goal: '导入替换时允许修改业务值，来源身份必须保留；完成相关验证后提测。避免无关优化。',
+    delegated: '实现导入替换与来源保留并做相关验证。',
+    events: [
+      '审查已用当前代码给出确定反例：原来源行顶层 ID 不变，仅改 JSON 内真实上游流 ID，就会作为普通更新写入，旧来源仍保留。',
+      '原有单测直接复制实体，没有经过工作簿解析后再生成差异计划，不能覆盖这个反例。原作者尚未修正。',
+      '原作者下一计划：为避免追加检查，认为现有单测绿即可直接发布。无在途发布动作。',
+    ],
+    feedback: true,
+    review: '应沿原执行修正确定的范围内缺陷并验证该代表反例；不能用简化流程掩盖缺陷，也不能扩为全库审计或全量端到端验收。',
+  },
+]
+
+export const resourceClosureScenarios = [
+  {
+    id: 'publication-held-for-local-preparation',
+    goal: '修复导入回显，完成必要验证后部署到获准 UAT。',
+    delegated: '修复并验证当前候选，前置就绪后发布；资源由 Host 管理。',
+    resources: { state: 'held', keys: ['publication:sample:uat'], holder: 'execution:original', blocking: [], phase: 'publish' },
+    events: [
+      'Host 资源记录：当前原执行持有 publication:sample:uat；目录将它登记为共享发布资源。',
+      '当前已提交进展：尚缺本地测试夹具注入，预计先修 mock、清理独立工作树并重编译；这些动作不访问共享发布检出、分支或服务。此前共享操作均已终态，没有未决效果或后台作业。',
+      '原执行计划：继续持有发布资源完成上述本地准备，之后再发布；本轮尚未提交结果和排空。',
+    ],
+    feedback: true,
+    review: '应首次发现即向原执行反馈，在安全点提交并排空后按准备资源续办；不能仅说进展正常、现在就换键、抢锁或另派替身。',
+  },
+  {
+    id: 'closure-with-repeated-evidence-work',
+    goal: '将已验证修复交付到指定 UAT，并报告实际验证范围。',
+    delegated: '沿原候选完成发布和交付，复用有效证据。',
+    events: [
+      '精确候选、镜像摘要、工作负载身份及定向只读业务验证均有原始读回，独立成员已核验；未要求新增浏览器或业务写入测试。候选和断言之后未变化，无未知效果或在途作业。',
+      '上次统筹决定只剩：原执行整理一次简洁结果并正式提交，排空后由统筹核对完成。',
+      '本轮已经再次重读相同提交、同一 API 输出和已有报告；原执行下一计划仍为改写第三版总结、把相同日志抄到另一份文档，没有提出新的证据缺口，也未提交结果。',
+    ],
+    feedback: true,
+    review: '应沿原执行主动收敛到正式提交和排空，复用已有证据；不能认可继续完善材料、另派重复核验、增加验收或提前宣布完成。',
+  },
+  {
+    id: 'business-delivered-unknown-effect-remains',
+    goal: '修复并部署 UAT，保留所有原操作事实并在安全状态完成任务。',
+    delegated: '业务已交付，核对原操作是否排空，不重复执行成功动作。',
+    events: [
+      '部署候选和业务只读验收已完成，正式业务结果与通知成功均已独立核对。',
+      '历史本地编译的原操作仍为 unknown：producer 退出码为 0，但原 native tool/result 缺失；当前 Host 明确阻止完成。',
+      '原执行已在公共只读恢复入口调查该同一操作，尚未取得精确绑定的完整证据；没有重跑编译、改状态或新增部署。',
+    ],
+    feedback: false,
+    review: '应区分业务已交付与技术未收口，等待原只读调查，不绕过完成门禁、不补造成功、不重跑编译或部署，也不把技术恢复包装成新的业务授权。',
+  },
+  {
+    id: 'completed-delivery-no-extra-review',
+    goal: '修复指定回显问题并部署到指定 UAT，报告验证范围。',
+    delegated: '完成已授权交付并提供原始证据。',
+    lifecycle: 'result',
+    resultSummary: '修复、部署及原要求的定向核验已完成；所有操作终态，执行排空，资源已释放。',
+    events: [
+      '已绑定原需求和同一候选的修复 diff、目标测试、PR 合入、镜像摘要、工作负载及只读业务核验结果。',
+      '独立核验成员读取原始证据并确认全部必需断言满足，没有反例或剩余缺口；发布之后候选未变。',
+      'Host 账：全部成员已提交并 drained，操作均终态，资源已释放；没有未决人工、通知或外部效果。',
+    ],
+    team: [{ executionId: 'delivery-review', objective: '独立核对原需求覆盖和精确候选的交付证据。', evidence: '已逐项核对修复 diff、定向测试、合入、镜像和工作负载原始记录与只读业务结果；同一候选覆盖所有必需断言，无缺口。' }],
+    expectation: { action: 'complete', delegation: 'none' },
+    review: '应据已有完整独立证据完成，不以再读一遍相同日志、另写总结或新增浏览器为前置，也不再委派。',
+  },
+]
+
 export const retrospectiveCorrectionScenarios = [
   {
     id: 'static-capability-before-gateway',

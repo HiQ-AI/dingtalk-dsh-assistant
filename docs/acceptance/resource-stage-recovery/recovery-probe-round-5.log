@@ -1,0 +1,28 @@
+✖ managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader (8006.7008ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8729.878
+
+✖ failing tests:
+
+test at test\native-restart-scope-runner-native.test.js:42:1
+✖ managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader (8006.7008ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(phases.some(event => event.phase === 'job' && event.callId === nativeCall.callId))
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/native-restart-scope-runner-native.test.js:71:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

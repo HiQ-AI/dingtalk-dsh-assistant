@@ -105,7 +105,7 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 新旧服务不得并行消费并执行同一群消息。需要回退先停新监听/外发与实际执行，保留新数据库、初始化标记、日志及真实外部效果证据，再按审阅后的旧实例配置恢复。清洁启动没有把新任务转换成旧工作流，不能恢复旧服务后自动重放新任务。旧数据的可恢复隔离与删除授权是两回事，不执行永久清理。
 
-任务与动态执行会话直接使用配置的原生工具，不添加工具白名单；readOnly/readbackOperationId仅用于关联原操作调查与对账材料，不用工具种类代替事实核验。原生权限、来源版本、真实生命周期及未决效果账继续按实际状态判断。即使Observer源码没有变，也必须显式提供当前已核验的ObserverPackage及摘要：官方安装会重新解析profile既有overrides，单独安装Assistant可能回退Observer。两个包均经源码/安装读回核验。
+任务统筹只保留本轮任务管理、模型内容和可信 preset 的 skill/read/read_image，具体业务工具交给动态执行会话；每次恢复重新装配边界。升级前由统筹直接产生的历史效果仍须按原记录对账，不迁移或重放。部署后检查统筹继承目录无 Shell/写入/搜索工具，强行调用和晚注册替换被拒绝，再验证单执行委派、证据读取及完成路径；readOnly/readbackOperationId仅用于关联原操作调查与对账材料，不用工具种类代替事实核验。原生权限、来源版本、真实生命周期及未决效果账继续按实际状态判断。即使Observer源码没有变，也必须显式提供当前已核验的ObserverPackage及摘要：官方安装会重新解析profile既有overrides，单独安装Assistant可能回退Observer。两个包均经源码/安装读回核验。
 
 统筹更新核验需区分新增Host输入、保留的旧Host内容与整个模型请求。检查原生surface仅保留当前Host快照，旧快照及旧版历史标记不再占模型消息，原审计输入仍存在，执行previousExecutions不递归。目录里的终态不是业务验收证据，须沿resultRef读取原结果。对模型过载查看本lease的turn/end：临时过载保留wake，按现有retryIntervalMs退避后续办同会话，不把其写为业务blocked；旧版误blocked仅凭原生日志精确识别恢复。看板中统筹等待尚在执行的小目标仍为执行中。
 
@@ -125,7 +125,7 @@ DWS 启动监听 ready 后会自动回补。服务按原始 `event_time ?? creat
 
 升级后在隔离任务确认执行工具目录存在 `execution_team_read` 和 `execution_send_message`。用同 Task 当前成员身份及目标 inputVersion 发送一条必要消息，独立回读 feedback 的 sourceExecutionId、sourceInputVersion、inputVersion、consumedAt 和原生日志 sequence；队列接收、模型步骤消费与业务处理分别核验。重复 key 不重复投递，跨 Task、旧输入版本或旧发送租约拒绝；已终态目标返回 recipient_finished，不启动新回合。续办后的旧 peer 消息只保留历史，不阻塞新轮次；统筹原有补充语义不变。只需对依赖就绪、接口/证据交接和具体冲突发定向消息，无新事实不反复发送。此检查不操作或重放现场任务。
 
-统筹方向判断核验：除检查读取调用外，核对巡检决定是否把最新整体目标、受托目标、范围及验收条件与实际行动对照，说明当前进展和下一必要结果。首次出现具体偏离就应通过原executionId反馈，不以重复错误为触发条件；确认偏离后仅复述进展并wait不算有效纠偏。跟进时独立核对反馈后的真实动作/产物，received或modelStepEnteredAt不能证明落实。必要验证、正常等待、证据不足和真实人工等待分别验证，不以一律发反馈为通过标准；本项不改变原人工等待/暂停机制。
+统筹方向判断核验：除检查读取调用外，核对巡检决定是否把最新整体目标、受托目标、范围及验收条件与实际行动对照，说明当前进展和下一必要结果。首次出现具体偏离就应通过原executionId反馈，不以重复错误为触发条件；确认偏离后仅复述进展并wait不算有效纠偏。跟进时独立核对反馈后的真实动作/产物，received或modelStepEnteredAt不能证明落实。必要验证、正常等待、证据不足和真实人工等待分别验证，不以一律发反馈为通过标准；本项不改变原人工等待/暂停机制。范围回归还应覆盖统筹自己提出的非必要优化：主动撤回错误门槛、复用充分证据完成；以本次真实缺陷仍须修复作对照。沿现有隔离模型脚本选择少量代表场景即可，不增加运行时表单或额外业务验收流程。
 
 能力/配置问答还须覆盖 `execution.result` 唤醒：读取当前版本实际结果，检查原问题是否已经可答，不把执行建议的附加排查当成必做项。用已核实版本的常量配置场景验证直接答复，用运行中多余调查场景验证原执行纠偏；以未绑定运行版本、真实读取配置但过滤未知、用户明确要求完整现场排障作为反例，防止为了简短而提前收口。每例核对实际结论、因果、必要下一步及是否产生多余人工申请，不以 complete/wait 或关键词单独判定。复验沿用下述模型脚本，本项没有数据迁移，也不重放原任务；隔离验证不能代替部署后的真实行为观察。
 
@@ -242,9 +242,31 @@ DSH新版不再支持subagent配置的toolFilter。当前配置中仅拒绝4个s
 
 部署后用隔离账本核验同资源等待、异资源并行、全部操作终态后自动提升，再独立回读已安装模块与进程健康。正式任务从执行查询或 `task_execution_read.resources` 读取 `held/waiting`、`keys` 与 `blocking`；queued 仅表示已接收。等待不应产生失败告警或反复领取。取消、暂停、修订仅能结清尚未启动的操作，后台 job 和 unknown 继续保留原锁，沿原操作核验终态后自动释放。不要通过换任务、换键、过期抢锁或直接改 SQLite 绕过阻塞。
 
-统筹应在派发前声明本阶段全部共享资源，同一环境使用一致键名；续办省略资源键保留原集合。需要改变集合时等原执行与效果排空，再开始下一阶段。执行中新增未声明资源会拒绝，避免持有部分资源后循环等待。本合同只约束同一控制库内已声明资源的执行，不替代外部平台跨实例并发控制。
+统筹先用 `task_resource_catalog {}` 读取受信工作区目录，再声明本轮全部共享资源。`resourcePhase=prepare` 不得取得目录内 `purpose=publication` 的资源；本地检出、改码、构建、测试可先独立准备，其他已授权业务仍按原目标执行。发布前置齐备后，原执行与效果安全排空，再以同一 executionId 续办 `resourcePhase=publish` 并联合取得发布所需资源；不携带无关开发锁。阶段只是资源占用合同，不是新增业务审批或固定工作流。省略阶段/键分别继承原值；反馈不能切阶段，不能持锁扩大资源集合。本合同只约束同一控制库内已声明资源的执行，不替代外部平台跨实例并发控制。
 
-执行会话自身使用 `execution_resources_read {}`；它只接受空参数，由 Host 固定绑定 taskId、executionId、sessionId 和版本。回执含 inputVersion、leaseEpoch 及 `resources`，核对 `held` 和 `holder=execution:<executionId>`，续办或恢复后重新读取。读取不会产生 operation 或发送反馈，不必为了取得持锁证明再打断执行。原有方向纠偏和新输入检查仍适用；当前观察不保证后续任意时刻仍持锁。已停止/暂停或版本失效会拒绝，不能拿旧证明绕过控制状态。
+### 安装和维护受信资源目录
+
+固定入口是实际 Agent 工作区的 `.dsh/shared-resources.json`，不是执行检出下的任意文件；Host 启动时读取并校验。字段如下，详见可安装的 [Dataset UAT2目录示例](shared-resource-catalog.example.json)。示例把发布环境、共享分支、集成检出与开发检出分开，示例内多个平台名称是同一发布目标的已知别名；实施前必须核对实际对应关系，不把不同资源因名称相似合并。
+
+```json
+{"version":1,"resources":[{"key":"publish:project:uat","aliases":["old:uat"],"purpose":"publication","description":"项目共享发布目标"}]}
+```
+
+- `key` 是稳定 canonical 身份；`aliases` 含历史及各工具入口用过的名称，每个名称全目录唯一。`purpose` 只取 `publication` 或 `workspace`，`description` 说明范围与用途。启用目录后，新委派声明只接受登记的 key 或 alias；Host 规范化后落账。原生 operation 的动态文件互斥仍可用，并同样不能绕过 publication 的阶段/范围检查。
+- 首次安装前，沿原只读任务/执行/资源查询核对活动声明与旧持有者，将确认属于同一资源的所有历史名称登记为别名。不能清锁、重建执行或重放旧效果来安装目录。多个旧别名已经分别被持有时，原行和操作保留；新增 canonical 请求等待所有冲突持有者按原证据排空。此状态不意味着过去已经互斥。
+- 目录在启动事务中与 `dynamic_meta` 的原快照校验。只允许追加资源/别名和修改说明；不能删除旧映射、改绑 key/alias 或修改用途。目录文件暂缺仍使用已保存快照，不降级为自由键；非法 JSON、重复名称、删除/重绑报错，不继续启动。若要改变已登记身份，先另行设计可审阅迁移，不能修改 SQLite。
+- 同一控制库仅允许一个活跃 Host（进程内路径登记及持久 owner fence）；第二个 handle 不能带不同目录同时运行。目录修改只在原 Host 关闭后重新加载，不热更新；跨控制库/实例仍需要平台互斥。
+- 回退到不识别目录或阶段的旧版前，必须核对涉及这些资源的执行、操作及旧别名锁均已安全排空；旧版不能承担新增目录语义。不能以删除目录文件、清除快照或锁行完成降级，未结效果保留原身份并先解决。
+
+安装前在插件源码根执行零写入校验，随后按既有部署流程在静止实例切换。以下命令只验证示例，不改运行配置：
+
+```powershell
+node --input-type=module -e 'import {readFile} from "node:fs/promises"; import {createExecutionResourceCatalog} from "./packages/dingtalk-dsh-assistant/execution-resource-catalog.js"; const c=createExecutionResourceCatalog(JSON.parse(await readFile("docs/ops/shared-resource-catalog.example.json","utf8"))); console.log(JSON.stringify({valid:true,resources:c.snapshot.resources.length}));'
+```
+
+首次安装由操作者把审阅后的 JSON 放入实际工作区的固定入口；已有文件须在原内容上追加，不能直接覆盖为示例。部署后先用 `task_resource_catalog` 回读 canonical key 和全部旧别名，再用隔离任务核对 prepare 不占发布资源、别名相互等待、原执行排空后 publish 的全键获取和最终释放。单元/原生测试不能代替现场目录安装及业务发布验收。
+
+执行会话自身使用 `execution_resources_read {}`；它只接受空参数，由 Host 固定绑定 taskId、executionId、sessionId 和版本。回执含 inputVersion、leaseEpoch、resourcePhase 及 `resources`，核对 `held` 和 `holder=execution:<executionId>`，续办或恢复后重新读取。读取不会产生 operation 或发送反馈，不必为了取得持锁证明再打断执行。原有方向纠偏和新输入检查仍适用；当前观察不保证后续任意时刻仍持锁。已停止/暂停或版本失效会拒绝，不能拿旧证明绕过控制状态。
 
 该工具需要安装包含此实现的 Assistant 并在当前执行工具目录中实际可见；仅更新个人 skill 不会给旧 Host 增加工具。能力缺失时由统筹沿现有 `task_execution_read` 核对并记录版本缺口，不猜造调用或查询内部 SQLite。定向验证使用隔离实例的 `test/task-execution-resources-native.test.js`，核验同会话续办后版本/资源更新、未知参数被拒绝及无外部操作；不能将其当作正式实例已升级。
 

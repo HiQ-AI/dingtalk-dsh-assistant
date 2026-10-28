@@ -535,6 +535,12 @@ export async function handleRequest(request, response, store, { testApiEnabled =
         expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
         artifactScopeCorrection: z.strictObject({ coordinationId: requiredText, expectedRevision: z.number().int().positive(), reason: requiredText.max(2000) }).optional(),
         nativeFailureResolutions: z.array(z.strictObject({ operationId: requiredText, expectedOperationDigest: z.string().regex(/^[a-f0-9]{64}$/u) })).min(1).max(8)
+          .refine(items => new Set(items.map(item => item.operationId)).size === items.length).optional(),
+        nativeRestartResolutions: z.array(z.strictObject({ operationId: requiredText, expectedOperationDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+          expectedIsolationDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+          scopeEvidence: z.strictObject({ hostPid: z.number().int().positive(), hostLogPath: requiredText, hostLogSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+            producerScopeReviewed: z.literal(true), localEffectsOnlyConfirmed: z.literal(true), excludeOriginalSourcesConfirmed: z.literal(true),
+            probeExecutionId: requiredText.optional(), probeCallId: requiredText.optional() }).optional() })).min(1).max(8)
           .refine(items => new Set(items.map(item => item.operationId)).size === items.length).optional() }).safeParse(await readJson(request))
       if (!parsed.success) return send(response, 400, { error: 'human_reply_invalid' })
       return send(response, 200, await store.respondTaskHumanRequest({ ...parsed.data,

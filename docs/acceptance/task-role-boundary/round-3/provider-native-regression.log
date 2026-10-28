@@ -1,0 +1,21 @@
+✔ task provider transient classifier only accepts the exact verified provider errors (1.4847ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=false (1415.6458ms)
+✔ native owner provider error keeps the same session and submitted decisions take priority: trailing=true (126.5668ms)
+✔ stale owner no-submission drains and resumes the same session with the supplement without technical backoff (1513.8835ms)
+✔ service retries a transient native owner with its claimed wake and same session after cooldown (6667.3769ms)
+✔ normal empty owner completion resumes automatically with the same session and wake: restart=false (6516.0545ms)
+✔ normal empty owner completion resumes automatically with the same session and wake: restart=true (6656.2217ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: true (2787.329ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: false (3261.2408ms)
+✔ owner technical failures have a durable bounded budget across leases and restart; later real input preserves a recovery entrance: noSubmission=false (8472.9126ms)
+✔ owner technical failures have a durable bounded budget across leases and restart; later real input preserves a recovery entrance: noSubmission=true (16855.4086ms)
+✔ owner recovery admission cannot hot-loop on non-provider runtime failure: newInput=true (999.17ms)
+✔ owner recovery admission cannot hot-loop on non-provider runtime failure: newInput=false (1020.671ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 57065.9822

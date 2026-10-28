@@ -1,0 +1,15 @@
+✖ 执行原生工具读取自身租约并在续办刷新，初始资源=none (68030.8372ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 68794.2729
+
+✖ failing tests:
+
+test at test\task-execution-resources-native.test.js:81:44
+✖ 执行原生工具读取自身租约并在续办刷新，初始资源=none (68030.8372ms)
+  'test timed out after 60000ms'

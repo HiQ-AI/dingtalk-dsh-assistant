@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { inspectSession } from './session-persistence.js'
 import { safeNotificationDetail } from './notification-delivery.js'
+import { isolationBinding, validIsolationReceipt } from './native-restart-isolation.js'
+import { restartScopeProbePlan, readRestartScopeProbe, readManagedRestartProbeCall } from './native-restart-scope-probe.js'
 import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
@@ -16,7 +18,7 @@ const inputFor = (events, binding) => events.findLast(event => event.type === 'u
   && event.data.source.executionSession.inputDigest === binding.inputDigest)
 
 /** 原调用作为调查材料提供，必须绑定真实日志和账本摘要；不把它当成效果成功证明。 */
-export async function readNativeOperationContext({ ctx, operation }) {
+export async function readNativeOperationContext({ ctx, operation, allowHostIdentityRendering = false }) {
   const binding = operation.dispatchBinding
   if (!binding || !operation.result?.callId) return null
   const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
@@ -25,21 +27,36 @@ export async function readNativeOperationContext({ ctx, operation }) {
   if (!input) return null
   const callId = operation.result.callId
   if (operation.key !== `native:${binding.executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${callId}`) return null
-  const call = events.find(event => event.seq > input.seq && event.type === 'tool/call' && event.data.callId === callId && event.data.name === operation.definition.toolName)
+  const direct = events.filter(event => event.seq > input.seq && event.type === 'tool/call' && event.data.callId === callId && event.data.name === operation.definition.toolName)
+  const managed = operation.definition.toolName === 'pwsh' ? readManagedRestartProbeCall(events, input, callId) : null
+  if (direct.length + Number(!!managed) !== 1) return null
+  const call = direct[0] ?? managed.call
   let args
   try { args = JSON.parse(call?.data.arguments) } catch { return null }
   if (hash(args) !== operation.definition.argumentsDigest) return null
-  const resultEvent = events.find(event => event.seq > call.seq && results(event).some(result => result.toolCallId === callId
-    && result.isError === operation.result.isError && hash(result.content) === operation.result.resultDigest))
+  const resultMatches = result => result.toolCallId === callId
+    && result.isError === operation.result.isError && (hash(result.content) === operation.result.resultDigest
+      // The Host guard recorded Error.message before the native runtime rendered
+      // this exact Error with its prefix. Never strip prefixes from arbitrary errors.
+      || allowHostIdentityRendering && ['pwsh', 'bash'].includes(operation.definition.toolName)
+        && operation.result.errorCode === 'execution_background_identity_missing' && result.isError === true
+        && result.content?.length === 1 && result.content[0].type === 'text'
+        && result.content[0].text === 'Error: execution_background_identity_missing'
+        && operation.result.resultDigest === hash([{ type: 'text', text: 'execution_background_identity_missing' }]))
+  const resultEvent = managed ? managed.operationMessage && resultMatches(managed.operationMessage) && managed.returned
+    : events.find(event => event.seq > call.seq && results(event).some(resultMatches))
   if (!resultEvent) return null
-  return { operationId: operation.operationId, sessionId: binding.sessionId, toolName: call.data.name, arguments: args,
-    result: results(resultEvent).find(result => result.toolCallId === callId), resultError: nativeFileError(call.data.name, args, results(resultEvent).find(result => result.toolCallId === callId), resultEvent.data.error),
+  const result = managed?.operationMessage ?? results(resultEvent).find(result => result.toolCallId === callId)
+  return { operationId: operation.operationId, sessionId: binding.sessionId, toolName: operation.definition.toolName, arguments: args,
+    result, resultError: nativeFileError(operation.definition.toolName, args, result, resultEvent.data.error),
+    ...(managed ? { managedParentCallId: managed.call.data.rootCallId, finalPolicyResult: managed.message,
+      operationPostExecutionDecision: managed.operationObservation.postExecutionDecision } : {}),
     callSequence: call.seq, resultSequence: resultEvent.seq,
     limitation: '原生调用及结果仅用于定位调查对象，不证明命令成功或没有部分效果；不能重放原命令。' }
 }
 
 /** 精确绑定原始错误与正常结束回合；错误文字、当前文件内容均不作为无效果证据。 */
-async function inspectFailedNativeOperation({ ctx, operation, execution }, { kind, accepts }) {
+async function inspectFailedNativeOperation({ ctx, operation, execution }, { kind, accepts, allowBlocked = false }) {
   const binding = operation.dispatchBinding
   if (operation.state !== 'unknown' || !binding
     || operation.executionId !== execution?.executionId || operation.taskId !== execution.taskId
@@ -49,7 +66,7 @@ async function inspectFailedNativeOperation({ ctx, operation, execution }, { kin
     || operation.result.toolName !== operation.definition.toolName) return null
   const jobs = ctx.get?.('jobs')
   if (!jobs?.list || jobs.list(execution.sessionId).some(job => ['running', 'stopping'].includes(job.status))) return null
-  const original = await readNativeOperationContext({ ctx, operation })
+  const original = await readNativeOperationContext({ ctx, operation, allowHostIdentityRendering: kind === 'native-investigated-failure' })
   if (!original || original.result.isError !== true || !accepts(original)) return null
   const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
   const input = inputFor(events, binding)
@@ -57,7 +74,7 @@ async function inspectFailedNativeOperation({ ctx, operation, execution }, { kin
   const result = events.find(event => event.seq === original.resultSequence && event.type === 'tool/result')
   const end = events.find(event => event.seq > original.resultSequence && event.type === 'turn/end')
   if (!input || !start || input.seq < start.seq || !Number.isSafeInteger(start.data.turn) || result?.data.turn !== start.data.turn
-    || end?.data.turn !== start.data.turn || end.data.reason?.kind !== 'completed'
+    || end?.data.turn !== start.data.turn || !(end.data.reason?.kind === 'completed' || allowBlocked && end.data.reason?.kind === 'blocked')
     || events.some(event => event.seq > start.seq && event.seq < end.seq && (event.type === 'turn/end' || event.type === 'turn/start'))) return null
   return { kind, operationId: operation.operationId, operationDigest: hash(operation),
     taskId: operation.taskId, executionId: execution.executionId, sessionId: binding.sessionId,
@@ -111,10 +128,96 @@ async function boundReadbackObservations({ ctx, operation, execution, executions
 
 /** A completed error is a failed call, not proof that all effects were absent. */
 export async function inspectInvestigatedNativeFailure(args) {
-  const proof = await inspectFailedNativeOperation(args, { kind: 'native-investigated-failure', accepts: () => true })
+  const proof = await inspectFailedNativeOperation(args, { kind: 'native-investigated-failure', accepts: () => true, allowBlocked: true })
   if (!proof) return null
   const observations = await boundReadbackObservations(args, proof.resultSequence)
   return observations.length ? { ...proof, observations, partialEffectsPossible: true } : null
+}
+
+/** 受管探针只读取当前调查绑定的原操作；模型不能换目标或提交替代命令。 */
+export async function prepareRestartScopeProbe({ ctx, operation, execution, executions, investigation, binding, args }) {
+  if (!investigation || investigation.taskId !== binding.taskId || investigation.executionId !== binding.executionId
+    || investigation.sessionId !== binding.sessionId || investigation.inputVersion !== binding.inputVersion
+    || investigation.inputDigest !== binding.inputDigest || investigation.leaseEpoch !== binding.leaseEpoch
+    || investigation.status !== 'running' || investigation.drained || investigation.cancelRequested
+    || investigation.definition?.recoveryReadOnly !== true || investigation.input?.readbackOperationId !== operation?.operationId
+    || operation?.taskId !== binding.taskId || hash(operation) !== args.expectedOperationDigest) return null
+  const authority = await inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence: args.scopeEvidence,
+    planOnly: true, activeProbe: investigation })
+  return authority?.probe.scriptDigest === args.expectedScriptDigest ? authority.probe : null
+}
+
+/** Read existing Host fence evidence; never create a fence or a process result here. */
+export async function inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence, planOnly = false, activeProbe }) {
+  const binding = operation.dispatchBinding, job = operation.job
+  if (operation.state !== 'unknown' || operation.recoveryReason !== 'host_restart' || operation.recoverySettlement
+    || !binding || !job || !['running', 'stopping'].includes(job.status) || operation.result != null
+    || !['pwsh', 'bash'].includes(operation.definition?.toolName)
+    || operation.taskId !== execution?.taskId || operation.executionId !== execution.executionId
+    || binding.sessionId !== execution.sessionId || job.owner !== execution.sessionId
+    || !execution.drained && !execution.recovering
+    || ctx.agents.get(execution.sessionId) || ctx.sessions.get(execution.sessionId)) return null
+  const jobs = ctx.get?.('jobs')
+  if (!jobs?.list || jobs.list(execution.sessionId).some(item => ['running', 'stopping'].includes(item.status))) return null
+  const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
+  if (!identity(events, binding)) return null
+  const input = inputFor(events, binding)
+  if (!input) return null
+  const calls = events.filter(event => event.seq > input.seq && event.type === 'tool/call'
+    && event.data.name === operation.definition.toolName
+    && operation.key === `native:${binding.executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${event.data.callId}`)
+  if (calls.length !== 1) return null
+  const call = calls[0], callId = call.data.callId
+  let args
+  try { args = JSON.parse(call.data.arguments) } catch { return null }
+  if (hash(args) !== operation.definition.argumentsDigest || typeof args.command !== 'string') return null
+  const registrations = events.filter(event => event.type === 'job/registered' && event.data.jobId === job.jobId)
+  if (registrations.length !== 1) return null
+  const registered = registrations[0], data = registered.data
+  if (registered.seq <= call.seq || data.owner !== job.owner || data.startedAt !== job.startedAt
+    || data.kind !== operation.definition.toolName || data.label !== args.command || data.toolCall?.callId !== callId
+    || data.toolCall.rootCallId && data.toolCall.rootCallId !== callId
+    || events.some(event => event.type === 'job/settled' && event.data.jobId === job.jobId)) return null
+  const responses = events.flatMap(event => event.seq > call.seq ? results(event).filter(result => result.toolCallId === callId) : [])
+  if (responses.length > 1) return null
+  if (responses.length) {
+    let receipt
+    try { receipt = JSON.parse(responses[0].content?.[0]?.text).nativeJobReceipt } catch { return null }
+    if (responses[0].isError !== false || !receipt || receipt.jobId !== job.jobId || receipt.owner !== job.owner
+      || receipt.startedAt !== job.startedAt || !['running', 'stopping'].includes(receipt.status)) return null
+  }
+  const observations = await boundReadbackObservations({ ctx, operation, execution, executions }, registered.seq)
+  if (!observations.length && !scopeEvidence) return null
+  const authority = ctx.get?.('nativeJobRecovery')
+  const challenge = isolationBinding(operation, callId)
+  let isolation
+  if (scopeEvidence) {
+    const plan = restartScopeProbePlan({ command: args.command, binding: challenge, evidence: scopeEvidence })
+    if (!plan) return null
+    if (planOnly) {
+      // 同一调查续办后当前投影变为 running，不能要求复制另一个已成功成员才能取只读计划。
+      // 这里只放行 Host 已绑定的活动调查取计划；正式隔离证明仍要求探针成功且排空。
+      const boundActive = activeProbe && activeProbe.taskId === operation.taskId && activeProbe.status === 'running' && !activeProbe.drained
+        && !activeProbe.cancelRequested && activeProbe.definition?.recoveryReadOnly === true && activeProbe.input?.readbackOperationId === operation.operationId
+      if (!boundActive && !executions.some(item => item.taskId === operation.taskId && item.status === 'succeeded' && item.drained && !item.recovering
+        && item.definition?.recoveryReadOnly === true && item.input?.readbackOperationId === operation.operationId)) return null
+      return { kind: 'native-host-restart-isolation-plan', ...challenge, probe: plan }
+    }
+    isolation = await readRestartScopeProbe({ ctx, plan, evidence: scopeEvidence, operation, executions })
+    if (isolation) {
+      const provenance = isolation.provenance, investigated = executions.find(item => item.executionId === provenance.executionId)
+      observations.push({ executionId: provenance.executionId, sessionId: provenance.sessionId, inputVersion: investigated.inputVersion,
+        callId: provenance.callId, toolName: 'pwsh', sequence: provenance.resultSequence,
+        callDigest: provenance.scriptDigest, resultDigest: hash(provenance.observation) })
+    }
+  } else {
+    if (typeof authority?.readIsolation !== 'function' || typeof authority.verifyIsolation !== 'function') return null
+    isolation = await authority.readIsolation({ binding: challenge })
+    if (await authority.verifyIsolation({ receipt: isolation, binding: challenge }) !== true) return null
+  }
+  if (!validIsolationReceipt(isolation, challenge) || !observations.length) return null
+  return { kind: 'native-host-restart-isolated', ...challenge, commandDigest: hash(args.command), callSequence: call.seq, registeredSequence: registered.seq,
+    observations, isolation, partialEffectsPossible: true, exitStatus: 'unknown', noReplay: true }
 }
 
 // Compatibility with the retired a5 promotion rejection only. That exact Host

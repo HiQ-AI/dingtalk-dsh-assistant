@@ -1,5 +1,6 @@
 import { trackDynamicProcesses } from './dynamic-process-scope.js'
 import { collectNativeJob } from './dynamic-native-job.js'
+import { registerRestartScopeProbe, restartScopeProbeToolName } from './native-restart-scope-probe.js'
 import { inspectSession, inboxHasPending } from './session-persistence.js'
 import { executionSessionTitle, nameSession, renameTaskSession } from './session-workspaces.js'
 import { sourceInterpretationInstructions } from './task-source-instructions.js'
@@ -45,6 +46,14 @@ const hasRunningJob = value => {
   return Object.entries(value).some(([key, item]) => key === 'text' && typeof item === 'string'
     ? /^\s*(?:job[_ -]?id\s*[:=]|(?:process|command) still running(?:\s|$))/im.test(item) || (() => { try { return hasRunningJob(JSON.parse(item)) } catch { return false } })()
     : item && typeof item === 'object' && hasRunningJob(item))
+}
+const foregroundShellOutput = result => {
+  const value = result?.value
+  if (value?.kind !== 'foreground' || !(Number.isSafeInteger(value.exitCode) || value.exitCode === null)
+    || !(typeof value.signal === 'string' || value.signal === null) || typeof value.timedOut !== 'boolean'
+    || typeof value.aborted !== 'boolean' || typeof value.stdout?.text !== 'string' || typeof value.stderr?.text !== 'string') return false
+  const { stdout, stderr, ...metadata } = value
+  return !hasRunningJob(metadata)
 }
 const hasDetachedRequest = value => value && typeof value === 'object' && Object.entries(value).some(([key, item]) =>
   /^(?:run_in_background|background|detached|detach)$/i.test(key) && item !== false && item !== null
@@ -196,13 +205,13 @@ function validateHistory(events, binding) {
  * 补充递增 inputVersion；原生 step 事件累计预算，已结束执行间的等待不计耗时。
  * outputSchema 使用 dsh-tools 支持的 JSON Schema。工具仅提交 { output }，不接受模型身份。
  */
-export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, contentRoot, withPersistenceWriter = (_binding, action) => action() }) {
+export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, contentRoot, readRestartDrainProof, withPersistenceWriter = (_binding, action) => action() }) {
   if (typeof isCurrent !== 'function') throw failure('execution_current_check_required')
   if (getWorkspaceDir !== undefined && typeof getWorkspaceDir !== 'function') throw failure('execution_workspace_provider_invalid')
   if (!Array.isArray(tools)) throw failure('execution_tool_registry_invalid')
   const registry = new Map()
   for (const tool of tools) {
-    if (!tool || typeof tool.name !== 'string' || !tool.name || [SUBMIT,DYNAMIC_SUBMIT,PROGRESS_REPORT].includes(tool.name) || registry.has(tool.name)
+    if (!tool || typeof tool.name !== 'string' || !tool.name || [SUBMIT,DYNAMIC_SUBMIT,PROGRESS_REPORT,restartScopeProbeToolName].includes(tool.name) || registry.has(tool.name)
       || typeof tool.description !== 'string' || typeof tool.execute !== 'function'
       || (tool.classifyError !== undefined && typeof tool.classifyError !== 'function')) throw failure('execution_tool_registry_invalid')
     assertSupportedJsonSchema(tool.parameters)
@@ -361,17 +370,27 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       // alpha2's filesystem and web read tools lack effect metadata. Pin the mounted
       // definitions, so a later same-name shadow cannot acquire read privileges.
       const readonlyTools = new Map(['read', 'read_image', 'glob', 'grep', 'ls', 'skill', 'web_fetch', 'web_search', 'job_list', 'job_output'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool && (tool.effectClass === undefined || ['read', 'pure'].includes(tool.effectClass))))
+      const shellTools = new Map(['bash', 'pwsh'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool))
       const isReadonly = exec => {
         const tool = agentCtx.tools.get(exec.name, exec.agent)
         return !!tool && (readonlyTools.get(exec.name) === tool || ['read', 'pure'].includes(tool.effectClass))
       }
       const nativeCalls = new Map()
-      let progressTool, resourcesTool, teamReadTool, teamSendTool
+      const probeSettlements = new Map()
+      const settleNative = async event => {
+        const receipt = await entry.onNativeExecution(event)
+        // 只在受管探针等待该子调用时保留账本实际接收的原始观察；最终策略结果另由 tools.execute 返回。
+        if (probeSettlements.has(event.callId)) probeSettlements.set(event.callId, copy({
+          result: event.result, cancelled: event.cancelled, postExecutionDecision: event.postExecutionDecision,
+        }))
+        return receipt
+      }
+      let progressTool, resourcesTool, teamReadTool, teamSendTool, restartProbeTool
       // Scope-local preset tools may be installed after setup. Resolve the actual schema list at call time.
       const nativeAllowed = exec => nativeEnabled && !forbiddenNativeTool(exec.name)
         && agentCtx.tools.schemas(exec.agent).some(schema => schema.name === exec.name)
       agentCtx.on('tools/execute', async (exec, next) => {
-        if (!nativeEnabled || exec.name === SUBMIT || exec.name === 'model_content_read' || exec.name === PROGRESS_REPORT || exec.name === RESOURCES_READ || exec.name === TEAM_READ || exec.name === TEAM_SEND) return next()
+        if (!nativeEnabled || exec.name === SUBMIT || exec.name === 'model_content_read' || exec.name === PROGRESS_REPORT || exec.name === RESOURCES_READ || exec.name === TEAM_READ || exec.name === TEAM_SEND || exec.name === restartScopeProbeToolName) return next()
         if (!await current(entry)) throw failure('execution_binding_stale')
         exec.signal.throwIfAborted()
         const toolDefinition = agentCtx.tools.get(exec.name, exec.agent)
@@ -403,14 +422,21 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
             if (background && call.jobReceipt && ['running', 'stopping'].includes(call.jobReceipt.status)) {
               (entry.backgroundJobs ??= []).push({ call, result, jobs, startedAt })
             }
-            if (hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
+            // Native file reads may contain serialized historical job receipts.
+            // Their data is not a new process launch. The structured native job
+            // identity above is still collected and validated for every tool.
+            // A pinned native foreground shell envelope has terminal status;
+            // its stdout/stderr and rendered text may serialize historical jobs.
+            // Real structured job identities were validated above, including reads.
+            const foreground = !background && shellTools.has(exec.name) && shellTools.get(exec.name) === toolDefinition && foregroundShellOutput(result)
+            if (!(exec.name === 'read' && isReadonly(exec)) && !foreground && hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
             return result
           })
           const result = await (entry.fileScope ? entry.fileScope.run(dispatch, { readOnly: isReadonly(exec) }) : dispatch())
           return result
         } catch (error) {
           if (error.executionDrained === false) entry.processDrainError = error
-          await entry.onNativeExecution({ ...call, phase: 'settled', cancelled: exec.signal.aborted || error.executionDrained === false, postExecutionDecision: 'block',
+          await settleNative({ ...call, phase: 'settled', cancelled: exec.signal.aborted || error.executionDrained === false, postExecutionDecision: 'block',
             result: { isError: true, content: [{ type: 'text', text: String(error.message) }], error: { code: error.code ?? 'execution_tool_failed', message: String(error.message) } } })
           nativeCalls.delete(exec.callId)
           throw error
@@ -419,7 +445,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       agentCtx.on('tools/post-execute', async (exec, result, next) => {
         const decision = await next(), call = nativeCalls.get(exec.callId)
         if (!call) return decision
-        const receipt = await entry.onNativeExecution({ ...call, phase: 'settled', cancelled: exec.signal.aborted,
+        const receipt = await settleNative({ ...call, phase: 'settled', cancelled: exec.signal.aborted,
           postExecutionDecision: decision.kind, result: copy({ isError: result.isError, content: result.content, ...(result.error ? { error: result.error } : {}) }) })
         nativeCalls.delete(exec.callId)
         if (call.jobReceipt && decision.kind === 'accept') return { kind: 'accept', content: [{ type: 'text', text: JSON.stringify({ nativeJobReceipt: call.jobReceipt,
@@ -442,6 +468,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (exec.name === RESOURCES_READ && agentCtx.tools.get(exec.name, exec.agent) !== resourcesTool) return 'execution_resources_tool_shadowed'
         if (exec.name === TEAM_READ && agentCtx.tools.get(exec.name, exec.agent) !== teamReadTool) return 'execution_team_tool_shadowed'
         if (exec.name === TEAM_SEND && agentCtx.tools.get(exec.name, exec.agent) !== teamSendTool) return 'execution_team_tool_shadowed'
+        if (exec.name === restartScopeProbeToolName && (!restartProbeTool || agentCtx.tools.get(exec.name, exec.agent) !== restartProbeTool)) return 'execution_restart_probe_tool_shadowed'
         if (!(dynamicExecution(entry.binding) && nativeEnabled)
           && (nativeEnabled && forbiddenNativeTool(exec.name) || !allowed.has(exec.name) && !nativeAllowed(exec))) { halt(entry, 'execution_tool_not_allowed'); return 'execution_tool_not_allowed' }
         if (closed || entry.cancelled || entry.stale || entry.haltCode || entry.attempted) return 'execution_attempt_stopped'
@@ -515,6 +542,14 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         }
         if (exec.name === SUBMIT && exec.callId === entry.submissionCallId && !result.isError) entry.accepted = true
       })
+      if (nativeEnabled && definition.recoveryReadOnly && entry.input.readbackOperationId && typeof entry.readRestartScopeProbePlan === 'function') {
+        restartProbeTool = registerRestartScopeProbe({ agentCtx, agent, current: () => current(entry), readPlan: entry.readRestartScopeProbePlan,
+          captureSettlement: async (callId, dispatch) => {
+            probeSettlements.set(callId, null)
+            try { return { result: await dispatch(), operationObservation: probeSettlements.get(callId) } }
+            finally { probeSettlements.delete(callId) }
+          } })
+      }
       if (dynamicExecution(entry.binding) && typeof entry.readResources === 'function') {
         agentCtx.tools.register({
           name: RESOURCES_READ,
@@ -715,12 +750,12 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     }
   }
 
-  async function run({ binding, input, title, definition, onSessionBound, onResult, onProgress, readResources, readTeam, sendMessage, readFeedback, onFeedbackConsumed, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
+  async function run({ binding, input, title, definition, onSessionBound, onResult, onProgress, readResources, readTeam, sendMessage, readRestartScopeProbePlan, readFeedback, onFeedbackConsumed, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
     if (closed) return Promise.reject(failure('execution_sessions_closed'))
     try {
       validateBinding(binding)
       if (!definition || typeof definition.prompt !== 'string' || !definition.provider || !definition.model
-        || !Array.isArray(definition.allowedTools) || definition.allowedTools.some(name => typeof name !== 'string' || !name || [SUBMIT,DYNAMIC_SUBMIT,PROGRESS_REPORT,RESOURCES_READ,TEAM_READ,TEAM_SEND].includes(name))) throw failure('execution_definition_invalid')
+        || !Array.isArray(definition.allowedTools) || definition.allowedTools.some(name => typeof name !== 'string' || !name || [SUBMIT,DYNAMIC_SUBMIT,PROGRESS_REPORT,RESOURCES_READ,TEAM_READ,TEAM_SEND,restartScopeProbeToolName].includes(name))) throw failure('execution_definition_invalid')
       assertSupportedJsonSchema(definition.outputSchema)
       if (definition.nativeTools && (!dynamicExecution(binding) || typeof nativeExecutionHook !== 'function')) throw failure('execution_native_ledger_required')
       if (dynamicExecution(binding) && !definition.nativeTools && definition.allowedTools.some(forbiddenNativeTool)) throw failure('execution_tool_not_allowed')
@@ -728,10 +763,11 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       if (definition.allowedTools.includes('execution_request_authorization') && (typeof requestAuthorization !== 'function' || registry.has('execution_request_authorization'))) throw failure('execution_authorization_request_not_admitted')
       if (typeof onSessionBound !== 'function' || typeof onResult !== 'function') throw failure('execution_callbacks_required')
       if ((validateOutput !== undefined && typeof validateOutput !== 'function') || (classifyOutputError !== undefined && typeof classifyOutputError !== 'function') || (onProgress !== undefined && typeof onProgress !== 'function') || (readResources !== undefined && typeof readResources !== 'function') || (readTeam !== undefined && typeof readTeam !== 'function') || (sendMessage !== undefined && typeof sendMessage !== 'function')) throw failure('execution_callbacks_invalid')
+      if (readRestartScopeProbePlan !== undefined && typeof readRestartScopeProbePlan !== 'function') throw failure('execution_callbacks_invalid')
       if (entries.has(executionKey(binding)) || sessions.has(binding.sessionId)) throw notDrained('execution_run_busy')
     } catch (error) { return Promise.reject(error) }
     binding = Object.freeze(copy(binding))
-    const entry = { binding, input: copy(input), readResources, readTeam, sendMessage, readFeedback, onFeedbackConsumed, feedbackVersion: 0, validateOutput, classifyOutputError, applyEdits, requestAuthorization, onProgress, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
+    const entry = { binding, input: copy(input), readResources, readTeam, sendMessage, readRestartScopeProbePlan, readFeedback, onFeedbackConsumed, feedbackVersion: 0, validateOutput, classifyOutputError, applyEdits, requestAuthorization, onProgress, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
       correctableCalls: new Map(), submissionCorrections: 0, steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
     const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, ...(definition.agentPreset === undefined ? {} : { agentPreset: definition.agentPreset }), nativeTools: definition.nativeTools === true, recoveryReadOnly: definition.recoveryReadOnly === true, protectedPaths: definition.protectedPaths ?? [], allowedTools: definition.allowedTools, outputSchema: definition.outputSchema })
@@ -886,10 +922,15 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     const inputEvent = stored.events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
     const events = stored.events.filter(event => event.seq > (inputEvent?.seq ?? -1))
     const calls = events.filter(event => event.type === 'tool/call')
-    if (calls.some(call => !events.some(event => event.type === 'tool/result' && event.seq > call.seq
-      && toolResults(event).some(item => item.toolCallId === call.data.callId)))) throw notDrained('execution_recovery_tool_unresolved')
+    const pendingCalls = calls.filter(call => !events.some(event => event.type === 'tool/result' && event.seq > call.seq
+      && toolResults(event).some(item => item.toolCallId === call.data.callId)))
+    let isolationAuditRefs
+    if (pendingCalls.length) {
+      isolationAuditRefs = await readRestartDrainProof?.({ binding, calls: pendingCalls })
+      if (!Array.isArray(isolationAuditRefs) || isolationAuditRefs.length !== pendingCalls.length) throw notDrained('execution_recovery_tool_unresolved')
+    }
     assertDrained(binding)
-    return { drained: true, sessionBound: true }
+    return { drained: true, sessionBound: true, ...(isolationAuditRefs ? { isolationAuditRefs } : {}) }
   }
 
   return { run, cancel, async feedback(executionId) { const entry = entries.get(`task-execution:${executionId}`); if (entry) await deliverFeedback(entry) }, assertDrained, recoverDrained, prepareManagedSession, async close() {

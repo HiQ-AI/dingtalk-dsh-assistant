@@ -1,0 +1,16 @@
+case,round,status,evidence
+owner_optional_scope,1,PASS,round-1/model/results.json
+owner_optional_scope,2,PASS,round-2/model/results.json
+delivery_normal_display,2,PASS,round-2/model/results.json
+real_identity_blocker,2,PASS,round-2/model/results.json
+registry_auth_classification,1,FAIL,deployment/baseline.json
+registry_auth_classification,2,PASS,deployment/round-1.json
+registry_four_cases,2,PASS,deployment/round-1.json
+native_profile_setup,1,SKIP,native-tests.log
+native_profile_setup,2,PASS,native-tests-round-2.log
+native_seven_cases,2,PASS,native-tests-round-2.log
+package_native_task,2,FAIL,native-tests-round-2.log
+package_native_task,3,PASS,package-rerun.log
+skills_forward_two_cases,2,PASS,independent-review.md
+final_diff_review,2,PASS,independent-review.md
+installed_six_files,2,PASS,installed-final-readback.json

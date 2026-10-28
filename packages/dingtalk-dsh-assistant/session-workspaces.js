@@ -72,6 +72,7 @@ export function renderExecutionDocument(execution) {
     '每次输入续办形成新轮，旧轮文件保留。日常先读本文件；证据缺失、矛盾或异常时，按会话身份读取原始记录。\n',
     section('身份与状态', [...Object.entries(identity).map(([key, value]) => `${key}: ${value}`),
       `executionBackend: ${execution.definition?.executionBackend ?? 'dsh'}`,
+      `resourcePhase: ${execution.resourcePhase ?? '未记录（历史执行）'}`,
       ...(execution.claudeSessionMode ? [`claudeSessionMode: ${execution.claudeSessionMode}`] : []),
       `leaseEpoch: ${execution.leaseEpoch}`, `status: ${execution.status}${execution.status === 'queued' ? '（已安排，待启动）' : ''}`,
       `drained: ${execution.drained === true}`, `cancelRequested: ${execution.cancelRequested === true}`,

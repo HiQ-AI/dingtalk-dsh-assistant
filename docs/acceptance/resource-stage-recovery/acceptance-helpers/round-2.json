@@ -1,0 +1,219 @@
+{
+  "status": "PASS",
+  "caseCount": 38,
+  "registryGetCount": 20,
+  "cases": [
+    {
+      "case": "raw-utf8-bytes",
+      "status": "PASS",
+      "exit": 0,
+      "reason": "verified"
+    },
+    {
+      "case": "header-optional",
+      "status": "PASS",
+      "exit": 0,
+      "reason": "verified"
+    },
+    {
+      "case": "secure-auth",
+      "status": "PASS",
+      "exit": 0,
+      "reason": "verified"
+    },
+    {
+      "case": "http-error-secret",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "http_status"
+    },
+    {
+      "case": "redirect-refused",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "http_status"
+    },
+    {
+      "case": "body-digest-mismatch",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "body_digest_mismatch"
+    },
+    {
+      "case": "header-digest-mismatch",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "header_digest_mismatch"
+    },
+    {
+      "case": "html-response",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "content_type_invalid"
+    },
+    {
+      "case": "invalid-json",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "json_invalid"
+    },
+    {
+      "case": "invalid-utf8",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "json_invalid"
+    },
+    {
+      "case": "json-array",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "manifest_shape_invalid"
+    },
+    {
+      "case": "schema-string",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "manifest_shape_invalid"
+    },
+    {
+      "case": "schema-bool",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "manifest_shape_invalid"
+    },
+    {
+      "case": "schema-float",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "manifest_shape_invalid"
+    },
+    {
+      "case": "descriptor-size-string",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "manifest_shape_invalid"
+    },
+    {
+      "case": "layers-object",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "manifest_shape_invalid"
+    },
+    {
+      "case": "media-type-mismatch",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "manifest_shape_invalid"
+    },
+    {
+      "case": "platform-index",
+      "status": "PASS",
+      "exit": 0,
+      "reason": "verified"
+    },
+    {
+      "case": "unknown-platform-kept",
+      "status": "PASS",
+      "exit": 0,
+      "reason": "verified"
+    },
+    {
+      "case": "platform-invalid",
+      "status": "PASS",
+      "exit": 1,
+      "reason": "manifest_shape_invalid"
+    },
+    {
+      "case": "version-http-json-0",
+      "status": "PASS",
+      "reason": "semantic-equality"
+    },
+    {
+      "case": "version-http-json-1",
+      "status": "PASS",
+      "reason": "semantic-equality"
+    },
+    {
+      "case": "version-http-json-2",
+      "status": "PASS",
+      "reason": "semantic-equality"
+    },
+    {
+      "case": "version-http-json-3",
+      "status": "PASS",
+      "reason": "semantic-equality"
+    },
+    {
+      "case": "version-http-json-4",
+      "status": "PASS",
+      "reason": "snapshot-version.mismatch"
+    },
+    {
+      "case": "version-http-json-5",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-6",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-7",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-8",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-9",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-10",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-11",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-12",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-13",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-14",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-15",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "version-http-json-16",
+      "status": "PASS",
+      "reason": "snapshot-version.invalid-type-or-value"
+    },
+    {
+      "case": "expected-version-invalid",
+      "status": "PASS"
+    }
+  ],
+  "registryScriptSha256": "9de152041a2cf179291b3bc5132c98e83ca09014bcbc5ad5e246f28c64f9613d",
+  "versionHelperSha256": "0ac34927e350826c7e5f054a1f55292938d985194a8a2936bfb634b259d249b0",
+  "boundary": "localhost fixtures only; no live Registry, business writes, login or deployment"
+}

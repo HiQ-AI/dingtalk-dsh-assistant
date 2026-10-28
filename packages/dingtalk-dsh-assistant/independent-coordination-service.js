@@ -297,6 +297,10 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     return observed
   }
   async function freezeProposal(request, proposal, coordinationId, source, extra = {}) {
+    // 观察只服务于真实执行依赖；即时查询不能注册持续观察义务。
+    for (const member of proposal.members ?? []) if (member.action === 'task-observe'
+      && !proposal.members.some(consumer => consumer.action !== 'task-observe' && consumer.afterTaskIds?.includes(member.taskId)))
+      fail('COORDINATION_OBSERVATION_REQUIRES_DEPENDENT_USE_QUERY')
     const observed = await checkObservedTasks(request, proposal)
     const taskCommand = proposal.kind === 'arrangement' || proposal.kind === 'schedule' && proposal.actionKind === 'task-command'
     const conditionalProposal = proposal.kind === 'schedule' ? proposal.conditionalMembers : undefined
@@ -419,12 +423,22 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
     await sourceMessage(request)
     const reconsidered = ledger.contextReconsideration
     const coordinationId = reconsidered?.coordinationId ?? stableId('coordination', `${request.groupId}:${request.unitId}:${request.unitRevision}:${request.generation}`)
-    if (reconsidered && !['arrangement', 'schedule', 'clarify'].includes(proposal.kind)) fail('COORDINATION_CONTEXT_RECONSIDERATION_SCOPE')
+    if (reconsidered && !['arrangement', 'schedule', 'clarify', 'query'].includes(proposal.kind)) fail('COORDINATION_CONTEXT_RECONSIDERATION_SCOPE')
     if (reconsidered && proposal.kind === 'clarify' && proposal.question !== ledger.question) fail('COORDINATION_CONTEXT_RECONSIDERATION_SCOPE')
     if (proposal.kind === 'reject') return reject(request, ledger, proposal.reason)
     if (proposal.kind === 'query') {
       const snapshots = []
-      for (const id of proposal.coordinationIds) {
+      const taskSnapshots = []
+      for (const id of [...new Set(proposal.taskIds ?? [])]) {
+        if (!catalogObservations.get(request.reservationId)?.has(id) && !observations.get(request.reservationId)?.has(id))
+          fail('COORDINATION_CONTEXT_REQUIRED')
+        const task = await query('task.get', { taskId: id })
+        if (!task || task.groupId !== request.groupId || task.archivedAt) fail('COORDINATION_TASK_SCOPE')
+        taskSnapshots.push({ taskId: id, title: task.title, status: task.status, control: task.control,
+          requirementRevision: task.requirementRevision, contextRevision: task.contextRevision ?? 0, runSequence: task.runSequence,
+          summary: task.status === 'completed' ? task.completion?.summary ?? null : null })
+      }
+      for (const id of [...new Set(proposal.coordinationIds ?? [])]) {
         if (!arrangementObservations.get(request.reservationId)?.has(id)) fail('COORDINATION_ARRANGEMENT_CONTEXT_REQUIRED')
         const state = await query('coordination.get', { coordinationId: id })
         if (!state || state.coordination.groupId !== request.groupId) fail('COORDINATION_ARRANGEMENT_SCOPE')
@@ -436,14 +450,20 @@ export function openIndependentCoordination({ ctx, root, getWorkspaceDir, getMod
       }
       const recipientNames = new Map(residentStore.getGroup(request.groupId).messages
         .filter(message => message.senderOpenDingTalkId && message.senderName).map(message => [message.senderOpenDingTalkId, message.senderName]))
-      const answerText = snapshots.map(snapshot => formatCoordinationSnapshot(snapshot, { requesterId: source.actorId, recipientNames })).join('\n\n')
+      const taskAnswer = taskSnapshots.map(task => {
+        const status = task.status === 'completed' ? '已完成' : task.control === 'cancelled' ? '已取消'
+          : task.control === 'paused' ? '已暂停' : '尚未完成'
+        return `${task.title}：${status}。${task.summary ? `\n${task.summary}` : ''}`
+      }).join('\n')
+      const answerText = [taskAnswer, ...snapshots.map(snapshot => formatCoordinationSnapshot(snapshot, { requesterId: source.actorId, recipientNames }))].filter(Boolean).join('\n\n')
       assertGroupReply(answerText, publicIdentityIds(request, proposal))
-      const frozenProposal = { ...proposal, answerText, snapshots }
+      const frozenProposal = { ...proposal, answerText, snapshots, taskSnapshots }
       await command('coordination.accept', { sourceId: ledger.id, fence: ledger.fence, coordinationId, members: [], readOnly: true,
+        ...(reconsidered ? { replaceClarificationRevision: reconsidered.expectedRevision } : {}),
         proposal: frozenProposal }, `coordination-accept:${request.reservationId}:${request.generation}`)
       await updateResident(request, 'accepted', { coordinationId, settled: true })
       await prepareSummary(request, coordinationId, `accepted:${request.reservationId}`, answerText)
-      return { status: 'accepted', coordinationId, snapshots }
+      return { status: 'accepted', coordinationId, snapshots, taskSnapshots }
     }
     if (['change','resolve','schedule-change','occurrence-control'].includes(proposal.kind)) return submitChange(request, proposal, source, ledger)
     if (proposal.kind === 'clarify') {
