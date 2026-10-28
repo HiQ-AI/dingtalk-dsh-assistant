@@ -51,7 +51,8 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
       try { mkdirSync(path) } catch (error) { if (error.code !== 'EEXIST') throw error }
       syncDirectory(parent)
     }
-    if (!lstatSync(path).isDirectory() || lstatSync(path).isSymbolicLink()) fail('MODEL_CONTENT_DIRECTORY_INVALID')
+    const info = lstatSync(path)
+    if (!info.isDirectory() || info.isSymbolicLink()) fail('MODEL_CONTENT_DIRECTORY_INVALID')
     const canonical = realpathSync(path), expected = resolve(path)
     if ((process.platform === 'win32' ? canonical.toLowerCase() !== expected.toLowerCase() : canonical !== expected) && parse(path).root !== path) fail('MODEL_CONTENT_DIRECTORY_INVALID')
   }
@@ -78,8 +79,8 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
     const json = JSON.stringify(value, (_key, child) => ordered(child))
     if (json === undefined) fail('MODEL_CONTENT_VALUE_INVALID')
     const ref = scope + ':' + digest(json)
+    const path = filename(ref)
     if (!values.has(ref)) {
-      const path = filename(ref)
       try {
         const fd = openSync(path, 'wx', 0o600)
         try { writeFileSync(fd, json); fsyncSync(fd) } finally { closeSync(fd) }
@@ -88,7 +89,7 @@ export function createModelContentIndex(session, { root = modelContentRoot(sessi
       catch (error) { if (error.code !== 'EEXIST') throw error; if (load(ref) !== json) fail('MODEL_CONTENT_DIGEST_MISMATCH') }
       values.set(ref, json)
     }
-    return { contentRef: ref, path: filename(ref), format: typeof value === 'string' ? 'text' : 'json', bytes: Buffer.byteLength(json) }
+    return { contentRef: ref, path, format: typeof value === 'string' ? 'text' : 'json', bytes: Buffer.byteLength(json) }
   }
   function project(value, { reuseVisible = true } = {}) {
     const localObjects = reuseVisible ? objects : new Set()
