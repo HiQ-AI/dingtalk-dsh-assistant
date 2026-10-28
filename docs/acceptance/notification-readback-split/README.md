@@ -4,7 +4,7 @@ Base: main 56483462ca81943ecd23cb6144644d8946acf897
 Branch: worktree-notification-readback-split
 Origin: https://github.com/HiQ-AI/dingtalk-dsh-assistant.git
 
-The existing notification scan keeps sends serial until the send ACK is persisted. It then releases the send lane while retaining the per-notification flight until readback finishes. Existing unknown/starting records enter readback without occupying the send lane. Only send-phase transport errors set the shared send backoff; readback diagnostics retain their own retry schedule. ACK alone never marks delivery confirmed. No durable state/schema or completion transaction changes.
+The existing notification scan keeps sends serial until the send ACK is persisted. It then returns to the existing scan for confirmation: one send lane and one readback lane, with per-notification single-flight protection in each phase. Durable starting/unknown state permits only readback between phases. Existing unknown/starting records enter readback without occupying the send lane. Only send-phase transport errors set the shared send backoff; readback diagnostics retain their own retry schedule. ACK alone never marks delivery confirmed. No durable state/schema or completion transaction changes.
 
 The task-session Topic adapter disables retired workflow instructions. Other Topic callers retain workflow guidance by default. Route/decision separation and Owner behavior are unchanged.
 

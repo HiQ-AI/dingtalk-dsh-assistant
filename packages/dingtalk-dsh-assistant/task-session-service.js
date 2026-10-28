@@ -75,7 +75,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     throw error
   }
   const inflightTasks = new Map(), inflightExecutions = new Map(), inflightGroups = new Map(), inflightNotifications = new Map()
-  const sourceProjections = new Set(), notificationSends = new Set()
+  const sourceProjections = new Set(), notificationSends = new Set(), notificationReadbacks = new Set()
   const failures = new Map(), taskSlots = new Set(), messageRecoveryFlights = new Set()
   const pendingDialogue = task => task.dialogue?.some(item => !item.reply)
   const taskLimit = () => legacy.getAgentConfig().maxConcurrentTasks ?? config.maxConcurrentTasks ?? 5
@@ -1297,24 +1297,23 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         failures.delete(notification.id)
       const readbackOnly = ['unknown', 'starting'].includes(notification.state)
       if (notification.state === 'delivered' || notification.state === 'failed' && !(notification.deliveryError?.knownNotSent && notification.deliveryError?.retryable)
-        || !readbackOnly && (notificationSends.size > 0 || Date.now() < notificationTransportRetryAt) || !retryReady(notification.id) || Date.parse(notification.nextAttemptAt ?? '') > Date.now() || inflightNotifications.has(notification.id) || attempted?.has(notification.id)) continue
+        || (readbackOnly ? notificationReadbacks.size > 0 : notificationSends.size > 0 || Date.now() < notificationTransportRetryAt) || !retryReady(notification.id) || Date.parse(notification.nextAttemptAt ?? '') > Date.now() || inflightNotifications.has(notification.id) || attempted?.has(notification.id)) continue
       attempted?.add(notification.id)
-      if (!readbackOnly) notificationSends.add(notification.id)
+      if (readbackOnly) notificationReadbacks.add(notification.id)
+      else notificationSends.add(notification.id)
       continueNotificationDelivery(track(inflightNotifications, notification.id, async () => {
         const processingRevision = sourceProcessingRevision
         try {
           const result = await deliverTaskNotification({ notification, notifications, command,
-            onStage: notificationStage, onSendAcknowledged: () => {
-              notificationSends.delete(notification.id)
-              void deliverNotifications(attempted)
-            } })
+            onStage: notificationStage, deferReadback: true })
+          if (result?.acknowledged) attempted?.delete(notification.id)
           if (result?.sourcePending) sourceHeldNotifications.set(notification.id, processingRevision)
           else sourceHeldNotifications.delete(notification.id)
         }
         catch (error) {
           if (error.notificationPhase === 'send' && (error.serverErrorCode === 'RATE_LIMIT_ERROR' || error.code === 'RATE_LIMIT_ERROR' || error.knownNotSent === true)) notificationTransportRetryAt = Math.max(notificationTransportRetryAt, Date.parse(error.notificationRetryAt) || Date.now() + 60000)
           throw error
-        } finally { notificationSends.delete(notification.id) }
+        } finally { notificationSends.delete(notification.id); notificationReadbacks.delete(notification.id) }
       }), attempted)
     }
   }

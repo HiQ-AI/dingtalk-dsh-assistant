@@ -33,3 +33,7 @@ node scripts/test-suites.mjs check
 本次仅本地提交供集成，不 push/PR，不修改真实库，不重启服务。
 
 测试映射按当前源码生成：324 个文件，lane/category/release 未变，无测试删除；刷新同时消除了 main 现有的三个已移除协调模块依赖闭包，集成后需重新生成并检查映射。
+
+## 同一 PR 整合补充
+
+本地提交 a15af6b7 已整合为20b54b86，与固定路由类别、平台只读问询、通知分阶段调度和退休提示清理同一 draft PR。最终交叉核心结果见 docs/acceptance/notification-readback-split/final-summary.md；原线程的“仅本地提交”描述是当时检查点，整合交付仍未合并、部署或修改真实数据。

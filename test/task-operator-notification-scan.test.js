@@ -28,7 +28,7 @@ for (const scenario of ['stale-snapshot', 'late-readback-error', 'recall-error']
     async command({ kind, args }) {
       if (kind === 'notification.start') { row.state = 'starting'; row.dispatchToken = 'send' }
       if (kind === 'notification.ack') row.ack = args.ack
-      if (kind === 'notification.receipt') { row.state = args.state; row.receipt = args.receipt }
+      if (kind === 'notification.receipt' || kind === 'notification.reconcile') { row.state = args.state; row.receipt = args.receipt }
       // 并行的精确送达证明已入账，随后旧快照的失败诊断只能保留历史事实。
       if (kind === 'notification.diagnostic' && scenario === 'late-readback-error') {
         row.state = 'delivered'; row.receipt = { messageId: 'actual', visible: true }
@@ -104,7 +104,7 @@ for (const scenario of ['recalled', 'not-due', 'no-adapter', 'due', 'expired-cla
       if (kind === 'notification.recall.result') row.recall = { ...row.recall, state: args.state }
       if (kind === 'notification.start') { row.state = 'starting'; row.dispatchToken = 'send'; return { dispatchEligible: true, result: { notification: structuredClone(row) } } }
       if (kind === 'notification.ack') row.ack = args.ack
-      if (kind === 'notification.receipt') { row.state = args.state; row.receipt = args.receipt }
+      if (kind === 'notification.receipt' || kind === 'notification.reconcile') { row.state = args.state; row.receipt = args.receipt }
       return { dispatchEligible: false, result: { notification: structuredClone(row) } }
     },
   }
@@ -239,6 +239,7 @@ for (const scenario of ['prepared', 'unknown', 'starting', 'send-pending']) test
   assert.equal(rows[0].state, initialState === 'unknown' ? 'unknown' : 'starting', 'ACK alone must not prove delivery')
   assert.deepEqual(sends, initialState === 'prepared' ? ['a', 'b'] : ['b'])
   assert.equal(reads.filter(id => id === 'a').length, 1)
+  assert.ok(!reads.includes('b'), 'readback retains its original single slot while new sends continue')
   release.resolve()
   await idle; await service.whenIdle()
   assert.ok(rows.every(row => row.state === 'delivered'))

@@ -84,7 +84,7 @@ export async function deliverTaskNotification(options) {
   return notificationFlight(options, false, () => deliverNotification(options))
 }
 
-async function deliverNotification({ notification, notifications, command, onStage = async () => {}, onSendAcknowledged = () => {}, readbackOnly = false }) {
+async function deliverNotification({ notification, notifications, command, onStage = async () => {}, deferReadback = false, readbackOnly = false }) {
   const measure = async (current, phase, action) => {
     const stage = { spanId: `${phase}:${current.id}:${randomUUID()}`, stage: phase, requestId: current.id,
       attempt: phase === 'send' ? current.sendAttemptCount ?? 1 : (current.readbackAttemptCount ?? 0) + 1,
@@ -141,8 +141,8 @@ async function deliverNotification({ notification, notifications, command, onSta
   try {
     ack = await measure(claimed, 'send', () => notifications.send(claimed))
     await command('notification.ack', { notificationId: claimed.id, dispatchToken: claimed.dispatchToken, ack: safeNotificationDetail(ack) }, `notification-ack:${claimed.id}:${claimed.dispatchToken}`)
-    // Release the send lane only after the ACK is durable; readback still owns this notification.
-    onSendAcknowledged()
+    // The service schedules confirmation separately after the ACK is durable.
+    if (deferReadback) return { acknowledged: true }
     phase = 'readback'
     const proof = notifications.readback ? await measure(claimed, 'readback', () => notifications.readback({ ...claimed, ack })) : undefined
     await command('notification.receipt', { notificationId: claimed.id, dispatchToken: claimed.dispatchToken,
