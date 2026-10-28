@@ -575,18 +575,22 @@ testRunner('native Web reopen preserves task identity and rejects stale input; H
   assert.equal(h.residentStore.listTopics('native-group').length, 1)
 })
 
-testRunner('mixed native source waits for blocked legacy Host but not coordinated business settlement', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+testRunner('协调暂停时混合消息拒绝协调来源，普通话题Host重试仍按原版本完成', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'mixed-semantic-source-'))
-  let host, store, blocked = true
+  let host, store, blocked = true, routeAttempts = 0
   t.after(async () => { try { await host?.close(); await store?.close() } finally { await rm(root, { recursive: true, force: true }) } })
   host = await nativeTaskHost(root, async request => {
     const names = request.tools.map(tool => tool.name), input = latestInput(request)
-    if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId,
+    if (names.includes('group_topic_route_submit')) {
+      const rejectedCandidate = ++routeAttempts === 1
+      return [call('group_topic_route_submit', { requestId: input.requestId,
       routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, ignoredRefs: [], units: [
-        { unitKey: 'reminder', summary: '查询提醒', sourceRefs: [{ quote: '测试助手，查询提醒；' }], dispatchOwner: 'coordination', topics: [], reason: '独立查询' },
+        { unitKey: 'reminder', summary: '查询提醒', sourceRefs: [{ quote: '测试助手，查询提醒；' }],
+          ...(rejectedCandidate ? { dispatchOwner: 'coordination', topics: [], reason: '暂停功能候选必须拒绝' } : { topics: [{ newTopicKey: 'file', title: '文件核查' }] }) },
         { unitKey: 'file', summary: '核查文件', sourceRefs: [{ quote: '测试助手，核查文件。' }], topics: [{ newTopicKey: 'file', title: '文件核查' }] },
       ] })) })]
-    if (names.includes('coordination_submit')) return [call('coordination_submit', { kind: 'clarify', question: '请提供查询对象。', candidates: [] })]
+    }
+    assert.ok(!names.includes('coordination_submit'))
     return topicTaskCalls(request) ?? [call('task_session_submit', { decision: { action: 'wait', summary: '等待业务核查', evidence: [], limitations: [] } })]
   }, { config: { coordination: { enabled: true, provider: 'native-task-test', model: 'controlled' } }, serviceFactory: async args => {
     store = await openDynamicTaskStore(args.config)
@@ -601,9 +605,8 @@ testRunner('mixed native source waits for blocked legacy Host but not coordinate
   assert.equal((await host.query('task.list')).length, 0)
   assert.equal(pending.processingCompleted, undefined)
   assert.equal(pending.processingPending, true)
-  const coordinated = (await host.query('coordination.source.list'))[0]
-  assert.equal(coordinated.state, 'needs_clarification')
-  assert.equal(coordinated.settled, false)
+  assert.ok(routeAttempts >= 2)
+  assert.equal((await host.query('coordination.source.list')).length, 0)
   assert.equal(host.residentStore.listTopics('native-group')[0].decisions[0].status, 'blocked')
   blocked = false
   await host.service.retryMessage({ groupId: 'native-group', messageId: 'mixed' })
@@ -611,6 +614,6 @@ testRunner('mixed native source waits for blocked legacy Host but not coordinate
   const completed = (await host.query('source.list')).find(source => source.messageId === 'mixed')
   assert.ok(completed.processingCompleted, JSON.stringify({ completed: completed.processingCompleted, topicStatus: host.residentStore.listTopics('native-group').map(topic => ({ processedRevision: topic.processedRevision, decisions: topic.decisions.map(record => ({ status: record.status, error: record.error })) })), alerts: host.service.listAlerts() }))
   assert.equal(completed.processingCompleted.activeUnitRefs.length, 2)
-  assert.equal((await host.query('coordination.source.list'))[0].settled, false)
+  assert.equal((await host.query('coordination.source.list')).length, 0)
   assert.equal((await host.query('task.list'))[0].status, 'active')
 })
