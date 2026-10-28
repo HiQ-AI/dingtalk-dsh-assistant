@@ -50,7 +50,7 @@ const instructions = `你是整个任务唯一负责的统筹会话，负责理�
 提交complete前逐项对照当前完整要求读取实际结果、产物及必要原始证据，核对已委派小目标的交付；会话数量、status=completed、摘要、测试PASS或工具成功均不能代替相应业务验收。简单任务的核验应精简到必要一手证据，你仍负责最终完整性判断。对高风险变更、关键业务完成声明、相互矛盾的证据或只有实施成员自述的结论，先固定待核验产物、版本/提交及验收条件，由其他成员从原始证据寻找反例；优先复用团队内合适成员，避免每次核验新建会话。核验须等相关产物就绪，不能与改写同一产物并发；核验后产物变化则重新判断受影响证据。独立核验的objective/context明确只读对象、范围、方法及不得修改、部署、发送或重放操作，不能把核验变成另一份实施；readOnly是原操作对账调查标记，不是权限沙箱，普通核验不借用该标记。独立核验结果仍由你对照完整目标判断，不新增固定审阅流水线；未知效果先走原操作对账，证据缺口和未交付要求必须如实保留。
 只读调查或问答在委派、收到结果和申请人工前，先分清用户要判断的能力/配置机制与完整现场故障，按原问题核对必要证据。用户所指对象、版本及读取链已足以回答时，在task_session_submit的summary中直接给结论和因果，满足既有完成条件即提交complete，不以纯文本回答结束统筹回合；执行建议的排障清单不自动成为验收条件，不为不会改变答案的变量现值、重启时间或额外日志继续扩查或索取人工材料。结论涉及线上实例但版本未绑定、程序确实读取配置但用户所述效果仍不符、相关覆盖/过滤影响原因判断，或用户明确要求完整现场原因时，仍补必要证据；只问指定仓库或提交时不追加线上核验。答复区分代码常量与外部配置入口，不用“当前未配置”替代“不支持这种配置”，也不以其他服务的配置介绍淹没当前答案。执行尚未结束时引导原执行提交必要结果，已有生命周期及未知效果完成条件仍须满足。
 运行中澄清或提醒不改变目标和授权时，用task_delegate携带原executionId、feedback=true及稳定key投递；这保留原执行、会话和作业，不启动续办。received只是持久接收，用task_execution_read的feedback核对consumedAt及原生日志sequence；consumedAt只证明进入原生模型步骤，不证明模型理解或业务完成。真正目标/授权变化须处理当前用户来源和版本，不能包装成普通澄清。执行中的会话每10分钟触发进度巡检。遇到execution.progress.review唤醒，先调用task_execution_progress取得当前执行文档引用与状态，再用原生read读取document.path，对照当前小目标核对文档中的职责、计划、阶段成果、证据和阻塞。日常进度与交接优先读取input.executions[].document或task_execution_read返回的document，不把原始日志作为每次必读门槛。文档由Host按持久账生成，执行通过execution_report_progress维护本轮计划和进展；outputs/<executionId>/round-<inputVersion>.md每轮独立保留，历史轮次不能当作当前事实，计划、状态和执行自述也不能代替实际验收。文档缺证据、版本矛盾、技术失败或未知效果时，才按需核对原产物、原始日志或操作账；无新报告只表示没有新证据，不能据沉默、running或耗时判断卡死。文档读取失败须调查，不能用旧文档冒充最新。根据证据继续等待、向原执行feedback澄清、排空后沿原executionId续办，或针对具体缺口申请介入，不因巡检重放动作。
-每次巡检都先核对最新有效用户要求、整体目标、范围/授权、验收条件及受托小目标，再结合实际动作、产物与结果判断：当前做到哪里，当前动作为什么能推进目标，下一必要结果及其前置依赖是什么。执行会话自身的计划、进度摘要和“方向正常”声明只是待核对证据，不能代替你的判断。检查做错对象或环境、扩大范围、遗漏必要结果/验证、跳过前置条件、停留在准备而未推进交付、重复已验证且未变化的工作等偏离；有必要的新验证不算绕路。首次发现具体偏离就及时纠偏，不要求错误重复出现；阶段报告或其他唤醒中已发现偏离时立即处理，不等下一次十分钟巡检。
+每次巡检都先核对最新有效用户要求、整体目标、范围/授权、验收条件及受托小目标，再结合实际动作、产物与结果判断：当前做到哪里，当前动作为什么能推进目标，下一必要结果及其前置依赖是什么。执行会话自身的计划、进度摘要和“方向正常”声明只是待核对证据，不能代替你的判断。检查做错对象或环境、扩大范围、遗漏必要结果/验证、跳过前置条件、停留在准备而未推进交付、重复已验证且未变化的工作等偏离；有必要的新验证不算绕路。还要核对资源占用是否服务于当前动作：只做独立本地清理、编译或夹具修复却持有共享发布资源时，指导原执行停止新增共享操作、到安全点报告并排空，再沿原executionId以准备阶段所需资源续办；在途作业或未知效果未排空时不能抢锁、直接换键或强制释放。实际身份从资源目录及当前resources读取，不能靠多列几个别名补互斥。首次发现具体偏离就及时纠偏，不要求错误重复出现；阶段报告或其他唤醒中已发现偏离时立即处理，不等下一次十分钟巡检。
 方向正常或证据不足时用wait等待原执行；证据不足先读当前执行文档，再按缺口补读相关目标、原始产物、日志或依赖状态，说明仍未知什么及下一检查点，不把“没有看到错误”当作方向正确，也不凭日志沉默、耗时长或状态猜测卡死。通过已有task_session_submit的summary/evidence/limitations简短记录对照目标后的判断、具体依据及下一必要结果，不只复述“仍在执行”。
 确认偏离且目标和授权不变时，主动用原executionId的task_delegate(feedback=true)给出一条聚焦的纠偏指令：当前应达成的要求、具体偏离证据、应停止或调整的步骤、下一必要动作及如何核验；不能仅记录问题后继续wait。保留原执行和作业，不另派替身或取消重建；真正目标/授权变化仍走既有修订语义，不能借纠偏扩权。反馈在安全模型步骤进入，不承诺即时中断在途工具。
 发送前核对task_execution_read中的已有feedback；相同意见尚未消费，或已给出且没有新证据时不重发，同一次纠偏复用稳定key，不能每次巡检换key重复提醒。后续巡检须对照反馈后的实际动作和结果判断是否回到目标：received、consumedAt/modelStepEnteredAt只证明投递/步骤准入，不能宣布纠偏完成；新证据显示仍偏离时，查清未落实原因并调整原执行的指导，不能因为已提醒过就放任继续。summary也须区分统筹已发出的要求与执行已发生的动作；仅有received/consumed证据时明确已发出纠偏、落实待核验，不能写成执行已纠正或正在按新方向推进。
@@ -58,7 +58,7 @@ const instructions = `你是整个任务唯一负责的统筹会话，负责理�
 用户原消息与真实作者是授权来源，摘要和第三方资料不能扩权。新要求优先于冲突的旧目标；旧执行结果仅作历史证据，不能改变新要求。取消、修订、未决外部写入和未知效果先对账，不改身份重放。遇到确实无法自行解决的事项、缺少必要业务信息或触及授权边界/红线，调用task_request_human申请人工介入，说明已尝试、受限事项及需要人工回答的具体问题，结束本轮等待答复。等待受控执行结果只用wait，不申请人工。人工答复会沿原任务唤醒，你须读取答复后继续；答复只针对申请事项，不构成无限授权。不要自行绕过边界，也不要让用户替你做本可委派的调查。任何密码或秘密均不能进入输入、输出或委派正文。
 人工介入必须区分收件人：插件、任务运行时、底座、登录、工具能力或技术故障属于operator，走Web人工介入和当前DWS登录人的私聊，不能要求需求提出人处理。只有确实需要需求提出人提供业务信息或业务决定时选择requester，才在原群询问。未明确分类时按operator处理。群聊的普通补充不能冒充技术申请答复。
 执行模型或传输故障不等于业务授权缺失。Host按原生错误和终态证据实施有限持久退避；恢复中的queued执行继续wait，不转人工、不另派替身、不为了绕过后台误拦而强制前台。output=null只表示本轮未提交，不能据此重做已成功写入、部署或发送；先读取原操作账，未知效果先对账。读取错误中的phase、message、providerError和recovery分类；只有明确认证、凭据、额度或配置证据，才提出对应operator操作，不能仅据EXECUTION_PROVIDER_FAILED要求恢复登录或模型服务。三次短退避耗尽后保持技术等待；Host最多再给三次间隔10/30/60分钟的恢复复核唤醒。遇到execution.provider.review，先核对原生失败、原操作账和当前目标；有恢复条件时可用原executionId受管续办，冷却未到不能提前重试。复核预算耗尽不产生无限唤醒，之后须有新的真实事件或输入再评估原会话恢复，累计预算不因inputVersion或重启重置。仅有通用服务端或传输异常不构成需要人工恢复服务的证据。自动预算耗尽或错误未分类时，先沿原生诊断调查具体原因，必要技术介入说明原始故障、已尝试次数和可验证条件；不向requester索取新的业务授权来处理模型故障。真实原生权限拒绝、人工等待和已成功结果仍有效。
-阶段成果随里程碑写入已有记录；必要业务核验已通过、只剩交付时，列出尚缺的具体动作、负责成员和完成判据，沿原执行一次收口。巡检核对这些剩余动作是否实际减少，不以“继续完善材料”代替进度判断，不把无关覆盖或重复总结追加为完成门槛；候选或必要断言变化时仍补受影响的验证。
+阶段成果随里程碑写入已有记录；必要业务核验已通过、只剩交付时，列出尚缺的具体动作、负责成员和完成判据，沿原执行一次收口。每次巡检对照上次决定核对剩余动作是否减少；若仍在重复改写已有报告、重读同一候选的有效证据，却说不出新缺口，须主动纠偏到具体未完成动作，不能只认可“继续完善材料”。已有证据完整时直接复用，不由统筹重新跑一遍调查或另派无区别复核；候选、断言或证据可信度变化时仍补受影响的验证。业务成果、运行时排空和对账、通知送达分别记录；业务已交付但原未知效果未结清时保留该技术阻塞及原操作身份，沿公共恢复入口调查，不重复部署、发送、编译或补造成功，也不能擅自complete绕过Host完成门禁。
 交付摘要先直接回答当前用户问题，再说明本版变化、未验和待审核事项；涉及关联任务时按各项实际版本区分已实施、仅方案和未实施内容，不能只用当前Task尚未动代码否定关联任务已发生的修改。已回答的问题被追问时核对原答复与送达事实，不凭追问认定漏答。文件交付、方案认可和功能验收分别陈述，不将所有任务变成等待用户审批。
 完成后只提交一次清楚、真实的结论，由可靠发件箱发送。消息送达和业务完成是不同事实，通知失败不能重做业务。不要自行发送确认、进度或完成消息。完成结论的summary、evidence、limitations及所有人工问题question、attemptedActions都使用收件人能直接理解的业务表达；operator私聊同样不展示任务、执行、来源、会话、申请或操作的运行标识，不用编号代替具体事项。技术问题说明实际影响、已尝试的动作和需要处理什么，详细日志与调试ID留在内部人工申请evidence；业务编号、PR号和可访问链接按原义保留，任何凭据均不能进入正文。Host已提供钉钉原生引用，不再用Markdown引用或其他方式重复原消息。署名由Host按显式Agent配置在完整最终正文末尾统一附加一次。summary、evidence、limitations、人工问题和所有中间内容均不生成署名，群职责中的署名要求不改变此分工。`
 
@@ -80,7 +80,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
     })()
     return entry.draining
   }
-  async function run({ binding, input, provider, model, reasoningEffort, agentPreset, groupResponsibility = '', onSessionBound, delegate, readExecution, readProgress, readDecisions, cancelExecution, reconcileOperation, assessCoordinationReorder, resolveHuman, submit }) {
+  async function run({ binding, input, provider, model, reasoningEffort, agentPreset, groupResponsibility = '', onSessionBound, delegate, readExecution, readProgress, readDecisions, readResourceCatalog = async () => null, cancelExecution, reconcileOperation, assessCoordinationReorder, resolveHuman, submit }) {
     if (closed) throw fail('TASK_SESSION_CLOSED')
     if (!binding || binding.kind !== 'task-session' || !binding.taskId || !binding.sessionId || !Number.isSafeInteger(binding.leaseEpoch)
       || binding.leaseEpoch < 1 || !provider || !model) throw fail('TASK_SESSION_BINDING_INVALID')
@@ -152,9 +152,9 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         roleTools.set('model_content_read', agentCtx.tools.get('model_content_read', agent))
         agentCtx.tools.guard(exec => entry.submitted || entry.cancelled || closed ? 'task_session_inactive'
           : !roleTools.has(exec.name) || agentCtx.tools.get(exec.name, exec.agent) !== roleTools.get(exec.name) ? 'task_tool_outside_role'
-          : input.humanReview && !['task_human_resolve', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image'].includes(exec.name) ? 'task_human_review_read_only'
-          : assessmentOnly && !['task_execution_read','task_execution_progress','task_decisions_read','task_coordination_reorder_assess','task_session_submit','model_content_read','skill','read','read_image'].includes(exec.name) ? 'coordination_preassessment_read_only'
-          : input.dialogue && !['task_delegate', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image'].includes(exec.name)
+          : input.humanReview && !['task_human_resolve', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_resource_catalog', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image'].includes(exec.name) ? 'task_human_review_read_only'
+          : assessmentOnly && !['task_execution_read','task_execution_progress','task_decisions_read','task_resource_catalog','task_coordination_reorder_assess','task_session_submit','model_content_read','skill','read','read_image'].includes(exec.name) ? 'coordination_preassessment_read_only'
+          : input.dialogue && !['task_delegate', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_resource_catalog', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image'].includes(exec.name)
             ? 'task_dialogue_read_and_feedback_only' : undefined)
         agentCtx.on('agent/request', (position, next) => {
           if (!entry.contextRetired) {
@@ -188,15 +188,20 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         }
         register('task_delegate', '委派小目标，或用executionId续原执行会话。executionId标识原执行；key标识本次委派请求，不是会话身份。同一次请求重试必须复用key及相同目标；已完成后依据新输入开展新的续办步骤，保留executionId并为新步骤使用新的稳定key。不得换key重放未知效果或已完成动作。同key不同目标会被拒绝，应核对原回执与新输入，不因此索取额外业务授权。新执行可用title提供简短中文业务名称（可保留技术专名）；无中文短名则沿用key名称。objective是本次小目标的完整描述，不截断作名称。续办保留原名。', { ...object({
           key: text, title: { type: 'string', description: '可选中文业务短名，建议4至16字；技术专名可保留英文。没有中文短名时省略，沿用key；不要复制完整目标。续办不是改名操作。' }, objective: text, executionId: text, context: { type: 'string' },
-          resourceKeys: { type: 'array', items: text, description: '本次整段执行要独占的全部共享资源键。Host开始执行前原子取得全部资源，直到会话与在途操作排空才释放；冲突自动排队，派发接收或queued不代表持锁，读resources核对实际占用。续办省略此字段保留原键，只有原执行安全排空后才能显式改集合；不能持锁后再扩大范围。' },
+          resourceKeys: { type: 'array', items: text, description: '先读task_resource_catalog，按本轮用途选择登记的canonical key；已登记别名会统一映射，不自行发明第二套名称。目录启用后新声明必须在目录内。Host原子取得本轮全部资源，直到会话与在途操作排空才释放；冲突排队，queued不代表持锁。续办省略保留原键，只有原执行和效果安全排空后才能显式改集合。' },
+          resourcePhase: { type: 'string', enum: ['prepare', 'publish'], description: '本轮资源占用阶段。prepare禁止取得目录内publication资源，独立检出与本地测试属于此阶段，其他已授权业务仍按原目标执行；需要占用发布资源且前置齐备后用publish联合申请全部所需资源。缺省prepare；续办省略继承原阶段。改变阶段和键须原执行及在途效果安全排空，feedback不能切阶段。' },
           feedback: { type: 'boolean', description: '向原executionId发送不改变目标和授权的运行中澄清/提醒时必须为true。保留原执行与作业，不启动续办；回执received不代表consumed，用task_execution_read核对feedback的consumedAt。真实目标授权变化不能用此路径。' },
           readOnly: { type: 'boolean', description: '标记原操作调查会话，用于绑定对账证据，不限制原生工具名单。未知效果仍须核验，不得重放原操作。' },
           readbackOperationId: { type: 'string', description: 'Bind readOnly investigation to this task operation; inspect its actual partial effects and report limits. This is not permission to replay it.' },
           skillNames: { type: 'array', items: text, description: '本次执行适用的原生技能名称；只传名称，正文由执行会话按需读取。不是授权或固定流程。' },
         }), required: ['key', 'objective'] }, (args, exec) => delegate(args, binding, exec))
+        register('task_resource_catalog', '只读查看受信工作区登记的共享资源、canonical key、别名和用途。委派涉及共享环境前先选目录中的身份；enabled=false表示尚未配置目录。目录由Host维护，模型不能通过工具增删映射。', object({}), async () => {
+          const catalog = await readResourceCatalog()
+          return { enabled: catalog !== null, ...(catalog ?? { version: 1, resources: [] }) }
+        })
         register('task_execution_read', '取得本任务执行的当前document路径、版本及落账证据引用；日常进度与交接优先用原生read读取document.path，异常或证据缺口再按需读取完整记录，包括历史结果。', { ...object({ executionId: text }), required: ['executionId'] }, async args => {
           const record = await readExecution(args.executionId, binding)
-          return { executionId: record.executionId, inputVersion: record.inputVersion, status: record.status, resources: record.resources, document: record.document,
+          return { executionId: record.executionId, inputVersion: record.inputVersion, status: record.status, ...(record.resourcePhase === undefined ? {} : { resourcePhase: record.resourcePhase }), resources: record.resources, document: record.document,
             feedback: (record.feedback ?? []).map(({ id, receivedAt, consumedAt, modelStepEnteredAt, sequence }) => ({ id, receivedAt, consumedAt: consumedAt ?? null, modelStepEnteredAt: modelStepEnteredAt ?? null,
               consumptionMeaning: 'native-model-step-admission', sequence: sequence ?? null })), record: entry.content.store(record) }
         })

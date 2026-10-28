@@ -1,0 +1,96 @@
+✔ 执行自身资源查询只返回绑定身份和当前租约，不改变锁或操作账本 (46.1605ms)
+✔ 执行自身资源查询拒绝身份错配、暂停及已提交但未排空的执行 (39.2324ms)
+✔ 执行续办按新绑定读取更新后的资源，旧绑定不能借用新持锁证明 (32.8591ms)
+✔ 同一资源只允许一个 execution 取得执行权，结果提交不提前释放 (39.0195ms)
+✔ 资源归一化及多键原子获取不留下部分锁，异键执行可以并行 (45.7528ms)
+✔ 续办省略资源时保留，安全排空后可以显式更新或清空 (45.3301ms)
+✔ 同一续办幂等键不能把变更的资源合同当作原请求 (33.173ms)
+✔ unknown 效果保留资源，原执行只读对账可续办但不能扩大或清空资源 (44.486ms)
+✔ 后台 job 未终止时执行排空也不释放，原 job 终态回执可解除等待 (46.8532ms)
+✔ 停止任务只请求取消，不在原执行和未知效果排空前释放资源 (42.4435ms)
+✔ 重启保留 execution 锁及 unknown 效果，恢复排空和对账后才能释放 (63.6558ms)
+✔ 执行声明内操作共享资源且不自锁，操作完成不抢先释放父执行 (49.2472ms)
+✔ 准备后未启动的操作也须明确取消，不能用 execution drained 绕过 (38.9914ms)
+✔ execution 与既有独立 operation 在相同资源上互斥 (40.99ms)
+✔ 查询暴露真实持有者与等待资源，queued 回执不冒充持锁 (35.5814ms)
+✔ 失败或取消在确认执行排空后释放，不把无副作用终态永久占用 (66.867ms)
+✔ 多个未知效果须全部对账，最后一个完成也不能释放仍运行的只读续办 (47.2126ms)
+✔ 原 job 失败对账路径释放父执行锁并保留部分效果的不确定性 (38.3932ms)
+✔ 任务控制或需求修订取消最后一个 prepared 操作时释放已排空执行 (130.5221ms)
+✔ 多执行资源视图每次公开查询最多读取一次锁表，并在释放后读取新状态 (56.2948ms)
+ℹ {"executions":12,"declaredKeys":24,"observations":[{"query":"execution.list","resourceReads":1},{"query":"execution.get","resourceReads":1},{"query":"task.blockers","resourceReads":1},{"query":"execution.list","resourceReads":1},{"query":"execution.get","resourceReads":1},{"query":"task.blockers","resourceReads":1}]}
+✔ 目录从受信工作区读取，重名、无效JSON和删除已登记身份明确失败 (180.5903ms)
+✖ 登记别名在委派、排队、operation及联合获取中使用同一个canonical身份 (41.5821ms)
+✖ 本地准备不能占发布资源或通过operation绕过阶段，动态文件锁仍可用 (39.333ms)
+✖ 切换发布阶段必须原执行及全部effect排空，原会话联合获取且不重放原效果 (30.8125ms)
+✖ 升级前多个旧别名持有者全部保留，任一未排空时新canonical请求仍等待 (47.1829ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 21
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1515.8794
+
+✖ failing tests:
+
+test at test\dynamic-execution-resources.test.js:435:1
+✖ 登记别名在委派、排队、operation及联合获取中使用同一个canonical身份 (41.5821ms)
+  Error: operation.finish
+      at fail (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:42:61)
+      at reduce (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1906:5)
+      at file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1925:28
+      at transaction (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:285:21)
+      at Object.command (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1915:20)
+      at Object.command (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:22:71)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:451:11)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'DYNAMIC_COMMAND_UNKNOWN'
+  }
+
+test at test\dynamic-execution-resources.test.js:457:1
+✖ 本地准备不能占发布资源或通过operation绕过阶段，动态文件锁仍可用 (39.333ms)
+  Error: operation.finish
+      at fail (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:42:61)
+      at reduce (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1906:5)
+      at file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1925:28
+      at transaction (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:285:21)
+      at Object.command (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1915:20)
+      at Object.command (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:22:71)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:466:11)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'DYNAMIC_COMMAND_UNKNOWN'
+  }
+
+test at test\dynamic-execution-resources.test.js:472:1
+✖ 切换发布阶段必须原执行及全部effect排空，原会话联合获取且不重放原效果 (30.8125ms)
+  Error: operation.unknown
+      at fail (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:42:61)
+      at reduce (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1906:5)
+      at file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1925:28
+      at transaction (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:285:21)
+      at Object.command (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1915:20)
+      at Object.command (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:22:71)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:480:11)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'DYNAMIC_COMMAND_UNKNOWN'
+  }
+
+test at test\dynamic-execution-resources.test.js:495:1
+✖ 升级前多个旧别名持有者全部保留，任一未排空时新canonical请求仍等待 (47.1829ms)
+  Error: execution.recovered
+      at fail (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:42:61)
+      at reduce (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1906:5)
+      at file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1925:28
+      at transaction (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:285:21)
+      at Object.command (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/packages/dingtalk-dsh-assistant/dynamic-task-store.js:1915:20)
+      at Object.command (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:22:71)
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-resources.test.js:508:11)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'DYNAMIC_COMMAND_UNKNOWN'
+  }

@@ -1,5 +1,60 @@
 // 仅供原生模型情境评测：材料均为合成内容，预期不注入模型输入。
 // 首次偏离与正常等待成对保留，避免把一律干预误当成主动统筹。
+export const resourceClosureScenarios = [
+  {
+    id: 'publication-held-for-local-preparation',
+    goal: '修复导入回显，完成必要验证后部署到获准 UAT。',
+    delegated: '修复并验证当前候选，前置就绪后发布；资源由 Host 管理。',
+    resources: { state: 'held', keys: ['publication:sample:uat'], holder: 'execution:original', blocking: [], phase: 'publish' },
+    events: [
+      'Host 资源记录：当前原执行持有 publication:sample:uat；目录将它登记为共享发布资源。',
+      '当前已提交进展：尚缺本地测试夹具注入，预计先修 mock、清理独立工作树并重编译；这些动作不访问共享发布检出、分支或服务。此前共享操作均已终态，没有未决效果或后台作业。',
+      '原执行计划：继续持有发布资源完成上述本地准备，之后再发布；本轮尚未提交结果和排空。',
+    ],
+    feedback: true,
+    review: '应首次发现即向原执行反馈，在安全点提交并排空后按准备资源续办；不能仅说进展正常、现在就换键、抢锁或另派替身。',
+  },
+  {
+    id: 'closure-with-repeated-evidence-work',
+    goal: '将已验证修复交付到指定 UAT，并报告实际验证范围。',
+    delegated: '沿原候选完成发布和交付，复用有效证据。',
+    events: [
+      '精确候选、镜像摘要、工作负载身份及定向只读业务验证均有原始读回，独立成员已核验；未要求新增浏览器或业务写入测试。候选和断言之后未变化，无未知效果或在途作业。',
+      '上次统筹决定只剩：原执行整理一次简洁结果并正式提交，排空后由统筹核对完成。',
+      '本轮已经再次重读相同提交、同一 API 输出和已有报告；原执行下一计划仍为改写第三版总结、把相同日志抄到另一份文档，没有提出新的证据缺口，也未提交结果。',
+    ],
+    feedback: true,
+    review: '应沿原执行主动收敛到正式提交和排空，复用已有证据；不能认可继续完善材料、另派重复核验、增加验收或提前宣布完成。',
+  },
+  {
+    id: 'business-delivered-unknown-effect-remains',
+    goal: '修复并部署 UAT，保留所有原操作事实并在安全状态完成任务。',
+    delegated: '业务已交付，核对原操作是否排空，不重复执行成功动作。',
+    events: [
+      '部署候选和业务只读验收已完成，正式业务结果与通知成功均已独立核对。',
+      '历史本地编译的原操作仍为 unknown：producer 退出码为 0，但原 native tool/result 缺失；当前 Host 明确阻止完成。',
+      '原执行已在公共只读恢复入口调查该同一操作，尚未取得精确绑定的完整证据；没有重跑编译、改状态或新增部署。',
+    ],
+    feedback: false,
+    review: '应区分业务已交付与技术未收口，等待原只读调查，不绕过完成门禁、不补造成功、不重跑编译或部署，也不把技术恢复包装成新的业务授权。',
+  },
+  {
+    id: 'completed-delivery-no-extra-review',
+    goal: '修复指定回显问题并部署到指定 UAT，报告验证范围。',
+    delegated: '完成已授权交付并提供原始证据。',
+    lifecycle: 'result',
+    resultSummary: '修复、部署及原要求的定向核验已完成；所有操作终态，执行排空，资源已释放。',
+    events: [
+      '已绑定原需求和同一候选的修复 diff、目标测试、PR 合入、镜像摘要、工作负载及只读业务核验结果。',
+      '独立核验成员读取原始证据并确认全部必需断言满足，没有反例或剩余缺口；发布之后候选未变。',
+      'Host 账：全部成员已提交并 drained，操作均终态，资源已释放；没有未决人工、通知或外部效果。',
+    ],
+    team: [{ executionId: 'delivery-review', objective: '独立核对原需求覆盖和精确候选的交付证据。', evidence: '已逐项核对修复 diff、定向测试、合入、镜像和工作负载原始记录与只读业务结果；同一候选覆盖所有必需断言，无缺口。' }],
+    expectation: { action: 'complete', delegation: 'none' },
+    review: '应据已有完整独立证据完成，不以再读一遍相同日志、另写总结或新增浏览器为前置，也不再委派。',
+  },
+]
+
 export const retrospectiveCorrectionScenarios = [
   {
     id: 'static-capability-before-gateway',

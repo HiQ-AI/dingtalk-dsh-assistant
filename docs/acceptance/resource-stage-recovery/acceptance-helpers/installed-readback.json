@@ -1,0 +1,86 @@
+{
+  "status": "PASS",
+  "replay": "two patches applied against original before bytes; SHA256 matches actual installation",
+  "relativeLinksChecked": 25,
+  "registrySourceMatchesInstalled": true,
+  "files": [
+    {
+      "group": "skills",
+      "path": "uat-pr/SKILL.md",
+      "beforeSha256": "e4e694b45ad70be8d370dfc70cb5991171bb4212c56f1977b9c4603c678951e2",
+      "afterSha256": "a8fdc93ca40a7457f50e7d78aac0ffb75bc7dc160466404b3214b02445a46ab6",
+      "bytes": 2170
+    },
+    {
+      "group": "skills",
+      "path": "uat-pr/references/procedure.md",
+      "beforeSha256": "fa42ae570814e6837fe72af275f944710571319436a50da06d298c7da5a5a5f7",
+      "afterSha256": "feeda29c1b49027e20a91ab13f093b608871776d235bfd81748678cd7bd3cf77",
+      "bytes": 18911
+    },
+    {
+      "group": "skills",
+      "path": "business-development/SKILL.md",
+      "beforeSha256": "9777ed19b23256cc49f0e094ac42c9cbb092c7cd847a17d1d97d2f3381f6a8e2",
+      "afterSha256": "f12cd685cecdbb2ea21525fe33c280c4c1f15ab48ec050de98639fc7c5658215",
+      "bytes": 4546
+    },
+    {
+      "group": "skills",
+      "path": "business-development/references/procedure.md",
+      "beforeSha256": "cae6bb973fbb7a93d61227fc1105245fa74e98822d5e10b44e99cc0ff20f7372",
+      "afterSha256": "f64935ac67dba3bafbd89b751f479d9551f87c2ad295b868c70fa1fef88f9fab",
+      "bytes": 32470
+    },
+    {
+      "group": "skills",
+      "path": "uat-deployment/SKILL.md",
+      "beforeSha256": "6368992e0807ddee2bbea44442dfd6e130d01992ae2c9a1084cbb0ee276f756e",
+      "afterSha256": "352e24a58e1c586e945fa8ebfd236efe88ecef911c71a2a36a39ea8ad4c8c569",
+      "bytes": 3980
+    },
+    {
+      "group": "skills",
+      "path": "uat-deployment/references/procedure.md",
+      "beforeSha256": "4df76fa2b439aa982aace1db794ef77f13d958d3ee5acf6f37175d4cca95a79e",
+      "afterSha256": "7250b2aaf27559c7cc151add5bece6097dbf88b220d869aae2dee811340d1299",
+      "bytes": 20860
+    },
+    {
+      "group": "skills",
+      "path": "baibu-uat-account-verify/SKILL.md",
+      "beforeSha256": "9dad070ec86b47c77ec40460c0299ec270d0f1812012d7b0e6fa442e64330699",
+      "afterSha256": "0433147f1cf13003912af237e033f41ccd62c80915fc3ddd34ff12bdd5999bcb",
+      "bytes": 3042
+    },
+    {
+      "group": "skills",
+      "path": "baibu-uat-account-verify/references/verified-flow.md",
+      "beforeSha256": "a845d5bd026707b1a5fa328fb2e8ad39d65914919105c401f323adcc9b6783de",
+      "afterSha256": "8c69d7fd0a95c30e3bbe28d07e16e2fb7a8fab9e5b5f27057efb459e786d8eb1",
+      "bytes": 8461
+    },
+    {
+      "group": "skills",
+      "path": "baibu-uat-account-verify/scripts/hiq_uat_session.py",
+      "beforeSha256": "05b094617af9206d8aa8efe380f986596e15dd4ed2bc13b41fa4e90e316c88f0",
+      "afterSha256": "0ac34927e350826c7e5f054a1f55292938d985194a8a2936bfb634b259d249b0",
+      "bytes": 8749
+    },
+    {
+      "group": "workspace",
+      "path": "docs/ops/woodpecker-uat.md",
+      "beforeSha256": "b0695e08925f4a37a0bc40b3c202776db628dbf02ad60080e2408dde2a8f8859",
+      "afterSha256": "4a32b3b732c78518099debc21fd515bb9c657c3fe64b5aeb7651b7bea48d4c43",
+      "bytes": 19787
+    },
+    {
+      "group": "workspace",
+      "path": "scripts/read-registry-manifest.ps1",
+      "beforeSha256": null,
+      "afterSha256": "9de152041a2cf179291b3bc5132c98e83ca09014bcbc5ad5e246f28c64f9613d",
+      "bytes": 7193,
+      "source": "../scripts/read-registry-manifest.ps1"
+    }
+  ]
+}

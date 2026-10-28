@@ -1,0 +1,144 @@
+--- a/uat-pr/SKILL.md
++++ b/uat-pr/SKILL.md
+@@ -12,6 +12,6 @@
+ - 已有工作先核验复用。历史组合修改或 UAT 祖先不自动要求重建原开发线；本次不回灌 UAT，不为制造产物重复提交/建 PR，按项目约定保留开发 PR 与 UAT 集成 PR 的各自身份。
+ - 用户仅要求准备或 PR 时不扩大为发布；已明确要求部署到指定 UAT 时，正常提交、推送、UAT PR 合入和验证属于完成该目标的必要步骤，不逐项重复申请。真实权限拒绝及超出范围的动作仍须停止。
+ - 保护规则 API 的可见性限制按具体接口记录；以已知项目要求、当前 PR 检查及平台正常合入约束判断，不把局部 403 泛化为仓库不可读或必须升级套餐。
+-- 共享 UAT 交付先核对 Host 的实际资源持有状态，queued 不代表已取得互斥。GitHub 合入前使用 [只读对象与可合并性预检](scripts/read-github-mergeability.ps1)；UNKNOWN 有界重读后仍未知即停止合入，该脚本不替代 required checks 或授权。
++- 共享 UAT 交付从 Host 资源目录选取真实资源，不自造同义键；独立本地准备与共享发布按程序分开占用，queued 不代表已取得互斥。GitHub 合入前使用 [只读对象与可合并性预检](scripts/read-github-mergeability.ps1)；UNKNOWN 有界重读后仍未知即停止合入，该脚本不替代 required checks 或授权。
+ 
+ 执行前读 [业务步骤](references/procedure.md) 第 1–4 节；只有授权合并才执行第 5–6 节。多项目及恢复见第 7 节。维护或审计提取覆盖时读 [源节点映射](references/source-map.json)，不把其中旧函数当作运行入口。
+--- a/uat-pr/references/procedure.md
++++ b/uat-pr/references/procedure.md
+@@ -10,7 +10,11 @@
+ 
+ ### 共享交付资源的占用与等待
+ 
+-涉及共享 UAT 分支、工作负载或发布检出时，按当前 Host 能力向 `task_delegate` 声明 `resourceKeys`，同一真实资源使用相同键。键约束整段 execution，Host 原子取得全部声明键后才启动；资源冲突应排队等待，不是执行失败。不要仅凭派发成功或 `queued` 声称资源已锁定。
++涉及共享 UAT 分支、工作负载或发布检出时，统筹先读取当前 Host 的 `task_resource_catalog`，按真实对象选择目录中的标准键，通过 `task_delegate.resourceKeys` 声明；别名由 Host 规范化，不把不同叫法各当一把锁，也不靠堆叠别名补互斥。目录来自受信工作区 `.dsh/shared-resources.json`，普通执行不为解除冲突修改目录。实际工具未提供或对象未登记时，保留明确的能力/登记缺口；可继续独立本地准备，不能猜键启动共享发布。
++
++委派使用 `resourcePhase: prepare` 完成独立开发检出的清理、编译、夹具修复和必要本地验证，只声明实际需要的工作区资源；这些动作不占用发布分支、工作负载或共享发布检出。候选及必要前置就绪后，原执行提交并真正排空，统筹沿原 `executionId` 续办为 `resourcePhase: publish`，声明接下来实际会改写的共享资源；Host 原子取得全部键后启动。准备阶段若实际会改写共享发布检出，就不能称为独立本地准备，应先调整到独立检出，或在正确发布阶段取得该资源。阶段不扩大操作授权。
++
++不能在仍运行的执行上改键释放占用。首次发现持发布资源却只做独立本地工作，统筹应通过原执行 feedback 纠偏，到安全点提交和排空后再变更阶段；存在后台作业或未知效果时先按原操作对账，不强制释放。续办省略阶段/键会继承，退回准备必须显式填写阶段及本轮所需键，不能仅把目标文字改成“本地验证”。资源冲突应排队等待，不是执行失败；派发成功、`queued` 或目录中存在键都不证明已经持锁。
+ 
+ 执行会话使用当前 Host 提供的无参数 `execution_resources_read` 读取自身身份和实时 `resources`，不能传入其他 executionId 或自行填写租约。核对返回的 executionId、inputVersion、leaseEpoch 属于当前执行；续办后重新读取，不复用旧回合证明。正常读取不需要统筹再发持锁 feedback；真实方向纠偏仍按原反馈机制处理。若实际工具目录未提供此入口，如实报告版本/能力缺口，由统筹使用现有 `task_execution_read` 核对，不搜索运行时内部接口或猜造工具。
+ 
+--- a/business-development/SKILL.md
++++ b/business-development/SKILL.md
+@@ -21,6 +21,6 @@
+ - 能力或配置问答先确认目标版本及实际读取链；证据足以回答时先给直接结论，不把不会改变结论的变量值、重启或现场日志变成回答前置条件。版本未确认时限定结论，确有读取入口而仍未生效时继续必要排查。网关或登录未知只阻塞依赖它的判断。真实页面验收时按 [页面验收接入](references/page-verification.md) 使用当前账号权限、查询语义与可定位断言；截图须实际读图后才能交付。
+ - 默认实跑与改动直接相关的明确测试类/用例；先完成语法/lint、必要的测试编译，再核对实际 profile、共享依赖及后台消费者，用一个代表性用例确认所需夹具可运行后执行相关业务用例。验证期间固定候选，不同时编辑同一检出；共享交付资源按程序核对 Host 实际持有状态。保留候选身份、结果和清理证据，不因局部通过自动扩成全仓测试。
+ - 业务确认连同条件和订正一起消费；最小方案须保留已确认的交互语义。明确工程约定的违反须在本次相关路径闭环，不能用“测试通过、未发现运行故障”降格放行。验证前先做包管理器/依赖就绪和低成本检查，执行时即时归档原始输出，具体做法见程序第 1、4、5、6 节。
+-- 随验证和交付里程碑更新现有记录及证据引用，收尾只列仍需完成的具体动作、依赖和完成依据，不集中补造文档或追加无关验收。获准交付后独立回读提交、远端分支和精确 PR；任何未知外部效果先核实再重试。
++- 随验证和交付里程碑更新现有记录及证据引用；统筹每次巡检保存判断、依据和下一必要结果，对照上次决定检查剩余动作是否减少。只做独立本地准备却占发布资源、或已有证据完整却反复整理材料时，首次发现即沿原执行纠偏。获准交付后独立回读提交、远端分支和精确 PR；任何未知效果先按原操作核实，业务已交付也不能绕过运行时收口条件。
+ 
+ 迁移审计或查某个旧节点时读 [节点来源映射](references/source-map.json)。旧节点名仅解释业务责任来源，不规定新任务必须有多少步骤或会话。
+--- a/business-development/references/procedure.md
++++ b/business-development/references/procedure.md
+@@ -24,7 +24,7 @@
+ - 必要依赖仓库必须处于当前授权范围且目标来源可核对，不能因为工具登记了该仓库就自行扩大业务范围。新增依赖超出当前授权时只暂停该部分并请求决定。
+ - 每个仓库保留自己的 source/head/target、工作目录、候选、检查、提交和 PR 证据。前后端要使用可追溯的实际版本组合，其他任务/另一个 UAT/旧需求的通过结果不能代用。
+ - 一个项目已有功能或无改动，不必制造提交；核实其现有能力能满足集成依赖。单项目构建通过、API 200 或依赖隔离完成不能代替端到端业务验收。
+-- 涉及同一 UAT 分支、工作负载或共享发布检出时，在 Host 委派中声明同一组真实资源键，按 [共享交付资源的占用与等待](../../uat-pr/references/procedure.md#共享交付资源的占用与等待) 核对持有者和阻塞项。任务接收或 queued 不证明互斥已取得；不把可自行查询的资源冲突交给用户协调。
++- 涉及同一 UAT 分支、工作负载或共享发布检出时，按 [共享交付资源的占用与等待](../../uat-pr/references/procedure.md#共享交付资源的占用与等待) 从 Host 目录选择标准资源键，并按准备/发布阶段取得实际所需资源。本地清理、编译和夹具修复不提前占用发布资源；若已持有，须沿原执行到安全点排空后切换阶段，不能直接改键。任务接收或 queued 不证明互斥已取得；不把可自行查询的资源冲突交给用户协调。
+ 
+ ## 2. 核实开发起点与复用
+ 
+@@ -148,7 +148,9 @@
+ 
+ 对应七个交付节点。它们不是每个开发任务必做的步骤：用户只要求本地修改时到此交回证据，不因旧引擎包含交付链自动提交或外发。
+ 
+-每个验证或交付里程碑结束时，在项目已有记录中同步真实结果、候选身份及原始证据引用；已有 `goal`、验收表或 PR 草稿按各自用途更新，不重复誊写日志或另造一套交付文档。进入收尾时列出精确剩余动作、依赖和完成依据，例如“回读本次 PR head 与正文”，不能只写“继续完善材料”。只处理原目标所需的缺口：发现真实问题应修复并复验受影响范围，已有有效证据则直接复用；必需业务验证未完成须如实保留，不以缩短耗时为由省略，也不为充实报告追加无关场景。
++每个验证或交付里程碑结束时，在项目已有记录中同步真实结果、候选身份及原始证据引用；已有 `goal`、验收表或 PR 草稿按各自用途更新，不重复誊写日志或另造一套交付文档。进入收尾时列出精确剩余动作、负责成员、依赖和完成依据，例如“原执行回读本次 PR head 与正文并提交结果”，不能只写“继续完善材料”。统筹在已有决定记录中逐次保留判断、具体依据及下一必要结果，对照上一决定检查这些动作是否减少；没有新缺口却重复抄日志、重读同候选证据或改写报告时，立即用原执行的 feedback 收敛到剩余动作，不另派重复核验，也不亲自重做业务操作。候选、断言或证据可信度变化时补受影响验证；必要验证未完成不能为了缩短耗时省略。
++
++分别记录业务交付、运行时排空/对账与通知送达。业务已经完成但历史原操作仍未知时，沿公共只读恢复入口核对原身份和完整证据，保留明确的技术阻塞；不能重跑编译、重新部署或发送来替代旧记录，也不能自行绕过 Host 完成门禁。全部必要结果及运行时条件已满足就完成，不再追加无关验收或等待用户认可。
+ 
+ ### prepare-commit / commit
+ 
+--- a/uat-deployment/SKILL.md
++++ b/uat-deployment/SKILL.md
+@@ -16,6 +16,7 @@
+ - 合入前按客户端限制选定可复用的上传检出，保留仍需续作的开发线；优先复用空闲上传或已完成的集成检出，不默认每版新 clone。回执消费及健康核验复用当前 runbook 的公共查询入口。
+ - 同一共享交付资源按 Host 实际持有状态等待，派发接收不等于持锁；公共健康脚本同时核对本次退出码与结构化 `healthy=true`，健康成功不证明运行镜像或业务验收。
+ - 使用真实流水线、镜像仓库和运行平台证明提交、镜像、Pod、就绪状态和入口可访问。触发成功、构建成功或部署命令退出成功，都不单独证明部署完成；HTTP 200 的 HTML 和 Pod Ready 不能代替应用健康契约。
++- Registry 清单复用当前 runbook 的 `read-registry-manifest.ps1`：按构建摘要读取，先核对原始字节 SHA256，再解析 JSON 结构；同时检查本次退出码与 `verified=true`。镜像索引还须选择 Pod 对应平台的子清单，解析失败不能写成部署版本不符，也不因此重新构建。
+ - UAT 运行版本核验完成不等于业务回归、提测或正式验收完成。任务会话对照完整用户目标决定是否仍有工作。
+ 
+ 执行部署或排查构建时，读取 [详细操作指引](references/procedure.md)。审查迁移覆盖或追溯旧节点时，读取 [来源映射](references/source-map.json)；源代码仅用于追溯，不作为技能运行依赖。
+--- a/uat-deployment/references/procedure.md
++++ b/uat-deployment/references/procedure.md
+@@ -101,13 +101,15 @@
+ 再从运行平台独立核验完整链路：
+ 
+ 1. 构建/推送成功的流水线源码 SHA 等于本次候选；整体失败但产物有效时分别报告步骤与总状态。
+-2. 构建发布到预期镜像仓库，镜像摘要与仓库 manifest 一致。
++2. 构建发布到预期镜像仓库，镜像摘要与仓库 manifest 一致。复用当前 runbook 的 `read-registry-manifest.ps1`，按精确摘要 GET，并先对原始响应字节计算 SHA256；不能把 PowerShell byte[] 当字符串，也不能重新序列化 JSON 后算摘要。脚本验证媒体类型、schemaVersion 和 descriptor 结构，只输出白名单摘要。使用环境已有受管 Registry 凭据入口，在同一进程传 SecureString Authorization，不新增人工交接。失败先区分 HTTP/解码/结构与真实摘要不符，不把验收器错误当成部署失败或重建理由。
+ 3. 多架构镜像先读取 manifest 下的平台摘要，Pod imageID 应属于对应平台镜像；不能只拿 manifest list 的摘要与单架构 imageID 做字符串比较。
+ 4. 从目标 Deployment 的真实 UID/所属 ReplicaSet 找到当前 Pod，取得完整 Pod 列表，排除其他工作负载的同名/旧 Pod。
+ 5. 工作负载的 observedGeneration 已追上 generation；期望副本数有效，Ready 副本和实际当前 Pod 覆盖期望副本；每个应运行的 Pod 均 Ready，镜像均匹配。
+ 6. 从当前网关路由/配置确认业务和健康入口，优先使用 runbook 的公共健康脚本。Pod Ready/rollout 成功与应用就绪分别核验，缺少 readiness/startup probe 时尤其如此。HTTP 200 还须符合健康接口契约（如 JSON 对象、status=UP），HTML/SPA、登录跳转不能通过。启动期 502/503 等按有界次数和超时重试，耗尽诊断实际路由/应用，不重构建刷绿；健康入口成功不能代替完整业务流程验收。
+ 
+ PowerShell 公共健康脚本使用 JSON + 明确退出码合同：用 `& <脚本> ...` 收集 JSON，下一条语句立即保存 `$LASTEXITCODE`，再解析并核对退出 0 且 `healthy=true`；失败为退出 1，不能取调用前或后续命令的退出码。按当前 runbook 调用，不在各任务重新拼健康解析器。记录的健康结果仅证明 HTTP 健康契约，仍独立完成前述源码、镜像、全部 Pod 的版本核对与任务要求的业务验证。
++
++Registry helper 同样立即保存本次退出码，并要求退出 0 且 `verified=true`；无摘要头时以已知摘要与原始字节相等为证，有摘要头时也必须相等。`kind=image-index` 的子项可能没有平台，不能任取第一项或把未知平台当宿主平台；按当前 Pod 节点平台定位唯一子清单并再次读取，证据不足保持未确认。helper 不跟重定向、不登录或重试，不输出认证、原始正文和异常详情。
+ 
+ Deployment 没有源码 SHA 注解时，可依靠上述流水线 SHA → 构建镜像 → 仓库 manifest → Pod imageID 链证明版本，不要求伪造注解。链路缺项、镜像漂移、部分副本未就绪或入口失败时保持“未确认”，说明具体缺项。
+ 
+--- a/baibu-uat-account-verify/SKILL.md
++++ b/baibu-uat-account-verify/SKILL.md
+@@ -15,5 +15,7 @@
+ 
+ 按当前用户授权的测试范围开展业务验收；允许范围内的测试新增、编辑、删除须限定测试数据对象并落实清理或恢复，不扩张到其他数据或权限。
+ 
++API `snapshotVersion` 使用现有 [UAT helper](scripts/hiq_uat_session.py) 的 `assert_snapshot_version(actual, expected)` 比较语义：非负整数 `2` 与规范字符串 `"2"` 相等；布尔、小数、空值和非规范字符串必须拒绝。输入/解析契约错误与真实版本不符分别报告，不把验收脚本类型误判转成产品失败、修改业务数据或重复部署。
++
+ 每次返回身份和环境证据、实际验证覆盖、失败原因、恢复/注销/清理的独立状态。新建正常 HiQ 验证会话可复用 [身份与清理 helper](scripts/hiq_uat_session.py)，从登录开始就进入 finally，页面失败也核查本轮会话。未知结果先查原操作，不重复改密登录；历史未知会话单独保留，不能扩大成所有后续已授权正常登录均禁止。恢复失败优先处理，未恢复不能标完成。本 skill 不包含部署、修复权限或生产操作。
+ 
+--- a/baibu-uat-account-verify/references/verified-flow.md
++++ b/baibu-uat-account-verify/references/verified-flow.md
+@@ -16,6 +16,10 @@
+ 页面只读验收还须按源码语义建立精确 method/path 清单。查询可能使用 POST，本例 `unitGroup/pageQuery`、`unit/getPage`、`approval/list`、`message/list` 经核查后放行；它们不是对所有任务永久有效的白名单。鉴权 login/logout 属于本轮会话生命周期，单独允许；不能顺带允许 `read/readAll/approve` 等业务写入，也不能用隐藏错误提示处理被拦查询。复用 [业务页面验收 helper](../../business-development/scripts/page_acceptance.py)，接入办法见 [真实页面验收](../../business-development/references/page-verification.md)。
+ 
+ 来源：`D:/baibu-agent/tasks/task-c74a355e5506fd9b2ed6af998a14263d/docs/acceptance/unit-group-uat2/scripts/capture-real-unit-pages.py` 的已修正常路径；同目录 `unit-pages-final-report.md` 的同身份注销证据。协议核对源码为实际开发检出 `src/views/login/index.vue:145`、`src/api/v1/account/user/utils.js`、`src/utils/request.js:257`。旧任务脚本包含专属账号路径和页面选择器，仅供取证，不整体复制作为新任务入口。helper 的本地失败场景回归不代表重新完成线上登录。
++
++## 业务版本断言
++
++JSON 解码后直接传 API 原值与本轮明确期望值：`assert_snapshot_version(record["snapshotVersion"], expected_version)`。helper 将非负整数和规范 ASCII 十进制字符串统一到整数；`2`/`"2"` 等价，但 `True`、`2.0`、`null`、空白、`"02"`、负值或对象均报 `snapshot-version.invalid-type-or-value`，不能用 `str()`/宽松 `int()` 掩盖输入问题。合法值不同报 `snapshot-version.mismatch`。返回值只证明该字段语义相等，仍需核对实际响应所属业务对象、候选和本轮请求，不能替代保存后重新查询或页面验收。
+ 
+ ## 历史临时改密案例（仅在正常路径不可用时参考）
+ 
+--- a/baibu-uat-account-verify/scripts/hiq_uat_session.py
++++ b/baibu-uat-account-verify/scripts/hiq_uat_session.py
+@@ -1,6 +1,7 @@
+ """HiQ 新建 UAT 验证会话的身份核验与注销；不读取凭据、不发起登录。"""
+ 
+ import json
++import re
+ from urllib.parse import unquote, urlsplit
+ 
+ 
+@@ -17,6 +18,24 @@
+ 
+ class SessionCheckFailed(RuntimeError):
+     """异常只含固定断言标识；调用者不能把原始认证异常写入报告。"""
++
++
++def snapshot_version(value):
++    """版本允许非负整数及其规范十进制字符串；不接受布尔、小数或隐式容错。"""
++    if type(value) is int and value >= 0:
++        return value
++    if type(value) is str and re.fullmatch(r"0|[1-9][0-9]*", value):
++        return int(value)
++    raise ValueError("snapshot-version.invalid-type-or-value")
++
++
++def assert_snapshot_version(actual, expected):
++    """区分解析契约失败与真实版本不符；返回已核验版本供安全摘要记录。"""
++    actual_version = snapshot_version(actual)
++    expected_version = snapshot_version(expected)
++    if actual_version != expected_version:
++        raise AssertionError("snapshot-version.mismatch")
++    return actual_version
+ 
+ 
+ class HiqUatSession:

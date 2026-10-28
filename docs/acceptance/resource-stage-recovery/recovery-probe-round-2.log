@@ -1,0 +1,20 @@
+✖ managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader (1452.0215ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2059.6615
+
+✖ failing tests:
+
+test at test\native-restart-scope-runner-native.test.js:42:1
+✖ managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader (1452.0215ms)
+  Error [SessionFormatUnsupportedError]: session "probe-session" contains event type "plugin:dingtalk/restart-scope-probe-dispatch" (seq 18) unknown to this harness and not marked ignorable; refusing to interpret the log — it was likely written by a newer harness (raw log: C:\Users\64554\AppData\Local\Temp\native-scope-runner-uLPBrN\legacy-sessions\--C-Users-64554-AppData-Local-Temp-native-scope-runner-uLPBrN-tasks-probe-task--\probe-session\session.v4.jsonl)
+      at unsupported (file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-session-persistence/lib/index.js:150:9)
+      at validateStoredEvents (file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-session-persistence/lib/index.js:184:85)
+      at Proxy.decodeStoredLog (file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js:2868:3) {
+    location: { kind: 'jsonl', path: 'C:\\Users\\64554\\AppData\\Local\\Temp\\native-scope-runner-uLPBrN\\legacy-sessions\\--C-Users-64554-AppData-Local-Temp-native-scope-runner-uLPBrN-tasks-probe-task--\\probe-session\\session.v4.jsonl' }
+  }

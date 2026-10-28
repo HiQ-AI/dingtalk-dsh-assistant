@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "resources": [
+    {
+      "key": "hiq:dataset:uat2",
+      "aliases": ["uat:dataset:uat2", "uat:HiQ-AI:dataset:UAT2", "hiqlcd-app-uat2/deployment/dataset", "k8s:hiqlcd-app-uat2:dataset", "HiQ-AI/dataset:uat2-woodpecker"],
+      "purpose": "publication",
+      "description": "Dataset UAT2发布目标：源码上传或构建、目标环境更新及写入验收共用此身份。"
+    },
+    {
+      "key": "github:HiQ-AI/dataset:feature/uat2-base",
+      "aliases": ["HiQ-AI/dataset:feature/uat2-base", "repo:HiQ-AI/dataset:feature/uat2-base"],
+      "purpose": "publication",
+      "description": "Dataset UAT2共享集成分支的写入与发布版本更新。"
+    },
+    {
+      "key": "HiQ-AI/dataset:uat2-integration-worktree",
+      "aliases": [],
+      "purpose": "workspace",
+      "description": "Dataset UAT2共享集成检出。只有实际修改此检出时申请，不用于独立开发检出。"
+    },
+    {
+      "key": "hiq:dataset:upr-merge-source:development",
+      "aliases": [],
+      "purpose": "workspace",
+      "description": "既有UPR开发共享检出。发布已完成的源码时不继续占用此开发资源。"
+    }
+  ]
+}

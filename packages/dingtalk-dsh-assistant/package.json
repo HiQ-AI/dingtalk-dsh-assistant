@@ -43,6 +43,7 @@
     "dynamic-task-store.js",
     "environment.js",
     "execution-context.js",
+    "execution-resource-catalog.js",
     "execution-provider-failure.js",
     "execution-session.js",
     "claude-execution-session.js",

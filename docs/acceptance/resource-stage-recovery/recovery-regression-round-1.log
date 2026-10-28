@@ -1,0 +1,128 @@
+✔ 自身资源查询在回读期间失效时不向后续模型步骤交付旧证明 (149.1136ms)
+✔ 自身资源查询仅由 Host 回调提供，配置不能冒充内部工具 (83.621ms)
+✔ 自身资源查询不能被原生注册接口同名覆盖，仍调用 Host 绑定 (71.5061ms)
+✖ 32 continued inputs retire recursive Host snapshots on actual SDK requests and replay (6752.3733ms)
+ℹ {"scope":"scripted adapter request, UTF-8 JSON bytes; no provider tokens","rawAuditInputTextBytes":153256,"metrics":[{"version":1,"rawInputBytes":48342,"currentInputBytes":1989,"hostBytes":2522,"messagesBytes":6613,"adapterRequestBytes":8479},{"version":2,"rawInputBytes":48342,"currentInputBytes":1989,"hostBytes":2522,"messagesBytes":7088,"adapterRequestBytes":8954},{"version":3,"rawInputBytes":48342,"currentInputBytes":1989,"hostBytes":2522,"messagesBytes":7563,"adapterRequestBytes":9429},{"version":4,"rawInputBytes":283,"currentInputBytes":1977,"hostBytes":2508,"messagesBytes":8024,"adapterRequestBytes":9890},{"version":5,"rawInputBytes":283,"currentInputBytes":1977,"hostBytes":2508,"messagesBytes":8499,"adapterRequestBytes":10365},{"version":32,"rawInputBytes":284,"currentInputBytes":1978,"hostBytes":2512,"messagesBytes":21350,"adapterRequestBytes":23216}]}
+✔ upgrade shadows every already stored recursive v1/v2/v3 input without rewriting originals (291.7078ms)
+ℹ {"scope":"execution Host messages, UTF-8 JSON bytes","beforeBytes":193198,"afterBytes":2375}
+✔ dynamic execution uses independent identities, task-parallel sessions and a generic submit tool (234.5586ms)
+✔ durable native submit is recollected without another model turn after result callback crash (268.7117ms)
+✔ continuation preserves native history while new input and requirement revisions remain authenticated (465.951ms)
+✔ 原生网页及job只读身份不覆盖显式写效果，同名替换不继承只读身份 (1253.6503ms)
+✔ native preset-only tools and workspace instructions are retained; managed subprocesses drain before result settlement (274.9392ms)
+✔ dynamic native sessions use configured shell and delegation without a session tool whitelist (170.9288ms)
+▶ dynamic background requests retain native capability and native errors can be corrected in the same conversation
+  ✔ true (148.1245ms)
+  ✔ false (203.4018ms)
+✔ dynamic background requests retain native capability and native errors can be corrected in the same conversation (353.637ms)
+✔ native process drain failure retains the execution slot and cannot report a settled result (211.3237ms)
+✔ process tracking handles async terminal allocation and isolates parallel native call ownership (23.1577ms)
+✔ a later foreground drain failure still stops the same executors retained background processes (244.4869ms)
+✔ retained process scopes keep services alive between tools and isolate parallel execution cleanup (4.4892ms)
+✔ native recovery validates durable identity and refuses missing bound sessions before releasing a lease (241.3316ms)
+✔ trusted native read preserves historical job data without treating it as a launch: draft registered and running acknowledgement (230.0094ms)
+✔ trusted native read preserves historical job data without treating it as a launch: material registered without result (226.2981ms)
+✔ read name does not exempt a side-effecting or replaced tool from background identity guard: write (229.4658ms)
+✔ read name does not exempt a side-effecting or replaced tool from background identity guard: replace (244.8811ms)
+✔ real structured native job identity is validated even when returned by a trusted read (252.9378ms)
+✔ unverifiable shell background identity in text still cannot report false success (260.6507ms)
+✔ terminal native shell output is data, not a background launch: nested historical receipts in foreground stdout (240.2477ms)
+✔ terminal native shell output is data, not a background launch: historical job JSON in foreground stderr (218.4577ms)
+✔ terminal native shell output is data, not a background launch: job marker printed by a completed foreground command (198.6882ms)
+✔ foreground shell exemption retains identity checks: malformed (148.8561ms)
+✔ foreground shell exemption retains identity checks: background-request (186.5339ms)
+✔ foreground shell exemption retains identity checks: structured-job (174.8534ms)
+✔ foreground shell exemption retains identity checks: replace (212.5349ms)
+✔ unverifiable background job without its native registry cannot report false success (224.1969ms)
+✔ one failed process termination still attempts cleanup of every other managed handle (3.2476ms)
+✔ configured native preset is chosen once and resume retains the persisted preset without changing permissions (509.7671ms)
+✔ anonymous field v12 native failure retains raw diagnostics and derives failure independently of HTTP200 (231.1641ms)
+✔ oversized execution Host survives reopen with exact source and recovery directories (1368.4944ms)
+ℹ {"oversizedExecutionHostBytes":[2594,2594,2594]}
+✔ strict isolated restart proof preserves redacted draft acknowledgement history (5.4423ms)
+✔ strict isolated restart proof preserves redacted material missing-result history (0.9119ms)
+✔ isolated restart rejects no Host restart (0.2827ms)
+✔ isolated restart rejects original result already exists (0.2489ms)
+✔ isolated restart rejects live original executor (0.1873ms)
+✔ isolated restart rejects running registry producer (0.1833ms)
+✔ isolated restart rejects ordinary undrained executor (0.1778ms)
+✔ isolated restart rejects unfinished investigation (0.3822ms)
+✔ isolated restart rejects failed investigation (0.4289ms)
+✔ isolated restart rejects unbound investigation (0.4881ms)
+✔ isolated restart rejects foreign investigation (0.3132ms)
+✔ isolated restart rejects stale isolation digest (0.3426ms)
+✔ isolated restart rejects foreign scope (0.2831ms)
+✔ isolated restart rejects old start identity (0.2448ms)
+✔ isolated restart rejects residual writers (1.1717ms)
+✔ isolated restart rejects incomplete range exclusion (0.5139ms)
+✔ isolated restart rejects no durable fence (0.4294ms)
+✔ isolated restart rejects revoked fence (0.5006ms)
+✔ isolated restart rejects no authority (0.7234ms)
+✔ isolated restart rejects real terminal receipt must use normal reconciliation (0.276ms)
+✔ isolated restart rejects wrong original registration (0.2216ms)
+✔ isolated restart rejects changed original arguments (0.3301ms)
+✔ maintenance preserves original ledger and history: false (7.2434ms)
+✔ maintenance preserves original ledger and history: true (1.2552ms)
+✔ maintenance rejects no explicit approval (0.648ms)
+✔ maintenance rejects wrong current Host (0.3619ms)
+✔ maintenance rejects stale digest (0.4719ms)
+✔ maintenance rejects new live task (0.4459ms)
+✔ maintenance rejects other unfinished execution (0.7749ms)
+✔ maintenance rejects live group (0.3509ms)
+✔ maintenance rejects uncancelled original (0.348ms)
+✔ maintenance rejects not recovery (0.5381ms)
+✔ maintenance rejects another unresolved call (0.4934ms)
+✔ maintenance rejects old settled receipt (0.3352ms)
+✔ maintenance rejects wrong registration (0.294ms)
+✔ maintenance rejects unreviewed scope (0.8782ms)
+✔ maintenance rejects residual producer (0.4782ms)
+✔ maintenance rejects residual writer (0.3418ms)
+✔ maintenance rejects listener (0.4364ms)
+✔ maintenance rejects stale observation (0.3496ms)
+✔ maintenance rejects lost retained artifacts (0.4253ms)
+✔ maintenance retains only unaudited restart work; corrupt audit rejects: false (0.9654ms)
+✔ maintenance retains only unaudited restart work; corrupt audit rejects: true (0.3261ms)
+✔ only the two bounded local launch recipes are supported; arbitrary shell extensions reject (2.5014ms)
+✔ existing native probe proves bounded isolation without a new service: PG (7.2521ms)
+✔ existing native probe proves bounded isolation without a new service: Maven (1.8988ms)
+✔ scoped probe rejects host still alive (0.8872ms)
+✔ scoped probe rejects old host runner alive (1.3814ms)
+✔ scoped probe rejects unattributed legacy producer alive (0.7971ms)
+✔ scoped probe rejects residual writer (0.6065ms)
+✔ scoped probe rejects listener remains (0.5856ms)
+✔ scoped probe rejects provider version changed (0.5475ms)
+✔ scoped probe rejects wrong fatal evidence (0.667ms)
+✔ scoped probe rejects discarded local effects (0.6167ms)
+✔ scoped probe rejects fake echo command (0.5055ms)
+✔ scoped probe rejects missing final LF (1.104ms)
+✔ scoped probe rejects LF converted to CRLF (0.4666ms)
+✔ scoped probe rejects probe not producer-settled (0.4252ms)
+✔ scoped probe rejects probe failed (0.375ms)
+✔ scoped probe rejects foreign probe (0.5595ms)
+✔ scoped probe rejects no reviewed scope (0.264ms)
+✔ managed plan is rebuilt from original native evidence and bound to the current investigation (1.4317ms)
+✔ actual PowerShell producer filter excludes unrelated Claude and retains DSH ownership and original-source descendants (976.5473ms)
+ℹ tests 100
+ℹ suites 0
+ℹ pass 99
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18002.6855
+
+✖ failing tests:
+
+test at test\dynamic-execution-session-native.test.js:157:1
+✖ 32 continued inputs retire recursive Host snapshots on actual SDK requests and replay (6752.3733ms)
+  AssertionError [ERR_ASSERTION]: Host budget includes absolute context paths; use a short physical TEMP/TMP root
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/dynamic-execution-session-native.test.js:190:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

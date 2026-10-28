@@ -5,6 +5,7 @@ import { taskNotificationRecovery } from './notification-delivery.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
+import { createExecutionResourceCatalog } from './execution-resource-catalog.js'
 import { DatabaseSync } from 'node:sqlite'
 import { coordinationSchema, coordinationLedger } from './coordination-ledger.js'
 import { scheduleSchema, coordinationSchedules } from './coordination-schedules.js'
@@ -98,13 +99,14 @@ function durableMarker(path, value, initial = false) {
 
 /** New-instance initialization is explicit. An ingress epoch can only be bound to a new ledger.
  * legacyDbPath is an offline, read-only inspection API, not a production compatibility path. */
-export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, migrate = false, migrationExpectedDigest, legacyDbPath, ingressEpoch, webActorId } = {}) {
+export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, migrate = false, migrationExpectedDigest, legacyDbPath, ingressEpoch, webActorId, resourceCatalog: configuredResourceCatalog } = {}) {
   if (migrationExpectedDigest !== undefined && !/^[a-f0-9]{64}$/.test(migrationExpectedDigest)) fail('DYNAMIC_ARGUMENT_INVALID', 'migrationExpectedDigest')
   if (!isAbsolute(dbPath ?? '') || !text(instanceId, 'instanceId') || typeof initialize !== 'boolean'
     || legacyDbPath !== undefined && !isAbsolute(legacyDbPath)) fail('DYNAMIC_STORE_OPTIONS_INVALID')
   const configuredIngressEpoch = ingressEpoch === undefined ? null : ingressTimestamp(ingressEpoch, false)
   if (ingressEpoch !== undefined && !configuredIngressEpoch) fail('DYNAMIC_INGRESS_EPOCH_INVALID', 'ingressEpoch must be an ISO timestamp with a timezone.')
   let boundIngressEpoch = null
+  let resourceCatalog = createExecutionResourceCatalog(configuredResourceCatalog)
   const existed = existsSync(dbPath), markerPath = `${dbPath}.initialized`
   let marker
   if (existsSync(markerPath)) {
@@ -225,9 +227,31 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     return get('dynamic_tasks', execution.taskId)
   }
   const release = holder => db.prepare('DELETE FROM dynamic_resource_locks WHERE holder=?').run(holder)
-  const resourceKeys = value => [...new Set(array(value ?? []).map(key => text(key, 'resourceKey')))].sort()
+  const resourceKeys = value => resourceCatalog.keys(value)
+  // 升级前请求摘要不含phase。按原字段和原键验证其既有收据，绝不补写历史摘要或重新执行。
+  const resourceRequestMatches = (storedDigest, payload, previous) => {
+    if (storedDigest === digest(payload)) return true
+    if (previous.resourcePhase !== undefined || payload.resourcePhase !== resourceCatalog.executionPhase(previous)
+      || digest(payload.resourceKeys) !== digest(resourceKeys(previous.resourceKeys))) return false
+    const { resourcePhase: _phase, ...original } = payload
+    return storedDigest === digest({ ...original, resourceKeys: previous.resourceKeys ?? [] })
+  }
   const executionHolder = execution => `execution:${execution.executionId}`
-  const heldKeys = holder => db.prepare('SELECT resource_key FROM dynamic_resource_locks WHERE holder=? ORDER BY resource_key').all(holder).map(row => row.resource_key)
+  const assertOperationResources = (execution, keys) => {
+    const declared = resourceKeys(execution?.resourceKeys)
+    if (execution) resourceCatalog.phase(resourceCatalog.executionPhase(execution), keys)
+    if (keys.some(key => !declared.includes(key) && (declared.length || resourceCatalog.publication(key)))) fail('DYNAMIC_RESOURCE_SCOPE_EXPANSION')
+  }
+  const heldKeys = holder => resourceKeys(db.prepare('SELECT resource_key FROM dynamic_resource_locks WHERE holder=? ORDER BY resource_key').all(holder).map(row => row.resource_key))
+  const resourceOwners = () => {
+    const owners = new Map()
+    for (const { resource_key, holder } of db.prepare('SELECT resource_key,holder FROM dynamic_resource_locks').all()) {
+      const [key] = resourceKeys([resource_key])
+      if (!owners.has(key)) owners.set(key, new Set())
+      owners.get(key).add(holder)
+    }
+    return owners
+  }
   // 会话终态不证明外部效果排空；后台作业和 unknown 必须沿原操作对账。
   const releaseExecution = executionId => {
     if (!executionId) return
@@ -240,29 +264,25 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   const releaseOperation = operation => { release(operation.operationId); releaseExecution(operation.executionId) }
   // 每次读取一份实时锁快照，在内存投影全部执行；不跨请求缓存，也不逐执行/资源查库。
   const executionViews = executions => {
-    const owners = new Map(), counts = new Map()
-    for (const { resource_key, holder } of db.prepare('SELECT resource_key,holder FROM dynamic_resource_locks').all()) {
-      owners.set(resource_key, holder); counts.set(holder, (counts.get(holder) ?? 0) + 1)
-    }
+    const owners = resourceOwners()
     return executions.map(execution => {
       if (!execution) return execution
       const keys = resourceKeys(execution.resourceKeys), holder = executionHolder(execution)
-      const held = counts.get(holder) ?? 0
-      const blocking = keys.flatMap(resourceKey => {
-        const owner = owners.get(resourceKey)
-        return owner && owner !== holder ? [{ resourceKey, holder: owner }] : []
-      })
-      const state = !keys.length ? 'none' : held === keys.length && keys.every(key => owners.get(key) === holder) ? 'held'
-        : terminalExecutions.has(execution.status) ? 'released' : blocking.length ? 'waiting' : 'available'
-      return { ...execution, resources: { state, keys, holder: held ? holder : null, blocking } }
+      const held = keys.filter(key => owners.get(key)?.has(holder)).length
+      const blocking = keys.flatMap(resourceKey => [...(owners.get(resourceKey) ?? [])]
+        .filter(owner => owner !== holder).map(owner => ({ resourceKey, holder: owner })))
+      const state = !keys.length ? 'none' : held === keys.length && !blocking.length ? 'held'
+        : blocking.length && (held || !terminalExecutions.has(execution.status)) ? 'waiting'
+          : terminalExecutions.has(execution.status) ? 'released' : 'available'
+      return { ...execution, resourcePhase: resourceCatalog.executionPhase(execution), resources: { state, keys, holder: held ? holder : null, blocking } }
     })
   }
   const lock = (keys, holder) => {
-    for (const resourceKey of keys) {
-      const prior = db.prepare('SELECT holder FROM dynamic_resource_locks WHERE resource_key=?').get(resourceKey)
-      if (prior && prior.holder !== holder) fail('DYNAMIC_RESOURCE_BUSY', resourceKey)
+    const owners = resourceOwners()
+    for (const resourceKey of resourceKeys(keys)) {
+      if ([...(owners.get(resourceKey) ?? [])].some(prior => prior !== holder)) fail('DYNAMIC_RESOURCE_BUSY', resourceKey)
     }
-    for (const resourceKey of keys) db.prepare('INSERT OR IGNORE INTO dynamic_resource_locks(resource_key,holder) VALUES (?,?)').run(resourceKey, holder)
+    for (const resourceKey of resourceKeys(keys)) db.prepare('INSERT OR IGNORE INTO dynamic_resource_locks(resource_key,holder) VALUES (?,?)').run(resourceKey, holder)
   }
   const transaction = fn => {
     if (closed || !healthy) fail('DYNAMIC_STORE_CLOSED')
@@ -371,6 +391,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(`dynamic_${table}`)) fail('DYNAMIC_SCHEMA_INVALID')
       }
       db.prepare('INSERT INTO dynamic_meta(key,value) VALUES (\'owner\',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(incarnation)
+      const savedCatalog = db.prepare("SELECT value FROM dynamic_meta WHERE key='executionResourceCatalog'").get()?.value
+      resourceCatalog = createExecutionResourceCatalog(configuredResourceCatalog, savedCatalog ? JSON.parse(savedCatalog) : null)
+      if (resourceCatalog.snapshot) db.prepare("INSERT INTO dynamic_meta(key,value) VALUES ('executionResourceCatalog',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(canonical(resourceCatalog.snapshot))
       // 决策沿原命令收据追加保存；索引只服务按任务分页，不把历史数组塞进每轮任务快照。
       db.exec(`CREATE INDEX IF NOT EXISTS dynamic_receipt_decision_task
         ON dynamic_receipts(json_extract(body,'$.taskDecision.taskId')) WHERE json_type(body,'$.taskDecision')='object'`)
@@ -409,7 +432,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       for (const operation of ops()) if (['starting','unknown'].includes(operation.state) && operationBlocksRecovery(operation)) {
         const held = heldKeys(operation.resourceHolder ?? operation.operationId)
-        if (operation.resourceHolder ? operation.resourceKeys.some(key => !held.includes(key)) : digest(held) !== digest(operation.resourceKeys)) fail('DYNAMIC_RESOURCE_INVARIANT')
+        const keys = resourceKeys(operation.resourceKeys)
+        if (operation.resourceHolder ? keys.some(key => !held.includes(key)) : digest(held) !== digest(keys)) fail('DYNAMIC_RESOURCE_INVARIANT')
       }
       db.exec('COMMIT')
       if (!marker) { marker = { version: 1, instanceId, phase: 'initialized', initToken: initToken ?? randomUUID(), ingressEpoch: boundIngressEpoch };
@@ -1053,11 +1077,13 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       assertNoLegacy(task.taskId)
       const key = text(a.key, 'key')
       if (a.definition?.executionBackend !== undefined && !['dsh', 'claude-code'].includes(a.definition.executionBackend)) fail('TASK_EXECUTION_BACKEND_INVALID')
-      const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {}, definition: a.definition ?? null, resourceKeys: resourceKeys(a.resourceKeys) }
-      const dispatchDigest = digest({ requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, ...payload })
       const prior = execs(task.taskId).find(item => item.key === key)
+      const keys = resourceCatalog.keys(a.resourceKeys, !prior || prior.resourcePhase !== undefined)
+      const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {}, definition: a.definition ?? null,
+        resourceKeys: keys, resourcePhase: resourceCatalog.phase(a.resourcePhase ?? (prior && prior.resourcePhase === undefined ? resourceCatalog.executionPhase(prior) : undefined), keys) }
+      const dispatchDigest = digest({ requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, ...payload })
       if (prior) {
-        if (prior.dispatchDigest !== dispatchDigest) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
+        if (!resourceRequestMatches(prior.dispatchDigest, { requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, ...payload }, prior)) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
         return changed({ execution: prior })
       }
       const executionId = a.executionId ?? randomUUID()
@@ -1082,13 +1108,15 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (a.definition?.recoveryReadOnly !== true && ops(task.taskId).some(item => item.executionId === execution.executionId && operationBlocksRecovery(item))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       const key = text(a.key, 'key')
       const previous = (execution.continuations ?? []).find(item => item.key === key)
-      const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {}, resourceKeys: resourceKeys(a.resourceKeys ?? previous?.resourceKeys ?? execution.resourceKeys) }
+      const keys = a.resourceKeys === undefined ? resourceKeys(previous?.resourceKeys ?? execution.resourceKeys) : resourceCatalog.keys(a.resourceKeys, !previous || previous.resourcePhase !== undefined)
+      const payload = { prompt: text(a.prompt, 'prompt'), input: a.input ?? {}, resourceKeys: keys,
+        resourcePhase: resourceCatalog.phase(a.resourcePhase ?? resourceCatalog.executionPhase(previous ?? execution), keys) }
       const continuationDigest = digest({ ...payload, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision })
       if (previous) {
-        if (previous.digest !== continuationDigest) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
+        if (!resourceRequestMatches(previous.digest, { ...payload, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision }, previous)) fail('DYNAMIC_DISPATCH_KEY_CONFLICT')
         return changed({ execution })
       }
-      if (digest(payload.resourceKeys) !== digest(resourceKeys(execution.resourceKeys)) && (execution.resourceLease
+      if ((digest(payload.resourceKeys) !== digest(resourceKeys(execution.resourceKeys)) || payload.resourcePhase !== resourceCatalog.executionPhase(execution)) && (execution.resourceLease
         || ops(execution.taskId).some(operation => operation.executionId === execution.executionId && operationBlocksRecovery(operation)))) fail('DYNAMIC_EXECUTION_RESOURCES_HELD')
       if (execution.result?.payload.error?.code === 'EXECUTION_PROVIDER_TRANSIENT' && execution.providerRecovery?.exhausted) {
         if (Date.parse(stamp) < Date.parse(execution.providerRecovery.retryNotBefore)) fail('DYNAMIC_PROVIDER_COOLDOWN_REQUIRED')
@@ -1103,11 +1131,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       execution.title ||= executionSessionTitle(execution)
       execution.prompt = payload.prompt; execution.input = clone(payload.input)
       execution.resourceKeys = payload.resourceKeys
+      execution.resourcePhase = payload.resourcePhase
       if (execution.providerRecovery) execution.providerRecovery = { ...execution.providerRecovery, nextAttemptAt: null, nextReviewAt: null, activeInputVersion: null }
       execution.definition = { ...execution.definition, recoveryReadOnly: a.definition?.recoveryReadOnly === true }
       execution.requirementRevision = task.requirementRevision; execution.controlRevision = task.controlRevision
       execution.cancelRequested = false; execution.status = 'queued'; execution.updatedAt = stamp
-      execution.continuations = [...(execution.continuations ?? []), { key, digest: continuationDigest, inputVersion: execution.inputVersion, resourceKeys: payload.resourceKeys }]
+      execution.continuations = [...(execution.continuations ?? []), { key, digest: continuationDigest, inputVersion: execution.inputVersion, resourceKeys: payload.resourceKeys, resourcePhase: payload.resourcePhase }]
       put('dynamic_executions', execution); return changed({ execution })
     }
     if (kind === 'execution.retry-provider') {
@@ -1194,6 +1223,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (!execution.definition?.recoveryReadOnly && ops(execution.taskId).some(item => item.executionId === execution.executionId && ['starting','unknown'].includes(item.state) && operationBlocksRecovery(item))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       // 同一事务全取或全不取，禁止持有部分资源后等待另一部分。
       const keys = resourceKeys(execution.resourceKeys)
+      resourceCatalog.phase(resourceCatalog.executionPhase(execution), keys)
       lock(keys, executionHolder(execution))
       execution.instructionScope = coordination.claimScope(execution)
       if (keys.length) execution.resourceLease ??= { acquiredAt: stamp }
@@ -1328,7 +1358,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const execution = a.binding.executionId ? get('dynamic_executions', a.binding.executionId) : null
       const restartPending = restartRecoveryPending(task)
       if (restartPending.length && !(execution?.definition?.recoveryReadOnly === true && restartPending.includes(execution.input?.readbackOperationId))) fail('DYNAMIC_RESTART_RECOVERY_READ_ONLY')
-      if (execution?.resourceKeys?.length && keys.some(key => !execution.resourceKeys.includes(key))) fail('DYNAMIC_RESOURCE_SCOPE_EXPANSION')
+      assertOperationResources(execution, keys)
       const specificationDigest = digest({ definition, resourceKeys: keys, requirementRevision: task.requirementRevision, controlRevision: task.controlRevision })
       const prior = ops(task.taskId).find(item => item.key === key)
       if (prior) {
@@ -1359,9 +1389,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         || operation.requirementRevision !== task.requirementRevision || operation.controlRevision !== task.controlRevision) fail('DYNAMIC_OPERATION_SCOPE_STALE')
       assertNoLegacy(task.taskId)
       if (operation.state !== 'prepared') return changed({ operation })
+      assertOperationResources(a.binding.executionId ? boundExecution(a.binding) : null, resourceKeys(operation.resourceKeys))
       if (operation.resourceHolder) {
         const execution = boundExecution(a.binding)
         if (!execution.resourceLease || digest(heldKeys(operation.resourceHolder)) !== digest(resourceKeys(execution.resourceKeys))) fail('DYNAMIC_RESOURCE_INVARIANT')
+        // 升级后发现多个旧别名持有者时保留双方记录，但不能继续产生相冲突的新效果。
+        lock(execution.resourceKeys, operation.resourceHolder)
       } else lock(operation.resourceKeys, operation.operationId)
       operation.state = 'starting'; operation.dispatchBinding = clone(a.binding); operation.updatedAt = stamp
       put('dynamic_operations', operation)
@@ -1992,7 +2025,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const { resources } = executionViews([execution])[0]
         value = { taskId: execution.taskId, executionId: execution.executionId, sessionId: execution.sessionId,
           requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
-          inputVersion: execution.inputVersion, leaseEpoch: execution.leaseEpoch, resources }
+          inputVersion: execution.inputVersion, leaseEpoch: execution.leaseEpoch, resourcePhase: resourceCatalog.executionPhase(execution), resources }
       }
       else if (q.kind === 'operation.get') value = get('dynamic_operations', q.operationId, true)
       else if (q.kind === 'operation.list') value = ops(q.taskId)
@@ -2001,6 +2034,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'notification.list') value = all('dynamic_notifications').filter(item => (!q.taskId || item.taskId === q.taskId) && (!q.groupId || item.payload?.conversationId === q.groupId) && (!q.state || item.state === q.state))
       else if (q.kind === 'legacy.list') value = all('dynamic_legacy_blockers')
       else if (q.kind === 'resource.list') value = db.prepare('SELECT resource_key AS resourceKey,holder FROM dynamic_resource_locks ORDER BY resource_key').all()
+      else if (q.kind === 'resource.catalog') value = resourceCatalog.snapshot
       else if (q.kind === 'source.get') value = get('dynamic_sources', q.sourceId, true)
       else if (q.kind === 'source.list') value = all('dynamic_sources').filter(item => (!q.groupId || item.groupId === q.groupId) && (!q.unrouted || !item.routed) && (!q.status || (q.status === 'routed' ? !!item.routed : !item.routed)))
       else if (q.kind === 'group.get') value = get('dynamic_groups', q.groupId, true)

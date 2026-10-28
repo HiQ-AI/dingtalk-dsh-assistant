@@ -1,0 +1,10 @@
+✔ 原生资源目录工具驱动准备到发布的原会话续办，目录别名实际落为canonical锁 (5723.1107ms)
+✔ 旧执行缺resourcePhase时原生读取仍为lossless JSON，旧Host未提供目录回调可只读空目录 (443.1061ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6991.7838

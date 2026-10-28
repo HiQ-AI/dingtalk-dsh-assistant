@@ -3,8 +3,8 @@ import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import { restartFixture } from './fixtures/native-restart-isolation.js'
 import { restartScopeProbePlan, localRestartScope, restartProducerFilter } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
-import { inspectIsolatedHostRestart } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
-import { isolationBinding, verifyRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
+import { inspectIsolatedHostRestart, prepareRestartScopeProbe } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
+import { isolationBinding, isolationDigest, verifyRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 
 const pg = String.raw`& D:\soft\PostgreSQL\16\bin\postgres.exe -D D:\agent\artifacts\isolated-pg -h 127.0.0.1 -p 25428`
 const maven = String.raw`$env:JAVA_HOME='D:\jdk'; $env:PATH="$env:JAVA_HOME\bin;$env:PATH"; $env:JAVA_TOOL_OPTIONS='-Dfile.encoding=UTF-8'; python D:\host\skills\business-development\scripts\verification_run.py --cwd D:\agent\worktrees\compat --evidence-dir D:\agent\tasks\task\round-5 --name compile -- D:\maven\bin\mvn.cmd -o '-Dmaven.repo.local=D:\maven\repository' -DskipTests test-compile`
@@ -66,6 +66,8 @@ for (const [name, alter] of Object.entries({
  'wrong fatal evidence': f => { f.observation.hostFatal = false },
  'discarded local effects': f => { f.observation.originalArtifactsPreserved = false },
  'fake echo command': f => { f.reads[2].data.arguments = JSON.stringify({ command: 'Write-Output fake' }) },
+ 'missing final LF': f => { f.reads[2].data.arguments = JSON.stringify({ command: f.plan.command.slice(0, -1) }) },
+ 'LF converted to CRLF': f => { f.reads[2].data.arguments = JSON.stringify({ command: f.plan.command.replaceAll('\n', '\r\n') }) },
  'probe not producer-settled': f => { f.reads[4].data.producerReported = false },
  'probe failed': f => { f.reads[4].data.status = 'failed' },
  'foreign probe': f => { f.scopeEvidence.probeExecutionId = 'foreign' },
@@ -74,6 +76,25 @@ for (const [name, alter] of Object.entries({
  const oldHome = process.env.DSH_HOME; process.env.DSH_HOME = 'D:\\host'
  try { const f = probeFixture(pg, true); alter(f); f.updateOutput(); assert.equal(await inspectIsolatedHostRestart(f), null) }
  finally { if (oldHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = oldHome }
+})
+
+test('managed plan is rebuilt from original native evidence and bound to the current investigation', async () => {
+ const oldHome = process.env.DSH_HOME; process.env.DSH_HOME = 'D:\\host'
+ try {
+  const f = probeFixture(maven, false)
+  const investigation = { ...f.readback, executionId: 'current-investigation', sessionId: 'current-session', status: 'running', drained: false }
+  const args = { expectedOperationDigest: isolationDigest(f.operation), expectedScriptDigest: f.plan.scriptDigest, scopeEvidence: f.scopeEvidence }
+  const request = { ...f, executions: [f.execution, investigation], investigation, binding: investigation, args }
+  assert.deepEqual(await prepareRestartScopeProbe(request), f.plan)
+  for (const changes of [
+   { binding: { ...investigation, inputVersion: 55 } },
+   { investigation: { ...investigation, taskId: 'foreign' } },
+   { investigation: { ...investigation, definition: { recoveryReadOnly: false } } },
+   { investigation: { ...investigation, input: { readbackOperationId: 'other' } } },
+   { args: { ...args, expectedOperationDigest: 'f'.repeat(64) } },
+   { args: { ...args, expectedScriptDigest: isolationDigest({ command: f.plan.command.trimEnd() }) } },
+  ]) assert.equal(await prepareRestartScopeProbe({ ...request, ...changes }), null)
+ } finally { if (oldHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = oldHome }
 })
 
 

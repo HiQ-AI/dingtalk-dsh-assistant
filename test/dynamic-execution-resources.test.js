@@ -1,15 +1,23 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
+import { createHash } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import { readExecutionResourceCatalog } from '../packages/dingtalk-dsh-assistant/execution-resource-catalog.js'
+
+const catalog = { version: 1, resources: [
+  { key: 'publish:example:uat', aliases: ['old:uat', 'cluster:example:uat'], purpose: 'publication', description: '示例共享发布目标' },
+  { key: 'publish:example:other', aliases: [], purpose: 'publication', description: '另一发布目标' },
+  { key: 'workspace:example:integration', aliases: ['old:integration'], purpose: 'workspace', description: '共享集成检出' },
+] }
 
 // 使用真实隔离账本和公开命令验证资源生命周期；不读写运行实例或依赖私有锁实现。
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'dynamic-execution-resources-'))
-  const config = { dbPath: join(root, 'ledger.sqlite'), instanceId: 'resource-tests', initialize: true }
+  const config = { dbPath: join(root, 'ledger.sqlite'), instanceId: 'resource-tests', initialize: true, ...options }
   let store = await openDynamicTaskStore(config), sequence = 0
   t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }) })
   const command = (kind, args, id = `command-${++sequence}`) => store.command({ id, kind, args })
@@ -18,8 +26,8 @@ async function fixture(t) {
     await command('task.create', { taskId, request: '验证共享环境的受管执行互斥' })
     return (await command('task.claim', { taskId })).result.binding
   }
-  async function dispatch(binding, resourceKeys, key = 'deploy') {
-    return (await command('execution.dispatch', { binding, key, prompt: '验证指定资源', input: {}, resourceKeys })).result.execution
+  async function dispatch(binding, resourceKeys, key = 'deploy', resourcePhase) {
+    return (await command('execution.dispatch', { binding, key, prompt: '验证指定资源', input: {}, resourceKeys, ...(resourcePhase ? { resourcePhase } : {}) })).result.execution
   }
   async function claim(execution) {
     return (await command('execution.claim', { executionId: execution.executionId })).result.binding
@@ -32,7 +40,15 @@ async function fixture(t) {
     return (await command('operation.prepare', { binding, key: `effect-${++sequence}`, definition: { toolName: 'pwsh' }, resourceKeys })).result.operation
   }
   return { command, query, task, dispatch, claim, finish, operation,
-    async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }) } }
+    openAdditional: options => openDynamicTaskStore({ ...config, initialize: false, ...options }),
+    // 仅隔离夹具模拟旧版本落盘形态；绝不接收或修改现场数据库路径。
+    async restoreLegacyFixture(rewrite, options = {}) {
+      await store.close()
+      const db = new DatabaseSync(config.dbPath)
+      try { rewrite(db) } finally { db.close() }
+      store = await openDynamicTaskStore({ ...config, initialize: false, ...options })
+    },
+    async reopen(overrides = {}) { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false, ...overrides }) } }
 }
 
 test('执行自身资源查询只返回绑定身份和当前租约，不改变锁或操作账本', async t => {
@@ -42,7 +58,7 @@ test('执行自身资源查询只返回绑定身份和当前租约，不改变�
   const empty = await f.claim(await f.dispatch(await f.task('no-resources'), []))
   const locks = await f.query({ kind: 'resource.list' })
   const snapshot = await f.query({ kind: 'execution.resources', binding })
-  assert.deepEqual(Object.keys(snapshot).sort(), ['taskId', 'executionId', 'sessionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'leaseEpoch', 'resources'].sort())
+  assert.deepEqual(Object.keys(snapshot).sort(), ['taskId', 'executionId', 'sessionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'leaseEpoch', 'resourcePhase', 'resources'].sort())
   assert.equal(snapshot.executionId, binding.executionId)
   assert.equal(snapshot.resources.state, 'held')
   assert.deepEqual(snapshot.resources.keys, ['uat2'])
@@ -402,4 +418,188 @@ test('多执行资源视图每次公开查询最多读取一次锁表，并在�
   assert.equal(currentBlockers.executions.length, executions.length - 1)
   assert.deepEqual(currentBlockers.executions.find(item => item.executionId === current.executionId).resources, current.resources)
   t.diagnostic(JSON.stringify({ executions: executions.length, declaredKeys: executions.length * 2, observations }))
+})
+
+test('目录从受信工作区读取，重名、无效JSON和删除已登记身份明确失败', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'resource-catalog-config-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  assert.equal(await readExecutionResourceCatalog(root), null)
+  await mkdir(join(root, '.dsh'))
+  const file = join(root, '.dsh', 'shared-resources.json')
+  await writeFile(file, JSON.stringify(catalog))
+  assert.equal((await readExecutionResourceCatalog(root)).resources.length, 3)
+  await writeFile(file, '{bad-json')
+  await assert.rejects(readExecutionResourceCatalog(root), { code: 'DYNAMIC_RESOURCE_CATALOG_INVALID' })
+  await writeFile(file, JSON.stringify({ ...catalog, resources: [...catalog.resources, { ...catalog.resources[0], key: 'duplicate' }] }))
+  await assert.rejects(readExecutionResourceCatalog(root), { code: 'DYNAMIC_RESOURCE_CATALOG_AMBIGUOUS' })
+  const f = await fixture(t, { resourceCatalog: catalog })
+  await assert.rejects(f.reopen({ resourceCatalog: { version: 1, resources: catalog.resources.slice(1) } }), { code: 'DYNAMIC_RESOURCE_CATALOG_REBIND_FORBIDDEN' })
+  const rebound = structuredClone(catalog)
+  rebound.resources[0].purpose = 'workspace'
+  await assert.rejects(f.reopen({ resourceCatalog: rebound }), { code: 'DYNAMIC_RESOURCE_CATALOG_REBIND_FORBIDDEN' })
+  await f.reopen({ resourceCatalog: null })
+  assert.equal((await f.query({ kind: 'resource.catalog' })).resources.length, 3, '配置暂缺仍保留持久映射')
+})
+
+test('同一控制库禁止不同目录的第二活跃Host，追加别名只能在原Host关闭后生效', async t => {
+  const f = await fixture(t, { resourceCatalog: catalog })
+  const extended = structuredClone(catalog)
+  extended.resources[0].aliases.push('new:uat')
+  await assert.rejects(f.openAdditional({ resourceCatalog: extended }), { code: 'DYNAMIC_STORE_ALREADY_OPEN' })
+  const owner = await f.task('owner')
+  await assert.rejects(f.dispatch(owner, ['new:uat'], 'not-loaded', 'publish'), { code: 'DYNAMIC_RESOURCE_UNREGISTERED' })
+  await f.reopen({ resourceCatalog: extended })
+  const held = await f.claim(await f.dispatch(await f.task('new'), ['new:uat'], 'loaded', 'publish'))
+  assert.deepEqual((await f.query({ kind: 'execution.resources', binding: held })).resources.keys, ['publish:example:uat'])
+})
+
+test('登记别名在委派、排队、operation及联合获取中使用同一个canonical身份', async t => {
+  const f = await fixture(t, { resourceCatalog: catalog }), owner = await f.task('owner')
+  const first = await f.dispatch(owner, ['old:uat', 'cluster:example:uat'], 'publish', 'publish')
+  assert.deepEqual(first.resourceKeys, ['publish:example:uat'])
+  const repeated = await f.dispatch(owner, ['publish:example:uat'], 'publish', 'publish')
+  assert.equal(repeated.executionId, first.executionId)
+  const binding = await f.claim(first)
+  const second = await f.dispatch(await f.task('second'), ['publish:example:other', 'cluster:example:uat'], 'publish', 'publish')
+  const queued = await f.query({ kind: 'execution.get', executionId: second.executionId })
+  assert.equal(queued.resources.state, 'waiting')
+  assert.deepEqual(queued.resources.blocking, [{ resourceKey: 'publish:example:uat', holder: `execution:${first.executionId}` }])
+  await assert.rejects(f.claim(second), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  assert.equal((await f.query({ kind: 'resource.list' })).length, 1, '多键失败不留下另一目标的部分锁')
+  const operation = await f.operation(binding, ['cluster:example:uat'])
+  assert.deepEqual(operation.resourceKeys, ['publish:example:uat'])
+  await f.command('operation.start', { binding, operationId: operation.operationId })
+  await f.command('operation.settle', { binding, operationId: operation.operationId, state: 'succeeded', result: { ok: true } })
+  await f.finish(binding)
+  await f.finish(await f.claim(second))
+  await assert.rejects(f.dispatch(owner, ['invented:uat'], 'bad-key', 'publish'), { code: 'DYNAMIC_RESOURCE_UNREGISTERED' })
+})
+
+test('本地准备不能占发布资源或通过operation绕过阶段，动态文件锁仍可用', async t => {
+  const f = await fixture(t, { resourceCatalog: catalog }), owner = await f.task('owner')
+  await assert.rejects(f.dispatch(owner, ['old:uat']), { code: 'DYNAMIC_RESOURCE_PHASE_MISMATCH' })
+  const prepared = await f.dispatch(owner, []), binding = await f.claim(prepared)
+  assert.equal((await f.query({ kind: 'execution.resources', binding })).resourcePhase, 'prepare')
+  await assert.rejects(f.operation(binding, ['old:uat']), { code: 'DYNAMIC_RESOURCE_PHASE_MISMATCH' })
+  const file = await f.operation(binding, ['file:isolated-worktree/README.md'])
+  await f.command('operation.start', { binding, operationId: file.operationId })
+  assert.deepEqual((await f.query({ kind: 'resource.list' })).map(row => row.resourceKey), ['file:isolated-worktree/README.md'])
+  await f.command('operation.settle', { binding, operationId: file.operationId, state: 'succeeded', result: {} })
+  await f.finish(binding)
+  const publish = await f.claim(await f.dispatch(owner, [], 'undeclared-publish', 'publish'))
+  await assert.rejects(f.operation(publish, ['old:uat']), { code: 'DYNAMIC_RESOURCE_SCOPE_EXPANSION' })
+})
+
+test('切换发布阶段必须原执行及全部effect排空，原会话联合获取且不重放原效果', async t => {
+  const f = await fixture(t, { resourceCatalog: catalog }), owner = await f.task('owner')
+  const execution = await f.dispatch(owner, ['old:integration'], 'prepare'), binding = await f.claim(execution)
+  const args = { binding: owner, executionId: execution.executionId, key: 'publish', prompt: '使用准备好的源码发布', input: {},
+    resourcePhase: 'publish', resourceKeys: ['old:uat', 'publish:example:other'] }
+  await assert.rejects(f.command('execution.continue', args), { code: 'DYNAMIC_EXECUTION_BUSY' })
+  const pending = await f.operation(binding)
+  await f.command('operation.start', { binding, operationId: pending.operationId })
+  await f.command('operation.settle', { binding, operationId: pending.operationId, state: 'unknown' })
+  await f.finish(binding)
+  await assert.rejects(f.command('execution.continue', args), { code: 'DYNAMIC_OPERATION_UNRESOLVED' })
+  await assert.rejects(f.command('execution.continue', { ...args, definition: { recoveryReadOnly: true } }), { code: 'DYNAMIC_EXECUTION_RESOURCES_HELD' })
+  await f.command('operation.reconcile', { operationId: pending.operationId, state: 'succeeded', result: { verified: true }, evidenceRef: 'original-effect-receipt' })
+  const next = (await f.command('execution.continue', args)).result.execution
+  assert.equal(next.executionId, execution.executionId)
+  assert.equal(next.sessionId, execution.sessionId)
+  assert.equal(next.resourcePhase, 'publish')
+  const publishBinding = await f.claim(next)
+  assert.deepEqual((await f.query({ kind: 'execution.resources', binding: publishBinding })).resources.keys, ['publish:example:other', 'publish:example:uat'])
+  assert.equal((await f.query({ kind: 'operation.list' })).length, 1, '阶段切换不生成或重放原效果')
+  await f.finish(publishBinding)
+})
+
+test('升级前多个旧别名持有者全部保留，任一未排空时新canonical请求仍等待', async t => {
+  const f = await fixture(t), first = await f.dispatch(await f.task('old-a'), ['old:uat'], 'old-a', 'publish')
+  const second = await f.dispatch(await f.task('old-b'), ['cluster:example:uat'], 'old-b', 'publish')
+  const firstBinding = await f.claim(first), secondBinding = await f.claim(second)
+  const effect = await f.operation(firstBinding, ['old:uat'])
+  await f.command('operation.start', { binding: firstBinding, operationId: effect.operationId })
+  await f.command('execution.result', { binding: firstBinding, output: { status: 'verified' } })
+  const before = await f.query({ kind: 'resource.list' })
+  await f.reopen({ resourceCatalog: catalog })
+  assert.deepEqual(await f.query({ kind: 'resource.list' }), before, '启动不重写或删除历史锁行')
+  const next = await f.dispatch(await f.task('new'), ['publish:example:uat'], 'new', 'publish')
+  assert.equal((await f.query({ kind: 'execution.get', executionId: next.executionId })).resources.blocking.length, 2)
+  const original = await f.query({ kind: 'execution.get', executionId: first.executionId })
+  assert.equal(original.status, 'succeeded')
+  assert.equal(original.drained, false)
+  assert.equal(original.resources.blocking.length, 1)
+  assert.equal(original.resources.state, 'waiting', '结果已提交但锁尚未释放，别名冲突不能误报released或独占held')
+  assert.equal(original.resources.holder, `execution:${first.executionId}`)
+  await assert.rejects(f.claim(next), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('execution.drained', { binding: firstBinding })
+  await f.command('execution.drained', { binding: secondBinding })
+  await assert.rejects(f.claim(next), { code: 'DYNAMIC_RESOURCE_BUSY' }, '旧执行排空不掩盖旧未知效果')
+  const unknown = await f.query({ kind: 'operation.get', operationId: effect.operationId })
+  assert.equal(unknown.state, 'unknown')
+  assert.deepEqual(unknown.resourceKeys, ['old:uat'], '历史操作身份保持不变')
+  await f.command('operation.reconcile', { operationId: effect.operationId, state: 'succeeded', result: { verified: true }, evidenceRef: 'old-effect-terminal' })
+  await f.finish(await f.claim(next))
+})
+
+test('旧独立operation的别名锁在目录安装与文件缺失后都继续阻塞canonical请求', async t => {
+  const f = await fixture(t), binding = await f.task('legacy-operation')
+  const effect = await f.operation(binding, ['old:uat'])
+  await f.command('operation.start', { binding, operationId: effect.operationId })
+  const originalLocks = await f.query({ kind: 'resource.list' })
+  await f.reopen({ resourceCatalog: catalog })
+  await f.reopen({ resourceCatalog: null })
+  assert.deepEqual(await f.query({ kind: 'resource.list' }), originalLocks)
+  const pending = await f.dispatch(await f.task('publisher'), ['cluster:example:uat'], 'publish', 'publish')
+  await assert.rejects(f.claim(pending), { code: 'DYNAMIC_RESOURCE_BUSY' })
+  await f.command('operation.reconcile', { operationId: effect.operationId, state: 'failed', result: { verified: true }, evidenceRef: 'old-independent-operation-readback' })
+  await f.finish(await f.claim(pending))
+})
+
+test('旧无phase委派和续办同key重入仍核验原摘要，归一别名不重放历史效果', async t => {
+  const f = await fixture(t), owner = await f.task('legacy-owner')
+  const execution = await f.dispatch(owner, ['old:uat'], 'initial')
+  const binding = await f.claim(execution), effect = await f.operation(binding)
+  await f.command('operation.start', { binding, operationId: effect.operationId })
+  await f.command('operation.settle', { binding, operationId: effect.operationId, state: 'succeeded', result: { receipt: 'original' } })
+  await f.finish(binding)
+  const continuation = { binding: owner, executionId: execution.executionId, key: 'continued', prompt: '旧版续办核验', input: {}, resourceKeys: ['old:uat'] }
+  const next = (await f.command('execution.continue', continuation, 'legacy-continue-receipt')).result.execution
+  await f.finish(await f.claim(next))
+  await f.command('task.drained', { binding: owner })
+  const oldDigest = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
+  const upgradeRecord = record => {
+    delete record.resourcePhase
+    record.dispatchDigest = oldDigest({ prompt: '验证指定资源', input: {}, definition: null, resourceKeys: ['old:uat'], requirementRevision: 1, controlRevision: 1 })
+    for (const item of record.continuations ?? []) {
+      delete item.resourcePhase
+      item.digest = oldDigest({ prompt: continuation.prompt, input: {}, resourceKeys: ['old:uat'], requirementRevision: 1, controlRevision: 1 })
+    }
+    return record
+  }
+  await f.restoreLegacyFixture(db => {
+    for (const row of db.prepare('SELECT id,body FROM dynamic_executions').all()) {
+      db.prepare('UPDATE dynamic_executions SET body=? WHERE id=?').run(JSON.stringify(upgradeRecord(JSON.parse(row.body))), row.id)
+    }
+    for (const row of db.prepare('SELECT id,body FROM dynamic_receipts').all()) {
+      const body = JSON.parse(row.body)
+      if (body.result?.execution) {
+        upgradeRecord(body.result.execution)
+        db.prepare('UPDATE dynamic_receipts SET body=? WHERE id=?').run(JSON.stringify(body), row.id)
+      }
+    }
+  }, { resourceCatalog: catalog })
+  const originalReceipt = await f.query({ kind: 'receipt.get', id: 'legacy-continue-receipt' })
+  const currentOwner = (await f.command('task.claim', { taskId: owner.taskId })).result.binding
+  const replay = await f.dispatch(currentOwner, ['cluster:example:uat'], 'initial')
+  assert.equal(replay.executionId, execution.executionId)
+  const resumed = (await f.command('execution.continue', { ...continuation, binding: currentOwner, resourceKeys: ['publish:example:uat'] })).result.execution
+  assert.equal(resumed.inputVersion, 2)
+  assert.equal(resumed.leaseEpoch, 2)
+  assert.equal(resumed.resourcePhase, undefined, '幂等回执不补写旧执行的phase')
+  assert.equal((await f.query({ kind: 'operation.list' })).length, 1)
+  assert.equal((await f.query({ kind: 'operation.get', operationId: effect.operationId })).result.receipt, 'original')
+  assert.deepEqual(await f.query({ kind: 'receipt.get', id: 'legacy-continue-receipt' }), originalReceipt)
+  await assert.rejects(f.command('execution.continue', { ...continuation, binding: currentOwner, prompt: '换目标' }), { code: 'DYNAMIC_DISPATCH_KEY_CONFLICT' })
 })
