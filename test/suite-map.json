@@ -5708,6 +5708,19 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
+      "file": "test/observer-audited-restart-alerts.test.js",
+      "lane": "unit",
+      "category": "unit",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
+        "packages/dingtalk-dsh-assistant/observer-alert-pages.js",
+        "packages/dingtalk-dsh-assistant/observer-memory-pages.js"
+      ],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
       "file": "test/observer-board-restoration.test.js",
       "lane": "unit",
       "category": "unit",
