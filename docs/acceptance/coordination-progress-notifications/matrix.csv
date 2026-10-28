@@ -25,3 +25,7 @@ native-git-msys-permission,8,PASS,round-8.md
 latest-package-release-smoke,8,PASS,round-8.md
 legacy-owner-direct-artifact-write,8,FAIL,round-8.md
 production-publisher-permission,8,PENDING,round-8.md
+production-publisher-permission,9,PASS,round-9.md
+original-session-execution-continuation,9,PASS,round-9.md
+original-git-helper-and-metadata,9,PASS,round-9.md
+technical-input-without-observer-index,9,PASS,round-9.md

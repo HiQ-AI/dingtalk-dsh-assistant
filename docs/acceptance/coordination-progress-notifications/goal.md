@@ -34,13 +34,13 @@
 | SG7 | 原v4 Owner模式故障恢复 | 原会话模式纠正并真实接续，原成果保留 | 已完成 | report.md；原生seq7446/7449，lease165，工具成功回包 |
 
 | SG8 | 同类目录前置保障 | tasks根一次性权限准备并继承，新建目录不再逐项审批 | 已完成 | round-7.md；现场根及新目录原生验证 |
-| SG9 | 能力判断与等待依据 | 不把未尝试能力说成不可用，保留实际失败工具/路径 | 源码完成待安装 | round-7.md；既有原生恢复1/1通过 |
+| SG9 | 能力判断与等待依据 | 不把未尝试能力说成不可用，保留实际失败工具/路径 | 已完成 | round-9.md；PID33984已安装 |
 | SG10 | 系统回归与交付 | 各目录/恢复/续办场景正反例及现场恢复 | 部分完成 | round-7.md；额外资源组超时、提示待安装 |
-| SG11 | 原发布执行权限恢复 | 原c5受信权限纠正、Git与辅助进程成功并续办剩余交付 | 进行中 | publish-execution-native-permissions.md；input8真实拒绝证据 |
+| SG11 | 原发布执行权限恢复 | 原c5受信权限纠正、Git与辅助进程成功并续办剩余交付 | 已完成 | round-9.md；input9同session、原生Git提交推送成功 |
 
 ## 当前检查点
-- 当前子目标：SG11
-- 唯一下一步：修复原发布执行的原生权限纠正入口，部署后正式恢复原c5，仅续办剩余交付。
+- 当前子目标：技术修复已闭环，原Task继续剩余UAT2交付
+- 唯一下一步：由原作者原执行继续UAT2集成及发布；不追加唤醒、不重跑业务验证。
 - 未闭环项：原UAT2业务交付由原任务继续；历史wakes尚未全部ack，全局recover耗时阶段未收敛。
 
 ## 进展
@@ -71,3 +71,5 @@
 - 用户追加：不能只修本次，要杜绝同类。原生官方诊断证实原outputs有效WRITE_DAC=true/WRITE_OWNER=false；授权后仅该根补当前用户FullControl，verification verified，未改文件/所有者。Owner所谓入口不存在已被tool schema及无delegate尝试反证。
 
 - SG11（进行中）：原发布c5/input8已真实接续，但Git common-dir写入与MSYS命名对象分别被受限环境拒绝。新增受信operator对精确原execution的权限纠正，复用原生mode，保留原检出/凭据/验证；不再把统一产物归档误作业务写根。方案docs/spec/publish-execution-native-permissions.md。
+
+- 最新现场：round-9已证明原c5 input9、同session完整模式和真实Git读/暂存/提交/推送成功，独立PR392回读head=c56df87d。PID33984；技术阻塞修复完成，UAT业务仍在原任务进行。
