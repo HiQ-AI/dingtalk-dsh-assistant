@@ -13,7 +13,7 @@ async function directory(t) {
   return root
 }
 
-test('mandatory integrity scan keeps Host timers responsive with synthetic history', async t => {
+test('explicit maintenance integrity scan keeps Host timers responsive with synthetic history', async t => {
   const dbPath = join(await directory(t), 'history.sqlite')
   const db = new DatabaseSync(dbPath)
   db.exec('CREATE TABLE history(id INTEGER PRIMARY KEY, body TEXT); BEGIN')
@@ -41,14 +41,14 @@ test('corruption and foreign-key violations remain fail-closed without leaking c
   })
 })
 
-test('startup metrics cannot change semantics and report integrity before recovery', async t => {
+test('startup metrics cannot change semantics and normal startup does not scan history', async t => {
   const { openDynamicTaskStore } = await import('../packages/dingtalk-dsh-assistant/dynamic-task-store.js')
   const samples = [], root = await directory(t)
   const options = { dbPath: join(root, 'tasks.sqlite'), instanceId: 'synthetic', initialize: true,
     startupObserver: sample => { samples.push(sample); throw new Error('observer failed') } }
   const store = await openDynamicTaskStore(options)
   await store.close()
-  assert.deepEqual(samples.map(sample => sample.phase), ['task-store.integrity', 'task-store.recovery'])
+  assert.deepEqual(samples.map(sample => sample.phase), ['task-store.recovery'])
   for (const sample of samples) {
     assert.ok(Number.isFinite(sample.durationMs) && sample.durationMs >= 0)
     assert.equal(sample.status, 'ok')

@@ -40,3 +40,23 @@ test('legacy trace migration honors the separate process-owner SQLite lock',asyn
  const result=run('--apply','--backup',backup,'--expected-sha256',hash)
  assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).ready,true)
 })
+
+
+test('offline migration partitions an existing archive flag and preserves readable command history', async t => {
+ const {openDynamicTaskStore}=await import('../packages/dingtalk-dsh-assistant/dynamic-task-store.js')
+ const root=await mkdtemp(join(tmpdir(),'observer-archive-migration-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const path=join(root,'ledger.sqlite'),backup=join(root,'backup.sqlite'),options={dbPath:path,instanceId:'fixture',initialize:true}
+ let store=await openDynamicTaskStore(options),n=0
+ const command=(kind,args,id=`c${++n}`)=>store.command({id,kind,args})
+ await command('task.create',{taskId:'legacy',request:'Synthetic migration'})
+ const {binding}=(await command('task.claim',{taskId:'legacy'})).result
+ const completed=await command('task.complete',{binding,summary:'Synthetic done'},'completed')
+ await command('task.drained',{binding});await store.close()
+ const old=new DatabaseSync(path);old.exec("UPDATE dynamic_tasks SET body=json_set(body,'$.archivedAt','2026-01-01T00:00:00Z','$.archivedBy','fixture') WHERE id='legacy'");old.close()
+ await copyFile(path,backup);const hash=createHash('sha256').update(await readFile(path)).digest('hex')
+ const result=spawnSync(process.execPath,[script.pathname.replace(/^\/([A-Za-z]:)/,'$1'),'--database',path,'--apply','--backup',backup,'--expected-sha256',hash],{encoding:'utf8',timeout:15000})
+ assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).archivedTasks,1)
+ const check=new DatabaseSync(path,{readOnly:true});assert.equal(check.prepare('SELECT count(*) n FROM dynamic_tasks').get().n,0);assert.equal(check.prepare('SELECT count(*) n FROM dynamic_archived_tasks').get().n,1);check.close()
+ store=await openDynamicTaskStore({...options,initialize:false})
+ try{assert.equal((await store.query({kind:'task.get',taskId:'legacy'})).completion.summary,'Synthetic done');assert.deepEqual(await store.command({id:'completed',kind:'task.complete',args:{binding,summary:'Synthetic done'}}),{...completed,replayed:true})}finally{await store.close()}
+})
