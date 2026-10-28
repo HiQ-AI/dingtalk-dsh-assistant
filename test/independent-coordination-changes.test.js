@@ -3,13 +3,13 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openIndependentCoordination } from '../packages/dingtalk-dsh-assistant/independent-coordination-service.js'
 import { formatCoordinationTime } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
-import { assertCoordinationHandoffProof, freezeCoordinationSourceOrder, selectCoordinationInstructions } from '../packages/dingtalk-dsh-assistant/coordination-changes.js'
+import { assertCoordinationHandoffProof, freezeCoordinationSourceOrder, selectCoordinationInstructions, coordinationContextRecoveryIdentity } from '../packages/dingtalk-dsh-assistant/coordination-changes.js'
 
 function facility(snapshot) {
   return new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
@@ -331,6 +331,99 @@ for (const allTogether of [false,true]) test(`member-level ambiguity preserves s
   ownership = f.resident.getSourceDispatchOwnership('group',original.unitId,original.unitRevision)
   assert.equal(ownership.settled,true); assert.equal(ownership.semanticState,'accepted')
   assert.equal(f.errors.length,0)
+})
+
+test('即时四事项进度查询冻结当前事实，不创建观察或唤醒任务', async t => {
+  const f = await fixture(t)
+  for (const [taskId, title] of [['upr-final', '修复终审只读数据UPR导入覆盖并部署UAT2'],
+    ['upr-unsaved', '修复新建未保存草稿UPR导入受限'], ['upr-material', '修复草稿UPR导入物料名称回显并部署UAT2'],
+    ['upr-merge', '按v4实现合并数据集UPR替换与来源保留并提测UAT2']])
+    await f.command('task.create', { taskId, title, groupId: 'group', ownerActorId: 'author', request: title })
+  const taskIds = ['upr-final', 'upr-unsaved', 'upr-material', 'upr-merge']
+  const request = await f.message('progress-only', '昨天关于导入的其他问题 修复了没')
+  await f.service.context(request)
+  // 目录读取后版本变化仍读取最新状态，不把查询变成固定版本观察。
+  await f.command('task.supplement', { taskId: 'upr-final', messageId: 'material', text: '补充已有材料', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  const binding = (await f.command('task.claim', { taskId: 'upr-material', force: true })).result.binding
+  await f.command('task.complete', { binding, summary: '名称回显修复完成，已部署UAT2', result: { evidence: ['deployment-proof'] } })
+  await f.command('task.drained', { binding })
+  await f.command('task.control', { taskId: 'upr-unsaved', expectedControlRevision: 1, control: 'paused', reason: '用户暂停' })
+  const before = await f.query('task.list'), wakes = await f.query('wake.list')
+  const result = await f.service.submit(request, { kind: 'query', taskIds })
+  assert.equal(result.taskSnapshots.length, 4)
+  assert.equal(result.taskSnapshots[0].contextRevision, 1)
+  const state = await f.query('coordination.get', { coordinationId: result.coordinationId })
+  assert.deepEqual(state.members, [])
+  const notice = (await f.query('notification.list')).find(item => item.payload.sourceMessageId === 'progress-only')
+  for (const task of before.filter(task => taskIds.includes(task.taskId))) assert.ok(notice.payload.text.includes(task.title))
+  assert.match(notice.payload.text, /已暂停/)
+  assert.match(notice.payload.text, /名称回显修复完成，已部署UAT2/)
+  assert.doesNotMatch(notice.payload.text, /原事项|版本|重新核对/)
+  assert.deepEqual(await f.query('task.list'), before)
+  assert.deepEqual(await f.query('wake.list'), wakes)
+  assert.deepEqual(await f.query('execution.list'), [])
+  assert.deepEqual(await f.query('coordination.schedule.list'), [])
+  assert.deepEqual(await f.query('coordination.occurrence.list'), [])
+  assert.equal((await f.command('coordination.aggregate', { coordinationId: result.coordinationId })).result.notification, undefined)
+  await f.restart(); await f.service.recoverGroup('group')
+  assert.deepEqual(await f.query('task.list'), before)
+  assert.deepEqual(await f.query('wake.list'), wakes)
+  assert.deepEqual((await f.query('notification.list')).filter(item => item.payload.sourceMessageId === 'progress-only'), [notice])
+})
+
+test('即时任务查询必须来自已读同群目录；空查询和跨群对象拒绝且不留安排', async t => {
+  const f = await fixture(t), request = await f.message('query-scope', '查看任务进度')
+  await f.command('task.create', { taskId: 'elsewhere', groupId: 'other', ownerActorId: 'author', request: '其他群任务' })
+  await assert.rejects(f.service.submit(request, { kind: 'query', taskIds: ['A'] }), /COORDINATION_CONTEXT_REQUIRED/)
+  await f.service.context(request)
+  await assert.rejects(f.service.submit(request, { kind: 'query', taskIds: ['elsewhere'] }), /COORDINATION_CONTEXT_REQUIRED/)
+  await assert.rejects(f.service.submit(request, { kind: 'query' }), /Query targets required/)
+  assert.deepEqual(await f.query('coordination.list'), [])
+  assert.deepEqual(await f.query('notification.list'), [])
+})
+
+test('初次与追加均拒绝无下游消费者的观察；同一来源可改交一次性查询', async t => {
+  const f = await fixture(t), request = await f.message('observe-only', '昨天关于导入的其他问题 修复了没')
+  const member = { action: 'task-observe', taskId: 'A', inputVersion: 1, runSequence: 1 }
+  await f.service.context(request, { taskIds: ['A', 'B'] })
+  const before = await f.query('task.list'), wakes = await f.query('wake.list')
+  await assert.rejects(f.service.submit(request, { kind: 'arrangement', members: [member] }), /OBSERVATION_REQUIRES_DEPENDENT_USE_QUERY/)
+  assert.deepEqual(await f.query('coordination.list'), [])
+  const accepted = await f.service.submit(request, { kind: 'query', taskIds: ['A', 'B'] })
+  const append = await f.message('append-observe', '只是想看看A进度')
+  await f.service.context(append, { taskIds: ['A'], coordinationIds: [accepted.coordinationId] })
+  await assert.rejects(f.service.submit(append, { kind: 'change', coordinationId: accepted.coordinationId, expectedRevision: 1,
+    change: { action: 'append', reason: '查询进度', members: [member] } }), /OBSERVATION_REQUIRES_DEPENDENT_USE_QUERY/)
+  assert.deepEqual(await f.query('task.list'), before)
+  assert.deepEqual(await f.query('wake.list'), wakes)
+  assert.deepEqual((await f.query('coordination.get', { coordinationId: accepted.coordinationId })).members, [])
+})
+
+test('旧引用澄清重判发现原任务已经承接时用query结算原安排，不遗留孤立观察', async t => {
+  const f = await fixture(t), request = await f.message('old-context', '部署到UAT2', { quote: { messageId: 'delivery', content: '原交付A' } })
+  const accepted = await f.service.submit(request, { kind: 'clarify', question: '要部署哪项改动？' })
+  const source = await f.query('coordination.source', { unitId: request.unitId, revision: request.unitRevision })
+  const arrangement = (await f.query('coordination.get', { coordinationId: accepted.coordinationId })).coordination
+  const original = (await f.query('source.list')).find(item => item.messageId === 'old-context')
+  const refs = [{ unitId: request.unitId, unitRevision: request.unitRevision }]
+  await f.command('source.processingStarted', { sourceId: original.sourceId, messageVersion: 1, activeUnitRefs: refs })
+  const processed = (await f.query('source.list')).find(item => item.sourceId === original.sourceId)
+  const token = createHash('sha256').update(JSON.stringify(coordinationContextRecoveryIdentity(source, arrangement, processed))).digest('hex')
+  await f.command('coordination.source.reconsiderContext', { sourceId: source.id, fence: source.fence, token,
+    coordinationId: arrangement.id, expectedRevision: arrangement.revision, messageSourceId: original.sourceId,
+    messageVersion: 1, reservationId: request.reservationId, generation: request.generation, activeUnitRefs: refs, quotedSnapshotMissing: true })
+  await f.service.context(request)
+  const before = await f.query('task.list'), wakes = await f.query('wake.list')
+  const answer = await f.service.submit(request, { kind: 'query', taskIds: ['A'] })
+  assert.equal(answer.coordinationId, accepted.coordinationId)
+  const state = await f.query('coordination.get', { coordinationId: accepted.coordinationId })
+  assert.equal(state.coordination.revision, 2)
+  assert.deepEqual(state.members, [])
+  assert.deepEqual(await f.query('task.list'), before)
+  assert.deepEqual(await f.query('wake.list'), wakes)
+  await f.restart(); await f.service.recoverGroup('group')
+  assert.equal((await f.query('coordination.list')).length, 1)
+  assert.deepEqual(await f.query('task.list'), before)
 })
 
 test('chat aggregate query freezes authoritative obligations and recovers the same answer without changing Tasks', async t => {

@@ -1,0 +1,16 @@
+case,round,status,evidence
+live-source-chain,1,PASS,round-1.md
+transmission-vs-generated-duplicates,1,PASS,round-1.md
+four-task-instant-query-zero-mutation,2,PASS,round-2-tests.log
+query-directory-and-group-scope,2,PASS,round-2-tests.log
+orphan-observation-admission,2,PASS,round-2-tests.log
+legitimate-dependency-and-schedule,2,PASS,round-2-tests.log
+clarification-query-recovery,2,PASS,round-2-tests.log
+native-routing-query-restart,2,PASS,round-2-tests.log
+historical-observation-no-auto-summary,2,PASS,round-2-tests.log
+unknown-delivery-no-replay,2,PASS,round-2-tests.log
+known-not-sent-not-delivered,2,FAIL,round-2.md
+known-not-sent-not-delivered,3,PASS,round-3-tests.log
+concrete-titles-neutral-version-status,3,PASS,round-3-tests.log
+business-state-dedup-and-full-fence,3,PASS,round-3-tests.log
+native-routing-query-restart,3,PASS,round-3-tests.log
