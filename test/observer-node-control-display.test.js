@@ -169,6 +169,7 @@ test('历史任务只读且保留产出读取，没有控制或动态新执行�
   const task = { taskId: 'old', title: '旧任务', legacyReadonly: true, result: '历史结果', executionNodes: [{ nodeRunId: 'old-node', title: '历史步骤', status: 'succeeded', outputRef: 'old-output' }] }
   const tree = harness('TaskSessionDetail', { task, onBack() {} }).render()
   assert.ok(elements(tree).some(item => item.props.task?.legacyReadonly === true))
+  task.legacyHistoryPage={items:task.executionNodes.map(node=>({node})),offset:0,total:task.executionNodes.length,limit:20,revision:'server'}
   const history = harness('LegacyTaskHistory', { task }).render()
   assert.match(text(history), /历史任务只读/)
   assert.ok(elements(history).some(item => item.props.node?.outputRef === 'old-output'))
@@ -435,7 +436,8 @@ test('新回合暂缺统筹记录时保留已读确认说明，跨任务或修�
 test('已取消任务仍出现在已结束桶，所有历史记录进入只读历史页', () => {
   assert.match(source, /\['completed', 'cancelled', 'succeeded', 'failed'\]\.includes\(task\.state\)/)
   assert.match(source, /filter\(task => task\.legacyReadonly \|\| task\.archivedAt\)/)
-  assert.match(source, /slice\(\(currentHistoryPage - 1\) \* 20, currentHistoryPage \* 20\)/)
+  assert.match(source, /archived=true&offset=\$\{\(historyPage - 1\) \* 20\}&limit=20/)
+  assert.doesNotMatch(source, /archivedTasks\.slice\(/)
   assert.match(source, /message\.taskSessionRefs \|\| \[\]/)
   assert.match(source, /onClick: \(\) => openTask\(tasksById\.get\(taskId\) \|\| \{ taskId \}\)/)
 })
@@ -836,4 +838,17 @@ test('三类记录统一取最新十条，展开刷新及续页保留、切任�
   assert.equal(rows(tree).length, 10)
   assert.equal(button(tree, '展开更早记录（2 条）').props['aria-expanded'], false)
   h.unmount()
+})
+
+
+test('legacy history consumes server pages and never slices or projects unselected legacy arrays',async()=>{
+ const task={taskId:'old',legacyReadonly:true,legacyHistoryPage:{items:[{node:{nodeRunId:'first',outputRef:'first-output'}}],offset:0,total:41,limit:20,revision:'stable'},get executions(){throw new Error('full legacy executions forbidden')},get executionNodes(){throw new Error('full legacy nodes forbidden')}}
+ const h=harness('LegacyTaskHistory',{task});let tree=h.render()
+ assert(elements(tree).some(item=>item.props.node?.nodeRunId==='first'))
+ button(tree,'下一页').props.onClick();tree=h.render()
+ assert.equal(h.requests.length,1);assert.match(h.requests[0].url,/legacy-history\?offset=20&limit=20&revision=stable/)
+ assert(!elements(tree).some(item=>item.props.node?.nodeRunId==='first'))
+ h.requests[0].resolve({items:[{node:{nodeRunId:'second',outputRef:'second-output'}}],offset:20,total:41,limit:20,revision:'stable'});await settle();tree=h.render()
+ assert(elements(tree).some(item=>item.props.node?.nodeRunId==='second'));assert(!elements(tree).some(item=>item.props.node?.nodeRunId==='first'))
+ assert.match(text(tree),/2\/3/)
 })

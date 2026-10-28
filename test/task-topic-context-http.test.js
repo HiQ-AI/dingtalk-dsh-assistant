@@ -26,7 +26,7 @@ test('topic context HTTP uses real topic decisions and current native task reade
       decision: { basisMessageIds: ['m1', 'm2'], actions: [], reason: `真实判断${id}` } })
     await store.completeTopicDecision({ groupId: 'g', topicId, decisionId: id })
   }
-  store.setTaskSessionReader({ listTasks: () => [{ taskId: 'native-task', groupId: 'g', title: '当前任务', state: 'waiting', inputVersion: 3, topicRefs: [{ topicId, revision }] }], getTask: () => null })
+  store.setTaskSessionReader({ listTaskPage: async()=>({items:[{taskId:'native-task',groupId:'g',title:'当前任务',state:'waiting',inputVersion:3,topicRefs:[{topicId,revision}]}],total:1,offset:0,limit:1,nextOffset:null}), listTasks: () => [{ taskId: 'native-task', groupId: 'g', title: '当前任务', state: 'waiting', inputVersion: 3, topicRefs: [{ topicId, revision }] }], getTask: () => null })
   const server = createServer((request, response) => handleRequest(request, response, store))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await store.close() })

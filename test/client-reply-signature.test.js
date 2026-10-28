@@ -38,7 +38,7 @@ function harness() {
     window: { __ModuleLoader__: { load: ({ factory }) => { component = factory(() => React).DingTalkDshAssistantCard } } },
   })
   return { writes, flushTimers() { for (const timer of timers.splice(0)) if (!timer.cancelled) timer.callback() }, setConfig: value => { config = value }, failSave: value => { failSave = value },
-    render() { cursor = 0; const tree = component(); scheduled.splice(0).forEach(effect => effect()); return tree },
+    render() { cursor = 0; const tree = component({}); scheduled.splice(0).forEach(effect => effect()); return tree },
   }
 }
 const field = tree => elements(tree).find(item => item.props['aria-label'] === 'Agent 群回复署名')

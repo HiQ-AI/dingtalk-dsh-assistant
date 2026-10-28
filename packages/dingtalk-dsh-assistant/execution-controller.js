@@ -689,7 +689,7 @@ export function createExecutionController({ store, artifacts, sessions, delivery
       let result
       try {
         await admitResult('output-validation', ready.nodeId, () => validate(nodeDefinition.outputSchema, output))
-        result = await artifacts.put(output, { reference: binding.inputRef })
+        result = await artifacts.put(output, { reference: binding.inputRef, observerNodeId:ready.nodeId })
         if (nodeDefinition.admitOutput) {
           const input = await artifacts.read(binding.inputRef)
           const disposition = await admitResult('output-admission', ready.nodeId, () => nodeDefinition.admitOutput({ output,

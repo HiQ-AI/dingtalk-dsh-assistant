@@ -1,3 +1,4 @@
+import {describeTaskNodeOutput} from './node-output-readout.js'
 import { inspectSession } from './session-persistence.js'
 import {createNotificationRetirementHandler} from './notification-retirement.js'
 import { sendTaskCompletionNotification } from './task-completion-notification.js'
@@ -153,161 +154,7 @@ async function verifiedUatRebuildCompletion({ taskId, plan, origin, artifacts, e
 }
 
 /** 将持久节点工件转换为可读产出；不推断未落盘的文件或外部执行结果。 */
-export function describeTaskNodeOutput(node, output, context = {}) {
-  if (output?.capabilityId === 'write-task-markdown' && output.output?.status === 'succeeded'
-    && output.verification?.passed === true) {
-    const file = output.output.result
-    return { overview: 'Markdown 文件已保存并独立读回',
-      text: `Markdown 文件\n${file.path}\n\n文件大小\n${file.bytes} 字节\n\nSHA-256\n${file.contentDigest}` }
-  }
-  if (output?.deliveryStatus === 'files_verified') {
-    const receipts = output.receipts ?? []
-    return { overview: `已核验送达 ${receipts.length} 个文件`, text: receipts.map(item => {
-      const receipt = item.result
-      return `${receipt.fileName}（${receipt.size} 字节）\nSHA-256：${receipt.sha256}\n消息 ID：${receipt.messageId}`
-    }).join('\n\n') }
-  }
-  if (node.nodeId === 'apply-changes' && output?.changeDisposition === 'no-change' && output.status === 'succeeded') {
-    return { overview: '现有实现符合要求，无需修改源码；继续构建与验收',
-      text: `判断依据\n${output.reason}\n\n已核对文件\n${(output.reviewedPaths ?? []).join('\n')}` }
-  }
-  if (node.nodeId === 'define-local-acceptance' && output?.localContext) {
-    return { overview: `已核对 ${output.localContext.criteria.length} 项任务验收条件`, text: `目标环境\n${output.localContext.uatEnvironment}\n\n数据环境\n共享 UAT 数据库\n\n任务验收条件\n${output.localContext.criteria.map(item => `${item.id}：${item.description}`).join('\n')}` }
-  }
-  if (node.nodeId === 'plan-local-acceptance' && Array.isArray(output?.cases)) {
-    const text = output.cases.map((item, index) => `${index + 1}. ${item.criterionId} · ${item.scenarioId}\n操作步骤：\n${item.steps.map((step, i) => `${i + 1}. ${step}`).join('\n')}\n预期：${item.expected}`).join('\n\n')
-    return { overview: `已编写 ${output.cases.length} 项本地验收用例`, text }
-  }
-  if (node.nodeId === 'prepare-local-acceptance' && output?.localPrepared) {
-    const prepared = output.localPrepared
-    return { overview: '已准备本地验收目录与任务数据标识', text: `验收目录\n${prepared.directory}\n\n目标环境\n${prepared.uatEnvironment}\n\n数据环境\n共享 UAT 数据库\n\n任务数据标识\n${prepared.namespace}` }
-  }
-  if (['run-local-acceptance', 'finalize-local-acceptance'].includes(node.nodeId) && output?.localAcceptance) {
-    const receipt = output.localAcceptance
-    const passed = receipt.passed === true && receipt.cleanup?.dataCleaned === true && receipt.cleanup?.processStopped === true
-    const cleanupDescription = receipt.cleanup?.mode === 'read-only' && receipt.cleanup.createdResources === 0 ? '无业务数据写入，会话已清理' : '已清理'
-    if (node.nodeId === 'finalize-local-acceptance') return { overview: passed ? `本地业务验收通过，${cleanupDescription}、服务已停止` : '本地验收或清理未确认，不能提交代码', text: passed ? `已核对 ${receipt.checks.length} 项验收结果及清理回执，允许进入代码提交。` : '验收结果或清理回执不完整，后续提交保持阻断。' }
-    const duration = ms => {
-      if (!Number.isFinite(ms) || ms < 0) return '耗时未记录'
-      const seconds = Math.floor(ms / 1000)
-      return seconds >= 3600 ? `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分 ${seconds % 60} 秒` : seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`
-    }
-    const phases = (receipt.phases ?? []).map(phase => `${phase.title}：${({ succeeded: '完成', passed: '通过', failed: '失败', skipped: '未执行', running: '执行中' })[phase.status] ?? '结果未确认'} · ${duration(phase.elapsedMs)}`).join('\n')
-    const checks = (receipt.checks ?? []).map((item, index) => `${index + 1}. ${item.criterionId} · ${item.scenarioId}\n操作步骤：\n${(item.steps ?? []).map((step, i) => `${i + 1}. ${step}`).join('\n')}\n预期：${item.expected}\n实际：${item.actual ?? '未取得实际结果'}\n结果：${item.passed === true ? '通过' : '未通过'}`).join('\n\n')
-    const text = `目标环境\n${receipt.uatEnvironment}\n\n数据环境\n共享 UAT 数据库\n\n执行阶段\n${phases || '未记录阶段结果'}\n\n业务验收\n${checks || '未记录实际验收结果'}\n\n清理结果\n任务数据：${receipt.cleanup?.dataCleaned === true ? cleanupDescription : '未确认清理完成'}\n本地服务：${receipt.cleanup?.processStopped === true ? '已停止' : '未确认停止'}`
-    return { overview: `本地业务验收${passed ? '通过' : '未通过'} · ${(receipt.checks ?? []).length} 项`, text, document: { name: '本地验收报告.md', content: `# 本地验收报告\n\n${text}` } }
-  }
-  if (node.nodeId === 'business-acceptance' && output?.acceptance) {
-    const items = output.acceptance.checks.map(check => {
-      const { acceptance } = JSON.parse(check.log)
-      return `${acceptance.criterion}\n预期：${acceptance.expected}\n实际：${acceptance.actual ?? '未取得实际结果'}\n结果：${check.passed ? '通过' : '未通过'}`
-    })
-    return { overview: `业务验收${output.acceptance.passed ? '通过' : '未通过'} · ${items.length} 项`, text: items.join('\n\n') }
-  }
-  if (node.nodeId === 'prepare-workspace') {
-    const workspace = output?.workspace ?? context.workspace
-    if(!workspace)return {overview:'工作目录回执未记录',text:'未找到本次节点的成功目录回执。'}
-    const actual=workspace.sourceMode==='remote-source-only'
-    return {overview:workspace.status==='succeeded'?'已绑定 Task 独立 Git 工作目录':'工作目录回执未记录',text:`工作目录\n${workspace.directory}\n\n${actual?'实际开发分支':'登记的开发分支（旧回执未证明 checkout 分支）'}\n${workspace.developmentBranch??'未记录'}\n\n源分支\n${workspace.sourceBranch??'历史记录未区分'}\n\nPR / UAT 目标分支\n${workspace.targetBranch??'未记录'}\n\n实际 checkout 提交\n${workspace.sourceCommit??workspace.baseCommit??'未记录'}\n\n来源\n${workspace.remote??workspace.sourceRepository??'未记录'}\n\n隔离方式\nTask 独立 Git 仓库；工作区回执绑定实际目录与提交。`}
-  }
-  if (node.nodeId === 'prepare-generation') {
-    const point = output?.startingPoint ?? context.startingPoint, requirement = output?.requirement ?? output
-    const remoteSource=point?.sourceOrigin==='remote-ls-remote'
-    return { overview: '已解析项目与分支意向；工作目录尚未创建',
-      text: `项目\n${point?.repository ?? '历史记录未提供项目名称'}\n\n源分支\n${point?.sourceBranch ?? '历史记录未区分'}\n\n拟用开发分支\n${point?.plannedDevelopmentBranch ?? point?.workBranch ?? '未记录'}\n\nPR / UAT 目标分支\n${point?.targetBranch ?? '未记录'}\n\n${remoteSource?'远程源提交（ls-remote 查询）':'登记的修改起点（历史来源未区分）'}\n${remoteSource?point.remoteSourceCommit:requirement?.baseCommit ?? '未记录'}\n\n创建状态\n本节点仅解析配置和远程引用；实际目录、工作分支和 checkout 提交由后续工作区回执记录。` }
-  }
-  if (['verify-candidate', 'prepare-commit'].includes(node.nodeId) && output?.verification) {
-    const report = describeVerificationChecks(output.verification)
-    if (node.nodeId === 'verify-candidate') {
-      const text = report.map(check => `${check.title}\n${check.passed ? '通过' : '未通过'}\n${check.steps.map(step => `${step.title}：${step.passed ? '通过' : '未通过'}${step.limitation ? `；${step.limitation}` : ''}`).join('\n')}\n${check.limitation}`).join('\n\n')
-      return { overview: report.map(check => `${check.title}${check.passed ? '通过' : '未通过'}`).join('；'), text,
-        document: { name: '构建检查报告.md', content: `# 构建检查报告\n\n${text}` } }
-    }
-  }
-  const sections = []
-  const fileSummaries = []
-  let overview = ''
-  const summarizeFiles = (label, paths) => {
-    const count = new Set(paths.filter(path => typeof path === 'string')).size
-    if (count) fileSummaries.push(`${label} ${count} 个文件`)
-  }
-  const add = (label, value) => { if (typeof value === 'string' && value.trim()) sections.push(`${label}\n${value.trim()}`) }
-  add('产出摘要', workflowResultText(output))
-  if (typeof output === 'string') add('正文', output)
-  add('正文', output?.markdown)
-  add('任务要求', output?.request)
-  if (node.nodeId === 'apply-changes' && output?.status === 'plan-revision-needed') {
-    add('方案修订意见', output.summary)
-    add('技术方案引用', output.planRef)
-    overview = '技术方案待修订，尚未编辑'
-  }
-  for (const [label, values] of [['发现', output?.findings], ['限制与未确认事项', output?.limitations], ['执行范围', output?.constraints], ['相关文件', output?.paths], ['已有文件', output?.existingPaths], ['新建文件', output?.newPaths]]) {
-    if (Array.isArray(values)) add(label, values.map(item => typeof item === 'string' ? item : item?.statement).filter(item => typeof item === 'string').join('\n'))
-    if (Array.isArray(values) && ['相关文件', '已有文件', '新建文件'].includes(label)) summarizeFiles(({ '相关文件': '已选择', '已有文件': '选择已有', '新建文件': '计划新建' })[label], values)
-  }
-  if (Array.isArray(output?.materials)) add('材料正文', output.materials.map(item => item?.text).filter(item => typeof item === 'string').join('\n\n'))
-  if (Array.isArray(output?.files)) {
-    const label = node.nodeId === 'apply-changes' && output.status === 'succeeded' ? '已修改' : node.nodeId === 'read-files' ? '已读取' : '涉及'
-    summarizeFiles(label, output.files.filter(item => item?.text !== null).map(item => item?.path))
-    summarizeFiles('尚不存在', output.files.filter(item => item?.text === null).map(item => item?.path))
-    add(`${label}文件`, output.files.filter(item => typeof item?.path === 'string').map(item => `${item.path}${item.text === null ? '（尚不存在）' : ''}`).join('\n'))
-  }
-  if (Array.isArray(output?.changes) || Array.isArray(output?.replacements)) summarizeFiles('修改方案涉及', [...(Array.isArray(output?.changes) ? output.changes : []), ...(Array.isArray(output?.replacements) ? output.replacements : [])].map(item => item?.path))
-  if (Array.isArray(output?.changes)) for (const change of output.changes) {
-    if (typeof change?.path !== 'string') continue
-    add('文件变更', `${change.content === null ? '删除' : '写入'} ${change.path}${typeof change.content === 'string' ? `\n文件内容：\n${change.content}` : ''}`)
-  }
-  if (Array.isArray(output?.replacements)) for (const replacement of output.replacements) {
-    if (typeof replacement?.path !== 'string' || typeof replacement.from !== 'string' || typeof replacement.to !== 'string') continue
-    add('修改方案', `文件：${replacement.path}\n修改前：\n${replacement.from}\n修改后：\n${replacement.to}`)
-  }
-  if (Array.isArray(output?.verification?.checks)) add('检查结果', describeVerificationChecks(output.verification).map(item => `${item.title}：${item.passed ? '通过' : '未通过'}；${item.limitation}`).join('\n'))
-  if (node.nodeId === 'index-files' && Array.isArray(output?.directories)) {
-    const paths = output.directories.flatMap(item => typeof item?.directory === 'string' && Array.isArray(item.names) ? item.names.filter(name => typeof name === 'string').map(name => item.directory + name) : [])
-    summarizeFiles('已索引', paths)
-    if (Number.isSafeInteger(output.excludedCount) && output.excludedCount >= 0) fileSummaries.push(`排除 ${output.excludedCount} 个文件`)
-    add('文件索引', paths.join('\n'))
-  }
-  if (['prepare-commit', 'commit', 'prepare-push', 'push', 'prepare-pr', 'create-pr', 'finalize'].includes(node.nodeId)) {
-    const prepared = ['commit', 'push', 'create-pr'].includes(node.nodeId) ? output?.prepared : output
-    const receipt = node.nodeId === 'finalize' ? output : output?.receipt
-    const action = { 'prepare-commit': '待提交', commit: '已提交', 'prepare-push': '待推送', push: '已推送' }[node.nodeId]
-    if (Array.isArray(prepared?.changedPaths)) {
-      summarizeFiles(receipt && receipt.status !== 'succeeded' ? '涉及' : action || '涉及', prepared.changedPaths)
-      add('变更文件', prepared.changedPaths.join('\n'))
-    }
-    add('提交说明', prepared?.message)
-    add('分支', prepared?.ref)
-    add('远端', prepared?.remote)
-    add('提交版本', receipt?.commitId ?? prepared?.commitId)
-    if (['prepare-commit', 'prepare-push'].includes(node.nodeId)) overview = node.nodeId === 'prepare-commit' ? '已生成提交计划' : '已生成推送计划'
-    if (['commit', 'push'].includes(node.nodeId)) {
-      overview = receipt?.status === 'succeeded' ? node.nodeId === 'commit' ? '已创建本地提交' : '已推送至远端' : '执行结果待核对'
-      add('执行结果', overview)
-    }
-    if (['prepare-pr', 'create-pr', 'finalize'].includes(node.nodeId)) {
-      add('PR 标题', prepared?.title)
-      add('目标仓库', receipt?.repo ?? prepared?.repo)
-      add('来源分支', receipt?.head ?? prepared?.head)
-      add('目标分支', receipt?.base ?? prepared?.base)
-      if (node.nodeId === 'prepare-pr') { overview = '已生成 PR 草稿'; add('PR 正文', prepared?.body) }
-      else {
-        overview = receipt?.status === 'succeeded' ? `${node.nodeId === 'finalize' ? '已回读' : '已创建'} PR${Number.isSafeInteger(receipt.number) ? ` #${receipt.number}` : ''}` : 'PR 结果待核对'
-        add('PR 地址', receipt?.url)
-        add('PR 状态', ({ open: '待合并', closed: '已关闭', merged: '已合并', OPEN: '待合并', CLOSED: '已关闭', MERGED: '已合并' })[receipt?.state] ?? receipt?.state)
-      }
-    }
-  }
-  let text = sections.join('\n\n'), document
-  if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)) {
-    document = output?.document?.markdown ? { name: '修改方案.md', content: output.document.markdown }
-      : { name: '修改记录.md', content: `# 已保存的修改记录\n\n历史节点没有保存方案说明文档。以下从实际补丁整理，不包含未记录的修改理由或验证计划。\n\n${text}` }
-    text = document.content
-    overview = output?.document?.markdown ? '修改方案.md' : '修改记录.md（原节点未保存方案说明）'
-  }
-  if (node.nodeId === 'prepare-pr' && typeof output?.body === 'string') document = { name: '合并请求.md', content: `# ${output.title ?? '合并请求'}\n\n${output.body}` }
-  return { text, overview: [overview, ...fileSummaries].filter(Boolean).join('；'), ...(document ? { document } : {}) }
-}
+export {describeTaskNodeOutput} from './node-output-readout.js'
 
 export const describeMessageTraceItem = (item) => {
   const input = item.input ?? {}, output = item.output ?? {}
@@ -317,7 +164,11 @@ export const describeMessageTraceItem = (item) => {
   const actionNames = { create: '创建任务', research: '开展排查', answer: '回答问题', status: '查询进展', result: '查询结果', fact: '补充话题事实', no_action: '不采取动作', revise: '调整任务', reopen: '重新打开任务', pause: '暂停任务', cancel: '取消任务', resume: '继续任务', report: '调整报告', clarification: '答复澄清', approve: '处理审批' }
   let title = { split: '拆分事项', route: '关联话题', intent: '判断下一步', command: '接纳动作', agent: '查询与答复' }[item.kind] ?? (item.nodeId === 'material' ? '读取补充材料' : '处理记录')
   let conclusion = '尚未记录判断结论'
-  if (item.kind === 'split' && Array.isArray(output.units)) {
+  if(item.kind==='coordinator'&&Array.isArray(output.units)){
+    title='群消息协调'
+    conclusion=output.units.length?`本批记录 ${output.units.length} 个有效协调单元`:'未记录有效协调单元'
+    output.units.forEach((unit,index)=>add(`协调单元 ${unit.unitId??index+1}`,unit.goalText))
+  } else if (item.kind === 'split' && Array.isArray(output.units)) {
     conclusion = `拆分为 ${output.units.length} 个事项`
     output.units.forEach((unit, i) => add(`事项 ${i + 1}`, unit.goalText ?? unit.text))
   } else if (item.kind === 'route' && output.kind === 'binding') {
@@ -3408,7 +3259,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     }
     return result
   }
-  async function tasks({ taskId: selectedTaskId, readableOnly = false, completePlan = false, origins = new Map() } = {}) {
+  async function tasks({ taskId: selectedTaskId, readableOnly = false, completePlan = false, summaryOnly = false, origins = new Map() } = {}) {
     const archives = new Map((await store.query({ kind: 'task.archives' })).map(item => [item.taskId, item.archivedAt]))
     const catalog = await store.query({ kind: 'task.catalog', ...(selectedTaskId ? { taskId: selectedTaskId } : {}) })
     const topicBindings = new Map()
@@ -3418,9 +3269,9 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       const origin = await origins.get(taskId)
       if (readableOnly && !readableTaskOrigin(origin)) return null
       const groupId = origin?.run.conversationId
-      if (origin?.command.unitId && !topicBindings.has(groupId))
+      if (!summaryOnly && origin?.command.unitId && !topicBindings.has(groupId))
         topicBindings.set(groupId, store.query({ kind: 'message.topic.bindings', conversationId: groupId }))
-      const topic = origin?.command.unitId
+      const topic = !summaryOnly && origin?.command.unitId
         ? (await topicBindings.get(groupId)).find(item => item.unitId === origin.command.unitId && item.sourceKey === origin.run.sourceKey)?.topic : null
       const topicRefs = topic && topic.conversationId === origin.run.conversationId
         ? [{ groupId: topic.conversationId, topicId: topic.topicId, revision: topic.revision, title: topic.title }] : []
@@ -3594,17 +3445,16 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     }
     throw executionError('TASK_DETAIL_STALE')
   }
-  async function taskExecutions(taskId, { offset = 0, limit = 20 } = {}) {
+  async function taskExecutions(taskId, { offset = 0, limit = 20, revision } = {}) {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
       throw executionError('TASK_EXECUTION_CURSOR_INVALID')
-    const family = await readableTaskFamily(taskId)
+    const family = await store.query({kind:'observer.legacy-family.page',taskId,offset,limit,revision,groupIds:[...groups],webActorId:config.webActorId})
     if (!family) return null
-    const selected = [...family.taskIds].reverse().slice(offset, offset + limit)
     const executions = []
-    for (const id of selected) {
-      const task = (await tasks({ taskId: id }))[0]
+    for (const {taskId:id,executionNumber} of family.selected) {
+      const task = (await tasks({ taskId: id, summaryOnly:true }))[0]
       const [{ runs }] = await store.query({ kind: 'task.catalog', taskId: id })
-      executions.push({ taskId: id, executionNumber: family.taskIds.indexOf(id) + 1,
+      executions.push({ taskId: id, executionNumber,
         state: task.state, outcome: task.outcome, title: task.title, objective: task.objective,
         createdAt: task.createdAt, updatedAt: task.updatedAt, result: task.result, archivedAt: task.archivedAt,
         stageOutcomes: [...runs].reverse().map(run => ({ runId: run.runId,
@@ -3612,8 +3462,8 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
             ?? taskWorkflowCatalog.find(item => item.id === run.workflowId)?.label ?? '工程执行',
           status: run.status })) })
     }
-    return { rootTaskId: family.rootTaskId, latestTaskId: family.latestTaskId, total: family.taskIds.length,
-      executions, nextOffset: offset + limit < family.taskIds.length ? offset + limit : null }
+    return { rootTaskId: family.rootTaskId, latestTaskId: family.latestTaskId, total: family.total, offset, limit, revision:family.revision,
+      executions, nextOffset: family.nextOffset }
   }
   let messageRecoveryFlight, taskRecoveryFlight, ownerObservationFlight, taskRecoveryCursor
   const recoveryProgress = { tasks: null, owners: null }
@@ -3994,33 +3844,29 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const selected=groupId ? [groupId] : [...groups]
     return (await Promise.all(selected.filter(id=>groups.has(id)).map(id=>store.query({kind:'message.topics',conversationId:id,limit:200})))).flat()
   }
-  async function topicContext({groupId,topicId,offset=0,limit=50}) {
+  async function topicContext({groupId,topicId,offset=0,limit=50,pageRevision}) {
     if(!groups.has(groupId)) return null
-    let topic=await store.query({kind:'message.topic',topicId})
+    let topic=await store.query({kind:'message.topic.header',topicId})
     if(!topic||topic.conversationId!==groupId) return null
     if(topic.mergedIntoTopicId) {
-      topic=await store.query({kind:'message.topic',topicId:topic.mergedIntoTopicId})
+      topic=await store.query({kind:'message.topic.header',topicId:topic.mergedIntoTopicId})
       if(!topic||topic.conversationId!==groupId||topic.mergedIntoTopicId) return null
       topicId=topic.topicId
     }
-    const refs=[...new Set([...topic.facts.flatMap(fact=>fact.sourceRefs.map(ref=>ref.sourceKey)),...await store.query({kind:'message.topic.sources',topicId})])]
-    const messages=(await Promise.all(refs.map(key=>store.query({kind:'message.source',sourceKey:key})))).filter(Boolean)
-      .map(run=>({messageId:run.context?.sourceMessageId,text:run.body,senderName:run.context?.senderName,occurredAt:run.context?.occurredAt??run.createdAt,sourceKind:'workflow-v2'}))
-      .sort((a,b)=>String(a.occurredAt).localeCompare(String(b.occurredAt)))
-    return {topic,messages:messages.slice(offset,offset+limit),total:messages.length,offset,limit}
+    return {topic,...await store.query({kind:'message.topic.context-page',topicId,offset,limit,revision:pageRevision})}
   }
-  async function messageTraceRecords(runId) {
-    const data = await messages.state(runId)
+  async function messageTraceRecords(runId, page) {
+    const data = page?.data ?? await messages.state(runId)
     if (!data?.run || !groups.has(data.run.conversationId)) return null
     const coordination = data.run.coordinatorConsumed ? (await store.query({ kind: 'message.coordinator', conversationId: data.run.conversationId })).coordinator : null
     const shared = []
     let beforeSequenceId
-    do {
+    if(!page)do {
       const page = await store.query({ kind: 'message.intent.runs', runId, limit: 100, ...(beforeSequenceId ? { beforeSequenceId } : {}) })
       shared.push(...page)
       beforeSequenceId = page.length === 100 ? page.at(-1).sequenceId : null
     } while (beforeSequenceId)
-    const byId = new Map(data.nodes.map(node => [node.nodeRunId, { ...node, carrierRunId: runId }]))
+    const byId = new Map(data.nodes.map(node => [node.nodeRunId, { ...node, carrierRunId: node.carrierRunId??runId }]))
     for (const node of shared) if (!byId.has(node.nodeRunId)) byId.set(node.nodeRunId, node)
     const nodeKinds = { S: 'split', R: 'route', I: 'intent', IB: 'intent' }
     const items = [...byId.values()].map(node => ({ id: node.nodeRunId, kind: nodeKinds[node.nodeId] ?? 'node', nodeId: node.nodeId,
@@ -4056,18 +3902,20 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')) || String(a.id).localeCompare(String(b.id)))
     return { data, items }
   }
-  async function messageTrace(runId, { offset = 0, limit = 50 } = {}) {
-    const trace = await messageTraceRecords(runId)
+  async function messageTrace(runId, { offset = 0, limit = 50, revision, unitCursor = 0 } = {}) {
+    const page=await store.query({kind:'message.trace.page',runId,offset,limit,revision,unitCursor})
+    if(!page)return null
+    const trace = await messageTraceRecords(runId,page)
     if (!trace) return null
     const { data, items } = trace
-    const pageItems = items.slice(offset, offset + limit)
+    const pageItems = items
     const sourceCache = new Map([[runId, data.run]])
     for (const item of pageItems.filter(item => ['intent', 'coordinator'].includes(item.kind))) {
       const topic = item.topicId ? await store.query({ kind: 'message.topic', topicId: item.topicId }) : null
       item.topicTitle = topic?.conversationId === data.run.conversationId ? topic.title : null
       item.sourceMessages = []
       for (const sourceId of [...new Set(item.sourceRunIds ?? [runId])]) {
-        if (!sourceCache.has(sourceId)) sourceCache.set(sourceId, (await messages.state(sourceId))?.run)
+        if (!sourceCache.has(sourceId)) sourceCache.set(sourceId, await store.query({kind:'message.run.header',runId:sourceId}))
         const source = sourceCache.get(sourceId)
         if (!source || source.conversationId !== data.run.conversationId) continue
         item.sourceMessages.push({ runId: sourceId, text: source.body, senderName: source.context?.senderName ?? null,
@@ -4075,7 +3923,7 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
       }
     }
     return { runId, message: { text: data.run.body, receivedAt: data.run.createdAt }, status: data.run.status, reason: data.run.reason ?? null, revision: data.run.revision ?? data.run.matterSetRevision ?? 0,
-      items: pageItems.map(({ input, output, usage, evidenceRefs, deterministic, ...item }) => ({ ...item, summary: describeMessageTraceItem({ ...item, input, output }) })), nextCursor: offset + limit < items.length ? offset + limit : null, total: items.length }
+      items: pageItems.map(({ input, output, usage, evidenceRefs, deterministic, ...item }) => ({ ...item, summary: describeMessageTraceItem({ ...item, input, output }) })), nextCursor:page.nextCursor,total:page.total,offset:page.offset,pageRevision:page.revision,...(data.coordinatorUnits?{coordinatorUnits:data.coordinatorUnits}:{}) }
   }
   async function workflowTopicContext(topicId, { offset = 0, limit = 50, intentCursor = 0, expectedRevision = null } = {}) {
     const topic = await store.query({ kind: 'message.topic', topicId })
@@ -4083,50 +3931,29 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     if (expectedRevision !== null && topic.contextRevision !== expectedRevision) throw executionError('MESSAGE_TOPIC_CONTEXT_STALE')
     const page = await store.query({ kind: 'message.topic.facts', topicId, status: 'active', cursor: offset, limit })
     if (page.contextRevision !== topic.contextRevision) throw executionError('MESSAGE_TOPIC_CONTEXT_STALE')
-    const sourceKeys = await store.query({ kind: 'message.topic.sources', topicId })
+    const sourceCount = await store.query({ kind: 'message.topic.source-count', topicId })
     const intentRuns = await store.query({ kind: 'message.topic.intents', topicId, limit: 50, ...(intentCursor ? { beforeSequenceId: intentCursor } : {}) })
     return { topicId, revision: page.contextRevision, current: { topicTitle: topic.title, activeFactCount: page.total,
-      sourceCount: sourceKeys.length, hasMoreFacts: page.nextCursor !== null }, facts: page.facts,
+      sourceCount, hasMoreFacts: page.nextCursor !== null }, facts: page.facts,
       intentRuns, intentNextCursor: intentRuns.length === 50 ? intentRuns.at(-1).sequenceId : null, nextCursor: page.nextCursor, total: page.total }
   }
-  async function messageEvidence(runId, resourceRef, { offset = 0, limit = 2000, hash = null } = {}) {
-    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 2 || limit > 8000) throw executionError('MESSAGE_EVIDENCE_CURSOR_INVALID')
-    const data = await messages.state(runId)
-    if (!data?.run || !groups.has(data.run.conversationId)) return null
-    let material = await store.query({ kind: 'message.material', runId, resourceRef })
-    let evidenceRefs
-    if (!material) {
-      // 只按本消息已接纳的产出引用读取工件；默认 trace 不读取任何工件正文。
-      const ownOutput = (data.executions ?? []).find(execution => execution.resultRef === resourceRef)
-      const ownEvidence = (data.executions ?? []).find(execution => execution.result?.evidenceRefs?.includes(resourceRef))
-      if (ownOutput || ownEvidence && /^sha256-[a-f0-9]{64}\.json$/.test(resourceRef)) {
-        const output = await artifacts.read(resourceRef)
-        if (ownOutput) {
-          evidenceRefs = ownOutput.result?.evidenceRefs ?? []
-          const body = output.summary ?? output.reply ?? '本次执行未生成答复正文。'
-          material = { text: [body, ...(output.limitations?.length ? ['\n已知限制', ...output.limitations] : [])].join('\n') }
-        } else if (output.kind === 'agent-query-evidence' && output.execution?.runId === runId) {
-          // 保留来源和业务查询结果，隐藏会话租约、权限摘要等内部身份。
-          material = { text: [`读取时间：${output.observedAt ?? '未记录'}`, '来源：', ...(output.verification?.sourceRefs ?? []),
-            '\n读取结果：', typeof output.result === 'string' ? output.result : JSON.stringify(output.result, null, 2)].join('\n') }
-        }
-      }
+  async function messageEvidence(runId,resourceRef,{offset=0,limit=2000,hash=null}={}){
+    if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<2||limit>8000)throw executionError('MESSAGE_EVIDENCE_CURSOR_INVALID')
+    const header=await store.query({kind:'message.evidence.header',runId})
+    if(!header||!groups.has(header.conversationId))return null
+    const options={runId,resourceRef,offset,limit,hash}
+    const recorded=await store.query({kind:'message.evidence.page',...options,materialOnly:true})
+    if(recorded)return recorded
+    const binding=await store.query({kind:'message.evidence.binding',runId,resourceRef})
+    if(binding&&(binding.kind==='output'||/^sha256-[a-f0-9]{64}\.json$/.test(resourceRef))){
+      if(!artifacts.readObserverPage)throw executionError('OBSERVER_TEXT_MIGRATION_REQUIRED')
+      let page
+      try{page=await artifacts.readObserverPage(resourceRef,binding.kind==='output'?'message-output':'message-query-evidence',{offset,limit,hash,requireHash:true})}
+      catch(cause){if(cause.code==='OBSERVER_TEXT_CURSOR_INVALID')throw executionError('MESSAGE_EVIDENCE_CURSOR_INVALID');throw cause}
+      if(binding.kind==='query'&&page.runId!==runId)return null
+      return {runId,resourceRef,...(binding.evidenceRefs?{evidenceRefs:binding.evidenceRefs}:{}),hash:page.hash,sourceVersion:null,totalLength:page.totalLength,totalBytes:page.totalBytes,start:page.start,end:page.end,text:page.text,complete:page.complete,nextCursor:page.nextCursor}
     }
-    if (!material) {
-      const trace = await messageTraceRecords(runId)
-      const sources = [data.run.snapshot?.source, ...(data.run.snapshot?.quotes ?? []), ...(data.run.snapshot?.history ?? []),
-        ...trace.items.flatMap(item => item.input?.sharedTopic?.sources ?? [])].filter(Boolean)
-      material = sources.find(ref => ref.sourceKey === resourceRef && typeof ref.text === 'string')
-    }
-    if (typeof material?.text !== 'string') return null
-    const currentHash = executionDigest(material.text)
-    if (hash && hash !== currentHash) throw executionError('MESSAGE_EVIDENCE_VERSION_CHANGED')
-    if (offset > material.text.length || offset > 0 && (!hash || /[\uDC00-\uDFFF]/u.test(material.text[offset] ?? ''))) throw executionError('MESSAGE_EVIDENCE_CURSOR_INVALID')
-    let end = Math.min(material.text.length, offset + limit)
-    if (end < material.text.length && /[\uD800-\uDBFF]/u.test(material.text[end - 1])) end--
-    return { runId, resourceRef, ...(evidenceRefs ? { evidenceRefs } : {}), hash: currentHash, sourceVersion: material.sourceVersion ?? null, totalLength: material.text.length,
-      totalBytes: Buffer.byteLength(material.text), start: offset, end, text: material.text.slice(offset, end),
-      complete: offset === 0 && end === material.text.length, nextCursor: end < material.text.length ? end : null }
+    return store.query({kind:'message.evidence.page',...options})
   }
   async function taskNodeOutput(taskId, runId, nodeRunId, { offset = 0, limit = 1200, outputRef, detailRevision, document = false } = {}) {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 2 || limit > 8000)
@@ -4145,6 +3972,15 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const readableRef = node && await taskNodeReadoutRef(node)
     if (!readableRef) return null
     if (outputRef !== readableRef) throw executionError('TASK_OUTPUT_CHANGED')
+    if(!document){
+      if(!artifacts.readObserverPage)throw executionError('OBSERVER_TEXT_MIGRATION_REQUIRED')
+      let page
+      try{page=await artifacts.readObserverPage(outputRef,`node:${node.nodeId}`,{offset,limit})}
+      catch(cause){if(cause.code==='OBSERVER_TEXT_CURSOR_INVALID')throw executionError('TASK_OUTPUT_CURSOR_INVALID');throw cause}
+      if(before!==await store.query({kind:'task.viewRevision',taskId}))throw executionError('TASK_OUTPUT_CHANGED')
+      if(page.pathOnly){const text=`历史结果路径\n${artifacts.locate?artifacts.locate(node.outputRef):join(artifacts.root,node.outputRef)}`;return {text,overview:'',nextCursor:null,totalLength:text.length}}
+      return {text:page.text,nextCursor:page.nextCursor,totalLength:page.totalLength,overview:page.overview,...(page.documentName?{documentName:page.documentName}:{})}
+    }
     const output = await artifacts.read(outputRef)
     const context = {}
     if (node.nodeId === 'prepare-workspace' && !output?.workspace) {
@@ -4160,33 +3996,19 @@ export async function openWorkflowService({ ctx, config, legacy, coordinatorSess
     const result = describeTaskNodeOutput(node, output, context), { text, overview } = result
     // 工件读取期间发生修订也不能把旧正文交给当前页面。
     if (before !== await store.query({ kind: 'task.viewRevision', taskId })) throw executionError('TASK_OUTPUT_CHANGED')
-    if (document) return result.document ?? null
-    if (['inspect-and-propose', 'propose-changes', 'validate-proposal'].includes(node.nodeId)
-      && !(node.nodeId === 'inspect-and-propose' && output?.document?.markdown && Array.isArray(output.scopePaths) && Array.isArray(output.criteria))) {
-      const pathText = `方案工件路径\n${artifacts.locate ? artifacts.locate(node.outputRef) : join(artifacts.root, node.outputRef)}`
-      return { text: pathText, overview: '', nextCursor: null, totalLength: pathText.length }
-    }
-    if (offset > text.length || offset > 0 && /[\uDC00-\uDFFF]/u.test(text[offset] ?? '')) throw executionError('TASK_OUTPUT_CURSOR_INVALID')
-    let end = Math.min(text.length, offset + limit)
-    if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1])) end--
-    return { text: text.slice(offset, end), nextCursor: end < text.length ? end : null, totalLength: text.length, overview,
-      ...(result.document ? { documentName: result.document.name } : {}) }
+    return result.document ?? null
   }
-  async function taskRuns(taskId, { offset = 0, limit = 20 } = {}) {
-    const origin = await store.query({ kind: 'task.origin', taskId })
-    if (!readableTaskOrigin(origin)) return null
-    const owner = await store.query({ kind: 'task.owner', taskId })
-    const runs = await store.query({ kind: 'run.list', taskId, limit: limit + 1, ...(offset ? { beforeSequenceId: offset } : {}) })
-    const selected = runs.slice(0, limit)
-    return { taskId, taskOwner: owner ? { sessionId: owner.sessionId, sessionBound: owner.sessionBound, status: owner.status, decision: owner.decision?.action ?? null } : null, runs: await Promise.all(selected.map(async run => {
-      const state = await controller.state(run.runId)
-      return { runId: run.runId, status: run.status, startedAt: run.createdAt,
-        nodes: state.nodes.map(node => ({ nodeId: node.nodeId, label: node.title ?? node.nodeId,
-          status: node.status, sessionBound: node.sessionBound === true, sessionId: node.sessionBound === true ? node.sessionId ?? null : null })) }
-    })), nextCursor: runs.length > limit ? selected.at(-1).sequenceId : null, total: null }
+  async function taskRuns(taskId, { offset = 0, limit = 20, revision } = {}) {
+    const page=await store.query({kind:'observer.legacy-runs.page',taskId,limit,revision,before:offset||Number.MAX_SAFE_INTEGER,groupIds:[...groups],webActorId:config.webActorId})
+    if(!page)return null
+    const owner=await store.query({kind:'task.owner',taskId})
+    return {...page,taskOwner:owner?{sessionId:owner.sessionId,sessionBound:owner.sessionBound,status:owner.status,decision:owner.decision?.action??null}:null}
   }
+
   return {
     controlTaskExecution, reviewTaskDelivery, confirmTaskCompletion, applyMaintenanceConstraint, ingest, resumeRequest, recoverClarification, handoffDataChangeApproval, reassessReadonly, repairStageAuthorizations, retryInvestigation, retryOwner, retryReadonlyAnswer, retryMaterialRequest, reprocessMessage, decideApproval, isApprovalRequest, listApprovalRequests, getApprovalRequest, prepareApprovalNotice, approvalNoticeCommand, reissueApprovalNotice,
+    topicIndex: async groupId => (await Promise.all((groupId?[groupId]:[...groups]).filter(id=>groups.has(id)).map(conversationId=>store.query({kind:'message.topic.index',conversationId})))).flat(),
+    topicById: topicId => store.query({kind:'message.topic.header',topicId}),
     getApprovalNotice: requestId => store.query({ kind: 'approval.notice', requestId }), submitWebTask, mailboxes, topics, topicContext,
     async retirePreparedEffect(request, identity) {
       if (identity?.channel !== 'web' || !config.webActorId || identity.actorId !== config.webActorId) throw executionError('WORKFLOW_WEB_ACTOR_FORBIDDEN')

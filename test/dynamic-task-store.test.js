@@ -1875,7 +1875,8 @@ test('archive retains durable task and execution history, refuses live tasks and
   assert.equal(archived.completion.summary, 'Verified done')
   assert.equal((await f.command('task.archive', { taskId: 'task', actorId: 'operator' })).result.task.archivedAt, archived.archivedAt)
   await f.reopen()
-  assert.deepEqual((await f.query({ kind: 'task.list' }))[0], archived)
+  assert.deepEqual(await f.query({ kind: 'task.list' }), [])
+  assert.deepEqual((await f.query({ kind: 'task.list', archived: true }))[0], archived)
 })
 
 

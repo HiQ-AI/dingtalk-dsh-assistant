@@ -17,6 +17,7 @@ for (const scenario of ['stale-snapshot', 'late-readback-error', 'recall-error']
   t.after(async () => { release.resolve(); await service?.close(); await rm(root, { recursive: true, force: true }) })
   const store = {
     async query(q) {
+      if (q.kind === 'resource.catalog') return null
       if (q.kind === 'notification.list') return [structuredClone(row)]
       if (q.kind === 'notification.get') return structuredClone(row)
       if (q.kind === 'task.get') return { taskId: 'task', humanRequests: [{ requestId: 'request', status: 'answered', replyChannel: 'web' }] }
@@ -89,6 +90,7 @@ for (const scenario of ['recalled', 'not-due', 'no-adapter', 'due', 'expired-cla
   const rows = [operator, ordinary]
   const store = {
     async query(q) {
+      if (q.kind === 'resource.catalog') return null
       if (q.kind === 'notification.list') return structuredClone(rows)
       if (q.kind === 'notification.get') return structuredClone(rows.find(row => row.id === q.notificationId))
       if (q.kind === 'task.get') { taskReads++; return { taskId: 'task', humanRequests: [{ requestId: 'request', status: 'answered', replyChannel: 'web' }] } }

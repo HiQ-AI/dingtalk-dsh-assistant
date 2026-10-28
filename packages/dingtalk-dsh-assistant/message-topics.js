@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto'
+import { createHash,randomUUID } from 'node:crypto'
+const pageIncarnations=new WeakMap()
 const fail=code=>{throw Object.assign(new Error(code),{code})}
 const str=(v,max=4096)=>{if(typeof v!=='string'||!v.trim()||v.length>max)fail('MESSAGE_TOPIC_INVALID');return v}
 const encode=v=>JSON.stringify(v)
@@ -92,6 +93,24 @@ export function reduceMessageTopic(db,{kind,args:a},ctx){
  return {result:{topic:topicView(db,encode(topic))}}
 }
 export function queryMessageTopics(db,a){
+ if(a.kind==='message.topic.header'){const row=db.prepare('SELECT body FROM message_topics WHERE topic_id=?').get(str(a.topicId));return row?JSON.parse(row.body):null}
+ if(a.kind==='message.topic.index')return db.prepare("SELECT topic_id AS topicId,conversation_id AS groupId,coalesce(json_extract(body,'$.updatedAt'),json_extract(body,'$.createdAt'),'') AS sort,json_extract(body,'$.contextRevision') AS revision FROM message_topics t WHERE conversation_id=? AND NOT (json_extract(body,'$.mergedIntoTopicId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM message_topic_bindings b WHERE b.topic_id=t.topic_id))").all(str(a.conversationId))
+ if(a.kind==='message.topic.context-page'){
+  const {topicId,offset=0,limit=50}=a
+  if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>100)fail('MESSAGE_TOPIC_INVALID')
+  if(!db.prepare("SELECT 1 FROM sqlite_master WHERE name='observer_topic_source_index'").get())fail('OBSERVER_PAGINATION_MIGRATION_REQUIRED')
+  if(!pageIncarnations.has(db))pageIncarnations.set(db,randomUUID())
+  const pageRevision=`${pageIncarnations.get(db)}:${db.prepare('SELECT total_changes() n').get().n}`
+  if(a.revision&&a.revision!==pageRevision)fail('OBSERVER_PAGE_STALE')
+  // Match the legacy source union, including the same first 256 active facts.
+  // Only narrow source keys and timestamps participate in ordering/counting.
+  const keys="WITH fact_page AS MATERIALIZED (SELECT fact_id FROM message_topic_facts WHERE topic_id=? AND status='active' ORDER BY rowid LIMIT 256), source_keys AS (SELECT source_key FROM message_topic_bindings WHERE topic_id=? UNION SELECT source_key FROM observer_topic_fact_sources ref JOIN fact_page f ON f.fact_id=ref.fact_id WHERE ref.topic_id=?), candidates AS (SELECT i.* FROM observer_topic_source_index i JOIN source_keys k ON k.source_key=i.source_key) "
+  const args=[str(topicId),topicId,topicId]
+  const total=db.prepare(keys+'SELECT count(*) n FROM candidates').get(...args).n
+  const messages=db.prepare(keys+" , selected AS MATERIALIZED (SELECT * FROM candidates ORDER BY sort_key,source_key LIMIT ? OFFSET ?) SELECT json_object('messageId',json_extract(r.body,'$.context.sourceMessageId'),'text',json_extract(r.body,'$.body'),'senderName',json_extract(r.body,'$.context.senderName'),'occurredAt',i.sort_key,'sourceKind','workflow-v2') AS body FROM selected i JOIN message_runs r ON r.run_id=i.run_id ORDER BY i.sort_key,i.source_key").all(...args,limit,offset).map(row=>JSON.parse(row.body))
+  return {messages,total,offset,limit,pageRevision}
+ }
+ if(a.kind==='message.topic.source-count')return db.prepare('SELECT count(DISTINCT source_key) n FROM message_topic_bindings WHERE topic_id=?').get(str(a.topicId)).n
  if(a.kind==='message.topic.intents'){
   const limit=a.limit??50,before=a.beforeSequenceId??Number.MAX_SAFE_INTEGER
   if(!Number.isSafeInteger(limit)||limit<1||limit>50||!Number.isSafeInteger(before)||before<1)fail('MESSAGE_TOPIC_INVALID')

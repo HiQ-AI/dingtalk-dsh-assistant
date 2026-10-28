@@ -42,7 +42,7 @@ export function createMessageAgentController({ ctx, store, artifacts, tools, mod
   }
   async function finish(entry, input, result) {
     const accepted = await validateOutput(entry, input, result)
-    const saved = await artifacts.put(accepted)
+    const saved = await artifacts.put(accepted,{observerMessageOutput:true})
     if (accepted.outcome === 'needs_input') {
       await command('message.agent.wait', { ...commandBinding(entry), drained: true,
         conversationId: input.scope.conversationId,
@@ -82,7 +82,7 @@ export function createMessageAgentController({ ctx, store, artifacts, tools, mod
       }
       const failure = { status: 'blocked', reply: '本次查询因系统读取问题未完成，执行已停止，需要修复后继续。',
         reason: error.code ?? error.message }
-      const saved = await artifacts.put(failure)
+      const saved = await artifacts.put(failure,{observerMessageOutput:true})
       await command('message.agent.fail', { ...commandBinding(entry), drained: true, error: failure.reason,
         resultRef: saved.ref, result: failure })
       await command('message.command.complete', { commandId: entry.commandId, leaseEpoch: entry.commandLeaseEpoch, result: failure })

@@ -73,3 +73,14 @@ Observer 依执行记录的 executionBackend 决定会话入口，缺失按历�
 执行完成结论：详情现有“阶段成果与统筹巡查”区域同时混排 timeline.executions[].conclusions，类型明确标为“执行完成结论”。仅投影 execution.result 与 results 中 payload.output.status=completed 且 summary 非空的真实输出，时间使用 receivedAt，缺失显示“时间未记录”并排在已知时间之后；不借状态、updatedAt、阶段快照或统筹判断补齐。按执行/输入轮次/租约/接收时间身份去重，保留续办历史与不同类型同文记录；证据、限制、产物使用现有安全文本展示。执行完成自述不代表独立核验或任务整体完成。历史缺记录不编造，无新存储、调度或权限变更。
 
 三类成果记录先统一按真实时间倒序排序，默认仅显示已加载集合的最新10条；其余已加载项通过“展开更早记录（N 条）”展开并可收起，数量不包含尚未加载的决定。展开后刷新保留展开状态和已读取记录，继续使用最新页返回的游标按需补读；切换任务恢复默认折叠。现有“读取更早记录”仍表示服务端分页，不表示已加载全部历史。
+
+
+## Observer pagination contract
+
+分页控件通过服务端/存储页接口读取；禁止全量正文返回后在 UI 再切片。窄 ID、排序、计数、过滤元数据与正文展开分开；冷索引成本和页内实体的关联历史成本须单独说明。默认页长依集合维持原设计，公开集合页 limit 上限为 100。
+
+同排序时间以稳定 ID 决胜；混合旧主题列表保留原列表的同时间次序。页版本发生变化时返回 409 并回第一页，加载、空、失败分别显示。旧 workflow provider 必须提供窄 topicIndex + 单主题读取，不能在分页 GET 中调用旧全量 topics 作为 fallback；不具备新能力明确返回 503。动态 topic context 必须提供 intentTotal 以及 task page provider，禁止 HTTP 再切 intent 或读取全任务列表。无索引的历史持久库由显式离线迁移处理，GET 不建索引。
+
+合成 React 宿主浏览器验证只能证明页面请求和交互；真实 DSH 宿主、安装版本及真实库性能须另验。逐入口实现、读取边界与限制见 docs/spec/observer-pagination-coverage.md。
+
+Coordinator trace 的 unit 有独立unitCursor/pageRevision和总数/完整性，SQL先排除superseded再取页。超过100个有效unit必须显示续读控件，不能借trace事件nextCursor=null暗示证据完整；跨消息/事件和409重置独立游标。
