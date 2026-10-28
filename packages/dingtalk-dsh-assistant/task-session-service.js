@@ -1729,6 +1729,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     listObserverGroups:()=>residentStore.listGroups().map(({groupId,name,responsibility,residentSessionId})=>({groupId,name,responsibility,residentSessionId})),
     listAuthorizationRequests: listHumanRequests, respondHumanRequest, respondPrivateHumanReply,
     store, ingest, recover, taskDetail, taskExecutions, isOwnNotification,
+    async taskIdentity(taskId) { return await query('task.get', { taskId }) ? { taskId, legacyReadonly: false } : null },
     messageProcessingRequests: groupId => topicCoordinator.messageProcessingRequests(groupId),
     async messageProcessingSources(groupId) {
       const [sources, notifications, coordinationSources, arrangements] = await Promise.all([

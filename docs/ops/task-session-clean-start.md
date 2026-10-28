@@ -336,3 +336,5 @@ Windows 原生受限 shell 为任务目录配置写入授权时，需要宿主�
 
 选择danger-full-access意味着该发布会话以当前Windows用户权限运行原生工具，适用于受限token确实无法完成已授权Git等运行需求的恢复；业务范围仍限已明确授权的检出、Git元数据及环境。恢复后应核对原execution实际新输入、原生mode与Git真实结果，不能只凭答复接收或execution succeeded判定UAT已发布。复用已有有效测试/构建，按原作者原执行仅完成剩余交付。
 安装器会把包复制到按 SHA256 派生的不可变目录后交给官方CLI，避免同版本、同file路径重打包被pnpm旧缓存命中。Check不创建缓存；源/缓存目录链拒绝reparse，源和复制后摘要都核验，已有缓存摘要冲突直接拒绝，不覆盖。policy的有效提案只把packagePath换成同一不可变路径，apply/verify及CLI一致，原提案保持。安装失败后先保留失败收据、核对精确旧PID退出/端口关闭/离线账本及包摘要，按上述原安装阶段接续，不再SIGINT或重放业务。
+
+Task context/archive等写入的历史身份预检使用getTaskSessionIdentity精确读取task.get，不构建观察详情或读取分页索引；旧runtime未实现identity时才沿旧详情合同。观察索引未迁移不应阻断当前Task的技术恢复输入，历史任务仍只读拒绝。观察页本身的迁移前置保持，不隐式扫描历史。
