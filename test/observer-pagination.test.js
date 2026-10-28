@@ -1,3 +1,7 @@
+import {readFile} from 'node:fs/promises'
+import {runInNewContext} from 'node:vm'
+import {executionSessionTitle} from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
+import {latestExecutionRoundTiming} from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 import {observerWorkMetadata} from '../packages/dingtalk-dsh-assistant/observer-work-index.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -236,4 +240,36 @@ test('legacy execution index stays readable without DDL and explicit migration a
  db.setAuthorizer((action,table,column)=>{if(action===constants.SQLITE_READ&&table==='dynamic_executions'&&column==='body'){forbiddenReads++;return constants.SQLITE_DENY}return constants.SQLITE_OK})
  try {db.exec("UPDATE dynamic_tasks SET body=json_set(body,'$.updatedAt','after-migration') WHERE id='task'");assert.equal(forbiddenReads,0)} finally {db.setAuthorizer(null)}
  assert.equal(db.prepare("SELECT state FROM observer_task_index WHERE id='task'").get().state,'running')
+})
+
+
+test('execution card page selects only its task/page and omits unrelated definition and old timing history',t=>{
+ const {db,put}=fixture(t)
+ const old=Array.from({length:300},(_,i)=>({leaseEpoch:1,state:'closed',startedAt:'2026-01-01T00:00:00Z',endedAt:'2026-01-01T00:01:00Z',unused:'x'.repeat(200)}))
+ db.exec('BEGIN')
+ for(let n=0;n<140;n++)put('executions',`e${n}`,{executionId:`e${n}`,sessionId:`s${n}`,taskId:n<40?'selected':'other',title:`执行${n}`,status:'running',drained:false,leaseEpoch:2,
+  definition:{executionBackend:'claude-code',secretUnused:'large-definition'.repeat(1000)},result:{payload:{output:'large-result'.repeat(1000)}},timeline:{segments:[...old,{leaseEpoch:2,state:'running',startedAt:'2026-01-02T00:00:00Z'}]}})
+ db.exec('COMMIT')
+ let rows=0;const queries=[]
+ const bounded={prepare(sql){queries.push(sql);const stmt=db.prepare(sql);return {get:(...args)=>stmt.get(...args),all:(...args)=>{const value=stmt.all(...args);if(sql.includes(' AS body'))rows+=value.length;return value}}}}
+ const page=observerPage(bounded,{collection:'executions',taskId:'selected',summary:true,offset:10,limit:2},'fixture')
+ assert.equal(page.total,40);assert.equal(rows,2);assert.deepEqual(page.items.map(row=>row.executionId),['e10','e11'])
+ for(const row of page.items){assert.equal(row.definition.executionBackend,'claude-code');assert.equal(row.definition.secretUnused,undefined);assert.equal(row.result,undefined);assert.equal(row.timeline.segments.length,1);assert.equal(row.timeline.segments[0].leaseEpoch,2)}
+ assert(Buffer.byteLength(JSON.stringify(page.items))<2000)
+ assert(queries.some(sql=>sql.includes('observer_execution_index i WHERE i.task_id=?')&&sql.includes('LIMIT ? OFFSET ?')))
+ // Full execution details retain the original result/definition/history contract.
+ const detail=observerPage(bounded,{collection:'executions',taskId:'selected',offset:10,limit:1},'fixture').items[0]
+ assert.equal(detail.timeline.segments.length,301);assert(detail.result.payload.output);assert(detail.definition.secretUnused)
+})
+
+
+test('execution card service returns timing and identity without constructing detail paths or querying other data',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/task-session-service.js',import.meta.url),'utf8')
+ const fragment=source.slice(source.indexOf('  async function taskExecutions('),source.indexOf('  async function materializeSource('))
+ const calls=[];const entry={executionId:'e',sessionId:'s',title:'中文标题',status:'running',drained:false,leaseEpoch:2,definition:{executionBackend:'claude-code'},timeline:{segments:[{leaseEpoch:2,state:'running',startedAt:'2026-01-02T00:00:00Z'}]}}
+ const method=runInNewContext(`${fragment};taskExecutions`,{query:async(kind,args)=>{calls.push({kind,args});return {items:[entry],total:1,nextOffset:null}},executionSessionTitle,latestExecutionRoundTiming,executionBackend:e=>e.definition?.executionBackend??'dsh',taskFilePath(){throw new Error('summary must not construct detail paths')},taskSessionLogRoot(){throw new Error('summary must not read logs')}})
+ const page=await method('only-this-task',{summary:true,offset:0,limit:10})
+ assert.equal(calls.length,1);assert.equal(calls[0].kind,'observer.page');assert.equal(calls[0].args.taskId,'only-this-task');assert.equal(calls[0].args.limit,10)
+ const row=page.executions[0];assert.equal(row.title,'中文标题');assert.equal(row.executionBackend,'claude-code');assert.equal(row.latestRoundTiming.startedAt,'2026-01-02T00:00:00Z');assert.equal(row.latestRoundTiming.active,true)
+ for(const key of ['timeline','definition','result','document','logPath','workspaceDir','workingDirectory'])assert.equal(row[key],undefined)
 })

@@ -1638,20 +1638,30 @@ window.__ModuleLoader__.load({
         React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', 'aria-label': '关闭提示', onClick: () => setVisible(false) }, '关闭'))
     }
     function CardExecutionPage({ task, updatedAt, navigate, navigatingSessionId }) {
-      const [offset, setOffset] = useState(0), [page, setPage] = useState(), [error, setError] = useState('')
+      const [offset, setOffset] = useState(0), [page, setPage] = useState(), [error, setError] = useState(''), [retry, setRetry] = useState(0)
+      const pending = useRef()
+      const pageKey = `${task.taskId}:${offset}`
+      useEffect(() => { setError(''); return () => { pending.current?.controller.abort(); pending.current = undefined } }, [task.taskId,offset])
       useEffect(() => {
-        const controller = new AbortController(); let active = true
-        setError(''); setPage(undefined)
-        get(`/state/tasks/${encodeURIComponent(task.taskId)}/executions?summary=true&offset=${offset}&limit=10`, {signal:controller.signal}).then(value => {
+        let active = true
+        if (!pending.current) {
+          const controller = new AbortController()
+          const request = { controller, promise: get(`/state/tasks/${encodeURIComponent(task.taskId)}/executions?summary=true&offset=${offset}&limit=10`, {signal:controller.signal}) }
+          pending.current = request
+          request.promise.finally(() => { if (pending.current === request) pending.current = undefined }).catch(() => {})
+        }
+        pending.current.promise.then(value => {
           if (!active) return
           if (offset && offset >= value.total) { setOffset(Math.max(0,Math.floor((value.total-1)/10)*10)); return }
-          setPage(value)
+          setError(''); setPage({...value,key:pageKey})
         },cause=>{if(active)setError(cause.message)})
-        return ()=>{active=false;controller.abort()}
-      },[task.taskId,offset,updatedAt])
-      const sessions = page?.executions || [], session = taskSession(task)
+        return ()=>{active=false}
+      },[task.taskId,offset,updatedAt,retry])
+      const visiblePage = page?.key === pageKey ? page : undefined
+      const sessions = visiblePage?.executions || [], session = taskSession(task)
       return React.createElement(React.Fragment,null,
-        error ? React.createElement('p',{role:'alert'},`读取执行记录失败：${error}`) : !page ? React.createElement('p',{role:'status'},'正在读取执行记录…') : null,
+        error ? React.createElement('p',{role:'alert'},`读取执行记录失败：${error}`, React.createElement(Button,{type:'button',variant:'outline',size:'sm',onClick:()=>setRetry(value=>value+1)},'重试')) : !visiblePage ? React.createElement('p',{role:'status'},'正在读取执行记录…') : null,
+        visiblePage && !sessions.length ? React.createElement('p',{role:'status'},'暂无执行记录') : null,
         React.createElement('div', { style: { display: 'grid', gap: 2, paddingTop: 6 } }, ...sessions.map(execution => {
               const done = ['succeeded', 'completed'].includes(execution.status)
               const running = execution.status === 'running'
@@ -1667,10 +1677,10 @@ window.__ModuleLoader__.load({
                 React.createElement('span', { title: execution.title, style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, execution.title, nativeSession ? null : ' · Claude Code'),
                 React.createElement('span', { style: { whiteSpace: 'nowrap', color: tone, fontSize: 10.5 } }, React.createElement(ExecutionSessionDuration, { timing: execution.latestRoundTiming })))
             })),
-        page && page.total > 10 ? React.createElement('nav',{'aria-label':'执行会话分页',style:{display:'flex',gap:8}},
+        visiblePage && visiblePage.total > 10 ? React.createElement('nav',{'aria-label':'执行会话分页',style:{display:'flex',gap:8}},
           React.createElement(Button,{type:'button',variant:'outline',size:'sm',disabled:offset===0,onClick:()=>setOffset(value=>Math.max(0,value-10))},'上一页'),
-          React.createElement('span',null,`${Math.floor(offset/10)+1}/${Math.max(1,Math.ceil(page.total/10))}`),
-          React.createElement(Button,{type:'button',variant:'outline',size:'sm',disabled:page.nextOffset===null,onClick:()=>setOffset(page.nextOffset)},'下一页')) : null)
+          React.createElement('span',null,`${Math.floor(offset/10)+1}/${Math.max(1,Math.ceil(visiblePage.total/10))}`),
+          React.createElement(Button,{type:'button',variant:'outline',size:'sm',disabled:visiblePage.nextOffset===null,onClick:()=>setOffset(visiblePage.nextOffset)},'下一页')) : null)
     }
     function ObserverContent({ openSession }) {
       const [activePage, updateActivePage] = useState(readActivePage)

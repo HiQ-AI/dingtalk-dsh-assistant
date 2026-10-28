@@ -400,6 +400,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   async function taskExecutions(taskId, { offset = 0, limit = 50, revision, summary = false } = {}) {
     const page = await query('observer.page', { collection: 'executions', taskId, offset, limit, revision, summary })
+    if (summary) return { ...page, items: undefined, executions: page.items.map(execution => ({
+      executionId: execution.executionId, sessionId: execution.sessionId, title: executionSessionTitle(execution),
+      executionBackend: executionBackend(execution), status: execution.status, drained: execution.drained,
+      recovering: execution.recovering === true, createdAt: execution.createdAt,
+      runTiming: execution.runTiming ?? null, latestRoundTiming: latestExecutionRoundTiming(execution),
+    })) }
     const executions = await Promise.all(page.items.map(async execution => ({ ...execution, title: executionSessionTitle(execution), objective: execution.prompt,
       executionBackend: executionBackend(execution),
       document: { path: taskFilePath(root, taskId, 'outputs', execution.executionId, `round-${execution.inputVersion}.md`), inputVersion: execution.inputVersion },
