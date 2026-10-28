@@ -1,6 +1,6 @@
 # 进度询问与协调通知全路径修复
 
-> 状态：ACTIVE
+> 状态：COMPLETE
 > Goal ID：coordination-progress-notifications-20261028
 > 最近维护：2026-10-28T11:29:21+08:00
 > 权威目标：D:/codex/worktrees/coordination-progress-notifications/dingtalk-dsh-assistant/docs/acceptance/coordination-progress-notifications/goal.md
@@ -31,7 +31,7 @@
 
 | SG6 | 历史错误协调正式收口 | 精确退役原纯观察安排，保留四任务及已送达，工作不再待核对 | 已完成 | round-5.md；正式revision2及错误观察已退役 |
 
-| SG7 | 原v4 Owner模式故障恢复 | 原会话正式改workspace-write，产物绑定保留并消费原wake | 进行中 | ARTIFACT_POLICY_MODE_REQUIRED已定位，原生catalog已核验 |
+| SG7 | 原v4 Owner模式故障恢复 | 原会话模式纠正并真实接续，原成果保留 | 已完成 | report.md；原生seq7446/7449，lease165，工具成功回包 |
 
 ## 当前检查点
 - 当前子目标：SG7
@@ -60,3 +60,5 @@
 - SG6进展：精确退役入口210+1通过，部署检查67通过，PR285 OPEN，已打包。现场原v4 Owner继续派发本地验证，current-control拒绝busy；已请求用户选择正式暂停/恢复或自然排空。尚未调用退役接口，不可声称原卡片已收口。
 
 - 去全扫版本已安装，新PID5600，57.5秒健康，入站/DWS正常，原协调已正式退役；v4模式RPC被Host writer拒绝，正在受信绑定路径内修复，未改原会话历史。
+
+- 最终现场：PID44064在线，错误观察原工作卡已正式退役；原v4会话workspace-write事件seq7446及新轮次seq7449实际工具回包。需求/控制13不变。原wakes尚未ack，UAT2业务未完成；全局恢复历史登记慢的确切阶段未收敛。见report.md。
