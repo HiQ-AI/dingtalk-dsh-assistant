@@ -7,8 +7,64 @@ import { createServer } from 'node:http'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
 import { coordinationContextSchema } from '../packages/dingtalk-dsh-assistant/independent-coordination-planner.js'
+import { taskNotificationRecovery } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
 
 const model = { enabled: true, provider: 'native-task-test', model: 'coordination-controlled' }
+
+test('整体暂停协调会话：旧启用配置不启动规划、历史派发、通知或重试，普通任务仍可续办',
+  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'coordination-paused-'))
+    let host, routeAttempts = 0
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, request => {
+      assert.ok(!request.tools.some(tool => tool.name === 'coordination_submit'))
+      const routed = topicTaskCalls(request)
+      if (routed) {
+        if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) {
+          assert.ok(JSON.stringify(request).includes('独立任务协调的新接纳已关闭'))
+          if (++routeAttempts === 1) for (const route of routed[0].args.routes) for (const unit of route.units) {
+            unit.dispatchOwner = 'coordination'
+            unit.topics = []
+          }
+        }
+        return routed
+      }
+      return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '等待后续补充', evidence: [], limitations: [] } } }]
+    }, { config: { coordination: model } })
+    await host.service.ingest({ groupId: 'native-group', messageId: 'ordinary', senderOpenDingTalkId: 'native-user',
+      text: '测试助手，检查文件并等待补充', timestamp: '2026-10-28T01:00:00Z' })
+    await host.service.whenIdle()
+    const [task] = await host.query('task.list')
+    assert.ok(task, '普通话题仍能创建任务')
+    assert.ok(routeAttempts >= 2, '模型误交协调来源必须拒绝后重提')
+    assert.equal((await host.query('coordination.source.list', { groupId: 'native-group' })).length, 0)
+    const command = (kind, args) => host.service.store.command({ kind, args, id: `${kind}:${Math.random()}` })
+    const source = (await command('coordination.reserve', { unitId: 'paused-old', revision: 1, groupId: 'native-group', original: '历史跨任务安排' })).result.source
+    await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'paused-old', members: [{
+      instructionId: 'paused-member', taskId: task.taskId, progressImpact: 'preserve', dependencies: [],
+      command: { id: 'coordination-command:paused-old:paused-member', kind: 'task.supplement', args: {
+        taskId: task.taskId, expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision,
+        messageId: 'must-not-apply', text: '暂停期间不得应用' } } }] })
+    await command('notification.prepare', { notificationId: 'paused-notice', kind: 'coordination', requirementRevision: 1,
+      payload: { conversationId: 'native-group', text: '暂停期间不得外发', fact: { coordinationId: 'paused-old', eventId: 'paused-notice' } } })
+    const before = await host.query('coordination.get', { coordinationId: 'paused-old' })
+    await host.service.recover()
+    await host.service.whenIdle()
+    assert.deepEqual(await host.query('coordination.get', { coordinationId: 'paused-old' }), before)
+    assert.equal((await host.query('notification.get', { notificationId: 'paused-notice' })).state, 'prepared')
+    assert.ok(!host.sent.some(item => item.kind === 'coordination'))
+    const notice = await host.query('notification.get', { notificationId: 'paused-notice' })
+    await assert.rejects(host.service.retryNotification({ groupId: 'native-group', notificationId: notice.id,
+      expectedToken: taskNotificationRecovery(notice).expectedToken }), { code: 'TASK_NOTIFICATION_RECOVERY_FORBIDDEN' })
+    for (const phase of ['coordination', 'coordination-context']) await assert.rejects(host.service.retryMessageProcessing({
+      groupId: 'native-group', messageId: 'ordinary', phase, requestId: 'paused-old', token: 'old-token',
+    }), { code: 'MESSAGE_RETRY_UNAVAILABLE' })
+    await host.service.appendTaskContext({ taskId: task.taskId, requestId: 'ordinary-context', context: '补充文件名',
+      expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision, progressImpact: 'preserve' })
+    await host.service.whenIdle()
+    assert.match((await host.query('task.get', { taskId: task.taskId })).request, /补充文件名/)
+    assert.equal((await host.query('task.list')).length, 1)
+  })
 
 test('原生HTTP精确退役历史纯观察协调，check不发送且工作终态不受旧版本阻塞覆盖',
   { skip: !available ? reason : false, timeout: 30000 }, async t => {
