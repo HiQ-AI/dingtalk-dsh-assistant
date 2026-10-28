@@ -8,6 +8,50 @@ import { coordinationContextSchema } from '../packages/dingtalk-dsh-assistant/in
 
 const model = { enabled: true, provider: 'native-task-test', model: 'coordination-controlled' }
 
+test('即时进度询问经原生路由与query工具一次答复四项任务，恢复不唤醒或重发',
+  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'instant-task-progress-'))
+    let host, ownerCalls = 0
+    const taskIds = []
+    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
+        routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
+          units: [{ unitKey: 'progress', summary: '查询导入事项进度', sourceRefs: [{ quote: message.text }],
+            dispatchOwner: 'coordination', topics: [], reason: '多个现有任务即时只读查询' }] })) } }]
+      if (names.includes('coordination_submit')) {
+        assert.equal(input.tasks.length, 4)
+        return [{ name: 'coordination_submit', args: { kind: 'query', taskIds } }]
+      }
+      const topic = topicTaskCalls(request); if (topic) return topic
+      if (names.includes('task_session_submit')) {
+        ownerCalls++
+        return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '原工作未结束', evidence: [], limitations: [] } } }]
+      }
+      return []
+    }, { config: { coordination: model } })
+    for (const title of ['终审只读UPR导入覆盖', '未保存草稿UPR导入', '草稿UPR物料名称回显', 'v4合并数据集UPR替换'])
+      taskIds.push((await host.service.createTask({ groupId: 'native-group', requestId: title, title, objective: title })).taskId)
+    await host.service.whenIdle()
+    const tasks = await host.query('task.list'), wakes = await host.query('wake.list'), calls = ownerCalls
+    await host.service.ingest({ groupId: 'native-group', messageId: 'progress', senderOpenDingTalkId: 'native-user', senderName: '同事',
+      text: '昨天关于导入的其他问题 修复了没', timestamp: '2026-10-28T01:44:09Z' })
+    await host.service.whenIdle()
+    assert.equal(host.sent.length, 1)
+    for (const task of tasks) assert.ok(host.sent[0].payload.text.includes(task.title))
+    const arrangement = (await host.query('coordination.list'))[0]
+    assert.deepEqual((await host.query('coordination.get', { coordinationId: arrangement.id })).members, [])
+    assert.deepEqual(await host.query('task.list'), tasks)
+    assert.deepEqual(await host.query('wake.list'), wakes)
+    assert.equal(ownerCalls, calls)
+    await host.service.recover(); await host.service.whenIdle()
+    assert.equal(host.sent.length, 1); assert.equal(ownerCalls, calls)
+    assert.deepEqual(await host.query('execution.list'), [])
+    assert.deepEqual(await host.query('coordination.schedule.list'), [])
+    assert.deepEqual(await host.query('coordination.occurrence.list'), [])
+  })
+
 test('部署到UAT2携带原引用穿过预约和独立协调，分页找到并重开唯一原任务，不重复新建',
   { skip: !available ? reason : false, timeout: 30000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'quoted-deployment-native-'))

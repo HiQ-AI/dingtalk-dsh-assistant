@@ -7,7 +7,7 @@ export function coordinationSnapshot({ coordination, members, tasks, schedules, 
     const task = tasks.find(t => t.taskId === m.taskId)
     const blocked = task?.status === 'active' && !['fulfilled','cancelled','superseded','template'].includes(m.state)
       && m.control !== 'cancelled' && task?.lastDecision?.action === 'blocked'
-    return { instructionId: m.id, taskId: m.taskId, observation: m.observation === true,
+    return { instructionId: m.id, taskId: m.taskId, title: task?.title ?? task?.objective ?? task?.request ?? '', observation: m.observation === true,
       requirement: m.observation ? '只观察原任务当前版本的正式完成，不追加要求或唤醒任务' : m.command.args.text ?? m.command.args.request ?? task?.objective ?? '',
       ...(m.recurringTemplateScheduleId ? { authorizationTemplateScheduleId: m.recurringTemplateScheduleId } : {}),
       state: m.state === 'template' ? 'template' : m.recurringOccurrenceId && ['fulfilled','superseded'].includes(m.state) ? m.state : m.waitingReason?.code === 'target_version_changed' ? 'version_changed' : m.state === 'fulfilled' ? 'fulfilled' : m.control === 'cancelled' ? 'cancelled' : m.control === 'paused' ? 'paused' : m.state,
@@ -16,7 +16,7 @@ export function coordinationSnapshot({ coordination, members, tasks, schedules, 
       ...(m.reorderAssessment ? {reorderAssessment:{id:m.reorderAssessment.id,state:m.reorderAssessment.state,
         decision:m.reorderAssessment.decision ?? null,summary:m.reorderAssessment.summary ?? null,evidence:m.reorderAssessment.evidence ?? []}} : {}),
       commandId: m.command.id, receiptRef: m.receipt ? m.command.id : null, completionProof: m.completionProof ?? null,
-      blocker: m.reorderAssessment?.state === 'needs_clarification' && !['cancelled','fulfilled','superseded'].includes(m.state)
+      blocker: m.waitingReason?.code === 'target_version_changed' ? null : m.reorderAssessment?.state === 'needs_clarification' && !['cancelled','fulfilled','superseded'].includes(m.state)
         && m.control !== 'cancelled' ? m.reorderAssessment.summary : blocked ? task.lastDecision.summary : null }
   })
   const fulfilled = items.filter(m => m.state === 'fulfilled').length
@@ -52,9 +52,28 @@ export function coordinationSnapshot({ coordination, members, tasks, schedules, 
       || ['pending','unknown'].includes(o.deliveryState)).map(o => o.id), activeScheduleIds: schedules.filter(s => ['active','paused'].includes(s.state)).map(s => s.id) } }
 }
 
+/** 自动通知只比较业务变化；完整快照仍用于审计和发送前版本校验。 */
+export function coordinationNotificationState(snapshot) {
+  const failure = reason => typeof reason === 'string' ? reason : reason?.code ?? null
+  return { state: snapshot.state,
+    members: snapshot.members.map(member => ({ instructionId: member.instructionId, taskId: member.taskId,
+      title: member.title ?? null, requirement: member.requirement, state: member.state, control: member.control,
+      blocked: Boolean(member.blocker), waitingReason: failure(member.waitingReason),
+      clarification: member.reorderAssessment?.state === 'needs_clarification' ? member.reorderAssessment.summary : null })),
+    pendingClarifications: snapshot.pendingClarifications,
+    schedules: snapshot.schedules.map(schedule => ({ scheduleId: schedule.scheduleId, state: schedule.state,
+      nextDueAt: schedule.nextDueAt ?? null, reminderText: schedule.reminderText ?? null, timezone: schedule.timezone,
+      rule: schedule.rule, recipientIds: schedule.recipientIds })),
+    occurrences: snapshot.occurrences.map(occurrence => ({ occurrenceId: occurrence.occurrenceId, scheduleId: occurrence.scheduleId,
+      plannedAt: occurrence.plannedAt, cancelled: Boolean(occurrence.cancelledAt), paused: Boolean(occurrence.paused),
+      actionState: occurrence.actionState, deliveryState: occurrence.deliveryState, failure: failure(occurrence.failureReason),
+      recipientIds: occurrence.recipientIds })),
+    jobs: snapshot.jobs.map(job => ({ jobId: job.jobId, state: job.state, failure: failure(job.failureReason) })) }
+}
+
 const statusLabels = { active: '进行中', completed: '已完成', partially_completed: '部分完成', needs_attention: '需要处理',
   needs_clarification: '还需要补充信息', cancelled: '已取消', paused: '已暂停', ready: '等待处理', observing: '等待原事项完成',
-  applied: '已接收，尚未完成', fulfilled: '已完成', template: '按约定周期处理', superseded: '已由新安排替代', version_changed: '任务要求已变化，需要重新核对',
+  applied: '已接收，尚未完成', fulfilled: '已完成', template: '按约定周期处理', superseded: '已由新安排替代', version_changed: '当前状态需重新核对',
   waiting: '等待执行', running: '执行中', succeeded: '已执行', failed: '未能完成', blocked: '暂时受阻', expired: '已过期，本次未执行' }
 const statusText = state => statusLabels[state] ?? '状态待核实'
 const sentence = value => { const text = String(value ?? '').trim(); return text ? /[。！？!?]$/u.test(text) ? text : `${text}。` : '' }
@@ -81,7 +100,7 @@ export function formatCoordinationTiming(rule, timezone, timeZone = workingTimeZ
 }
 
 const reasonLabels = {
-  authorization_changed: '相关授权已变化，暂时无法继续', target_version_changed: '任务要求已变化，需要核对后继续',
+  authorization_changed: '相关授权已变化，暂时无法继续', target_version_changed: '当前状态需重新核对',
   waiting_batch_clarification: '还需要补充安排信息', waiting_dependency: '需要先完成前面的事项',
   dependency_pending: '需要先完成前面的事项', paused: '安排已暂停', cancelled: '安排已取消',
   waiting_trigger: '尚未满足约定的执行条件', trigger_paused: '安排已暂停', trigger_cancelled: '安排已取消', trigger_superseded: '已由新安排替代',
@@ -134,11 +153,11 @@ export function formatCoordinationAcceptance(proposal, { memberCount = 0, schedu
 export function formatCoordinationSnapshot(snapshot, { timeZone = workingTimeZone(), requesterId, recipientNames = new Map() } = {}) {
   const lines = []
   for (const member of snapshot.members) {
-    let detail = member.blocker || reasonText(member.waitingReason)
+    let detail = member.state === 'version_changed' ? '' : member.blocker || reasonText(member.waitingReason)
     // 历史诊断保留在快照；含内部身份的阻塞原因改成明确的待核查说明，不截取拼接残句。
-    if (member.blocker) try { assertGroupReply(member.blocker, [snapshot.coordinationId, member.instructionId, member.taskId, member.commandId, member.receiptRef]) }
+    if (detail && member.blocker) try { assertGroupReply(member.blocker, [snapshot.coordinationId, member.instructionId, member.taskId, member.commandId, member.receiptRef]) }
     catch (error) { if (error.code !== 'GROUP_REPLY_INTERNAL_DETAILS') throw error; detail = reasonText(member.waitingReason) || '处理暂时受阻，具体原因还需核查' }
-    lines.push(`${sentence(`${member.observation ? '原事项' : body(member.requirement) || '这项工作'}：${statusText(member.state)}`)}${sentence(detail)}`)
+    lines.push(`${sentence(`${body(member.observation ? member.title : member.requirement) || '这项工作'}：${statusText(member.state)}`)}${sentence(detail)}`)
   }
   if (snapshot.state !== 'cancelled') lines.push(...snapshot.pendingClarifications.map(item => sentence(item.question)))
   const schedules = new Map(snapshot.schedules.map(item => [item.scheduleId, item]))

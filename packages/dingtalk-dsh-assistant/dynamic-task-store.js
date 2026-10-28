@@ -10,7 +10,7 @@ import { coordinationSchema, coordinationLedger } from './coordination-ledger.js
 import { scheduleSchema, coordinationSchedules } from './coordination-schedules.js'
 import { assertTaskContextSemantics } from './task-input-contract.js'
 import { migrationStateDigest } from './coordination-migration-state.js'
-import { coordinationSnapshot, formatCoordinationSnapshot } from './coordination-summary.js'
+import { coordinationSnapshot, coordinationNotificationState, formatCoordinationSnapshot } from './coordination-summary.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs'
 import { isAbsolute, dirname, basename } from 'node:path'
@@ -471,22 +471,35 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       schedules: schedules.list('schedules').filter(s => s.coordinationId === item.id), occurrences,
       jobs: schedules.list('jobs').filter(j => occurrenceIds.has(j.occurrenceId)) })
   }
+  const hasCoordinationNotificationWork = snapshot => snapshot.members.some(member => !member.observation)
+    || snapshot.occurrences.some(occurrence => !occurrence.cancelledAt
+      && (['failed','expired','blocked'].includes(occurrence.actionState) || occurrence.deliveryState === 'failed'))
   function reduce(kind, a, commandId) {
     const stamp = now()
     if (kind === 'coordination.aggregate') {
       const item = get('dynamic_coordination', a.coordinationId)
       const snapshot = currentCoordinationSnapshot(item)
       const snapshotDigest = digest(snapshot), changedSnapshot = item.aggregateDigest !== snapshotDigest
+      const significanceDigest = digest(coordinationNotificationState(snapshot))
       item.lifecycleState = snapshot.state; item.aggregateSnapshot = snapshot; item.aggregateDigest = snapshotDigest
       let notification
       let prior = item.summaryNotificationId ? get('dynamic_notifications', item.summaryNotificationId, true) : null
+      // 只有已送达摘要才抑制同一业务状态；发送中/未知由下方 prior 门禁防重，不能冒充送达。
+      if (prior?.state === 'delivered' && prior.payload.fact.significanceDigest)
+        item.lastNotifiedSignificanceDigest = prior.payload.fact.significanceDigest
+      const notificationWork = hasCoordinationNotificationWork(snapshot)
+      if (!notificationWork && prior?.state === 'prepared' && !prior.sendPermit) {
+        prior.state = 'superseded'; prior.retirement = { reason: 'coordination-observation-only', at: stamp }
+        put('dynamic_notifications', prior)
+      }
       if (prior?.state === 'prepared' && !prior.sendPermit && prior.payload.fact.snapshotDigest !== snapshotDigest) {
         prior.state = 'superseded'; prior.retirement = { reason: 'coordination-facts-changed', at: stamp }; put('dynamic_notifications', prior)
         item.summaryNotificationId = null; item.lastNotifiedDigest = null; prior = null
       }
       const failedOccurrences = snapshot.occurrences.filter(occurrence => !occurrence.cancelledAt && (['failed','expired','blocked'].includes(occurrence.actionState) || occurrence.deliveryState === 'failed'))
-      const shouldNotify = (item.memberIds.length > 0 || failedOccurrences.length > 0) && !['needs_clarification','cancelled'].includes(item.state)
+      const shouldNotify = notificationWork && !['needs_clarification','cancelled'].includes(item.state)
         && ['completed','partially_completed','needs_attention'].includes(snapshot.state)
+        && item.lastNotifiedSignificanceDigest !== significanceDigest
         && item.lastNotifiedDigest !== snapshotDigest
       if (shouldNotify && !prior?.state?.match(/^(starting|unknown|prepared)$/)) {
         item.summaryRevision = (item.summaryRevision ?? 0) + 1
@@ -495,7 +508,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           payload: { kind: 'coordination', replyKind: 'substantive', conversationId: item.groupId,
             atOpenDingTalkIds: [...new Set(failedOccurrences.flatMap(occurrence => occurrence.recipientIds))],
             text: formatCoordinationSnapshot(snapshot),
-            fact: { coordinationId: item.id, eventId: `summary:${item.summaryRevision}`, snapshotDigest, summaryRevision: item.summaryRevision } } }, commandId).result.notification
+            fact: { coordinationId: item.id, eventId: `summary:${item.summaryRevision}`, snapshotDigest, significanceDigest, summaryRevision: item.summaryRevision } } }, commandId).result.notification
         item.summaryNotificationId = notification.id; item.lastNotifiedDigest = snapshotDigest
       }
       put('dynamic_coordination', item); return changed({ coordination: item, snapshot, changed: changedSnapshot, ...(notification ? { notification } : {}) })
@@ -1673,7 +1686,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             }
           }
           // 在发送许可同一事务内回读摘要事实，取消本次安排不能被尚未运行的聚合扫描绕过。
-          if (fact.snapshotDigest && fact.snapshotDigest !== digest(currentCoordinationSnapshot(coordination))) {
+          const summarySnapshot = fact.snapshotDigest ? currentCoordinationSnapshot(coordination) : null
+          if (summarySnapshot && !hasCoordinationNotificationWork(summarySnapshot)) {
+            notification.state = 'superseded'; notification.retirement = { reason: 'coordination-observation-only', at: stamp }
+            put('dynamic_notifications', notification); return changed({ notification })
+          }
+          if (summarySnapshot && fact.snapshotDigest !== digest(summarySnapshot)) {
             notification.state = 'superseded'; notification.retirement = { reason: 'coordination-facts-changed', at: stamp }
             put('dynamic_notifications', notification); return changed({ notification })
           }

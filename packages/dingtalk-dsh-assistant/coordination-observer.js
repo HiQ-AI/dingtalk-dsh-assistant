@@ -21,7 +21,7 @@ const ruleView = rule => rule ? { kind: text(rule.kind), at: text(rule.at), time
 const lastStamp = values => values.filter(instant).sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1) ?? null
 const resultView = (code, label, tone = 'neutral') => ({ code, label, tone })
 const reasonLabels = {
-  waiting_dependency: '等待前置事项完成', target_version_changed: '任务要求已变化，需要核对',
+  waiting_dependency: '等待前置事项完成', target_version_changed: '当前状态需重新核对',
   DYNAMIC_COORDINATION_VERSION_STALE: '任务版本已变化，需要核对',
   DYNAMIC_COORDINATION_RECURRING_AUTHORIZATION_STALE: '相关授权已变化，需要核对',
   DYNAMIC_COORDINATION_RECURRING_TASK_STATE_CHANGED: '任务状态已变化，需要核对',
