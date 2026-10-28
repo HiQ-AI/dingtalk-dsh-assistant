@@ -19,6 +19,7 @@ import { createStartupMetrics } from './startup-metrics.js'
 import { createExecutionSessions } from './execution-session.js'
 import { createClaudeExecutionSessions, claudeExecutionLogPath } from './claude-execution-session.js'
 import { createTaskSessionObservability } from './task-session-observability.js'
+import { activeFixedUnits } from './fixed-topics.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { createCoordinationObserver } from './coordination-observer.js'
 import { resolveTaskArtifactScope } from './task-artifact-scope.js'
@@ -50,7 +51,7 @@ export const dynamicExecutionOutputSchema = { type: 'object', properties: {
   evidence: texts, limitations: texts, artifacts: texts, question: string,
 }, required: ['status','summary','evidence','limitations','artifacts'], additionalProperties: false }
 /** All model decisions pass through this Host boundary. No workflow catalog or staged plan exists here. */
-export async function openTaskSessionService({ ctx, config, legacy, residentStore, notifications, readMessage, readResource,
+export async function openTaskSessionService({ ctx, config, legacy, residentStore, notifications, readMessage, readResource, readMentioned,
   taskSessions: suppliedTaskSessions, executionSessions: suppliedExecutionSessions, claudeExecutionSessions: suppliedClaudeExecutionSessions,
   store: suppliedStore, persistence: suppliedPersistence, startupObserver } = {}) {
   const startup = createStartupMetrics(startupObserver)
@@ -525,7 +526,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (source.version !== message.messageVersion) return
     const refs = residentStore.listTopics(source.groupId).filter(topic => resolveTopicMessages(group, topic.topicId, topic.revision)
       .some(item => item.messageId === source.messageId && item.messageVersion === source.version))
-    const legacyComplete = refs.every(topic => {
+    const legacyComplete = !activeFixedUnits(message).length && refs.every(topic => {
       const latest = new Map()
       for (const entry of topic.entries) if (entry.messageId === source.messageId) latest.set(entry.unitId ?? 'legacy', entry)
       return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === source.version).every(entry =>
@@ -652,7 +653,14 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction,
     // 独立协调会话整体暂停；普通 Topic 路由继续，但不再接纳协调来源。
-    coordinationEnabled: false, onStage: recordMessageStage,
+    coordinationEnabled: false, onStage: recordMessageStage, readMentioned,
+    readPlatformTasks: async groupId => {
+      const tasks = await query('task.list', { groupId, archived: 'all' })
+      const executions = await query('execution.list')
+      return tasks.filter(task => task.groupId === groupId).map(task => ({ taskId: task.taskId, groupId, title: task.title,
+        state: taskBoardState(task, executions.filter(execution => execution.taskId === task.taskId)),
+        completedAt: task.completion?.at ?? null, archivedAt: task.archivedAt ?? null }))
+    },
     onInputSettled: groupId => {
       if (closed) return
       // Topic 首次完成后立即结算来源；不能等待整个群队列、业务执行或通知回读排空。

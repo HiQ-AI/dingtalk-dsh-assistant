@@ -2747,11 +2747,12 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
     }),
     updateGroup: (request) => serialize(request.groupId, () => store.updateGroup(request)),
     getAgentConfig: () => ({
-      agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...currentSelection(), proxyUrl: store.getProxyUrl?.() ?? '',
+      agentNames: store.getAgentNames?.() ?? [], timezone: store.getTimezone?.(), workspaceDir: agentWorkspace, ...currentSelection(), proxyUrl: store.getProxyUrl?.() ?? '',
       leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', taskPrompts: store.getTaskPrompts?.() ?? [], taskPromptsVersion: store.getTaskPromptsVersion?.() ?? 0, maxConcurrentTasks: taskConcurrencyLimit,
     }),
-    updateAgentConfig: ({ agentNames, workspaceDir, model, reasoningEffort, proxyUrl, leafSessionPrompt, taskPrompts, taskPromptsVersion, maxConcurrentTasks: nextMaxConcurrentTasksInput }) => serializeConfig(async () => {
+    updateAgentConfig: ({ agentNames, timezone, workspaceDir, model, reasoningEffort, proxyUrl, leafSessionPrompt, taskPrompts, taskPromptsVersion, maxConcurrentTasks: nextMaxConcurrentTasksInput }) => serializeConfig(async () => {
       if (runtimeClosing) throw new Error('resident_runtime_closed')
+      if (timezone !== undefined) new Intl.DateTimeFormat('en', { timeZone: timezone }).format()
       if (agentNames !== undefined && !Array.isArray(agentNames)) throw new Error('agent_names_must_be_array')
       const nextAgentNames = agentNames === undefined ? (store.getAgentNames?.() ?? []) : [...new Set(agentNames.map((name) => name.trim()).filter(Boolean))]
       const namesChanged = JSON.stringify(nextAgentNames) !== JSON.stringify(store.getAgentNames?.() ?? [])
@@ -2776,8 +2777,9 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       const nextMaxConcurrentTasks = nextMaxConcurrentTasksInput === undefined ? taskConcurrencyLimit : nextMaxConcurrentTasksInput
       if (!Number.isInteger(nextMaxConcurrentTasks) || nextMaxConcurrentTasks < 1 || nextMaxConcurrentTasks > 50) throw new Error('agent_max_concurrent_tasks_invalid')
       const concurrencyChanged = nextMaxConcurrentTasks !== taskConcurrencyLimit
-      const resultConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...currentSelection(), proxyUrl: nextProxyUrl, leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', taskPrompts: store.getTaskPrompts?.() ?? [], taskPromptsVersion: store.getTaskPromptsVersion?.() ?? 0, maxConcurrentTasks: taskConcurrencyLimit })
-      if (!workspaceChanged && !selectionChanged && !proxyChanged && !guidanceChanged && !taskPromptsChanged && !namesChanged && !concurrencyChanged) return resultConfig()
+      const timezoneChanged = timezone !== undefined && timezone !== store.getTimezone?.()
+      const resultConfig = () => ({ timezone: store.getTimezone?.(), agentNames: store.getAgentNames?.() ?? [], workspaceDir: agentWorkspace, ...currentSelection(), proxyUrl: nextProxyUrl, leafSessionPrompt: store.getLeafSessionPrompt?.() ?? '', taskPrompts: store.getTaskPrompts?.() ?? [], taskPromptsVersion: store.getTaskPromptsVersion?.() ?? 0, maxConcurrentTasks: taskConcurrencyLimit })
+      if (!workspaceChanged && !selectionChanged && !proxyChanged && !guidanceChanged && !taskPromptsChanged && !namesChanged && !concurrencyChanged && !timezoneChanged) return resultConfig()
       if (workspaceChanged) await serializeTasks(() => {
         if (store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
       })
@@ -2803,6 +2805,7 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
           if (workspaceChanged && store.listTasks().some((task) => task.state === 'running' || task.state === 'waiting' || task.state === 'queued')) throw new Error('agent_config_has_active_tasks')
           if (selectionChanged) await ctx.agentDefaultModel.saveSelection(nextSelection)
           if (proxyChanged) await store.setProxyUrl(nextProxyUrl)
+          if (timezoneChanged) await store.setAgentSettings({ timezone })
           if (namesChanged) await store.setAgentNames(nextAgentNames)
           if (guidanceChanged) await store.setLeafSessionPrompt(nextLeafSessionPrompt)
           if (taskPromptsChanged) {

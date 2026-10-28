@@ -102,7 +102,9 @@
     "topic-model.js",
     "topic-runtime.js",
     "version-check.js",
-    "web-client.js"
+    "web-client.js",
+    "fixed-topics.js",
+    "fixed-topic-handler.js"
   ],
   "exports": {
     ".": "./index.js",

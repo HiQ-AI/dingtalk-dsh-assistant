@@ -30,7 +30,7 @@ async function setup(t, options = {}) {
   const sent = [], errors = [], tools = new Map(), applications = []
   const agent = { session: options.session, inbox: options.inbox, steer(message) { sent.push(message.content[0].text); options.onSteer?.(message) }, whenIdle: options.whenIdle ?? (() => new Promise(() => {})) }
   const coordinator = createTopicCoordinator({
-    workflowPromptsEnabled: options.workflowPromptsEnabled, dispatchRequest: options.dispatchRequest, checkStartupRecovery: options.checkStartupRecovery, quotedReminderContext: options.quotedReminderContext,
+    fixedTopicsEnabled: options.fixedTopicsEnabled, workflowPromptsEnabled: options.workflowPromptsEnabled, dispatchRequest: options.dispatchRequest, checkStartupRecovery: options.checkStartupRecovery, quotedReminderContext: options.quotedReminderContext,
     store, getAgent: () => agent, assertSession(exec, groupId) { if (exec?.groupId !== groupId) throw new Error('wrong_session') },
     serializeTasks: options.serializeTasks ?? ((fn) => fn()), isClosing: options.isClosing ?? (() => false), retryDelayMs: options.retryDelayMs ?? 60_000,
     reviewCandidates: options.reviewCandidates ?? (() => []), onDecisionRequest: options.onDecisionRequest, maxRequestAttempts: options.maxRequestAttempts ?? 3,
@@ -2686,4 +2686,23 @@ for (const workflowPromptsEnabled of [false, true]) test('workflow instructions 
   }
   assert.ok(text.includes('dispatchAssessment'))
   assert.ok(text.includes('group_task_context_get'))
+})
+
+test('fixed route categories are offered by active mode and bypass business decisions', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true, workflowPromptsEnabled: false })
+  await ingest(h, 'fixed-source', { text: '查平台；买咖啡；修复UPR' })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.deepEqual(request.fixedTopics.map(topic => topic.title), ['职责外话题', '职责内Agent平台相关'])
+  const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'fixed-source', messageVersion: 1, units: [
+    { unitKey: 'platform', summary: '平台查询', sourceRefs: [{ quote: '查平台；' }], fixedTopic: 'agent-platform', topics: [], reason: '平台整体查询' },
+    { unitKey: 'outside', summary: '买咖啡', sourceRefs: [{ quote: '买咖啡；' }], fixedTopic: 'out-of-scope', topics: [], reason: '职责外' },
+    { unitKey: 'upr', summary: '修复UPR', sourceRefs: [{ quote: '修复UPR' }], topics: [{ newTopicKey: 'upr', title: 'UPR修复' }] },
+  ] }] })
+  assert.equal(result.status, 'accepted')
+  assert.equal(result.pendingDecisions.length, 1)
+  assert.equal(result.pendingDecisions[0].messages.length, 1)
+  assert.equal(result.pendingDecisions[0].messages[0].text, '修复UPR')
+  assert.equal(h.store.getGroup('g').topics.length, 1)
+  assert.deepEqual(h.applications, [])
 })
