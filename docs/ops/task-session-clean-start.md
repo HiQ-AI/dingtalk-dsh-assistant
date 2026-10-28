@@ -338,3 +338,5 @@ Windows 原生受限 shell 为任务目录配置写入授权时，需要宿主�
 安装器会把包复制到按 SHA256 派生的不可变目录后交给官方CLI，避免同版本、同file路径重打包被pnpm旧缓存命中。Check不创建缓存；源/缓存目录链拒绝reparse，源和复制后摘要都核验，已有缓存摘要冲突直接拒绝，不覆盖。policy的有效提案只把packagePath换成同一不可变路径，apply/verify及CLI一致，原提案保持。安装失败后先保留失败收据、核对精确旧PID退出/端口关闭/离线账本及包摘要，按上述原安装阶段接续，不再SIGINT或重放业务。
 
 Task context/archive等写入的历史身份预检使用getTaskSessionIdentity精确读取task.get，不构建观察详情或读取分页索引；旧runtime未实现identity时才沿旧详情合同。观察索引未迁移不应阻断当前Task的技术恢复输入，历史任务仍只读拒绝。观察页本身的迁移前置保持，不隐式扫描历史。
+
+本地恢复验收包括看板数据面：脚本在health/入站恢复后进入observer-readiness阶段，单次读取任务分页和待答复分页（均limit=1），503或非分页结构立即失败并保留阶段记录，不重试或自动迁移。实际页面仍须独立打开列表和任务详情。已存在库缺索引时按task-archive规程执行indexes-only离线迁移；停机后若留有WAL，先在精确owner/PID死亡检查下执行受控TRUNCATE checkpoint，再做零写迁移Check与Apply，不跑完整性全扫。

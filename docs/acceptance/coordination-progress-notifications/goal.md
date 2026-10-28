@@ -38,9 +38,11 @@
 | SG10 | 系统回归与交付 | 各目录/恢复/续办场景正反例及现场恢复 | 部分完成 | round-7.md；额外资源组超时、提示待安装 |
 | SG11 | 原发布执行权限恢复 | 原c5受信权限纠正、Git与辅助进程成功并续办剩余交付 | 已完成 | round-9.md；input9同session、原生Git提交推送成功 |
 
+| SG12 | 本地运行看板恢复 | 索引就绪、原任务/执行保持、分页API及真实列表详情通过 | 已完成 | round-10.md；PID13436、8API200、Chrome截图 |
+
 ## 当前检查点
-- 当前子目标：技术修复已闭环，原Task继续剩余UAT2交付
-- 唯一下一步：由原作者原执行继续UAT2集成及发布；不追加唤醒、不重跑业务验证。
+- 当前子目标：SG12 已完成，本地看板真实恢复
+- 唯一下一步：交付本轮索引恢复与部署就绪校验；原任务已正式完成，无需再唤醒或发布。
 - 未闭环项：原UAT2业务交付由原任务继续；历史wakes尚未全部ack，全局recover耗时阶段未收敛。
 
 ## 进展
@@ -73,3 +75,7 @@
 - SG11（进行中）：原发布c5/input8已真实接续，但Git common-dir写入与MSYS命名对象分别被受限环境拒绝。新增受信operator对精确原execution的权限纠正，复用原生mode，保留原检出/凭据/验证；不再把统一产物归档误作业务写根。方案docs/spec/publish-execution-native-permissions.md。
 
 - 最新现场：round-9已证明原c5 input9、同session完整模式和真实Git读/暂存/提交/推送成功，独立PR392回读head=c56df87d。PID33984；技术阻塞修复完成，UAT业务仍在原任务进行。
+
+- SG12（进行中）：用户反馈本地看板仍503。已实证动态库无observer_*索引，原始HTTP任务/待答复/详情503、群/话题200，实际Chrome看板可见原错误。索引only脚本29项相关验证通过，原c5发布已排空，等待最后只读核验与Owner自然排空后处理。方案docs/spec/local-observer-index-recovery.md。
+
+- SG12完成：同包恢复PID13436，indexes-only迁移887ms，原正文/身份/schema不变；真实8API200及Chrome列表/原详情已恢复，原v4任务显示已结束。新部署验收增加observer-readiness，防止health正常但看板503误报成功。证据round-10.md。

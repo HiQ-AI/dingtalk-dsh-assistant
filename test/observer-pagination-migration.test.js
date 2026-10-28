@@ -7,6 +7,26 @@ import {join} from 'node:path'
 import {createHash} from 'node:crypto'
 import {spawnSync} from 'node:child_process'
 const script=new URL('../scripts/migrate-observer-pagination.mjs',import.meta.url)
+test('indexes-only preserves source rows/schema/owner, rejects live or mismatched owners and rolls back failed DDL',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'observer-indexes-only-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const path=join(root,'ledger.sqlite'),db=new DatabaseSync(path)
+ db.exec(`PRAGMA application_id=1146311763;PRAGMA user_version=2;CREATE TABLE dynamic_meta(key TEXT PRIMARY KEY,value TEXT);INSERT INTO dynamic_meta VALUES('instanceId','fixture'),('initToken','fixture');`)
+ for(const name of ['tasks','executions','wakes','coordination_sources','sources','notifications','coordination'])db.exec(`CREATE TABLE dynamic_${name}(id TEXT PRIMARY KEY,body TEXT)`)
+ const body=JSON.stringify({status:'completed',archivedAt:'2026-01-01',groupId:'g'})
+ db.prepare('INSERT INTO dynamic_tasks VALUES(?,?)').run('t',body);db.close()
+ const run=(...args)=>spawnSync(process.execPath,[script.pathname.replace(/^\/([A-Za-z]:)/,'$1'),'--database',path,'--indexes-only',...args],{encoding:'utf8',timeout:15000})
+ const before=await readFile(path);assert.equal(run().status,0);assert.deepEqual(await readFile(path),before)
+ let edit=new DatabaseSync(path);edit.prepare("INSERT INTO dynamic_meta VALUES('owner',?)").run(`${process.pid}:live`);edit.close()
+ assert.notEqual(run('--apply','--expected-owner',`${process.pid}:live`).status,0)
+ const child=spawnSync(process.execPath,['-e',''],{encoding:'utf8'}),stale=`${child.pid}:dead`
+ edit=new DatabaseSync(path);edit.prepare("UPDATE dynamic_meta SET value=? WHERE key='owner'").run(stale);edit.exec('DROP TABLE dynamic_notifications');edit.close()
+ assert.notEqual(run('--apply','--expected-owner','wrong').status,0)
+ assert.notEqual(run('--apply','--expected-owner',stale).status,0)
+ edit=new DatabaseSync(path);assert.equal(edit.prepare("SELECT 1 FROM sqlite_master WHERE name='observer_task_index'").get(),undefined);edit.exec('CREATE TABLE dynamic_notifications(id TEXT PRIMARY KEY,body TEXT)');edit.close()
+ const result=run('--apply','--expected-owner',stale);assert.equal(result.status,0,result.stderr)
+ assert.equal(JSON.parse(result.stdout).archivedTasks,0);assert.equal(run('--apply','--expected-owner',stale).status,0)
+ const check=new DatabaseSync(path,{readOnly:true});assert.equal(check.prepare('SELECT body FROM dynamic_tasks').get().body,body);assert.equal(check.prepare("SELECT value FROM dynamic_meta WHERE key='owner'").get().value,stale);assert.equal(check.prepare('PRAGMA user_version').get().user_version,2);assert.equal(check.prepare("SELECT 1 FROM sqlite_master WHERE name='dynamic_archived_tasks'").get(),undefined);check.close()
+})
 test('offline CLI is read-only by default and requires the exact preserved backup before atomic index migration',async t=>{
  const root=await mkdtemp(join(tmpdir(),'observer-offline-migration-'));t.after(()=>rm(root,{recursive:true,force:true}))
  const path=join(root,'ledger.sqlite'),backup=join(root,'backup.sqlite'),db=new DatabaseSync(path)
@@ -39,6 +59,20 @@ test('legacy trace migration honors the separate process-owner SQLite lock',asyn
  await copyFile(path,backup);const before=await readFile(path),hash=createHash('sha256').update(before).digest('hex')
  const result=run('--apply','--backup',backup,'--expected-sha256',hash)
  assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).ready,true)
+})
+
+test('resident indexes-only requires initialized identity and an unlocked owner file, without backup',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'observer-resident-indexes-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const path=join(root,'resident.sqlite'),db=new DatabaseSync(path)
+ db.exec('CREATE TABLE message_runs(run_id TEXT PRIMARY KEY,body TEXT);CREATE TABLE message_items(item_id TEXT PRIMARY KEY,run_id TEXT,kind TEXT,body TEXT)');db.close()
+ const lock=new DatabaseSync(path+'.owner.sqlite');lock.exec('CREATE TABLE guard(id TEXT)');lock.close()
+ const run=(...args)=>spawnSync(process.execPath,[script.pathname.replace(/^\/([A-Za-z]:)/,'$1'),'--database',path,'--indexes-only',...args],{encoding:'utf8',timeout:15000})
+ assert.notEqual(run('--apply').status,0)
+ const init=new DatabaseSync(path);init.exec('PRAGMA application_id=1146308677;PRAGMA user_version=9');init.close()
+ const before=await readFile(path),ownerBefore=await readFile(path+'.owner.sqlite');assert.equal(run().status,0);assert.deepEqual(await readFile(path),before);assert.deepEqual(await readFile(path+'.owner.sqlite'),ownerBefore)
+ const owner=new DatabaseSync(path+'.owner.sqlite');owner.exec('BEGIN EXCLUSIVE');assert.notEqual(run('--apply').status,0);owner.exec('ROLLBACK');owner.close()
+ const result=run('--apply');assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).databaseKind,'resident');assert.equal(run('--apply').status,0)
+ const check=new DatabaseSync(path,{readOnly:true});assert.equal(check.prepare('PRAGMA user_version').get().user_version,9);assert.ok(check.prepare("SELECT 1 FROM sqlite_master WHERE name='observer_trace_index'").get());check.close()
 })
 
 

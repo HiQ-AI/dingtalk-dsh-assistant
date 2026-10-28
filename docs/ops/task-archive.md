@@ -10,6 +10,10 @@
 
 既有已标记归档的数据可使用 `scripts/migrate-observer-pagination.mjs` 的显式离线迁移入口：停用该合成/维护目标、保留一致性备份，并提供匹配 SHA256；默认只读检查，`--apply` 才写。迁移按最多 100 个任务 ID 取批，再在事务中搬迁；不将普通 completed 自动归档。本次未操作真实库。
 
+仅修复看板 `OBSERVER_PAGINATION_MIGRATION_REQUIRED` 时，使用同入口 `--indexes-only`。先按原生部署流程等待当前控制排空、停止精确实例，再分别对动态任务库和 resident 消息库运行 `node scripts/migrate-observer-pagination.mjs --database <实际库路径> --indexes-only`；默认 Check 零写，通过后原参数加 `--apply`。输出 `databaseKind` 区分两类库。动态库若保留死亡实例的 owner，必须增加 `--expected-owner <完整pid:token>`，脚本在事务内核对原值且要求 PID 不存在；不清除 owner。resident 库全程持有原 `.owner.sqlite` 独占锁，在线实例仍持锁时拒绝。
+
+该模式只允许已初始化库，不需要历史备份、不计算整库摘要、不执行完整性全扫、不搬归档记录或升级归档 schema。单事务复用原索引安装函数，失败回滚；只建立/回填 `observer_*` 派生表、索引和触发器。动态源表涉及任务、执行、唤醒、通知、来源、协调及已存在的归档表；resident 涉及消息、话题事实和旧执行表。不同投影会分别读取相应源表，证据索引还会生成派生文本分块，因此首次回填仍有实际 I/O；不将这些回填移入普通启动或 GET。迁移后独立检查 `ready`，启动同包同配置，再验证真实分页 API 和浏览器任务列表/详情，不能用 health 代替看板验收。
+
 首次物理归档设置 schema 3 和 taskArchiveSchema 标记，旧二进制不能直接读回，回退必须使用迁移前备份。未部署的外置详情草案格式不作为兼容输入。本 PR 已撤回独立详情数据库、codec 和外置迁移工具。
 
 分表不会自动缩小 SQLite 文件。减少无变化巡查回执写入是独立的控增长措施；真实库压缩不在本次实施范围。

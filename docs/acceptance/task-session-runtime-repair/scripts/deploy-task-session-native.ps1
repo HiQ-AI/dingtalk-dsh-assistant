@@ -66,6 +66,15 @@ function RunNode([string[]]$Arguments){
  return ($output -join "`n")
 }
 function Record([string]$Name,$Value){$Value|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $EvidenceDirectory "$Name.json") -Encoding utf8}
+function ReadObserverReadiness([string]$BaseUrl='http://127.0.0.1:18998') {
+ $totals=@{}
+ foreach($entry in @(@{name='tasks';path='/state/tasks?offset=0&limit=1'},@{name='pending';path='/state/authorizations?offset=0&limit=1&filter=pending'})){
+  $page=Invoke-RestMethod ($BaseUrl+$entry.path) -NoProxy -TimeoutSec 10
+  if($null-eq$page -or $page.items -isnot [array] -or $page.total -isnot [long] -and $page.total -isnot [int] -or $page.total-lt0 -or $page.offset-ne0 -or $page.limit-ne1 -or $page.items.Count-gt1 -or $page.revision -isnot [string]){throw 'DEPLOY_OBSERVER_PAGE_INVALID'}
+  $totals[$entry.name]=$page.total
+ }
+ return @{ready=$true;taskTotal=$totals.tasks;pendingTotal=$totals.pending}
+}
 function ReadConsoleProof {
  $psi=[Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
  $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
@@ -250,6 +259,8 @@ try{
  WaitFor {
   try{$script:health=Invoke-RestMethod http://127.0.0.1:18998/health -NoProxy -TimeoutSec 10;return $health.inboundProcessing -and $health.dwsBridge.healthy}catch{return $false}
  } 'DEPLOY_TRANSPORT_NOT_READY' 60
+ $phase='observer-readiness'
+ Record 'observer-readiness' (ReadObserverReadiness)
  Record 'readback' @{newPid=$newPid;creationDate=(Get-CimInstance Win32_Process -Filter "ProcessId=$newPid").CreationDate;health=$health;profileSha256=Hash $patch;packageSha256=Hash $Package;installedVersion=(Get-Content "$installed/package.json" -Raw|ConvertFrom-Json).version;taskEnabled=(Get-ScheduledTask -TaskName $taskName).Settings.Enabled;backupCreated=[bool]$RestartMaintenanceProposal}
  @{installed=$true;transportReady=$true;newPid=$newPid;health=$health.status;recoveryIssueCount=$health.recoveryIssueCount;evidenceDirectory=$EvidenceDirectory}|ConvertTo-Json
 }catch{

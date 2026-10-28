@@ -1,9 +1,30 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawnSync, spawn } from 'node:child_process'
+import { createServer } from 'node:http'
 import { resolve, sep } from 'node:path'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+
+test('部署只读看板验收实际请求分页，health正常不掩盖503或非分页响应', {skip:process.platform!=='win32'},async t=>{
+ let mode='ok';const requests=[]
+ const server=createServer((req,res)=>{
+  requests.push(req.url);res.setHeader('Content-Type','application/json')
+  if(req.url==='/health'){res.end(JSON.stringify({inboundProcessing:true,dwsBridge:{healthy:true}}));return}
+  if(mode==='missing'){res.statusCode=503;res.end(JSON.stringify({error:'OBSERVER_PAGINATION_MIGRATION_REQUIRED'}));return}
+  res.end(JSON.stringify(mode==='unpaged'?[]:{items:[],total:req.url.includes('authorizations')?2:3,offset:0,limit:1,revision:'fixture'}))
+ })
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)))
+ const base=`http://127.0.0.1:${server.address().port}`,source=resolve('docs/acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1').replaceAll("'","''")
+ const run=()=>new Promise((resolve,reject)=>{
+  const child=spawn('pwsh',['-NoProfile','-Command',`$ErrorActionPreference='Stop';$ast=[Management.Automation.Language.Parser]::ParseFile('${source}',[ref]$null,[ref]$null);$fn=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'ReadObserverReadiness'},$false)[0];Invoke-Expression $fn.Extent.Text;ReadObserverReadiness '${base}'|ConvertTo-Json -Compress`],{windowsHide:true});let stdout='',stderr='';child.stdout.on('data',v=>stdout+=v);child.stderr.on('data',v=>stderr+=v);child.on('error',reject);child.on('close',status=>resolve({status,stdout,stderr}))
+ })
+ assert.equal((await (await fetch(base+'/health')).json()).inboundProcessing,true)
+ let result=await run();assert.equal(result.status,0,result.stderr);assert.deepEqual(JSON.parse(result.stdout),{ready:true,taskTotal:3,pendingTotal:2})
+ assert.deepEqual(requests.slice(1),['/state/tasks?offset=0&limit=1','/state/authorizations?offset=0&limit=1&filter=pending'])
+ mode='missing';requests.length=0;result=await run();assert.notEqual(result.status,0);assert.equal(requests.length,1)
+ mode='unpaged';requests.length=0;result=await run();assert.notEqual(result.status,0);assert.match(result.stderr,/DEPLOY_OBSERVER_PAGE_INVALID/);assert.equal(requests.length,1)
+})
 test('原生双包部署为冷启动保留十分钟，仍要求双端口新PID且超时失败', { skip: process.platform !== 'win32' }, () => {
  const script = resolve('docs/acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1').replaceAll("'", "''")
  const command = String.raw`

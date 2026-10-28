@@ -29,3 +29,8 @@ production-publisher-permission,9,PASS,round-9.md
 original-session-execution-continuation,9,PASS,round-9.md
 original-git-helper-and-metadata,9,PASS,round-9.md
 technical-input-without-observer-index,9,PASS,round-9.md
+observer-index-check-apply-rollback,10,PASS,round-10.md
+observer-source-identity-preserved,10,PASS,round-10.md
+observer-real-http-pages-detail,10,PASS,round-10.md
+observer-real-browser-board-detail,10,PASS,round-10.md
+deployment-observer-readiness-gate,10,PASS,round-10.md
