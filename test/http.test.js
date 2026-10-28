@@ -432,7 +432,7 @@ test('新工作流话题进入列表与详情，跨群详情不可读',async()=>
     assert.equal(refreshed.topics[0].summaryRevision, 4)
     assert.equal(refreshedDetail.topic.summary, topic.summary)
     assert.equal((await fetch(base+'/state/topics/workflow-topic?groupId=other')).status,404)
-  },{overrides:{listWorkflowTopics:async groupId=>groupId==='other'?[]:[topic],getWorkflowTopicContext:async({groupId})=>groupId==='g'?{topic,messages:[{messageId:'m',text:'原消息'}],total:1}:null}})
+  },{overrides:{listWorkflowTopics:async()=>{throw new Error('full topic projection forbidden')},listWorkflowTopicIndex:async groupId=>groupId==='other'?[]:[{topicId:topic.topicId,sort:topic.updatedAt,revision:topic.contextRevision??topic.revision}],getWorkflowTopicById:async()=>topic,getWorkflowTopicContext:async({groupId})=>groupId==='g'?{topic,messages:[{messageId:'m',text:'原消息'}],total:1}:null}})
 })
 
 test('控制账失效时健康状态降级并保留首因，不能只看群桥', async () => withServer(false, async base => {
@@ -589,7 +589,7 @@ test('Topic 查询有界分页且群摘要不泄漏内部决策、归类和预�
     assert.deepEqual(existing, { ...group.messages[0], processingConclusion: null, processingCompletedAt: null, processingSentAt: null, topicRefs: [{ topicId: 'topic-0', revision: 3, title: '话题 0' }] })
     assert.deepEqual(projected.topicProgress, { total: 102, pending: 102, pendingRevisions: 204, pendingUnits: 0, unroutedMessages: 1 })
     const detail = await (await fetch(`${baseUrl}/state/topics/topic-0?groupId=g&revision=2&offset=1&limit=3`)).json()
-    assert.deepEqual(request, { groupId: 'g', topicId: 'topic-0', revision: 2, offset: 1, limit: 3 })
+    assert.deepEqual(request, { groupId: 'g', topicId: 'topic-0', revision: 2, offset: 1, limit: 3, includeTaskRefs:false })
     assert.equal(detail.topic.decisions, undefined)
     assert.equal(detail.topic.entries, undefined)
     assert.deepEqual(detail.topic.processing, listing.topics[0].processing)
@@ -887,4 +887,45 @@ test('current task archive checks local identity, strict body, legacy protection
     const response = await fetch(`${base}/tasks/live/archive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
     assert.equal(response.status, 409); assert.equal((await response.json()).error, 'DYNAMIC_TASK_ARCHIVE_NOT_QUIESCENT')
   }, { overrides: { isTaskSessionMode: () => true, getTaskSessionDetail: async () => ({}), archiveTask: async () => { throw new Error('DYNAMIC_TASK_ARCHIVE_NOT_QUIESCENT') } } })
+})
+
+
+test('legacy workflow topic pagination requires an index provider instead of silently projecting all bodies',async()=>{
+ let called=0
+ await withServer(false,async base=>{
+  const response=await fetch(base+'/state/topics?limit=10');assert.equal(response.status,503)
+  assert.equal((await response.json()).error,'workflow_topic_pagination_provider_required');assert.equal(called,0)
+ },{overrides:{listWorkflowTopics:async()=>{called++;return []}}})
+})
+
+
+test('mixed workflow topic pages resolve only selected bodies and reject a changed metadata version',async()=>{
+ let revision=1,calls=[]
+ const index=Array.from({length:1000},(_,i)=>({topicId:`t${i}`,sort:'same',revision}))
+ await withServer(false,async base=>{
+  const path=base+'/state/topics?offset=510&limit=10'
+  const result=await(await fetch(path)).json();assert.equal(result.total,1000);assert.equal(result.topics.length,10);assert.equal(calls.length,10);assert.equal(calls[0],'t510')
+  index[0]={...index[0],revision:2}
+  const stale=await fetch(path+'&pageRevision='+encodeURIComponent(result.revision));assert.equal(stale.status,409);assert.equal(calls.length,10)
+ },{overrides:{listWorkflowTopics:async()=>{throw new Error('full workflow list forbidden')},listWorkflowTopicIndex:async()=>index,getWorkflowTopicById:async id=>{calls.push(id);return {topicId:id,conversationId:'g',title:id,revision:1}}}})
+})
+
+
+test('legacy history page requires a bounded provider and forwards only explicit cursor options',async()=>{
+ await withServer(false,async base=>{assert.equal((await fetch(base+'/state/tasks/old/legacy-history?limit=20')).status,503)})
+ let request
+ await withServer(false,async base=>{
+  const response=await fetch(base+'/state/tasks/old/legacy-history?offset=20&limit=10&revision=stable');assert.equal(response.status,200)
+  assert.deepEqual(request,['old',{offset:20,limit:10,revision:'stable'}]);assert.equal((await response.json()).items.length,1)
+ },{overrides:{getLegacyTaskHistoryPage:async(...args)=>{request=args;return {items:[{node:{nodeRunId:'n'}}],total:41,offset:20,limit:10,revision:'stable'}}}})
+})
+
+
+test('trace coordinator unit cursor is independent from event pagination and validates its boundary',async()=>{
+ const calls=[]
+ await withServer(false,async base=>{
+  const response=await fetch(base+'/state/workflows/run/trace?cursor=2&limit=3&unitCursor=100&pageRevision=rev')
+  assert.equal(response.status,200);assert.deepEqual(calls,[['run',{offset:2,limit:3,revision:'rev',unitCursor:100}]])
+  assert.equal((await fetch(base+'/state/workflows/run/trace?unitCursor=-1')).status,400);assert.equal(calls.length,1)
+ },{overrides:{getWorkflowMessageTrace:async(...args)=>{calls.push(args);return {items:[],coordinatorUnits:{total:101,returned:1,nextCursor:null}}}}})
 })

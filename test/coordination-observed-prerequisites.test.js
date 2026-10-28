@@ -96,7 +96,8 @@ test('completed status without a formal receipt cannot release observed prerequi
 
 test('formal receipt without event can release once, but cancellation or pause never releases B',async t=>{
   const f=await fixture(t), receipt=await f.complete('A'), id=receipt.taskDecision.id
-  f.inject(db=>{const row=db.prepare('SELECT body FROM dynamic_receipts WHERE id=?').get(id), body=JSON.parse(row.body)
+  const legacyReceipt=await f.query('receipt.get',{id})
+  f.inject(db=>{const body=structuredClone(legacyReceipt)
     delete body.completionEvent;db.prepare('UPDATE dynamic_receipts SET body=? WHERE id=?').run(JSON.stringify(body),id)
     db.prepare('DELETE FROM dynamic_task_events WHERE id=?').run(`task-completed:${id}`)})
   const members=await f.arrange();await f.restart();await f.command('coordination.observe.reconcile',{coordinationId:'c'})

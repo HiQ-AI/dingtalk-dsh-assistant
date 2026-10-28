@@ -1,3 +1,4 @@
+import {ObserverMemoryPages} from './observer-memory-pages.js'
 import { coordinationSnapshot } from './coordination-summary.js'
 import { quotedSendRejectionProof } from './group-message.js'
 
@@ -165,19 +166,28 @@ function relationView(member, { coordination, memberById, taskById, coordination
 
 // This reader receives only query, never a command capability or raw runtime DTO.
 export function createCoordinationObserver(query) {
-  async function readWork(groupId) {
+  const workPages=new ObserverMemoryPages(),workCaches=new Map()
+  async function readWork(groupId, metadata) {
+    const read=metadata?(kind,args={})=>{
+      const names={'coordination.list':'coords','coordination.schedule.list':'schedules','coordination.occurrence.list':'occurrences','coordination.job.list':'jobs','notification.list':'notifications','coordination.source.list':'sources','execution.list':'executions'}
+      if(names[kind])return metadata[names[kind]]
+      if(kind==='coordination.get')return {coordination:metadata.coords.find(item=>item.id===args.coordinationId),members:metadata.members.filter(item=>item.coordinationId===args.coordinationId)}
+      if(kind==='task.get')return metadata.tasks.find(item=>item.taskId===args.taskId)
+      if(kind==='receipt.get')return metadata.receipts.find(item=>item.id===args.id)
+      throw new Error('OBSERVER_METADATA_QUERY_INVALID')
+    }:query
     const [coordinations, schedules, occurrences, jobs, notifications, sources, executions] = await Promise.all([
-      query('coordination.list', { groupId }), query('coordination.schedule.list'), query('coordination.occurrence.list'),
-      query('coordination.job.list'), query('notification.list'), query('coordination.source.list'), query('execution.list'),
+      read('coordination.list', { groupId }), read('coordination.schedule.list'), read('coordination.occurrence.list'),
+      read('coordination.job.list'), read('notification.list'), read('coordination.source.list'), read('execution.list'),
     ])
-    const states = await Promise.all(coordinations.map(coordination => query('coordination.get', { coordinationId: coordination.id })))
+    const states = await Promise.all(coordinations.map(coordination => read('coordination.get', { coordinationId: coordination.id })))
     const memberById = new Map(states.flatMap(state => state.members).map(member => [member.id, member]))
     const allTasks = (await Promise.all([...new Set([...memberById.values()].map(member => member.taskId))]
-      .map(taskId => query('task.get', { taskId })))).filter(Boolean)
+      .map(taskId => read('task.get', { taskId })))).filter(Boolean)
     const taskById = new Map(allTasks.map(task => [task.taskId, task]))
     const coordinationById = new Map(coordinations.map(coordination => [coordination.id, coordination]))
     const commandIds = [...new Set([...memberById.values()].filter(member => !member.observation).map(member => member.command?.id).filter(Boolean))]
-    const receiptById = new Map(await Promise.all(commandIds.map(async id => [id, await query('receipt.get', { id })])))
+    const receiptById = new Map(await Promise.all(commandIds.map(async id => [id, await read('receipt.get', { id })])))
     const entities = []
     for (const coordination of coordinations) {
       const { members } = states.find(state => state.coordination.id === coordination.id)
@@ -301,12 +311,22 @@ export function createCoordinationObserver(query) {
     return entities.sort((a, b) => String(b.work.updatedAt).localeCompare(String(a.work.updatedAt)) || a.work.id.localeCompare(b.work.id))
   }
   return {
-    async coordinationWork({ groupId, offset = 0, limit = 20 } = {}) {
+    async coordinationWork({ groupId, offset = 0, limit = 20, revision:pageRevision } = {}) {
       if (groupId !== undefined && (typeof groupId !== 'string' || !groupId.trim())
         || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
         throw new Error('coordination_query_invalid')
-      const entities = await readWork(groupId)
-      return { works: entities.slice(offset, offset + limit).map(item => item.work), total: entities.length, offset, limit, observedAt: new Date().toISOString() }
+      const key=groupId??'*',revision=await query('observer.revision')
+      let cache=workCaches.get(key)
+      if(cache&&cache.revision!==revision&&pageRevision)throw Object.assign(new Error('OBSERVER_PAGE_STALE'),{code:'OBSERVER_PAGE_STALE'})
+      if(!cache||cache.revision!==revision){
+        const metadata=await query('observer.work-metadata',{groupId})
+        const entities=await readWork(groupId,metadata)
+        if(await query('observer.revision')!==revision)throw Object.assign(new Error('OBSERVER_PAGE_STALE'),{code:'OBSERVER_PAGE_STALE'})
+        cache={revision,works:new Map(entities.map(item=>[item.work.id,item.work]))};workCaches.set(key,cache)
+        workPages.replace(key,cache,entities.map(item=>({id:item.work.id,sort:item.work.updatedAt})))
+      }
+      const page=await workPages.page(key,{offset,limit,revision:pageRevision},id=>cache.works.get(id))
+      return {...page,items:undefined,works:page.items,observedAt:new Date().toISOString()}
     },
     async coordinationWorkDetail(workId) {
       const identity = typeof workId === 'string' && /^(schedule|dispatch|trigger):/u.exec(workId)
@@ -331,13 +351,12 @@ export function createCoordinationObserver(query) {
         || Number(b.meta.accepted) - Number(a.meta.accepted) || a.relation.id.localeCompare(b.relation.id)).map(item => item.relation)
       return { condition: 'all', relations }
     },
-    async coordinationSources({ groupId, offset = 0, limit = 20 } = {}) {
+    async coordinationSources({ groupId, offset = 0, limit = 20, revision } = {}) {
       if (groupId !== undefined && (typeof groupId !== 'string' || !groupId.trim())
         || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
         throw new Error('coordination_query_invalid')
-      const sources = await query('coordination.source.list', { groupId })
-      sources.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || a.id.localeCompare(b.id))
-      return { sources: sources.slice(offset, offset + limit).map(sourceView), total: sources.length, offset, limit, observedAt: new Date().toISOString() }
+      const page = await query('observer.page', { collection: 'coordination-sources', groupId, offset, limit, revision })
+      return { ...page, items: undefined, sources: page.items.map(sourceView), observedAt: new Date().toISOString() }
     },
     async coordinationSourceDetail(sourceId) {
       const source = (await query('coordination.source.list')).find(item => item.id === sourceId)

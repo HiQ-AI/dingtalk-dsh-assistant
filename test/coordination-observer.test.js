@@ -7,8 +7,26 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { createCoordinationObserver } from '../packages/dingtalk-dsh-assistant/coordination-observer.js'
+import { createCoordinationObserver as productionCoordinationObserver } from '../packages/dingtalk-dsh-assistant/coordination-observer.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
+
+// Old view fixtures describe domain records, not SQLite. Adapt their query contract
+// to the new narrow read model while preserving every existing outcome assertion.
+function createCoordinationObserver(query){
+ const metadata=async args=>{
+  const coords=await query('coordination.list',args),states=await Promise.all(coords.map(item=>query('coordination.get',{coordinationId:item.id})))
+  const members=states.flatMap(state=>state.members),tasks=(await Promise.all([...new Set(members.map(item=>item.taskId))].map(taskId=>query('task.get',{taskId})))).filter(Boolean)
+  const receipts=(await Promise.all([...new Set(members.map(item=>item.command?.id).filter(Boolean))].map(async id=>{const value=await query('receipt.get',{id});return value?{...value,id}:null}))).filter(Boolean)
+  const [schedules,occurrences,jobs,notifications,sources,executions]=await Promise.all(['coordination.schedule.list','coordination.occurrence.list','coordination.job.list','notification.list','coordination.source.list','execution.list'].map(kind=>query(kind)))
+  return {coords,members,tasks,receipts,schedules,occurrences,jobs,notifications,sources,executions}
+ }
+ return productionCoordinationObserver(async(kind,args={})=>{
+  const value=await query(kind,args)
+  if(kind==='observer.revision'&&typeof value!=='string')return JSON.stringify(await metadata({}))
+  if(kind==='observer.work-metadata'&&!value?.coords)return metadata(args)
+  return value
+ })
+}
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'coordination-observer-'))

@@ -37,7 +37,7 @@ export async function openExecutionRuntime({ ctx, dbPath, instanceId, artifactDi
   let sessions, controller
   try {
     const getTaskDirectories = taskWorkspaceRoot ? createTaskDirectoryResolver({ store, workspaceRoot: taskWorkspaceRoot }) : undefined
-    const artifacts = await openExecutionArtifacts({ directory: artifactDirectory, initialize, taskWorkspaceRoot, getTaskDirectories })
+    const artifacts = await openExecutionArtifacts({ directory: artifactDirectory, initialize, taskWorkspaceRoot, getTaskDirectories,observerPageBindings:{get:args=>store.query({kind:'observer.artifact-binding',...args}),put:args=>store.command({id:`observer-artifact-binding:${args.ref}:${args.view}:${args.root}`,kind:'observer.artifact-bind',args})} })
     const delivery = deliveryOptions ? createExecutionDelivery({ ...deliveryOptions, store, artifacts }) : undefined
     const registeredTools = typeof tools === 'function' ? await tools({ store, artifacts }) : tools
     sessions = createExecutionSessions({ ctx, isCurrent: binding => controller.isCurrent(binding), repositoryInspect, tools: registeredTools, getWorkspaceDir })

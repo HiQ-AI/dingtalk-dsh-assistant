@@ -1,3 +1,5 @@
+import {installObserverArtifactBindings,queryObserverArtifactBinding,putObserverArtifactBinding} from './observer-artifact-bindings.js'
+import {installObserverLegacyExecutionPages,observerLegacyFamilyPage,observerLegacyRunPage} from './observer-legacy-execution-pages.js'
 import { inspectExecutionPurge, reduceExecutionPurge, queryPurgeCleanup, approvedPurgeTaskIds } from './execution-task-purge.js'
 import { inspectExecutionReset, reduceExecutionReset, archivedExecutionIds, inspectResetOwnerSchemaCorrection, reconcileResetOwnerSchema } from './execution-task-reset.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -365,6 +367,8 @@ function install() {
   installMessageSchema(db)
   installTaskPlanSchema(db)
   installTaskOwnerSchema(db)
+  installObserverLegacyExecutionPages(db,{migrate:true})
+  installObserverArtifactBindings(db)
 }
 function validate(connection) {
   if (scalar(connection.prepare('PRAGMA application_id').get()) !== APPLICATION_ID) fail('STORE_APPLICATION_MISMATCH')
@@ -1254,6 +1258,12 @@ function command(value) {
       db.exec('COMMIT')
       return { replayed: true, dispatchEligible: false, result: JSON.parse(prior.result) }
     }
+    if(value.kind==='observer.artifact-bind'){
+      object(value.args,['ref','view','root'])
+      const result=putObserverArtifactBinding(db,value.args)
+      db.exec('COMMIT')
+      return {replayed:false,dispatchEligible:false,result}
+    }
     assertMaintenanceDispatch(db, value, workerData.processIncarnation)
     // 与 message 的接纳和 command 领取使用同一持久输入守卫；读取和取消本身不被拦住。
     if (['task.accept','task.owner.accept','task.owner.applied','task.plan.initialize','task.plan.extend','task.plan.insertDependency',
@@ -1694,6 +1704,7 @@ function inspectTaskDeletion({ taskId, actorId, expectedControlRevision }) {
     retained: ['source-messages','command-receipts','audit-events','artifact-files','native-sessions'] }
 }
 function query(value) {
+  if(value.kind==='observer.artifact-binding')return queryObserverArtifactBinding(db,value)
   if(value?.kind==='task.execution.purge.check')return inspectExecutionPurge(db,value,workerData.processIncarnation)
   if(value?.kind==='task.execution.purge.cleanup')return queryPurgeCleanup(db,value.taskId)
   if(value?.kind==='task.delivery.ledger')return db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_delivery_ledger'").get()?db.prepare('SELECT repository,branch,action,external_id AS externalId,base,operation_key AS operationKey,task_base AS taskBase FROM task_delivery_ledger WHERE task_id=?').all(value.taskId):[]
@@ -1729,13 +1740,17 @@ function query(value) {
     // 单个原生查询内读取全部版本依据；不包含随时钟变化的累计耗时。
     return createHash('sha256').update(canonical({ plan, owner, runs, family: taskFamily(taskId) })).digest('hex')
   }
+  if(value?.kind==='observer.legacy-family.page')return observerLegacyFamilyPage(db,value)
+  if(value?.kind==='observer.legacy-runs.page')return observerLegacyRunPage(db,value)
   if (value?.kind === 'task.family') return taskFamily(text(value.taskId, 'taskId'))
   if (value?.kind === 'task.families') return taskFamilies()
-  if (value?.kind === 'task.catalog') return db.prepare('SELECT task_id FROM business_tasks UNION SELECT task_id FROM task_owners UNION SELECT task_id FROM execution_runs').all()
-    .filter(row => value.taskId === undefined || row.task_id === text(value.taskId, 'taskId')).map(row => ({
-    taskId: row.task_id, runs: db.prepare('SELECT rowid AS sequence_id,* FROM execution_runs WHERE task_id=? ORDER BY rowid DESC').all(row.task_id)
-      .filter(run=>!archivedExecutionIds(db,row.task_id).has(run.run_id)).map(run => ({ ...runDto(run), sequenceId: run.sequence_id }))
-  }))
+  if (value?.kind === 'task.catalog') {
+    const selectedTaskId=value.taskId===undefined?null:text(value.taskId,'taskId')
+    const ids=db.prepare('SELECT task_id FROM (SELECT task_id FROM business_tasks UNION SELECT task_id FROM task_owners UNION SELECT task_id FROM execution_runs)'+(selectedTaskId?' WHERE task_id=?':'')).all(...(selectedTaskId?[selectedTaskId]:[]))
+    const indexed=!!db.prepare("SELECT 1 FROM sqlite_master WHERE name='observer_legacy_archived_runs'").get()
+    return ids.map(row=>({taskId:row.task_id,runs:db.prepare('SELECT r.rowid AS sequence_id,r.* FROM execution_runs r WHERE task_id=?'+(indexed?' AND NOT EXISTS(SELECT 1 FROM observer_legacy_archived_runs a WHERE a.run_id=r.run_id)':'')+' ORDER BY r.rowid DESC').all(row.task_id)
+      .filter(run=>indexed||!archivedExecutionIds(db,row.task_id).has(run.run_id)).map(run=>({...runDto(run),sequenceId:run.sequence_id}))}))
+  }
   if(value?.kind==='node.input-history')return nodeInputHistory(text(value.nodeRunId,'nodeRunId'))
   if(value?.kind==='node.binding-history')return db.prepare("SELECT payload FROM execution_events WHERE kind='node.claim' AND json_extract(payload,'$.binding.nodeRunId')=? ORDER BY seq").all(text(value.nodeRunId,'nodeRunId')).map(row=>JSON.parse(row.payload).binding)
   if(value?.kind==='node.process-claim') {

@@ -271,22 +271,27 @@ window.__ModuleLoader__.load({
         detail ? React.createElement('span', null, detail) : null,
         actionLabel && onAction ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: onAction }, actionLabel) : null))
     async function get(path, { signal } = {}) {
-      const response = await fetch(`${ENDPOINT}${path}`, { method: 'GET', headers: { accept: 'application/json' }, signal })
+      const response = await fetch(`${ENDPOINT}${path}`, { method: 'GET', headers: { accept: 'application/json' }, signal:typeof AbortSignal!=='undefined'&&AbortSignal.timeout?(signal&&AbortSignal.any?AbortSignal.any([signal,AbortSignal.timeout(15000)]):signal||AbortSignal.timeout(15000)):signal })
       const value = await response.json()
-      if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`)
+      if (!response.ok) throw Object.assign(new Error(value.error || `HTTP ${response.status}`), { status: response.status })
       return value
     }
     async function post(path, body = {}) {
       const response = await fetch(`${ENDPOINT}${path}`, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(body) })
       const value = await response.json()
-      if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`)
+      if (!response.ok) throw Object.assign(new Error(value.error || `HTTP ${response.status}`), { status: response.status })
       return value
     }
-    async function load() {
-      const [health, groups, tasks, alerts, authorizations, topicPage] = await Promise.all([
-        get('/health'), get('/state/groups'), get('/state/tasks'), get('/state/supervisor/alerts'), get('/state/authorizations'), get('/state/topics?offset=0&limit=100')
+    async function load({ taskPages = {}, historyPage = 1, revisions = {}, selectedGroupId='', messagePage=1,outboxPage=1,messageDeliveryFilter='all',outboxStatusFilter='all',authorizationPage=1,authorizationFilter='all',alertType='all',resolvedAlertPage=1 } = {}) {
+      const [health, groups, taskCollections, alertPages, authorizationCollection, topicPage] = await Promise.all([
+        get('/health'), get('/state/groups?summary=true'), Promise.all([...taskBuckets.map(bucket => get(`/state/tasks?state=${bucket.state}&offset=${((taskPages[bucket.state] || 1) - 1) * 10}&limit=10${revisions[bucket.state] ? `&revision=${encodeURIComponent(revisions[bucket.state])}` : ''}`)), get(`/state/tasks?archived=true&offset=${(historyPage - 1) * 20}&limit=20${revisions.archive ? `&revision=${encodeURIComponent(revisions.archive)}` : ''}`)]), Promise.all(['active','resolved'].map(view=>get(`/state/supervisor/alerts?view=${view}&type=${alertType}&offset=${(resolvedAlertPage-1)*10}&limit=10`))), get(`/state/authorizations?offset=${(authorizationPage-1)*10}&limit=10&filter=${authorizationFilter}${revisions.authorizations?`&pageRevision=${encodeURIComponent(revisions.authorizations)}`:''}`), get('/state/topics?offset=0&limit=100')
       ])
-      return { health, groups, tasks, alerts, authorizations, topics: topicPage.topics }
+      const groupId=groups.some(group=>group.groupId===selectedGroupId)?selectedGroupId:groups[0]?.groupId
+      const groupCollections=groupId?await Promise.all(['messages','outbox'].map(collection=>{
+        const page=collection==='messages'?messagePage:outboxPage,filter=collection==='messages'?messageDeliveryFilter:outboxStatusFilter
+        return get(`/state/groups/${encodeURIComponent(groupId)}/${collection}?offset=${(page-1)*10}&limit=10&filter=${encodeURIComponent(filter)}${revisions[collection]?`&pageRevision=${encodeURIComponent(revisions[collection])}`:''}`).then(value=>({...value,groupId,filter}))
+      })):[]
+      return { health, groups, groupCollections:Object.fromEntries(groupCollections.map((value,i)=>[['messages','outbox'][i],value])), tasks: taskCollections.flatMap(page => page.items), taskCollections: Object.fromEntries(taskBuckets.map((bucket,index) => [bucket.state,taskCollections[index]])), archiveCollection: taskCollections.at(-1), alerts:alertPages.flatMap(page=>page.items),alertCollections:Object.fromEntries(alertPages.map((page,i)=>[['active','resolved'][i],page])),authorizations:authorizationCollection.items,authorizationCollection:{...authorizationCollection,filter:authorizationFilter},topics: topicPage.topics }
     }
     function SidebarAction({ wide, onOpen }) {
       const isOpen = useOpen()
@@ -428,6 +433,8 @@ window.__ModuleLoader__.load({
       const [page, setPage] = useState()
       const [cursor, setCursor] = useState('')
       const [cursorHistory, setCursorHistory] = useState([])
+      const [unitCursor,setUnitCursor]=useState('')
+      const [unitCursorHistory,setUnitCursorHistory]=useState([])
       const [retry, setRetry] = useState(0)
       const [error, setError] = useState('')
       const [loading, setLoading] = useState(true)
@@ -441,9 +448,13 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         let active = true
         setLoading(true); setError('')
-        get(`/state/workflows/${encodeURIComponent(runId)}/trace${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`).then((value) => { if (active) setPage(value) }, (cause) => { if (active) setError(cause.message) }).finally(() => { if (active) setLoading(false) })
+        const params=new URLSearchParams()
+        if(cursor)params.set('cursor',cursor)
+        if(unitCursor)params.set('unitCursor',unitCursor)
+        if(page?.runId===runId&&page?.pageRevision&&(unitCursor||cursor&&page?.offset!==Number(cursor)))params.set('pageRevision',page.pageRevision)
+        get(`/state/workflows/${encodeURIComponent(runId)}/trace?${params}`).then((value) => { if (active) setPage(value) }, (cause) => { if(active){setError(cause.message);if(cause.status===409){setCursor('');setCursorHistory([]);setUnitCursor('');setUnitCursorHistory([]);setPage(undefined)}} }).finally(() => { if (active) setLoading(false) })
         return () => { active = false }
-      }, [runId, cursor, retry])
+      }, [runId, cursor, unitCursor, retry])
       const labels = { coordinator: '群消息协调', split: '拆分事项', route: '关联话题', intent: '判断下一步', command: '接纳动作', agent: '查询与答复' }
       const ready = !loading && !error && page
       return React.createElement('section', { 'aria-label': '消息处理过程', style: { ...card, display: 'grid', gap: 12 } },
@@ -464,7 +475,7 @@ window.__ModuleLoader__.load({
               React.createElement('ol', { style: { margin: '12px 0 0', paddingLeft: 22, display: 'grid', gap: 12 } }, ...item.sourceMessages.map(message => React.createElement('li', { key: message.runId, style: { borderLeft: message.current ? `3px solid ${colors.accent}` : `3px solid ${colors.border}`, paddingLeft: 10 } },
                 React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, `${message.senderName || '发送人未记录'} · ${fmt(message.occurredAt)} · ${message.current ? '当前查看的消息' : '共同参与判断'}`),
                 React.createElement('p', { style: { margin: '6px 0', whiteSpace: 'pre-wrap', lineHeight: 1.65 } }, message.text),
-                !message.current ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setPage(undefined); setCursor(''); setCursorHistory([]); setRunId(message.runId) } }, '查看这条消息的过程') : null))),
+                !message.current ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setPage(undefined); setCursor(''); setCursorHistory([]); setUnitCursor('');setUnitCursorHistory([]);setRunId(message.runId) } }, '查看这条消息的过程') : null))),
               React.createElement('p', { style: { margin: '10px 0 0', color: colors.muted, fontSize: 12 } }, '以上消息共享下面这次判断，判断耗时只记录一次。后续重判保留为另一条判断记录。')) : null,
             React.createElement('p', { style: { margin: '10px 0', fontWeight: 600, lineHeight: 1.6 } }, view.conclusion),
             view.rows.length ? React.createElement('dl', { style: { margin: '0 0 12px', display: 'grid', gap: 10 } }, ...view.rows.map((row, i) => React.createElement('div', { key: i }, React.createElement('dt', { style: { color: colors.muted, fontSize: 12, marginBottom: 4 } }, row.label), React.createElement('dd', { style: { margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.65 } }, row.value)))) : null,
@@ -476,14 +487,20 @@ window.__ModuleLoader__.load({
             item.sourceRunIds?.length > 1 ? React.createElement('p', { style: { color: colors.muted, fontSize: 12 } }, `同一话题的 ${new Set(item.sourceRunIds).size} 条消息共同判断，各事项的决定分别列出。`) : null,
             item.gaps?.length ? React.createElement('p', { style: { color: colors.warning } }, `依据缺口：${item.gaps.join('；')}`) : null)
         })),
+        ready&&page.coordinatorUnits ? React.createElement('nav', { 'aria-label':'协调单元分页', style:{display:'flex',gap:8,flexWrap:'wrap'} },
+          React.createElement('span', {role:'status'}, `有效协调单元共 ${page.coordinatorUnits.total} 个，本批 ${page.coordinatorUnits.returned} 个${page.coordinatorUnits.nextCursor!==null?'，还有后续记录':'，已到最后一批'}`),
+          unitCursorHistory.length ? React.createElement(Button,{type:'button',variant:'outline',size:'sm',disabled:loading,onClick:()=>{setUnitCursor(unitCursorHistory.at(-1));setUnitCursorHistory(items=>items.slice(0,-1))}},'上一批协调单元'):null,
+          page.coordinatorUnits.nextCursor!==null ? React.createElement(Button,{type:'button',variant:'outline',size:'sm',disabled:loading,onClick:()=>{setUnitCursorHistory(items=>[...items,unitCursor]);setUnitCursor(String(page.coordinatorUnits.nextCursor))}},'下一批协调单元'):null):null,
         ready ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, `本页 ${page.items?.length ?? 0} 条${Number.isFinite(page.total) ? `，共 ${page.total} 条处理记录` : ''}；按记录时间排列，多事项可能分别判断。`) : null,
         ready ? React.createElement('p', { style: { color: colors.muted, fontSize: 12, margin: 0 } }, '耗时按本次开始到完成计算，包含工具等待；重试显示最近一次处理，不代表纯模型耗时。进行中记录可刷新查看最新状态。') : null,
-        React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page?.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null))
+        React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setUnitCursor('');setUnitCursorHistory([]);setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page?.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setUnitCursor('');setUnitCursorHistory([]);setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null))
     }
     function TopicBrowser({ groups, tasks, target, updatedAt, onOpenTask, onOpenSession }) {
       const [groupId, setGroupId] = useState(target?.groupId || '')
       const [offset, setOffset] = useState(0)
       const [selection, setSelection] = useState(target)
+      const [relatedOffset,setRelatedOffset]=useState(0),[relatedPage,setRelatedPage]=useState(),[relatedError,setRelatedError]=useState('')
+      const listingSnapshot=useRef(null),relatedSnapshot=useRef(null)
       const [messageOffset, setMessageOffset] = useState(0)
       const [listing, setListing] = useState()
       const [context, setContext] = useState()
@@ -491,6 +508,7 @@ window.__ModuleLoader__.load({
       const [contextCursor, setContextCursor] = useState('')
       const [contextCursorHistory, setContextCursorHistory] = useState([])
       const [contextRevision, setContextRevision] = useState()
+      const [messagePageRevision,setMessagePageRevision]=useState()
       const [intentCursor, setIntentCursor] = useState('')
       const [intentCursorHistory, setIntentCursorHistory] = useState([])
       const [selectedIntentRun, setSelectedIntentRun] = useState('')
@@ -510,14 +528,15 @@ window.__ModuleLoader__.load({
         setMessageOffset(0)
         setContextCursor('')
         setContextCursorHistory([])
-        setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined)
+        setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined); setMessagePageRevision(undefined)
       }, [target?.groupId, target?.topicId, target?.revision])
       useEffect(() => {
         let active = true
         setLoading(true); setListError('')
         const params = new URLSearchParams({ offset: String(offset), limit: String(topicPageSize) })
         if (groupId) params.set('groupId', groupId)
-        get(`/state/topics?${params}`).then((value) => { if (active) { setListing(value); if (value.total > 0 && offset >= value.total) setOffset(Math.floor((value.total - 1) / topicPageSize) * topicPageSize) } }, (error) => { if (active) setListError(error.message) }).finally(() => { if (active) setLoading(false) })
+        if(offset&&listingSnapshot.current?.groupId===groupId&&listingSnapshot.current.offset!==offset&&listingSnapshot.current.revision)params.set('pageRevision',listingSnapshot.current.revision)
+        get(`/state/topics?${params}`).then((value) => { if (active) { listingSnapshot.current={groupId,...value};setListing(value); if (value.total > 0 && offset >= value.total) setOffset(Math.floor((value.total - 1) / topicPageSize) * topicPageSize) } }, (error) => { if(active){setListError(error.message);if(error.status===409){listingSnapshot.current=null;setOffset(0)}} }).finally(() => { if (active) setLoading(false) })
         return () => { active = false }
       }, [groupId, offset, retry, updatedAt])
       useEffect(() => {
@@ -525,7 +544,7 @@ window.__ModuleLoader__.load({
         if (!current || current.revision === selection.revision && current.summaryRevision === selection.summaryRevision && current.updatedAt === selection.updatedAt) return
         setSelection({ groupId: current.groupId, topicId: current.topicId, revision: current.revision, summaryRevision: current.summaryRevision, updatedAt: current.updatedAt })
         setMessageOffset(0); setContextCursor(''); setContextCursorHistory([])
-        setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined)
+        setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined); setMessagePageRevision(undefined)
         setContext(undefined); setTopicContext(undefined)
       }, [listing, selection])
       useEffect(() => {
@@ -533,7 +552,8 @@ window.__ModuleLoader__.load({
         let active = true
         setDetailLoading(true); setDetailError(''); setContext(undefined)
         const params = new URLSearchParams({ groupId: selection.groupId, revision: String(selection.revision), offset: String(messageOffset), limit: String(messagePageSize) })
-        get(`/state/topics/${encodeURIComponent(selection.topicId)}?${params}`).then((value) => { if (active) setContext(value) }, (error) => { if (active) setDetailError(error.message) }).finally(() => { if (active) setDetailLoading(false) })
+        if(messageOffset>0&&messagePageRevision)params.set('pageRevision',messagePageRevision)
+        get(`/state/topics/${encodeURIComponent(selection.topicId)}?${params}`).then((value) => { if (active) {setContext(value);setMessagePageRevision(value.pageRevision)} }, (error) => { if (active) {if(error.status===409){setMessageOffset(0);setMessagePageRevision(undefined)}else setDetailError(error.message)} }).finally(() => { if (active) setDetailLoading(false) })
         return () => { active = false }
       }, [selection, messageOffset, retry])
       useEffect(() => {
@@ -547,11 +567,21 @@ window.__ModuleLoader__.load({
         get(`/state/topics/${encodeURIComponent(selection.topicId)}/context?${params}`).then((value) => { if (active) { setTopicContext(value); setContextRevision(value.revision) } }, (cause) => { if (active) setContextError(cause.message) }).finally(() => { if (active) setContextLoading(false) })
         return () => { active = false }
       }, [selection, contextCursor, intentCursor, retry])
-      const selectTopic = (topic) => { setSelection({ groupId: topic.groupId, topicId: topic.topicId, revision: topic.revision }); setMessageOffset(0); setContextCursor(''); setContextCursorHistory([]); setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined); setTopicContext(undefined) }
-      if (selectedIntentRun) return React.createElement(TraceDetail, { key: selectedIntentRun, runId: selectedIntentRun, onOpenSession, onBack: () => setSelectedIntentRun(''), backLabel: '返回话题判断列表' })
+      const selectTopic = (topic) => { setSelection({ groupId: topic.groupId, topicId: topic.topicId, revision: topic.revision }); setMessageOffset(0); setContextCursor(''); setContextCursorHistory([]); setIntentCursor(''); setIntentCursorHistory([]); setSelectedIntentRun(''); setContextRevision(undefined); setMessagePageRevision(undefined); setTopicContext(undefined) }
+
       const topic = context?.topic
       const group = groups.find((item) => item.groupId === groupId)
-      const relatedTasks = tasks.filter((task) => task.topicRefs?.some((ref) => (ref.groupId || task.sourceGroupId || task.groupId) === selection?.groupId && ref.topicId === selection?.topicId))
+      useEffect(()=>{setRelatedOffset(0);relatedSnapshot.current=null},[selection?.groupId,selection?.topicId])
+      useEffect(()=>{
+        if(!selection){setRelatedPage(undefined);return}
+        let active=true;const controller=new AbortController();setRelatedError('')
+        const params=new URLSearchParams({groupId:selection.groupId,topicId:selection.topicId,archived:'all',offset:String(relatedOffset),limit:'10'})
+        if(relatedOffset&&relatedSnapshot.current?.offset!==relatedOffset&&relatedSnapshot.current?.revision)params.set('revision',relatedSnapshot.current.revision)
+        get(`/state/tasks?${params}`,{signal:controller.signal}).then(value=>{if(active){relatedSnapshot.current=value;setRelatedPage(value);if(relatedOffset&&relatedOffset>=value.total)setRelatedOffset(Math.max(0,Math.floor((value.total-1)/10)*10))}},cause=>{if(active){setRelatedError(cause.message);if(cause.status===409){relatedSnapshot.current=null;setRelatedOffset(0)}}})
+        return()=>{active=false;controller.abort()}
+      },[selection?.groupId,selection?.topicId,relatedOffset,updatedAt])
+      if (selectedIntentRun) return React.createElement(TraceDetail, { key: selectedIntentRun, runId: selectedIntentRun, onOpenSession, onBack: () => setSelectedIntentRun(''), backLabel: '返回话题判断列表' })
+      const relatedTasks=relatedPage?.offset===relatedOffset?relatedPage.items:[]
       const failure = (message) => React.createElement('div', { role: 'alert', style: { padding: 16, color: colors.danger } }, message, ' ', React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setRetry((value) => value + 1) }, '重试'))
       const pager = (pageOffset, total, pageSize, onChange, busy) => React.createElement('div', { style: { ...tableFooter, flexWrap: 'wrap' } }, React.createElement('span', { style: { marginRight: 'auto', color: colors.muted, fontSize: 12 } }, `${total} 条 · 第 ${Math.floor(pageOffset / pageSize) + 1} 页`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy || pageOffset === 0, onClick: () => onChange(Math.max(0, pageOffset - pageSize)) }, '上一页'), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy || pageOffset + pageSize >= total, onClick: () => onChange(pageOffset + pageSize) }, '下一页'))
       return React.createElement('section', { 'aria-label': '话题与上下文', style: { display: 'grid', gap: ui.space4 } },
@@ -580,7 +610,9 @@ window.__ModuleLoader__.load({
                   React.createElement('div', { style: { display: 'flex', gap: 8 } }, contextCursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setContextCursor(contextCursorHistory.at(-1)); setContextCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, topicContext.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => { setContextCursorHistory((items) => [...items, contextCursor]); setContextCursor(topicContext.nextCursor) } }, '下一页') : null)) : React.createElement('span', { style: { color: colors.muted } }, '历史未记录')),
               React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: 12, padding: '16px 0', borderBottom: `1px solid ${colors.border}` } },
                 React.createElement('section', { 'aria-label': '当前待解决问题', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `待解决问题 · ${topic?.openQuestions?.length || 0}`), topic?.openQuestions?.length ? React.createElement('ul', { style: { margin: 0, paddingLeft: 18, display: 'grid', gap: 6, fontSize: 12, lineHeight: 1.6 } }, ...topic.openQuestions.map((question, index) => React.createElement('li', { key: index }, question))) : React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '当前没有待解决问题')),
-                React.createElement('section', { 'aria-label': '关联任务', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `关联任务 · ${relatedTasks.length}`), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 7 } }, ...relatedTasks.map((task) => React.createElement(Button, { key: task.taskId, variant: 'outline', size: 'sm', type: 'button', onClick: () => onOpenTask(task), style: { maxWidth: '100%' } }, React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: task.title || task.objective }, taskDisplayTitle(task)))), relatedTasks.length === 0 ? React.createElement('span', { style: { color: colors.muted, fontSize: 12 } }, '暂无关联任务') : null))),
+                React.createElement('section', { 'aria-label': '关联任务', style: { minWidth: 0 } }, React.createElement('strong', { style: { display: 'block', marginBottom: 8, fontSize: 12 } }, `关联任务 · ${relatedPage?.total||0}`), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 7 } }, ...relatedTasks.map((task) => React.createElement(Button, { key: task.taskId, variant: 'outline', size: 'sm', type: 'button', onClick: () => onOpenTask(task), style: { maxWidth: '100%' } }, React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: task.title || task.objective }, taskDisplayTitle(task)))), relatedError?React.createElement('span',{role:'alert'},`关联任务读取失败：${relatedError}`):null,
+                  relatedTasks.length===0?React.createElement('span',{style:{color:colors.muted,fontSize:12}},relatedPage?'暂无关联任务':'正在读取关联任务…'):null,
+                  relatedPage?.total>10?React.createElement('nav',{'aria-label':'关联任务分页',style:{display:'flex',gap:8}},React.createElement(Button,{type:'button',variant:'outline',size:'sm',disabled:relatedOffset===0,onClick:()=>setRelatedOffset(value=>Math.max(0,value-10))},'上一页'),React.createElement('span',null,`${Math.floor(relatedOffset/10)+1}/${Math.ceil(relatedPage.total/10)}`),React.createElement(Button,{type:'button',variant:'outline',size:'sm',disabled:relatedPage.nextOffset===null,onClick:()=>setRelatedOffset(relatedPage.nextOffset)},'下一页')):null))),
               React.createElement('section', { 'aria-label': '群聊消息', style: { marginTop: 4 } },
                 React.createElement('strong', { style: { display: 'block', padding: '14px 0', fontSize: 13, fontWeight: 600 } }, `群聊消息 · ${context.total} 条`),
                 React.createElement('div', { style: { display: 'grid' } }, ...(context.messages?.length ? context.messages.map((message, index) => React.createElement('article', { key: `${message.messageId}:${index}`, style: { position: 'relative', minWidth: 0, padding: '10px 0 15px 22px', borderLeft: `1px solid ${colors.border}` } }, React.createElement('span', { 'aria-hidden': true, style: { position: 'absolute', top: 15, left: -4, width: 7, height: 7, borderRadius: '50%', background: index === 0 ? colors.accent : colors.cardSurface, border: `1px solid ${index === 0 ? colors.accent : colors.border}` } }), React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 8px', color: colors.muted, fontSize: 11 } }, React.createElement('strong', { style: { color: 'inherit', fontWeight: 600 } }, message.senderName || message.sourceKind || '未知发送人'), React.createElement('time', { dateTime: message.occurredAt || undefined, style: { fontVariantNumeric: 'tabular-nums' } }, fmt(message.occurredAt))), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13, lineHeight: 1.7 } }, message.text || '（空消息）'), message.quotedMessage?.content ? React.createElement('details', { style: { marginTop: 9, color: colors.muted, fontSize: 12 } }, React.createElement('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, '查看引用消息'), React.createElement('blockquote', { style: { margin: '7px 0 0', padding: '8px 10px', borderLeft: `2px solid ${colors.border}`, background: colors.surface2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.6 } }, message.quotedMessage.content)) : null)) : [emptyState('此版本没有消息')])),
@@ -609,6 +641,7 @@ window.__ModuleLoader__.load({
     function useCoordinationRead(path) {
       const [resource, setResource] = useState({ path, loading: Boolean(path) })
       const [retry, setRetry] = useState(0)
+      const pagingSnapshot=useRef(null)
       useEffect(() => {
         if (!path) return
         let active = true, pending = false, controller
@@ -618,10 +651,18 @@ window.__ModuleLoader__.load({
           const timeout = window.setTimeout(() => controller.abort(), 15000)
           setResource(current => ({ path, value: current.path === path ? current.value : undefined, error: current.path === path ? current.error : '', loading: true }))
           try {
-            const value = await get(path, { signal: controller.signal })
-            if (active) setResource({ path, value, error: '', loading: false })
+            let requestPath=path,paging
+            if(/^\/state\/coordination-(work|sources)\?/u.test(path)){
+              paging=new URL(path,'http://observer.local');const offset=Number(paging.searchParams.get('offset')||0);paging.searchParams.delete('offset');const scope=paging.pathname+paging.search
+              const prior=pagingSnapshot.current
+              if(offset&&prior?.scope===scope&&prior.offset!==offset&&prior.revision)requestPath+=`&pageRevision=${encodeURIComponent(prior.revision)}`
+              paging={scope,offset}
+            }
+            const value = await get(requestPath, { signal: controller.signal })
+            if(active){if(paging)pagingSnapshot.current={...paging,revision:value.revision};setResource({ path, value, error: '', loading: false })}
           } catch (cause) {
-            if (active) setResource(current => ({ ...current, loading: false, error: cause.message === 'coordination_observer_unavailable' ? '当前服务尚未提供协调工作读取，请核对安装版本。' : '协调记录读取失败，请重试；未能确认最新状态。' }))
+            if (active) {if(cause.status===409)pagingSnapshot.current=null;setResource(current => ({ ...current, conflict:cause.status===409, loading: false, error: cause.message === 'coordination_observer_unavailable' ? '当前服务尚未提供协调工作读取，请核对安装版本。' : '协调记录读取失败，请重试；未能确认最新状态。' }))
+            }
           } finally { window.clearTimeout(timeout); pending = false }
         }
         void read()
@@ -657,8 +698,9 @@ window.__ModuleLoader__.load({
         }
       }, [workId, value])
       useEffect(() => {
+        if(listing.conflict&&offset>0){setOffset(0);return}
         if (listing.value && offset > 0 && offset >= listing.value.total) { setOffset(Math.max(0, Math.floor((listing.value.total - 1) / 10) * 10)) }
-      }, [listing.value, offset])
+      }, [listing.value,listing.conflict, offset])
       const choose = id => { focusDetail.current = true; setWorkId(id) }
       const back = () => { focusWork.current = workId; setWorkId('') }
       const refresh = () => { listing.reload(); detail.reload() }
@@ -954,14 +996,26 @@ window.__ModuleLoader__.load({
     }
     function LegacyTaskHistory({ task }) {
       const [page, setPage] = useState(1)
-      const items = [...(task.executions || []).map(execution => ({ execution })), ...(task.executionNodes || []).map(node => ({ node }))]
-      const pages = Math.max(1, Math.ceil(items.length / 20)), current = Math.min(page, pages)
+      const [collection,setCollection]=useState(task.legacyHistoryPage)
+      const [loading,setLoading]=useState(!task.legacyHistoryPage)
+      const [error,setError]=useState('')
+      const offset=(page-1)*20
+      useEffect(()=>{
+        if(task.legacyHistoryPage&&page===1&&collection===task.legacyHistoryPage)return
+        let active=true;setLoading(true);setError('')
+        const params=new URLSearchParams({offset:String(offset),limit:'20'})
+        if(page>1&&collection?.revision)params.set('revision',collection.revision)
+        get(`/state/tasks/${encodeURIComponent(task.taskId)}/legacy-history?${params}`).then(value=>{if(active)setCollection(value)},cause=>{if(active){if(cause.status===409){setPage(1);setCollection(undefined)}else setError(cause.message==='legacy_history_pagination_provider_required'?'历史服务需要升级后才能按页读取。':cause.message==='OBSERVER_PAGINATION_MIGRATION_REQUIRED'?'历史数据需要先完成离线索引升级。':cause.message)}}).finally(()=>{if(active)setLoading(false)})
+        return ()=>{active=false}
+      },[task.taskId,task.detailRevision,page])
+      const items=collection?.offset===offset?collection.items:[]
+      const pages=Math.max(1,Math.ceil((collection?.total??0)/20)),current=page
       return React.createElement('section', { 'aria-label': '只读历史执行', style: { display: 'grid', gap: 12 } },
         React.createElement('p', { role: 'status' }, '历史任务只读，不再接受旧执行操作。'),
         task.session?.sessionId ? React.createElement('p', { style: { color: colors.muted } }, `历史任务会话：${task.session.sessionId}`) : null,
-        ...items.slice((current - 1) * 20, current * 20).map(({ execution, node }, index) => node ? React.createElement(LegacyTaskOutput, { key: node.nodeRunId || index, taskId: task.taskId, node, detailRevision: task.detailRevision })
-          : React.createElement('details', { key: execution.executionId, style: card }, React.createElement('summary', { style: { cursor: 'pointer' } }, `历史执行 ${execution.executionId} · ${taskStateLabel(execution.status)}`), React.createElement('p', null, `记录时间 ${fmt(execution.createdAt)}`), ...(execution.sessions || []).map(session => React.createElement('p', { key: session.sessionId }, `历史会话 ${session.sessionId} · ${taskStateLabel(session.status)}`)), execution.result ? React.createElement(TaskResult, { result: execution.result }) : null)),
-        !items.length ? emptyState('暂无历史执行记录') : null,
+        ...items.map(({ execution, node }, index) => node ? React.createElement(LegacyTaskOutput, { key: node.nodeRunId || index, taskId: task.taskId, node, detailRevision: task.detailRevision })
+          : React.createElement('details', { key: execution.executionId, style: card }, React.createElement('summary', { style: { cursor: 'pointer' } }, `历史执行 ${execution.executionId} · ${taskStateLabel(execution.status)}`), React.createElement('p', null, `记录时间 ${fmt(execution.createdAt)}`), ...(execution.sessions || []).map(session => React.createElement('p', { key: session.sessionId }, `历史会话 ${session.sessionId} · ${taskStateLabel(session.status)}`)), ...(execution.sessions || []).filter(session=>session.outputRef).map(session=>React.createElement(LegacyTaskOutput,{key:session.nodeRunId,taskId:task.taskId,node:{...session,nodeRunId:session.nodeRunId,runId:session.runId||execution.legacyRunId||execution.executionId},detailRevision:task.detailRevision})), execution.result ? React.createElement(TaskResult, { result: execution.result }) : null)),
+        loading?React.createElement('p',{role:'status'},'正在读取历史执行…'):error?React.createElement('p',{role:'alert'},`历史执行读取失败：${error}`):!items.length ? emptyState('暂无历史执行记录') : null,
         pages > 1 ? React.createElement('div', { style: { display: 'flex', gap: 12 } }, React.createElement(Button, { type: 'button', variant: 'outline', disabled: current <= 1, onClick: () => setPage(value => value - 1) }, '上一页'), React.createElement('span', null, `${current}/${pages}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: current >= pages, onClick: () => setPage(value => value + 1) }, '下一页')) : null)
     }
     const taskProgressView = task => {
@@ -1583,6 +1637,41 @@ window.__ModuleLoader__.load({
         React.createElement('span', { style: { flex: 1, minWidth: 0, overflowWrap: 'anywhere' } }, text),
         React.createElement(Button, { type: 'button', variant: 'ghost', size: 'sm', 'aria-label': '关闭提示', onClick: () => setVisible(false) }, '关闭'))
     }
+    function CardExecutionPage({ task, updatedAt, navigate, navigatingSessionId }) {
+      const [offset, setOffset] = useState(0), [page, setPage] = useState(), [error, setError] = useState('')
+      useEffect(() => {
+        const controller = new AbortController(); let active = true
+        setError(''); setPage(undefined)
+        get(`/state/tasks/${encodeURIComponent(task.taskId)}/executions?summary=true&offset=${offset}&limit=10`, {signal:controller.signal}).then(value => {
+          if (!active) return
+          if (offset && offset >= value.total) { setOffset(Math.max(0,Math.floor((value.total-1)/10)*10)); return }
+          setPage(value)
+        },cause=>{if(active)setError(cause.message)})
+        return ()=>{active=false;controller.abort()}
+      },[task.taskId,offset,updatedAt])
+      const sessions = page?.executions || [], session = taskSession(task)
+      return React.createElement(React.Fragment,null,
+        error ? React.createElement('p',{role:'alert'},`读取执行记录失败：${error}`) : !page ? React.createElement('p',{role:'status'},'正在读取执行记录…') : null,
+        React.createElement('div', { style: { display: 'grid', gap: 2, paddingTop: 6 } }, ...sessions.map(execution => {
+              const done = ['succeeded', 'completed'].includes(execution.status)
+              const running = execution.status === 'running'
+              const active = running && !execution.drained && !execution.recovering
+              const failed = execution.status === 'failed'
+              const nativeSession = (execution.executionBackend ?? 'dsh') === 'dsh'
+              const tone = done ? 'var(--dsw-alias-state-success-primary, #248a3d)' : running ? colors.accent : failed ? colors.danger : colors.muted
+              return React.createElement(nativeSession ? 'button' : 'div', { key: execution.sessionId || execution.executionId, className: 'observer-execution-session', ...(nativeSession ? { type: 'button', disabled: !execution.sessionId || navigatingSessionId === execution.sessionId, 'aria-busy': navigatingSessionId === execution.sessionId, onClick: () => navigate(execution.sessionId, session.sessionId) } : {}), style: { display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr) auto', alignItems: 'start', gap: 7, minWidth: 0, padding: '6px 0', border: 0, borderRadius: 4, background: 'transparent', color: 'inherit', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5, textAlign: 'left', cursor: nativeSession && execution.sessionId ? 'pointer' : 'default' } },
+                active ? React.createElement('span', { role: 'img', 'aria-label': taskStateLabel(execution.status), title: taskStateLabel(execution.status), style: { display: 'inline-flex', width: 14, height: 14, marginTop: 1 } }, React.createElement(StateDot, { state: 'ongoing', size: 14 })) : React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: tone, strokeWidth: 1.3, role: 'img', 'aria-label': taskStateLabel(execution.status), style: { marginTop: 1 } },
+                  React.createElement('title', null, taskStateLabel(execution.status)),
+                  React.createElement('circle', { cx: 8, cy: 8, r: 5.6, fill: done ? tone : 'none' }),
+                  done ? React.createElement('path', { d: 'm5 8 2 2 4-4', stroke: 'white' }) : running ? React.createElement('circle', { cx: 8, cy: 8, r: 2, fill: tone, stroke: 'none' }) : failed ? React.createElement('path', { d: 'M8 4.5v4M8 10v1' }) : null),
+                React.createElement('span', { title: execution.title, style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, execution.title, nativeSession ? null : ' · Claude Code'),
+                React.createElement('span', { style: { whiteSpace: 'nowrap', color: tone, fontSize: 10.5 } }, React.createElement(ExecutionSessionDuration, { timing: execution.latestRoundTiming })))
+            })),
+        page && page.total > 10 ? React.createElement('nav',{'aria-label':'执行会话分页',style:{display:'flex',gap:8}},
+          React.createElement(Button,{type:'button',variant:'outline',size:'sm',disabled:offset===0,onClick:()=>setOffset(value=>Math.max(0,value-10))},'上一页'),
+          React.createElement('span',null,`${Math.floor(offset/10)+1}/${Math.max(1,Math.ceil(page.total/10))}`),
+          React.createElement(Button,{type:'button',variant:'outline',size:'sm',disabled:page.nextOffset===null,onClick:()=>setOffset(page.nextOffset)},'下一页')) : null)
+    }
     function ObserverContent({ openSession }) {
       const [activePage, updateActivePage] = useState(readActivePage)
       const setActivePage = useCallback(page => {
@@ -1650,14 +1739,50 @@ window.__ModuleLoader__.load({
       const [authorizationPage, setAuthorizationPage] = useState(1)
       const [authorizationFilter, setAuthorizationFilter] = useState('all')
       const [selectedAuthorizationId, setSelectedAuthorizationId] = useState('')
-      const pendingRefresh = useRef(null)
+      const authorizationIdentity=useRef(null),[authorizationDetailData,setAuthorizationDetailData]=useState(),[authorizationDetailError,setAuthorizationDetailError]=useState('')
+      const openAuthorization=item=>{if(!item)return;authorizationIdentity.current={taskId:item.taskId,requestId:item.requestId};setAuthorizationDetailData(item);setSelectedAuthorizationId(item.requestId)}
+      const pendingRefresh = useRef(null), pageSnapshots = useRef({})
       const refresh = useCallback(() => {
-        if (pendingRefresh.current) return pendingRefresh.current
-        pendingRefresh.current = load().then(value => { setData({ ...value, tasks: (value.tasks || []).map(task => archivedTasksRef.current.has(task.taskId) ? { ...task, ...archivedTasksRef.current.get(task.taskId) } : task) }); setUpdatedAt(new Date()); setError(undefined) },
-          cause => { setError(cause instanceof Error ? cause.message : String(cause)) })
-          .finally(() => { pendingRefresh.current = null })
-        return pendingRefresh.current
-      }, [])
+        const key = JSON.stringify([taskPages,historyPage,selectedGroupId,messagePage,outboxPage,messageDeliveryFilter,outboxStatusFilter,authorizationPage,authorizationFilter,alertType,alertView,resolvedAlertPage])
+        if (pendingRefresh.current?.key === key) return pendingRefresh.current.promise
+        const revisions = {}
+        for (const bucket of taskBuckets) {
+          const prior = pageSnapshots.current[bucket.state], offset = ((taskPages[bucket.state] || 1)-1)*10
+          if (offset && prior && prior.offset !== offset) revisions[bucket.state] = prior.revision
+        }
+        const previousArchive = pageSnapshots.current.archive
+        if (historyPage > 1 && previousArchive && previousArchive.offset !== (historyPage-1)*20) revisions.archive = previousArchive.revision
+        for(const [collection,page,filter] of [['messages',messagePage,messageDeliveryFilter],['outbox',outboxPage,outboxStatusFilter]]){
+          const prior=pageSnapshots.current[collection]
+          if(page>1&&prior&&(!selectedGroupId||prior.groupId===selectedGroupId)&&prior.filter===filter&&prior.offset!==(page-1)*10)revisions[collection]=prior.revision
+        }
+const previousAuthorization=pageSnapshots.current.authorizations
+        if(authorizationPage>1&&previousAuthorization?.filter===authorizationFilter&&previousAuthorization.offset!==(authorizationPage-1)*10)revisions.authorizations=previousAuthorization.revision
+        const request = {key}
+        request.promise = load({taskPages,historyPage,revisions,selectedGroupId,messagePage,outboxPage,messageDeliveryFilter,outboxStatusFilter,authorizationPage,authorizationFilter,alertType,resolvedAlertPage}).then(value => {
+          if (pendingRefresh.current !== request) return
+          pageSnapshots.current = {...value.taskCollections,archive:value.archiveCollection,...value.groupCollections,authorizations:{...value.authorizationCollection,filter:authorizationFilter}}
+          setData({ ...value, tasks: (value.tasks || []).map(task => archivedTasksRef.current.has(task.taskId) ? { ...task, ...archivedTasksRef.current.get(task.taskId) } : task) })
+          const clamped = {...taskPages}; let changed = false
+          for (const bucket of taskBuckets) {
+            const maximum = Math.max(1,Math.ceil(value.taskCollections[bucket.state].total/10))
+            if ((clamped[bucket.state] || 1)>maximum) {clamped[bucket.state]=maximum;changed=true}
+          }
+          if(changed)setTaskPages(clamped)
+          if((historyPage-1)*20>=value.archiveCollection.total && historyPage>1)setHistoryPage(Math.max(1,Math.ceil(value.archiveCollection.total/20)))
+          for(const [name,setPage,page] of [['messages',setMessagePage,messagePage],['outbox',setOutboxPage,outboxPage]]){const collection=value.groupCollections?.[name];if(collection&&page>1&&(page-1)*10>=collection.total)setPage(Math.max(1,Math.ceil(collection.total/10)))}
+          if(authorizationPage>1&&(authorizationPage-1)*10>=value.authorizationCollection.total)setAuthorizationPage(Math.max(1,Math.ceil(value.authorizationCollection.total/10)))
+          const alertTotal=value.alertCollections?.[alertView]?.total
+          if(resolvedAlertPage>1&&alertTotal!==undefined&&(resolvedAlertPage-1)*10>=alertTotal)setResolvedAlertPage(Math.max(1,Math.ceil(alertTotal/10)))
+          setUpdatedAt(new Date());setError(undefined)
+        },cause=>{
+          if(pendingRefresh.current !== request)return
+          if(cause.status===409){pageSnapshots.current={};setTaskPages({});setHistoryPage(1);setMessagePage(1);setOutboxPage(1);setAuthorizationPage(1);setResolvedAlertPage(1);setError('列表已更新，已返回第一页，请重新翻页。')}
+          else setError(cause instanceof Error ? cause.message : String(cause))
+        }).finally(()=>{if(pendingRefresh.current===request)pendingRefresh.current=null})
+        pendingRefresh.current=request
+        return request.promise
+      }, [taskPages,historyPage,selectedGroupId,messagePage,outboxPage,messageDeliveryFilter,outboxStatusFilter,authorizationPage,authorizationFilter,alertType,alertView,resolvedAlertPage])
       const manualRefresh = useCallback(async () => {
         if (refreshState === 'refreshing') return
         setRefreshState('refreshing')
@@ -1690,6 +1815,13 @@ window.__ModuleLoader__.load({
         document.addEventListener('click', closeForSession, true)
         return () => document.removeEventListener('click', closeForSession, true)
       }, [])
+      useEffect(()=>{
+        const identity=authorizationIdentity.current
+        if(!selectedAuthorizationId||identity?.requestId!==selectedAuthorizationId)return
+        const controller=new AbortController();let active=true;setAuthorizationDetailError('')
+        get(`/state/authorizations/${encodeURIComponent(identity.requestId)}?taskId=${encodeURIComponent(identity.taskId)}`,{signal:controller.signal}).then(value=>{if(active)setAuthorizationDetailData(value)},cause=>{if(active)setAuthorizationDetailError(cause.message)})
+        return()=>{active=false;controller.abort()}
+      },[selectedAuthorizationId,updatedAt])
       const groupsById = new Map((data?.groups || []).map((group) => [group.groupId, group]))
       const tasksById = new Map((data?.tasks || []).map(task => [task.taskId, task]))
       const topicsById = new Map((data?.topics || []).map((topic) => [`${topic.groupId}:${topic.topicId}`, topic]))
@@ -1722,18 +1854,20 @@ window.__ModuleLoader__.load({
       }
       const copyButton = (value, label) => React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: !value, onClick: (event) => { event.stopPropagation(); copyId(value).catch((cause) => setNavigationError(cause instanceof Error ? cause.message : String(cause))) }, style: { color: copiedId === value ? 'var(--dsw-alias-state-success-primary, #248a3d)' : undefined, cursor: value ? 'pointer' : 'default', fontSize: 10.5 } }, copiedId === value ? '已复制' : `复制${label}`)
       const selectedGroup = groupsById.get(selectedGroupId) || (data?.groups || [])[0]
-      const selectedMessages = [...(selectedGroup?.messages || [])].filter((message) => message.sourceKind === 'dingtalk' || message.sourceKind === 'migration' || message.sourceKind === 'workflow-v2' || message.sourceKind === 'task-session' || !message.sourceKind).sort((left, right) => (new Date(right.occurredAt).getTime() || 0) - (new Date(left.occurredAt).getTime() || 0) || Number(right.sequence || 0) - Number(left.sequence || 0))
+      const messageCollection=data?.groupCollections?.messages
+      const selectedMessages=messageCollection&&messageCollection.groupId===selectedGroup?.groupId&&messageCollection.filter===messageDeliveryFilter?messageCollection.items:[]
       const messageWorkflowState = (message) => {
         if (['routing', 'processing', 'needs_clarification', 'processed', 'failed', 'unknown'].includes(message.processingState)) return message.processingState
         if (message.routingStatus === 'failed') return 'failed'
         if (message.routingStatus !== 'routed') return 'routing'
         return 'unknown'
       }
-      const filteredMessages = selectedMessages.filter((message) => messageDeliveryFilter === 'all' || messageWorkflowState(message) === messageDeliveryFilter)
+      const filteredMessages = selectedMessages
       const pageSize = 10
-      const pageCount = Math.max(1, Math.ceil(filteredMessages.length / pageSize))
+      const pageCount = Math.max(1, Math.ceil((messageCollection?.total||0) / pageSize))
       const currentMessagePage = Math.min(messagePage, pageCount)
-      const visibleMessages = filteredMessages.slice((currentMessagePage - 1) * pageSize, currentMessagePage * pageSize)
+      const messagesLoading=!messageCollection||messageCollection.groupId!==selectedGroup?.groupId||messageCollection.filter!==messageDeliveryFilter||messageCollection.offset!==(currentMessagePage-1)*pageSize
+      const visibleMessages = messageCollection?.offset===(currentMessagePage-1)*pageSize?filteredMessages:[]
       const delivery = {
         routing: { label: '待归类', state: 'ongoing' },
         processing: { label: '处理中', state: 'ongoing' },
@@ -1775,12 +1909,12 @@ window.__ModuleLoader__.load({
               React.createElement('span', { title: '消息发生至本轮语义决策结束，不是业务执行耗时', style: { flex: '0 0 auto', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, ['processed', 'needs_clarification'].includes(workflowState) ? messageProcessingElapsed(message) : '—'))),
           React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, React.createElement(MessageProcessingFacts, { message }), recovery && workflowState !== 'processed' ? React.createElement(MessageRecovery, { key: recovery.requestId, path: `/config/groups/${encodeURIComponent(selectedGroup.groupId)}/messages/${encodeURIComponent(message.messageId)}/retry`, body: recoveryBody, token: recovery.token, onChanged: refresh }) : workflowState === 'failed' ? React.createElement('div', { style: { marginTop: 6, fontSize: 11, color: colors.muted } }, '需先核实并解除原操作阻塞；未知效果不允许重放。') : null, messageFacts))
       })
-      const selectedOutbox = [...(selectedGroup?.outbox || [])].reverse()
-      const filteredOutbox = selectedOutbox.filter(message => outboxStatusFilter === 'all' || outboxDelivery(message).id === outboxStatusFilter)
-      const outboxPageSize = 10
-      const outboxPageCount = Math.max(1, Math.ceil(filteredOutbox.length / outboxPageSize))
-      const currentOutboxPage = Math.min(outboxPage, outboxPageCount)
-      const visibleOutbox = filteredOutbox.slice((currentOutboxPage - 1) * outboxPageSize, currentOutboxPage * outboxPageSize)
+      const outboxCollection=data?.groupCollections?.outbox
+      const selectedOutbox=outboxCollection&&outboxCollection.groupId===selectedGroup?.groupId&&outboxCollection.filter===outboxStatusFilter?outboxCollection.items:[]
+      const filteredOutbox=selectedOutbox,outboxPageSize=10
+      const outboxPageCount=Math.max(1,Math.ceil((outboxCollection?.total||0)/outboxPageSize)),currentOutboxPage=Math.min(outboxPage,outboxPageCount)
+      const outboxLoading=!outboxCollection||outboxCollection.groupId!==selectedGroup?.groupId||outboxCollection.filter!==outboxStatusFilter||outboxCollection.offset!==(currentOutboxPage-1)*outboxPageSize
+      const visibleOutbox=outboxCollection?.offset===(currentOutboxPage-1)*outboxPageSize?filteredOutbox:[]
       const outboxRows = visibleOutbox.map((message, rowIndex) => {
         const status = outboxDelivery(message)
         const recovery = message.notificationRecovery
@@ -1814,7 +1948,8 @@ window.__ModuleLoader__.load({
         const hovered = hoveredTaskId === task.taskId
         const queued = task.state === 'queued'
         const sessions = task.executionSessions || []
-        const completedSessions = sessions.filter(item => ['succeeded', 'completed'].includes(item.status)).length
+        const completedSessions = task.completedExecutionCount ?? sessions.filter(item => ['succeeded', 'completed'].includes(item.status)).length
+        const sessionCount = task.executionCount ?? sessions.length
         const displayObjective = String(task.objective || '').startsWith('[TASK_SOURCE_EVIDENCE]') ? (task.title || task.objective) : task.objective
         return React.createElement('article', { key: task.taskId, onClick: event => { if (!event.target.closest('button, summary, details')) openTask(task) }, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
           React.createElement('button', { type: 'button', onClick: () => openTask(task), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', textAlign: 'left', display: 'grid', gap: 6, fontFamily: 'inherit' } },
@@ -1829,28 +1964,14 @@ window.__ModuleLoader__.load({
             })),
           React.createElement('button', { type: 'button', title: displayObjective, 'aria-label': '查看完整任务目标', onClick: () => openTask(task), style: { border: 0, padding: 0, background: 'transparent', color: 'inherit', textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer', minWidth: 0, display: 'block', maxHeight: '4.5em', overflow: 'hidden', overflowWrap: 'anywhere', fontSize: 11, lineHeight: 1.5 } },
             React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, style: { display: 'inline-block', verticalAlign: -2, marginRight: 5, color: colors.muted } }, React.createElement('circle', { cx: 8, cy: 8, r: 5.5 }), React.createElement('circle', { cx: 8, cy: 8, r: 2 }), React.createElement('path', { d: 'M8 1v2M15 8h-2' })), displayObjective),
-          !task.legacyReadonly && sessions.length ? React.createElement('details', { className: 'observer-card-sessions', open: expandedTaskId === task.taskId, 'aria-label': '全部执行会话', style: { minWidth: 0, padding: '8px 9px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2 } },
+          !task.legacyReadonly && sessionCount ? React.createElement('details', { className: 'observer-card-sessions', open: expandedTaskId === task.taskId, 'aria-label': '全部执行会话', style: { minWidth: 0, padding: '8px 9px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2 } },
             React.createElement('summary', { onClick: event => { event.preventDefault(); event.stopPropagation(); setExpandedTaskId(id => id === task.taskId ? '' : task.taskId) }, style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer', fontSize: 11, color: colors.muted, listStyle: 'none' } },
               React.createElement('svg', { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, 'aria-hidden': true }, React.createElement('path', { d: 'M2 3h2v2H2zM6 4h8M2 7h2v2H2zM6 8h8M2 11h2v2H2zM6 12h8' })),
               React.createElement('span', null, '执行会话'),
-              React.createElement('meter', { min: 0, max: sessions.length, value: completedSessions, 'aria-label': '已完成执行会话数量', style: { flex: 1, minWidth: 20, maxWidth: 80, height: 5, marginLeft: 'auto' } }),
-              React.createElement('span', { style: { fontVariantNumeric: 'tabular-nums' } }, `${completedSessions}/${sessions.length}`),
+              React.createElement('meter', { min: 0, max: sessionCount, value: completedSessions, 'aria-label': '已完成执行会话数量', style: { flex: 1, minWidth: 20, maxWidth: 80, height: 5, marginLeft: 'auto' } }),
+              React.createElement('span', { style: { fontVariantNumeric: 'tabular-nums' } }, `${completedSessions}/${sessionCount}`),
               React.createElement('svg', { className: 'observer-card-session-chevron', width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, 'aria-hidden': true }, React.createElement('path', { d: 'm4 6 4 4 4-4' }))),
-            React.createElement('div', { style: { display: 'grid', gap: 2, paddingTop: 6 } }, ...sessions.map(execution => {
-              const done = ['succeeded', 'completed'].includes(execution.status)
-              const running = execution.status === 'running'
-              const active = running && !execution.drained && !execution.recovering
-              const failed = execution.status === 'failed'
-              const nativeSession = (execution.executionBackend ?? 'dsh') === 'dsh'
-              const tone = done ? 'var(--dsw-alias-state-success-primary, #248a3d)' : running ? colors.accent : failed ? colors.danger : colors.muted
-              return React.createElement(nativeSession ? 'button' : 'div', { key: execution.sessionId || execution.executionId, className: 'observer-execution-session', ...(nativeSession ? { type: 'button', disabled: !execution.sessionId || navigatingSessionId === execution.sessionId, 'aria-busy': navigatingSessionId === execution.sessionId, onClick: () => navigate(execution.sessionId, session.sessionId) } : {}), style: { display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr) auto', alignItems: 'start', gap: 7, minWidth: 0, padding: '6px 0', border: 0, borderRadius: 4, background: 'transparent', color: 'inherit', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.5, textAlign: 'left', cursor: nativeSession && execution.sessionId ? 'pointer' : 'default' } },
-                active ? React.createElement('span', { role: 'img', 'aria-label': taskStateLabel(execution.status), title: taskStateLabel(execution.status), style: { display: 'inline-flex', width: 14, height: 14, marginTop: 1 } }, React.createElement(StateDot, { state: 'ongoing', size: 14 })) : React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: tone, strokeWidth: 1.3, role: 'img', 'aria-label': taskStateLabel(execution.status), style: { marginTop: 1 } },
-                  React.createElement('title', null, taskStateLabel(execution.status)),
-                  React.createElement('circle', { cx: 8, cy: 8, r: 5.6, fill: done ? tone : 'none' }),
-                  done ? React.createElement('path', { d: 'm5 8 2 2 4-4', stroke: 'white' }) : running ? React.createElement('circle', { cx: 8, cy: 8, r: 2, fill: tone, stroke: 'none' }) : failed ? React.createElement('path', { d: 'M8 4.5v4M8 10v1' }) : null),
-                React.createElement('span', { title: execution.title, style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, execution.title, nativeSession ? null : ' · Claude Code'),
-                React.createElement('span', { style: { whiteSpace: 'nowrap', color: tone, fontSize: 10.5 } }, React.createElement(ExecutionSessionDuration, { timing: execution.latestRoundTiming })))
-            }))) : null,
+            expandedTaskId === task.taskId ? React.createElement(CardExecutionPage, {task,updatedAt,navigate,navigatingSessionId}) : null) : null,
           task.waitingReason ? React.createElement('div', { style: { fontSize: 11, lineHeight: 1.5, color: colors.warning, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, task.waitingReason) : null,
           React.createElement('div', { style: { minWidth: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted } },
             React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt), React.createElement('span', { style: { marginLeft: 'auto' } }, !task.legacyReadonly && !task.archivedAt && ['completed', 'cancelled', 'succeeded', 'failed'].includes(task.state) ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', title: '归档任务（仅限已完成或已取消且执行已结束的任务）', 'aria-label': `归档任务：${task.title || task.taskId}`, 'aria-busy': archivingIds.includes(task.taskId), disabled: archivingIds.includes(task.taskId), onClick: event => { event.stopPropagation(); archiveTask(task) }, style: { minWidth: 58, fontSize: 10.5, cursor: archivingIds.includes(task.taskId) ? 'wait' : 'pointer' } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, 'aria-hidden': true, style: { verticalAlign: -2, marginRight: 4 } }, React.createElement('path', { d: 'M3 3h18v5H3zM5 8v13h14V8M9 12h6' })), '归档') : React.createElement('span', { style: { color: colors.muted, fontSize: 10.5 } }, task.legacyReadonly ? '历史只读' : task.archivedAt ? '已归档' : ''))))
@@ -1877,22 +1998,21 @@ window.__ModuleLoader__.load({
           React.createElement('div', { style: { marginTop: 5, fontSize: 14 } }, alert.message || alert.detail || alert.reason || JSON.stringify(alert)),
           React.createElement('code', { style: { display: 'block', marginTop: 6, fontSize: 11, color: colors.muted } }, `${alert.taskId} · ${alert.fingerprint} · ${alert.count || 1} 次`))
       }
-      const activeAlerts = (data?.alerts || []).filter((alert) => alert.status !== 'resolved').sort((left, right) => String(right.lastSeenAt).localeCompare(String(left.lastSeenAt)))
-      const resolvedAlerts = (data?.alerts || []).filter((alert) => alert.status === 'resolved').sort((left, right) => String(right.resolvedAt || right.lastSeenAt).localeCompare(String(left.resolvedAt || left.lastSeenAt)))
-      const matchesAlertType = (alert) => alertType === 'all' || classifyAlert(alert).id === alertType
-      const filteredActiveAlerts = activeAlerts.filter(matchesAlertType)
-      const filteredResolvedAlerts = resolvedAlerts.filter(matchesAlertType)
-      const resolvedAlertPageSize = 10
-      const resolvedAlertPageCount = Math.max(1, Math.ceil(filteredResolvedAlerts.length / resolvedAlertPageSize))
-      const currentResolvedAlertPage = Math.min(resolvedAlertPage, resolvedAlertPageCount)
-      const visibleResolvedAlerts = filteredResolvedAlerts.slice((currentResolvedAlertPage - 1) * resolvedAlertPageSize, currentResolvedAlertPage * resolvedAlertPageSize)
+      const activeAlerts=data?.alertCollections?.active?.items||[],resolvedAlerts=data?.alertCollections?.resolved?.items||[]
+      const filteredActiveAlerts=activeAlerts,filteredResolvedAlerts=resolvedAlerts,resolvedAlertPageSize=10
+      const selectedAlertCollection=data?.alertCollections?.[alertView]
+      const resolvedAlertPageCount=Math.max(1,Math.ceil((selectedAlertCollection?.total||0)/10)),currentResolvedAlertPage=Math.min(resolvedAlertPage,resolvedAlertPageCount)
+      const visibleResolvedAlerts=selectedAlertCollection?.offset===(currentResolvedAlertPage-1)*10?resolvedAlerts:[]
       const bucketColumns = taskBuckets.map(bucket => {
         const tasks = (data?.tasks || []).filter(task => (bucket.state === 'completed' ? ['completed', 'cancelled', 'succeeded', 'failed'].includes(task.state) : bucket.state === 'waiting' ? ['waiting', 'paused', 'blocked', 'interrupted'].includes(task.state) : task.state === bucket.state) && !task.archivedAt && !task.legacyReadonly).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
-        const totalPages = Math.max(1, Math.ceil(tasks.length / 10)), page = Math.min(taskPages[bucket.state] || 1, totalPages)
-        const visible = tasks.slice((page - 1) * 10, page * 10)
+        const collection = data?.taskCollections?.[bucket.state]
+        const total = collection?.total ?? 0
+        const totalPages = Math.max(1, Math.ceil(total / 10)), page = Math.min(taskPages[bucket.state] || 1, totalPages)
+        const loadingCollection=!collection||collection.offset!==(page-1)*10
+        const visible = collection?.offset === (page - 1) * 10 ? tasks : []
         return React.createElement('section', { key: bucket.state, style: { boxSizing: 'border-box', borderRadius: 14, background: bucket.background, padding: '8px 4px', minWidth: 0, display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 164px)', minHeight: 420, maxHeight: 'calc(100dvh - 164px)', overflow: 'hidden' } },
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px 10px' } }, React.createElement('strong', { style: { display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, fontWeight: 650, lineHeight: 1.4, color: 'var(--dsw-alias-label-primary-inverted, #fff)', background: bucket.tone } }, bucket.label), React.createElement('span', { style: { borderRadius: 999, background: colors.cardSurface, padding: '2px 7px', fontSize: 10.5, color: colors.muted } }, tasks.length)),
-          React.createElement('div', { style: { flex: 1, minHeight: 0, padding: '8px 8px 12px 8px', display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', scrollbarWidth: 'none' } }, ...(visible.length ? visible.map(renderTaskCard) : [React.createElement('div', { key: 'empty', style: { border: `1px dashed ${colors.border}`, borderRadius: 10, minHeight: 90, display: 'grid', placeItems: 'center', color: colors.muted, fontSize: 12 } }, '暂无任务')])),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px 10px' } }, React.createElement('strong', { style: { display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, fontWeight: 650, lineHeight: 1.4, color: 'var(--dsw-alias-label-primary-inverted, #fff)', background: bucket.tone } }, bucket.label), React.createElement('span', { style: { borderRadius: 999, background: colors.cardSurface, padding: '2px 7px', fontSize: 10.5, color: colors.muted } }, total)),
+          React.createElement('div', { style: { flex: 1, minHeight: 0, padding: '8px 8px 12px 8px', display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', scrollbarWidth: 'none' } }, ...(visible.length ? visible.map(renderTaskCard) : [React.createElement('div', { key: 'empty', style: { border: `1px dashed ${colors.border}`, borderRadius: 10, minHeight: 90, display: 'grid', placeItems: 'center', color: colors.muted, fontSize: 12 } }, error?'任务读取失败，请刷新重试':loadingCollection?'正在读取任务…':'暂无任务')])),
           totalPages > 1 ? React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8 } }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: page <= 1, onClick: () => setTaskPages(value => ({ ...value, [bucket.state]: page - 1 })) }, '上一页'), React.createElement('span', null, `${page}/${totalPages}`), React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: page >= totalPages, onClick: () => setTaskPages(value => ({ ...value, [bucket.state]: page + 1 })) }, '下一页')) : null)
       })
       const menu = React.createElement('nav', { 'aria-label': '运行看板视图', style: { minWidth: 0, height: 27, display: 'flex', alignItems: 'stretch', gap: 36, overflowX: 'auto', padding: '0 0 0 8px' } },
@@ -1911,7 +2031,7 @@ window.__ModuleLoader__.load({
           React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: refreshState === 'refreshing', onClick: manualRefresh, 'aria-live': 'polite', style: { gap: 6, minWidth: 78, fontSize: 13, lineHeight: '20px' } }, refreshState === 'refreshing' ? '刷新中' : refreshState === 'done' ? '已刷新' : '刷新', refreshIcon)),
         menu)
       const dataViewTabs = React.createElement('div', { role: 'tablist', 'aria-label': '群聊数据视图', style: { display: 'flex', alignSelf: 'stretch', gap: 20 } },
-        ...[{ id: 'messages', label: `收信箱 · ${selectedMessages.length}` }, { id: 'outbox', label: `发信箱 · ${selectedOutbox.length}` }].map((item) => React.createElement('button', { key: item.id, role: 'tab', 'aria-selected': groupTableView === item.id, type: 'button', onClick: () => setGroupTableView(item.id), style: navigationTabStyle(groupTableView === item.id, { paddingBottom: 4 }) }, item.label)))
+        ...[{ id: 'messages', label: `收信箱 · ${messageCollection?.total||0}` }, { id: 'outbox', label: `发信箱 · ${outboxCollection?.total||0}` }].map((item) => React.createElement('button', { key: item.id, role: 'tab', 'aria-selected': groupTableView === item.id, type: 'button', onClick: () => setGroupTableView(item.id), style: navigationTabStyle(groupTableView === item.id, { paddingBottom: 4 }) }, item.label)))
       const groupTableToolbar = React.createElement('div', { style: { ...toolbar, flexWrap: 'wrap' } },
         dataViewTabs,
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' } },
@@ -1926,19 +2046,19 @@ window.__ModuleLoader__.load({
       const messagesTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 1040, borderCollapse: 'collapse', tableLayout: 'fixed' } },
           React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 144 } }, '处理状态'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '发送人 / 时间'), React.createElement('th', { style: { ...tableHeadCell, width: 160 } }, '关联任务 / 历史话题'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 240 } }, '消息'))),
-          React.createElement('tbody', null, ...(messageRows.length ? messageRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 9, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的群聊消息'))])))),
-        React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredMessages.length} 条 · 每页 ${pageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage <= 1, onClick: () => setMessagePage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentMessagePage} / ${pageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage >= pageCount, onClick: () => setMessagePage((page) => Math.min(pageCount, page + 1)) }, '下一页')))
+          React.createElement('tbody', null, ...(messageRows.length ? messageRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 9, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, error?'群聊消息读取失败，请刷新重试':messagesLoading?'正在读取群聊消息…':'暂无符合条件的群聊消息'))])))),
+        React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${messageCollection?.total||0} 条 · 每页 ${pageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage <= 1, onClick: () => setMessagePage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentMessagePage} / ${pageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentMessagePage >= pageCount, onClick: () => setMessagePage((page) => Math.min(pageCount, page + 1)) }, '下一页')))
       const outboxTable = React.createElement(React.Fragment, null,
         React.createElement('div', { style: { overflowX: 'auto' } }, React.createElement('table', { style: { width: '100%', minWidth: 1040, borderCollapse: 'collapse', tableLayout: 'fixed' } },
           React.createElement('thead', null, React.createElement('tr', { style: { background: colors.surface2, textAlign: 'left' } }, React.createElement('th', { style: { ...tableHeadCell, width: 124 } }, '状态'), React.createElement('th', { style: { ...tableHeadCell, width: 180 } }, '送达时间'), React.createElement('th', { style: tableHeadCell }, '消息内容'), React.createElement('th', { style: { ...tableHeadCell, width: 220 } }, '来源'))),
           React.createElement('tbody', null, ...(outboxRows.length ? outboxRows : [React.createElement('tr', { key: 'empty' }, React.createElement('td', { colSpan: 4, style: { ...tableBodyCell, padding: 36, textAlign: 'center', color: colors.muted } }, '暂无符合条件的 Agent 发件记录'))])))),
-        React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredOutbox.length} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
+        React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${outboxCollection?.total||0} 条 · 每页 ${outboxPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage <= 1, onClick: () => setOutboxPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentOutboxPage} / ${outboxPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentOutboxPage >= outboxPageCount, onClick: () => setOutboxPage((page) => Math.min(outboxPageCount, page + 1)) }, '下一页')))
       const groupsPage = selectedMessageRunId ? React.createElement(TraceDetail, { runId: selectedMessageRunId, onOpenSession: navigate, onBack: () => setSelectedMessageRunId('') }) : React.createElement('section', { style: { minWidth: 0 } }, React.createElement('div', { style: { ...tableFrame, minWidth: 0 } }, groupTableToolbar, groupTableView === 'messages' ? messagesTable : outboxTable))
       const selectedTask = taskDetail?.taskId === selectedTaskId ? taskDetail : undefined
       const tasksPage = selectedTaskId ? React.createElement('div', { className: 'observer-task-detail-route', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 16 } },
           React.createElement('style', null, taskDetailCss),
           detailError ? React.createElement('div', { className: 'detail-fetch-error', role: 'alert' }, `${selectedTask ? '详情刷新失败，已读取内容可能过期' : '详情读取失败'}：${detailError}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setDetailRetry(value => value + 1) }, '重试读取详情')) : null,
-          selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onBack: returnFromTask, onOpenTask: task => openTask(task, taskCoordinationReturn ? coordinationTarget : undefined), updatedAt, onOpenHumanRequest: taskId => { setSelectedAuthorizationId((data?.authorizations || []).find(item => item.taskId === taskId && item.taskSessionRequest && item.status === 'waiting-reply')?.requestId || ''); setActivePage('authorizations') } })
+          selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onBack: returnFromTask, onOpenTask: task => openTask(task, taskCoordinationReturn ? coordinationTarget : undefined), updatedAt, onOpenHumanRequest: taskId => { openAuthorization((data?.authorizations||[]).find(item=>item.taskId===taskId&&item.status==='waiting-reply')||((taskDetail?.humanRequests||[]).find(item=>item.status==='waiting-reply')?{...taskDetail.humanRequests.find(item=>item.status==='waiting-reply'),taskId,groupId:taskDetail.groupId}:undefined));setActivePage('authorizations') } })
             : React.createElement('section', { className: 'observer-session-detail detail-fetch-state', 'aria-label': '任务详情读取状态' }, React.createElement('div', { className: 'detail-topline' }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: returnFromTask }, '返回看板'), React.createElement('span', { className: 'detail-muted' }, '任务详情')), React.createElement('h1', null, '任务详情'), !detailError ? React.createElement('span', { role: 'status' }, '正在读取任务详情…') : React.createElement('p', { className: 'detail-muted' }, '未读取到任务内容，请重试或返回看板。')))
         : React.createElement('section', { style: { display: 'grid', gap: 16 } }, React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns))
       const authorizationStatus = {
@@ -1953,16 +2073,12 @@ window.__ModuleLoader__.load({
       const authorizationPresentation = (item) => item.status === 'answered'
         ? item.taskSessionRequest ? { label: '已答复', state: 'done' } : authorizationDecision[item.decision] || authorizationStatus.answered
         : authorizationStatus[item.status] || { label: '状态异常', state: 'error' }
-      const authorizationItems = [...(data?.authorizations || [])].sort((left, right) => {
-        const leftPending = isPendingAuthorization(left) ? 1 : 0; const rightPending = isPendingAuthorization(right) ? 1 : 0
-        return rightPending - leftPending || String(right.createdAt || '').localeCompare(String(left.createdAt || ''))
-      })
-      const filteredAuthorizationItems = authorizationItems.filter((item) => authorizationFilter === 'all' || (authorizationFilter === 'pending' ? isPendingAuthorization(item) : ['superseded', 'answered'].includes(authorizationFilter) ? item.status === authorizationFilter : item.decision === authorizationFilter))
-      const authorizationPageSize = 10
-      const authorizationPageCount = Math.max(1, Math.ceil(filteredAuthorizationItems.length / authorizationPageSize))
-      const currentAuthorizationPage = Math.min(authorizationPage, authorizationPageCount)
-      const visibleAuthorizationItems = filteredAuthorizationItems.slice((currentAuthorizationPage - 1) * authorizationPageSize, currentAuthorizationPage * authorizationPageSize)
-      const selectedAuthorization = authorizationItems.find((item) => item.requestId === selectedAuthorizationId)
+      const authorizationItems=data?.authorizations||[]
+      const filteredAuthorizationItems=authorizationItems,authorizationPageSize=10
+      const authorizationPageCount=Math.max(1,Math.ceil((data?.authorizationCollection?.total||0)/10)),currentAuthorizationPage=Math.min(authorizationPage,authorizationPageCount)
+      const authorizationLoading=!data?.authorizationCollection||data.authorizationCollection.filter!==authorizationFilter||data.authorizationCollection.offset!==(currentAuthorizationPage-1)*10
+      const visibleAuthorizationItems=data?.authorizationCollection?.filter===authorizationFilter&&data?.authorizationCollection?.offset===(currentAuthorizationPage-1)*10?authorizationItems:[]
+      const selectedAuthorization = authorizationDetailData?.requestId===selectedAuthorizationId?authorizationDetailData:authorizationItems.find(item=>item.requestId===selectedAuthorizationId)
       const authorizationDetailField = (label, value) => React.createElement('div', { style: { display: 'grid', gap: 5 } },
         React.createElement('strong', { style: { fontSize: 11, color: colors.muted } }, label),
         React.createElement('div', { style: { fontSize: 13, lineHeight: 1.65, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, ...linkedTaskText(value || '—')))
@@ -1974,9 +2090,9 @@ window.__ModuleLoader__.load({
           React.createElement('span', { style: { minWidth: 0 } }, React.createElement('strong', { title: item.objective, style: { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, fontWeight: 600, lineHeight: 1.5 } }, item.objective), React.createElement('span', { style: { display: 'block', marginTop: 3, color: colors.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, group?.name || item.groupId)),
           React.createElement('span', { style: { minWidth: 0 } }, React.createElement('span', { title: item.requestedAction || item.question || item.reason, style: { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, lineHeight: 1.55, color: colors.muted } }, item.requestedAction || item.question || item.reason), item.risk && item.risk !== '未单独说明' ? React.createElement('span', { style: { display: 'block', marginTop: 3, color: colors.danger, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, `风险 · ${item.risk}`) : null),
           React.createElement('span', { style: { color: colors.muted, fontSize: 11, lineHeight: 1.5 } }, fmt(item.createdAt)),
-          React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', onClick: () => setSelectedAuthorizationId(item.requestId) }, '查看'))
+          React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', onClick: () => openAuthorization(item) }, '查看'))
       })
-      const authorizationDetail = selectedAuthorization ? React.createElement(HumanRequestModal, { key: selectedAuthorization.requestId, onClose: () => setSelectedAuthorizationId('') },
+      const authorizationDetail = selectedAuthorization ? React.createElement(HumanRequestModal, { key: selectedAuthorization.requestId, onClose: () => setSelectedAuthorizationId('') },authorizationDetailError?React.createElement('p',{role:'alert'},`详情刷新失败，已显示的数据可能过期：${authorizationDetailError}`):null,
           React.createElement('header', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24, padding: '24px 24px 20px', borderBottom: `1px solid ${colors.border}`, background: colors.surface } },
             React.createElement('div', { style: { minWidth: 0 } }, React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } }, statusTag(authorizationPresentation(selectedAuthorization).label, authorizationPresentation(selectedAuthorization).state), React.createElement('span', { style: { color: colors.muted, fontSize: 11.5 } }, fmt(selectedAuthorization.createdAt))), React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 600, lineHeight: 1.5, overflowWrap: 'anywhere', maxHeight: '15dvh', overflowY: 'auto' } }, selectedAuthorization.objective || '人工介入事项'), React.createElement('code', { style: { display: 'block', marginTop: 10, color: colors.muted, fontSize: 10.5, overflowWrap: 'anywhere' } }, selectedAuthorization.requestId)),
             React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', 'aria-label': '关闭人工介入事项', onClick: () => setSelectedAuthorizationId(''), style: { flex: '0 0 auto', minWidth: 52, whiteSpace: 'nowrap' } }, '关闭')),
@@ -1990,27 +2106,29 @@ window.__ModuleLoader__.load({
         React.createElement('div', { style: tableFrame },
           React.createElement('div', { style: { ...toolbar, justifyContent: 'flex-end' } }, React.createElement(SelectMenu, { label: '筛选处理状态', value: authorizationFilter, options: [{ id: 'all', label: '全部处理状态' }, { id: 'pending', label: '等待处理' }, { id: 'answered', label: '已答复' }, { id: 'approved', label: '已继续' }, { id: 'rejected', label: '不执行' }, { id: 'superseded', label: '已失效' }], onChange: (value) => { setAuthorizationFilter(value); setAuthorizationPage(1) }, fitContent: true })),
           React.createElement('div', { style: { height: 42, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: '104px minmax(220px, 1.1fr) minmax(280px, 1.5fr) 126px 52px', alignItems: 'center', gap: 16, padding: '0 16px', background: colors.surface2, color: colors.muted, fontSize: 13, fontWeight: 600 } }, React.createElement('span', null, '状态'), React.createElement('span', null, '任务'), React.createElement('span', null, '阻塞事项'), React.createElement('span', null, '提出时间'), React.createElement('span', null, '操作')),
-          React.createElement('div', null, ...(authorizationRows.length ? authorizationRows : [React.createElement('div', { key: 'empty', style: { padding: 36, textAlign: 'center', color: colors.muted, fontSize: 12 } }, '暂无人工介入事项')])),
+          React.createElement('div', null, ...(authorizationRows.length ? authorizationRows : [React.createElement('div', { key: 'empty', style: { padding: 36, textAlign: 'center', color: colors.muted, fontSize: 12 } }, error?'人工介入列表读取失败，请刷新重试':authorizationLoading?'正在读取人工介入事项…':'暂无人工介入事项')])),
           React.createElement('div', { style: tableFooter },
-            React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `当前显示 ${filteredAuthorizationItems.length} 条 · 每页 ${authorizationPageSize} 条`),
+            React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `当前显示 ${data?.authorizationCollection?.total||0} 条 · 每页 ${authorizationPageSize} 条`),
             React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentAuthorizationPage <= 1, onClick: () => setAuthorizationPage((page) => Math.max(1, page - 1)) }, '上一页'),
             React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentAuthorizationPage} / ${authorizationPageCount}`),
             React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentAuthorizationPage >= authorizationPageCount, onClick: () => setAuthorizationPage((page) => Math.min(authorizationPageCount, page + 1)) }, '下一页')))
       ), authorizationDetail)
       const archivedTasks = (data?.tasks || []).filter(task => task.legacyReadonly || task.archivedAt).sort((left, right) => String(right.updatedAt || right.archivedAt).localeCompare(String(left.updatedAt || left.archivedAt)))
-      const historyPageCount = Math.max(1, Math.ceil(archivedTasks.length / 20)), currentHistoryPage = Math.min(historyPage, historyPageCount)
+      const historyPageCount = Math.max(1, Math.ceil((data?.archiveCollection?.total || 0) / 20)), currentHistoryPage = Math.min(historyPage, historyPageCount)
+      const archiveLoading=!data?.archiveCollection||data.archiveCollection.offset!==(currentHistoryPage-1)*20
+      const visibleArchivedTasks=archiveLoading?[]:archivedTasks
       const archivePage = React.createElement('section', { style: { display: 'grid', gap: 16 } },
         React.createElement('p', { role: 'status', style: { margin: 0, color: colors.muted } }, '历史任务只读。旧流程、参数和执行操作已停止。'),
-        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))', gap: 12 } }, ...archivedTasks.slice((currentHistoryPage - 1) * 20, currentHistoryPage * 20).map(renderTaskCard)),
-        !archivedTasks.length ? emptyState('暂无历史任务') : null,
-        React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } }, React.createElement('span', { style: { marginRight: 'auto' } }, `${archivedTasks.length} 条 · ${currentHistoryPage}/${historyPageCount}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: currentHistoryPage <= 1, onClick: () => setHistoryPage(value => value - 1) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: currentHistoryPage >= historyPageCount, onClick: () => setHistoryPage(value => value + 1) }, '下一页')))
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))', gap: 12 } }, ...visibleArchivedTasks.map(renderTaskCard)),
+        !visibleArchivedTasks.length ? emptyState(error?'历史任务读取失败，请刷新重试':archiveLoading?'正在读取历史任务…':'暂无历史任务') : null,
+        React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } }, React.createElement('span', { style: { marginRight: 'auto' } }, `${data?.archiveCollection?.total || 0} 条 · ${currentHistoryPage}/${historyPageCount}`), React.createElement(Button, { type: 'button', variant: 'outline', disabled: currentHistoryPage <= 1, onClick: () => setHistoryPage(value => value - 1) }, '上一页'), React.createElement(Button, { type: 'button', variant: 'outline', disabled: currentHistoryPage >= historyPageCount, onClick: () => setHistoryPage(value => value + 1) }, '下一页')))
       const alertsPage = React.createElement(React.Fragment, null,
         React.createElement('section', null, React.createElement('div', { style: tableFrame },
           React.createElement('div', { style: toolbar },
-            React.createElement('div', { role: 'tablist', 'aria-label': '告警状态视图', style: { display: 'flex', alignSelf: 'stretch', gap: 20 } }, ...[{ id: 'active', label: `当前异常 · ${filteredActiveAlerts.length}` }, { id: 'resolved', label: `恢复历史 · ${filteredResolvedAlerts.length}` }].map((item) => React.createElement('button', { key: item.id, role: 'tab', 'aria-selected': alertView === item.id, type: 'button', onClick: () => setAlertView(item.id), style: navigationTabStyle(alertView === item.id, { paddingBottom: 4 }) }, item.label))),
+            React.createElement('div', { role: 'tablist', 'aria-label': '告警状态视图', style: { display: 'flex', alignSelf: 'stretch', gap: 20 } }, ...[{ id: 'active', label: `当前异常 · ${data?.alertCollections?.active?.total||0}` }, { id: 'resolved', label: `恢复历史 · ${data?.alertCollections?.resolved?.total||0}` }].map((item) => React.createElement('button', { key: item.id, role: 'tab', 'aria-selected': alertView === item.id, type: 'button', onClick: () => {setAlertView(item.id);setResolvedAlertPage(1)}, style: navigationTabStyle(alertView === item.id, { paddingBottom: 4 }) }, item.label))),
             React.createElement(SelectMenu, { label: '筛选告警类型', value: alertType, options: alertCategories.map((category) => ({ id: category.id, label: category.label })), onChange: (value) => { setAlertType(value); setResolvedAlertPage(1) }, fitContent: true })),
           React.createElement('div', { style: { padding: '0 16px' } }, ...(alertView === 'active' ? (filteredActiveAlerts.length ? filteredActiveAlerts.map(renderAlert) : [React.createElement('div', { key: 'empty', style: { padding: '36px 0', textAlign: 'center', color: colors.muted, fontSize: 12 } }, '当前没有此类型异常')]) : (visibleResolvedAlerts.length ? visibleResolvedAlerts.map(renderAlert) : [React.createElement('div', { key: 'empty', style: { padding: '36px 0', textAlign: 'center', color: colors.muted, fontSize: 12 } }, '暂无此类型恢复记录')]))),
-          alertView === 'resolved' ? React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${filteredResolvedAlerts.length} 条 · 每页 ${resolvedAlertPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage <= 1, onClick: () => setResolvedAlertPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentResolvedAlertPage} / ${resolvedAlertPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage >= resolvedAlertPageCount, onClick: () => setResolvedAlertPage((page) => Math.min(resolvedAlertPageCount, page + 1)) }, '下一页')) : null))
+          selectedAlertCollection ? React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${data?.alertCollections?.resolved?.total||0} 条 · 每页 ${resolvedAlertPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage <= 1, onClick: () => setResolvedAlertPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentResolvedAlertPage} / ${resolvedAlertPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage >= resolvedAlertPageCount, onClick: () => setResolvedAlertPage((page) => Math.min(resolvedAlertPageCount, page + 1)) }, '下一页')) : null))
       )
       const topicsPage = React.createElement(TopicBrowser, { groups: data?.groups || [], tasks: data?.tasks || [], target: topicTarget, updatedAt, onOpenTask: openTask, onOpenSession: navigate })
       const coordinationPage = React.createElement(CoordinationBrowser, { groups: data?.groups || [], groupsReady: Boolean(data), target: coordinationTarget, onOpenTask: openTask })

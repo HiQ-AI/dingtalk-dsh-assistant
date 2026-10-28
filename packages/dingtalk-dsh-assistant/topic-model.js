@@ -66,7 +66,10 @@ export function webTaskTopicReusePlan(group, tasks) {
   return { groupId: group.groupId, routingRevision: group.routingRevision, transfers }
 }
 
-export function topicMessages(group, topic, revision) {
+function indexedTopicRefs(group, topic, revision) {
+  let revisions = topicPageIndexes.get(topic)
+  if (!revisions) { revisions = new Map(); topicPageIndexes.set(topic,revisions) }
+  if(revisions.has(revision))return revisions.get(revision)
   if (!Number.isInteger(revision) || revision < 1 || revision > topic.revision) throw new Error('topic_revision_invalid')
   const refs = new Map()
   for (const entry of topic.entries) {
@@ -77,9 +80,19 @@ export function topicMessages(group, topic, revision) {
     else refs.set(entryUnitId, normalized)
   }
   const sourceOrder = new Map(group.messages.map(message => [message.messageId, message.sequence]))
-  return [...refs].sort(([, a], [, b]) => (sourceOrder.get(a.messageId) ?? 0) - (sourceOrder.get(b.messageId) ?? 0)).map(([unitId, entry]) => {
+  const ordered = [...refs].sort(([, a], [, b]) => (sourceOrder.get(a.messageId) ?? 0) - (sourceOrder.get(b.messageId) ?? 0))
+  revisions.set(revision,ordered)
+  if(revisions.size>8)revisions.delete(revisions.keys().next().value)
+  return ordered
+}
+const topicPageIndexes = new WeakMap(), topicMessageIndexes = new WeakMap()
+export const topicMessageCount = (group,topic,revision) => indexedTopicRefs(group,topic,revision).length
+export function topicMessages(group,topic,revision,{offset=0,limit=Infinity}={}) {
+  let messages=topicMessageIndexes.get(group.messages)
+  if(!messages){messages=new Map(group.messages.map(message=>[message.messageId,message]));topicMessageIndexes.set(group.messages,messages)}
+  return indexedTopicRefs(group,topic,revision).slice(offset,offset+limit).map(([unitId, entry]) => {
     const { messageId, messageVersion: version, unitRevision } = entry
-    const current = group.messages.find((message) => message.messageId === messageId)
+    const current = messages.get(messageId)
     const fact = current?.messageVersion === version ? current : current?.facts?.find((item) => item.messageVersion === version)
     if (!fact) throw new Error(`topic_message_fact_missing:${messageId}:${version}`)
     const unit = fact.units?.find((item) => item.unitId === unitId && item.unitRevision === unitRevision)

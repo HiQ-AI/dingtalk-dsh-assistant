@@ -1,3 +1,5 @@
+import {indexObserverRunEvidence,indexObserverItemEvidence,observerEvidencePage,observerEvidenceBinding} from './observer-evidence-pages.js'
+import {installObserverTracePages,observerTracePage} from './observer-trace-pages.js'
 import { reduceTaskOwnerCommand, queryTaskOwner } from './task-owner-store.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { executionDigest } from './execution-artifacts.js'
@@ -321,6 +323,7 @@ export function installMessageSchema(db) {
     CREATE TABLE message_groups(conversation_id TEXT PRIMARY KEY,body TEXT NOT NULL CHECK(json_valid(body))) STRICT;
     CREATE TABLE message_workflows(digest TEXT PRIMARY KEY,body TEXT NOT NULL CHECK(json_valid(body))) STRICT;`)
   installMessageTopics(db)
+  installObserverTracePages(db,{migrate:true})
 }
 export function validateMessageSchema(db) {
   if (!db.prepare("SELECT name FROM sqlite_master WHERE name='message_meta'").get()) fail('MESSAGE_SCHEMA_MISSING')
@@ -333,10 +336,10 @@ export function validateMessageSchema(db) {
   validateMessageTopics(db)
 }
 const rows = (db,runId,kind) => db.prepare('SELECT body FROM message_items WHERE run_id=? AND kind=? ORDER BY rowid').all(runId,kind).map(r=>JSON.parse(r.body))
-const put = (db,runId,kind,item) => { const existing=db.prepare('SELECT run_id FROM message_items WHERE item_id=?').get(kind+':'+item.id);if(existing&&existing.run_id!==runId)fail('MESSAGE_IDENTITY_CONFLICT');return db.prepare('INSERT INTO message_items VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET body=excluded.body').run(kind+':'+item.id,runId,kind,json(item)) }
+const put = (db,runId,kind,item) => { const existing=db.prepare('SELECT run_id FROM message_items WHERE item_id=?').get(kind+':'+item.id);if(existing&&existing.run_id!==runId)fail('MESSAGE_IDENTITY_CONFLICT');const result=db.prepare('INSERT INTO message_items VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET body=excluded.body').run(kind+':'+item.id,runId,kind,json(item));indexObserverItemEvidence(db,runId,kind,item);return result }
 const get = (db,kind,id) => { const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get(kind+':'+id); if(!row) fail('MESSAGE_ITEM_NOT_FOUND'); return JSON.parse(row.body) }
 const run = (db,id) => { const r=db.prepare('SELECT body FROM message_runs WHERE run_id=?').get(str(id)); if(!r) fail('MESSAGE_RUN_NOT_FOUND'); return JSON.parse(r.body) }
-const save = (db,r) => db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(json(r),r.runId)
+const save = (db,r) => {const result=db.prepare('UPDATE message_runs SET body=? WHERE run_id=?').run(json(r),r.runId);indexObserverRunEvidence(db,r);return result}
 function topicRunsStatus(db,topicId,intentStatus){
   for(const row of db.prepare("SELECT DISTINCT r.body FROM message_topic_bindings b JOIN message_runs r ON r.run_id=b.run_id JOIN message_sources s ON s.source_key=r.source_key AND s.current_version=COALESCE(json_extract(r.body,'$.validSourceVersion'),r.source_version) WHERE b.topic_id=?").all(topicId)){
     const r=JSON.parse(row.body);if(r.status==='superseded')continue;r.intentStatus=intentStatus;save(db,r)
@@ -1235,7 +1238,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     original.validSourceVersion=a.sourceVersion;save(db,original)
     const alias={...old,runId:str(a.runId),sourceVersion:a.sourceVersion,aliasOf:original.runId,status:'alias',createdAt:now}
     delete alias.validSourceVersion
-    db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(alias.runId,alias.sourceKey,alias.sourceVersion,json(alias))
+    db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(alias.runId,alias.sourceKey,alias.sourceVersion,json(alias));indexObserverRunEvidence(db,alias)
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(alias.sourceVersion,alias.sourceKey)
     registerMessageImpact(db,alias,now)
     return {result:{run:original,alias}}
@@ -1291,7 +1294,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
       context:{...old.context,...(a.compactPolicy !== undefined ? {compactPolicy:str(a.compactPolicy)} : {}),occurredAt:old.context?.occurredAt??origin.context?.occurredAt??origin.createdAt,replayOf:origin.runId,replayOfSequenceId:sequence},snapshot:null,
       budgetBaseline:spent,policy:{...old.policy,...a.policy}}
     delete next.activatedAt;delete next.executionStartedAt;delete next.reason;delete next.capacityRetryVersion;delete next.attentionScope;delete next.attentionUnitIds;delete next.coordinatorConsumed
-    db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next))
+    db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(next.runId,next.sourceKey,next.sourceVersion,json(next));indexObserverRunEvidence(db,next)
     db.prepare('UPDATE message_sources SET current_version=? WHERE source_key=?').run(next.sourceVersion,next.sourceKey)
     // Transfer the fence to the new source; only its final decision may release it.
     const replayBarriers=rows(db,old.runId,'barrier').filter(item=>item.status==='pending')
@@ -1317,7 +1320,7 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
     db.prepare('INSERT INTO message_sources(source_key,current_version) VALUES(?,?) ON CONFLICT(source_key) DO UPDATE SET current_version=excluded.current_version').run(a.sourceKey,a.sourceVersion)
     const r={...a,revision:0,status:'pending',routingStatus:'routing_pending',intentStatus:null,createdAt:now,policy:{...a.policy},snapshot:null}
     const group=db.prepare('SELECT body FROM message_groups WHERE conversation_id=?').get(a.conversationId);if(group){const g=JSON.parse(group.body);r.engineEpoch=g.epoch;if(g.state!=='active'||g.engine!=='workflow')r.status='buffered'}
-    db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(a.runId,a.sourceKey,a.sourceVersion,json(r))
+    db.prepare('INSERT INTO message_runs VALUES(?,?,?,?)').run(a.runId,a.sourceKey,a.sourceVersion,json(r));indexObserverRunEvidence(db,r)
     registerMessageImpact(db,r,now)
     for(const b of inheritedBarriers){b.previousOwnerRunId=b.ownerRunId;b.ownerRunId=r.runId;db.prepare('UPDATE message_items SET run_id=?,body=? WHERE item_id=?').run(r.runId,json(b),'barrier:'+b.id)}
     if(source)put(db,r.runId,'barrier',{id:'edit:'+r.runId,ownerRunId:r.runId,targetSourceKey:r.sourceKey,status:'pending',createdAt:now,reason:'source_edit'})
@@ -1863,6 +1866,8 @@ export function reduceMessageCommand(db,{kind,args:a},ctx) {
   fail('MESSAGE_UNKNOWN_COMMAND')
 }
 export function queryMessages(db,a) {
+  if(a.kind==='message.trace.page')return observerTracePage(db,a)
+  if(a.kind==='message.run.header')return run(db,a.runId)
   if(a.kind==='message.barrier.no-action'){const checked=noActionBarrierState(db,run(db,str(a.runId)));return {eligible:checked.eligible,expectedDigest:checked.expectedDigest,barrierIds:checked.barriers.map(b=>b.id)}}
   if(a.kind==='message.clarification.recover.check')return inspectClarificationRecovery(db,a)
   if(a.kind==='message.topic.reconcile.check')return topicReconciliationView(inspectTopicReconciliation(db,a))
@@ -1937,6 +1942,9 @@ export function queryMessages(db,a) {
           AND (b.unit_id IS NULL OR json_extract(i.body,'$.blockedReason') IS NOT NULL)))
     ORDER BY r.rowid`).all(str(a.conversationId)).map(row=>JSON.parse(row.body)).filter(r=>!a.topicId||pendingAffectsTopic(db,r,a.topicId))
   if(a.kind==='message.task.version')return taskFactVersion(db,a.taskId)
+  if(a.kind==='message.evidence.page')return observerEvidencePage(db,a)
+  if(a.kind==='message.evidence.binding')return observerEvidenceBinding(db,a)
+  if(a.kind==='message.evidence.header'){const row=db.prepare("SELECT json_object('runId',run_id,'conversationId',json_extract(body,'$.conversationId')) body FROM message_runs WHERE run_id=?").get(str(a.runId));return row?JSON.parse(row.body):null}
   if(a.kind==='message.material'){const row=db.prepare('SELECT body FROM message_items WHERE item_id=?').get('material:'+json([str(a.runId),str(a.resourceRef)]));return row?JSON.parse(row.body).material:null}
   if(a.kind==='message.request')return get(db,'request',a.requestId)
   if(a.kind==='message.outboundByMessage') {

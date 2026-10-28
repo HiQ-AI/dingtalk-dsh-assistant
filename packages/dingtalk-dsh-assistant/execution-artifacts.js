@@ -1,3 +1,5 @@
+import {writeObserverArtifactText,readObserverArtifactText} from './observer-artifact-pages.js'
+import {describeTaskNodeOutput} from './node-output-readout.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, stat, lstat, link, unlink, readdir, writeFile, rename } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
@@ -33,7 +35,7 @@ export function parseArtifactReference(ref) {
   return { logicalTaskId: match[1], fileName: match[2], digest: match[3] }
 }
 
-export async function openExecutionArtifacts({ directory, initialize = false, taskWorkspaceRoot, getTaskDirectories }) {
+export async function openExecutionArtifacts({ directory, initialize = false, taskWorkspaceRoot, getTaskDirectories,observerPageBindings }) {
   if (typeof directory !== 'string' || !directory) throw executionError('ARTIFACT_DIRECTORY_REQUIRED')
   const root = resolve(directory)
   if (initialize) await mkdir(root, { recursive: true })
@@ -56,6 +58,31 @@ export async function openExecutionArtifacts({ directory, initialize = false, ta
     if (createHash('sha256').update(bytes).digest('hex') !== identity.digest) throw executionError('ARTIFACT_DIGEST_MISMATCH')
     return JSON.parse(bytes.toString('utf8'))
   }
+  const localPageBindings=new Map()
+  async function indexObserverPages(ref,value,{nodeId,context={},replace=false,messageOutput=nodeId===undefined,strictContext=true}={}) {
+    const path=locate(ref)
+    const write=async(view,text,extra)=>{const meta=await writeObserverArtifactText(path,view,text,extra,{replace});if(observerPageBindings)await observerPageBindings.put({ref,view,root:meta.bindingRoot});else localPageBindings.set(JSON.stringify([ref,view]),meta.bindingRoot);return meta}
+    const outputText=[value?.summary??value?.reply??'本次执行未生成答复正文。',...(value?.limitations?.length?['\n已知限制',...value.limitations]:[])].join('\n')
+    if(messageOutput)await write('message-output',outputText)
+    if(value?.kind==='agent-query-evidence'){
+      const text=[`读取时间：${value.observedAt??'未记录'}`,'来源：',...(value.verification?.sourceRefs??[]),'\n读取结果',typeof value.result==='string'?value.result:JSON.stringify(value.result,null,2)].join('\n')
+      await write('message-query-evidence',text,{runId:value.execution?.runId??null})
+    }
+    if(nodeId){
+      if(nodeId==='prepare-workspace'&&!value?.workspace&&!context.workspace||nodeId==='prepare-generation'&&!value?.startingPoint&&!context.startingPoint){if(strictContext)throw executionError('OBSERVER_TEXT_CONTEXT_REQUIRED');return}
+      const result=describeTaskNodeOutput({nodeId},value,context)
+      await write(`node:${nodeId}`,result.text,{overview:result.overview,documentName:result.document?.name??null,pathOnly:['inspect-and-propose','propose-changes','validate-proposal'].includes(nodeId)&&!(nodeId==='inspect-and-propose'&&value?.document?.markdown&&Array.isArray(value.scopePaths)&&Array.isArray(value.criteria))})
+    }
+  }
+  async function readObserverPage(ref,view,options={}){
+    const path=locate(ref),identity=parseArtifactReference(ref)
+    if(identity.logicalTaskId)await checkedTaskDirectory(dirname(path))
+    const bindingRoot=observerPageBindings?await observerPageBindings.get({ref,view}):localPageBindings.get(JSON.stringify([ref,view]))
+    if(!bindingRoot)throw executionError('OBSERVER_TEXT_MIGRATION_REQUIRED')
+    const result=await readObserverArtifactText(path,view,{...options,bindingRoot})
+    if(identity.logicalTaskId)await checkedTaskDirectory(dirname(path))
+    return result
+  }
   async function put(value, scope = {}) {
     let logicalTaskId
     if (scope.reference !== undefined && taskWorkspaceRoot) logicalTaskId = parseArtifactReference(scope.reference).logicalTaskId
@@ -77,9 +104,10 @@ export async function openExecutionArtifacts({ directory, initialize = false, ta
       if (error.code !== 'EEXIST') throw error
       await read(ref) // 已存在的内容必须真实完整，绝不悄悄覆盖坏工件。
     } finally { await file?.close(); await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error }) }
+    if(scope.observerNodeId||scope.observerMessageOutput===true||value?.kind==='agent-query-evidence')await indexObserverPages(ref,value,{nodeId:scope.observerNodeId,context:scope.observerContext,messageOutput:scope.observerMessageOutput===true,strictContext:false})
     return { ref, digest }
   }
-  return { put, read, root, locate, getTaskDirectories }
+  return { put, read, root, locate, getTaskDirectories,readObserverPage,indexObserverPages }
 }
 
 /** 复用Task目录读取材料或产物；相对路径不允许越界和链接跳转。 */
