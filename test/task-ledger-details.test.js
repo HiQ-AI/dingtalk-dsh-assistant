@@ -181,3 +181,15 @@ test('legacy inline rows are readable and only changed records become externaliz
   await f.store.command({id:'claim',kind:'task.claim',args:{taskId:'task'}})
   assert.ok(inspect(f.dbPath,d=>JSON.parse(d.prepare("SELECT body FROM dynamic_tasks WHERE id='task'").get().body)._hostDetail))
 })
+
+test('missing legacy drain metadata remains a recovery obligation rather than presumed quiescent',async t=>{
+  const f=await fixture(t)
+  await f.store.command({id:'create',kind:'task.create',args:{taskId:'task',request:'legacy'}})
+  const original=await f.store.query({kind:'task.get',taskId:'task'})
+  await f.close(); delete original.drained
+  const db=new DatabaseSync(f.dbPath)
+  db.prepare("UPDATE dynamic_tasks SET body=? WHERE id='task'").run(JSON.stringify(original));db.close()
+  await f.reopen()
+  assert.equal((await f.store.query({kind:'task.get',taskId:'task'})).recovering,true)
+  assert.equal((await f.store.query({kind:'recovery.pending'})).tasks[0].taskId,'task')
+})

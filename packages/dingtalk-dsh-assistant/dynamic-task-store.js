@@ -446,7 +446,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       for (const operation of startupOperations) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
       const blockingExecutions = new Set(startupOperations.filter(operationBlocksRecovery).map(operation => JSON.stringify([operation.taskId, operation.executionId])))
       for (const notification of all('dynamic_notifications', "WHERE json_extract(body,'$.state')='starting'")) { notification.state = 'unknown'; put('dynamic_notifications', notification) }
-      for (const execution of all('dynamic_executions', "WHERE coalesce(json_extract(body,'$.drained'),1)=0")) {
+      for (const execution of all('dynamic_executions', "WHERE coalesce(json_extract(body,'$.drained'),0)=0")) {
         execution.recovering = true
         const segment = execution.timeline?.segments.at(-1)
         if (segment?.state === 'running') { segment.state = 'unknown'; execution.timeline.complete = false }
@@ -461,7 +461,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           runSequence: get('dynamic_tasks', execution.taskId).runSequence, contextRevision: null, instructionIds: [], boundAt: now() }
         put('dynamic_executions', execution)
       }
-      for (const task of all('dynamic_tasks', "WHERE coalesce(json_extract(body,'$.drained'),1)=0")) { task.recovering = true; saveTask(task) }
+      for (const task of all('dynamic_tasks', "WHERE coalesce(json_extract(body,'$.drained'),0)=0")) { task.recovering = true; saveTask(task) }
       for (const group of all('dynamic_groups')) if (!group.drained) { group.recovering = true; put('dynamic_groups', group) }
       importLegacy()
       // 旧版活动执行未取得资源锁，不能在升级恢复时伪造此前已串行的保证。
@@ -2117,9 +2117,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'group.get') value = get('dynamic_groups', q.groupId, true)
       else if (q.kind === 'group.list') value = all('dynamic_groups')
       else if (q.kind === 'receipt.get') { const row = db.prepare('SELECT body FROM dynamic_receipts WHERE id=?').get(q.id); value = row ? decode(row.body, 'dynamic_receipts', q.id) : null }
-      else if (q.kind === 'recovery.pending') value = { tasks: all('dynamic_tasks', "WHERE coalesce(json_extract(body,'$.drained'),1)=0"),
-        groups: all('dynamic_groups').filter(item => !item.drained), executions: all('dynamic_executions', "WHERE coalesce(json_extract(body,'$.drained'),1)=0 OR json_extract(body,'$.status')='queued'"),
-        operations: all('dynamic_operations', "WHERE json_extract(body,'$.state') NOT IN ('succeeded','failed','cancelled')").filter(item => operationBlocksRecovery(item)), notifications: all('dynamic_notifications', "WHERE json_extract(body,'$.state') NOT IN ('delivered','failed')"), legacy: legacy() }
+      else if (q.kind === 'recovery.pending') value = { tasks: all('dynamic_tasks', "WHERE coalesce(json_extract(body,'$.drained'),0)=0"),
+        groups: all('dynamic_groups').filter(item => !item.drained), executions: all('dynamic_executions', "WHERE coalesce(json_extract(body,'$.drained'),0)=0 OR json_extract(body,'$.status')='queued'"),
+        operations: all('dynamic_operations', "WHERE coalesce(json_extract(body,'$.state'),'') NOT IN ('succeeded','failed','cancelled')").filter(item => operationBlocksRecovery(item)), notifications: all('dynamic_notifications', "WHERE coalesce(json_extract(body,'$.state'),'') NOT IN ('delivered','failed')"), legacy: legacy() }
       else fail('DYNAMIC_QUERY_UNKNOWN', q.kind)
       if (q.kind === 'task.get' && value && restartReopenEligible(value)) value = { ...value, restartRecoveryEligible: true }
       if (q.kind === 'task.list') value = value.map(task => restartReopenEligible(task) ? { ...task, restartRecoveryEligible: true } : task)
