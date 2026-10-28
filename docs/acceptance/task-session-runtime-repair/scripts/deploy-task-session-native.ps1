@@ -91,7 +91,7 @@ if($RestartMaintenanceProposal){
  $maintenanceProposalHash=Hash $RestartMaintenanceProposal
  $maintenanceArgs=@('online',[string]$ExpectedPid,$RestartMaintenanceProposal)
 }
-$ledgerProof=RunNode (@($ledger,$db,$agentWorkspace)+$maintenanceArgs)
+$ledgerProof=if($RestartMaintenanceProposal){RunNode (@($ledger,$db,$agentWorkspace)+$maintenanceArgs)}else{RunNode @($ledger,'current-control',$db,'online',[string]$ExpectedPid)}
 if($PtyUpgradeProposal){$ptyProposalSha256=Hash $PtyUpgradeProposal;$ptyCheck=RunNode @($ptyHelper,'check',$profile,$PtyUpgradeProposal);if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'}}
 $artifactPolicyCheck=$null
 if($ArtifactPolicyProposal){
@@ -123,14 +123,19 @@ try{
    Record 'restart-maintenance-preflight' ($ledgerProof|ConvertFrom-Json)
  }
  $phase='native-dispose'
+ $originalDescendants=@(Descendants $ExpectedPid)
  $signalOut=Join-Path $EvidenceDirectory 'signal.json';$signalErr=Join-Path $EvidenceDirectory 'signal.stderr.log'
  $signalArgs=@('-NoProfile','-File',(Join-Path $PSScriptRoot 'stop-web-console.ps1'),'-ExpectedPid',[string]$ExpectedPid)
  $signaler=Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList $signalArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput $signalOut -RedirectStandardError $signalErr
  $signaler.WaitForExit();if($signaler.ExitCode){throw 'DEPLOY_NATIVE_SIGNAL_FAILED'}
  WaitFor {
   if(Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue){return $false}
+  foreach($child in $originalDescendants){
+   $remaining=Get-CimInstance Win32_Process -Filter "ProcessId=$($child.ProcessId)" -ErrorAction SilentlyContinue
+   if($remaining -and $remaining.CreationDate -eq $child.CreationDate){return $false}
+  }
   if((PortOwners 3080).Count-or(PortOwners 18998).Count){return $false}
-  try{$offlineArgs=@($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid);if($RestartMaintenanceProposal){$offlineArgs+=$RestartMaintenanceProposal};$script:offlineProof=RunNode $offlineArgs;return $true}catch{return $false}
+  try{$offlineArgs=if($RestartMaintenanceProposal){@($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid,$RestartMaintenanceProposal)}else{@($ledger,'current-control',$db,'offline',[string]$ExpectedPid)};$script:offlineProof=RunNode $offlineArgs;return $true}catch{return $false}
  } 'DEPLOY_NATIVE_NOT_QUIESCENT'
  if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
  Record 'quiescent' @{ledger=($offlineProof|ConvertFrom-Json);pid=$ExpectedPid;creationDate=$original.CreationDate;remainingDescendants=0;runtimePortClosed=$true;observedAt=[DateTime]::UtcNow.ToString('o');shutdown='SIGINT'}

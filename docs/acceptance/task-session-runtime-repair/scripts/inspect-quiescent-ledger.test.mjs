@@ -235,3 +235,40 @@ for(const kind of ['hardlink','ancestor-link'])test(`Claude journal ${kind} is r
  assert.throws(()=>inspectLedger(f.path,f.root),/DEPLOY_CLAUDE_LOG_PATH_INVALID/)
  assert.deepEqual(await readFile(target),before)
 })
+
+test('ordinary package control checks current ownership, drain and effects without historic logs', async t => {
+ const { inspectCurrentControl } = await import('./inspect-quiescent-ledger.mjs')
+ const { path, db } = await unstartedFixture(t)
+ db.prepare("UPDATE dynamic_meta SET value=? WHERE key='owner'").run(`${process.pid}:current`)
+ for (const name of ['tasks','executions','groups']) db.exec(`DELETE FROM dynamic_${name}`)
+ db.prepare('INSERT INTO dynamic_tasks VALUES (?)').run(JSON.stringify({taskId:'old',sessionBound:true,sessionId:'missing-history',drained:true}))
+ assert.equal(inspectCurrentControl(path,'online',process.pid).scope,'current-control')
+ assert.throws(()=>inspectCurrentControl(path,'offline',process.pid),/OWNER_NOT_RELEASED/)
+ assert.throws(()=>inspectCurrentControl(path,'online',1),/OWNER_IDENTITY/)
+ assert.throws(()=>inspectCurrentControl(path,'bad',process.pid),/MODE_INVALID/)
+ for (const name of ['tasks','executions','groups']) {
+  db.prepare(`INSERT INTO dynamic_${name} VALUES (?)`).run(JSON.stringify({drained:false}))
+  assert.throws(()=>inspectCurrentControl(path,'online',process.pid),/NOT_DRAINED/)
+  db.exec(`DELETE FROM dynamic_${name} WHERE json_extract(body,'$.drained')=0`)
+ }
+ for (const name of ['operations','notifications']) {
+  db.prepare(`INSERT INTO dynamic_${name} VALUES (?)`).run(JSON.stringify({state:'starting'}))
+  assert.throws(()=>inspectCurrentControl(path,'online',process.pid),/STARTING_EFFECT/)
+  db.exec(`DELETE FROM dynamic_${name}`)
+  db.prepare(`INSERT INTO dynamic_${name} VALUES (?)`).run(JSON.stringify({state:'unknown'}))
+ }
+ const child=spawnSync(process.execPath,['-e',''],{windowsHide:true});assert.equal(child.status,0)
+ db.prepare("UPDATE dynamic_meta SET value=? WHERE key='owner'").run(`${child.pid}:stale`)
+ const proof=inspectCurrentControl(path,'offline',child.pid)
+ assert.equal(proof.staleOwner,true);assert.equal(proof.unknownOperations,1);assert.equal(proof.unknownNotifications,1)
+ assert.equal(db.prepare("SELECT value FROM dynamic_meta WHERE key='owner'").get().value,`${child.pid}:stale`)
+})
+
+test('ordinary deployment selects current controls while maintenance retains historical audit and captured child identities', async () => {
+ const source = await readFile(new URL('./deploy-task-session-native.ps1', import.meta.url), 'utf8')
+ assert.match(source, /\$ledgerProof=if\(\$RestartMaintenanceProposal\).*\$agentWorkspace.*else\{RunNode @\(\$ledger,'current-control',\$db,'online'/)
+ assert.match(source, /\$offlineArgs=if\(\$RestartMaintenanceProposal\).*\$agentWorkspace.*else\{@\(\$ledger,'current-control',\$db,'offline'/)
+ assert.ok(source.indexOf('$originalDescendants=@(Descendants $ExpectedPid)') < source.indexOf('$signaler=Start-Process'))
+ assert.match(source, /foreach\(\$child in \$originalDescendants\)/)
+ assert.match(source, /\$remaining\.CreationDate -eq \$child\.CreationDate/)
+})

@@ -1,6 +1,6 @@
 # 进度询问与协调通知全路径修复
 
-> 状态：COMPLETE
+> 状态：ACTIVE
 > Goal ID：coordination-progress-notifications-20261028
 > 最近维护：2026-10-28T11:29:21+08:00
 > 权威目标：D:/codex/worktrees/coordination-progress-notifications/dingtalk-dsh-assistant/docs/acceptance/coordination-progress-notifications/goal.md
@@ -27,10 +27,14 @@
 | SG3 | 通知生成与触发修复 | 具体事项、准确状态、无无价值重复 | 已完成 | round-3.md，41项摘要测试通过 |
 | SG4 | 集成验证与交付 | 定向测试、文档、PR 独立回读 | 已完成 | 302项集成及127项最终回归通过；PR #281 OPEN独立回读 |
 
+| SG5 | 受控本地部署 | 包摘要、安装版本、新进程、健康及旧观察止扰只读核验 | 已完成 | docs/tmp/coordination-progress-deployment-20261028/ |
+
+| SG6 | 历史错误协调正式收口 | 精确退役原纯观察安排，保留四任务及已送达，工作不再待核对 | 进行中 | 用户现场反馈，待正式入口 |
+
 ## 当前检查点
-- 当前子目标：SG4
-- 唯一下一步：本轮源码交付已完成；上线时按更新runbook安装并独立核验。
-- 未闭环项：本轮源码交付无；正式安装和真实模型/渠道未验证，不能声称线上已修复。
+- 当前子目标：SG6
+- 唯一下一步：实现并验证历史纯观察精确退役入口，安装后正式收口原协调。
+- 未闭环项：用户已授权本地部署，正在准备；真实模型和渠道不通过发送消息制造验收。
 
 ## 进展
 - 2026-10-28：主检出较旧，已 fetch 并创建最新 main 独立 worktree。最新 coordination-summary.js 有固定“原事项”和版本变化文案，但递归来源尚未证实。
@@ -45,3 +49,8 @@
 - 正式 profile：D:/dsh_home/profiles/web/cordis.patch.yml；存储配置指向 D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116；Assistant 端口 18998；当前动态账本为 D:/baibu-agent/.dsh/task-sessions.sqlite。
 
 - PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/281；2026-10-28独立回读 number=281,state=OPEN。
+
+- 2026-10-28：用户明确授权部署；PR #281 已 MERGED，merge SHA 4a6471d4cf4fc5b680a7d31c1427e1ec60113456。源码与当前 HEAD 无差异。正式任务会话实例无旧 workflow maintenance，按 task-session-clean-start 原生双包入口部署。
+
+
+- 2026-10-28：SG5本地部署完成，新PID32564，Assistant2.2.1，包SHA256 2409c86b9b38f4fe619fef2c060bf3109d495f5ef89a140f51fa26fd917fd3f7；配置摘要保持，transportReady=true，degraded/3为部署前已有。旧汇总revision10、通知11、已送达10保持；当前安装代码投影验证四事项标题，历史aggregate缓存未刷新。证据docs/tmp/coordination-progress-deployment-20261028。非必要全库扫描精简仍待修复。

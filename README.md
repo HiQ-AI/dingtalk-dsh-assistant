@@ -6,6 +6,8 @@
 
 运行看板的 **协调工作** 页按持久实体展示：每笔定时安排跨改期只有一行，独立无计划触发按触发身份展示，其余不受计划管理的任务按协调批次展示一笔调度；创建、修改和查询消息只作历史，不重复成工作。默认按既有群列表顺序选中首个有效群，保留手选、紧凑列表、分页、5 秒刷新、独立键盘焦点及任务详情往返。列表只有一个实际主要结果：提醒的发送失败、送达未知、待送达和已送达按真实通知事实表达；任务协调突出“前置任务正式完成 → 调度目标任务”的关系，只报告等待前置、待调度、调度成功或真实调度失败，不混入目标任务的执行中或完成状态。目标任务执行由其任务页面负责；等待前置时列出尚未满足的具体任务并支持跳转。调度成功只能来自真实命令回执，不能从目标任务 active、fulfilled 或 completed 反推。详情分开显示计划控制、实际触发结果与真实后续触发/重试记录，取消或暂停不抹去已有送达和失败事实；无记录不承诺重试。原文、变更、历史触发与证据按需展开。实体接口为 `/state/coordination-work`，旧来源接口保留历史诊断，不制造未接纳或被拒绝输入的工作行。读取沿用本机 resident 的 Host/Origin 边界，正文与证据不是脱敏公共导出。见[看板设计合同](docs/manual/observer-design-contract.md)和[API 合同](docs/api/coordination-observer.md)；源码功能不表示共享部署已升级。
 
+历史上由纯进度询问误建的独立观察协调，可通过本地 `POST /coordination/:id/retire-observation/check` 零写核对，再向同路径去掉 `/check` 提交精确退役；请求绑定 `groupId`、协调来源 `sourceId`、`expectedRevision` 和 `reason`，操作者取已配置的 Web 身份。只有无执行命令、定时计划或下游依赖的纯观察安排可退役。原任务、来源、历史完成证明和已开始/未知/已送达通知保持；未开始发送的候选通知退役，不另发群消息。协调工作保留原行并显示“错误观察已退役”，详情仍可查原证据。接口与拒绝条件见 [API 合同](docs/api/coordination-observer.md)。
+
 `dingtalk-dsh-assistant` 把钉钉群聊接入 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness)。当前 resident 将消息单元独占交给话题链或独立任务协调层：普通讨论与单项交办沿话题处理，多任务安排和定时计划可不依附 Topic，直接关联原 Task，不创建一个总 Task 替代它们。任务会话（Owner）持续负责完整目标，独立执行会话使用所选后端的实际工具完成受托工作。
 
 当前源码不再装配固定 workflow、DAG、阶段或节点调度器。从旧 workflow 体系切换到任务会话体系，按[任务会话清洁启动 Runbook](docs/ops/task-session-clean-start.md)使用全新任务库与 Resident domain，保留隔离的旧数据，不导入旧任务或重发旧通知。已经使用任务会话体系的实例升级协调账本，则按[协调账本 v1→v2 迁移 Runbook](docs/ops/coordination-ledger-migration.md)保留原任务与回执；不要把这两种升级场景混用。本文描述源码行为，不表示已发布、已部署或通过真实钉钉验收。

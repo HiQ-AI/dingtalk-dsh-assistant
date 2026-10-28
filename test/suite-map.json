@@ -3905,6 +3905,7 @@
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
+        "packages/dingtalk-dsh-assistant/http.js",
         "packages/dingtalk-dsh-assistant/independent-coordination-planner.js",
         "packages/dingtalk-dsh-assistant/independent-coordination-service.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
@@ -3935,7 +3936,8 @@
         "packages/dingtalk-dsh-assistant/task-topic-coordinator.js",
         "packages/dingtalk-dsh-assistant/tool-schema.js",
         "packages/dingtalk-dsh-assistant/topic-model.js",
-        "packages/dingtalk-dsh-assistant/topic-runtime.js"
+        "packages/dingtalk-dsh-assistant/topic-runtime.js",
+        "packages/dingtalk-dsh-assistant/version-check.js"
       ],
       "retainedCompatibilityImports": [],
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"

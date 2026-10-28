@@ -398,6 +398,19 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, value ? 200 : 404, value ?? { error: 'coordination_work_not_found' })
     } catch (error) { return send(response, error instanceof URIError || error.message === 'coordination_query_invalid' ? 400 : 503, { error: error instanceof URIError || error.message === 'coordination_query_invalid' ? 'coordination_query_invalid' : 'coordination_observer_unavailable' }) }
   }
+  const retireObservation = request.method === 'POST' && /^\/coordination\/([^/]+)\/retire-observation(\/check)?$/u.exec(url.pathname)
+  if (retireObservation) {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+    if (!store.retireCoordinationObservation) return send(response, 503, { error: 'coordination_retirement_unavailable' })
+    try {
+      if (url.searchParams.size) return send(response, 400, { error: 'coordination_retirement_invalid' })
+      const parsed = z.strictObject({ groupId: z.string().trim().min(1), sourceId: z.string().trim().min(1),
+        expectedRevision: z.number().int().positive(), reason: z.string().trim().min(1).max(2000) }).safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'coordination_retirement_invalid' })
+      return send(response, 200, await store.retireCoordinationObservation({ ...parsed.data,
+        coordinationId: decodeURIComponent(retireObservation[1]), checkOnly: Boolean(retireObservation[2]) }))
+    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+  }
   if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, await (store.listTaskView?.() ?? store.listTasks()))
   const topicState = request.method === 'GET' && /^\/state\/topics\/([^/]+)\/context$/u.exec(url.pathname)
   if (topicState) {

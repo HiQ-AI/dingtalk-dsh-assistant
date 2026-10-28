@@ -422,7 +422,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     db?.close(); livePaths.delete(pathKey); throw error
   }
 
-  const coordination = coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, now,
+  const coordination = coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, now, webActorId,
     validateOwner: binding => currentTask(binding),
     triggerState: id => schedules.memberTriggerState(id),
     notifyTask: (taskId, payload) => wake(taskId, 'coordination.changed', payload, `coordination-change:${payload.sourceId}:${payload.instructionId}`),
@@ -597,6 +597,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (a.change.action === 'resolve' && a.change.schedule) result.schedule = schedules.command('coordination.schedule.create', { ...a.change.schedule, coordinationId: result.coordination.id }).schedule
       }
       if (kind === 'coordination.cancel') schedules.cancelCoordination(a.coordinationId)
+      if (kind === 'coordination.retireObservation') {
+        const snapshot = currentCoordinationSnapshot(result.coordination)
+        result.coordination.lifecycleState = snapshot.state; result.coordination.aggregateSnapshot = snapshot
+        result.coordination.aggregateDigest = digest(snapshot)
+        put('dynamic_coordination', result.coordination)
+      }
       return changed(result)
     }
     if (kind === 'task.coordination.input') {
@@ -1941,6 +1947,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       record(q)
       let value
       if (q.kind === 'ingress.policy') value = { instanceId, ingressEpoch: boundIngressEpoch }
+      else if (q.kind === 'coordination.retireObservation.check') value = coordination.checkObservationRetirement(q)
       else if (q.kind === 'coordination.runtime') value = JSON.parse(db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value ?? '{"mode":"active"}')
       else if (q.kind === 'coordination.assessments') value = all('dynamic_coordination_members').filter(m => m.taskId === q.taskId
         && m.control !== 'cancelled' && get('dynamic_coordination',m.coordinationId).state === 'active'

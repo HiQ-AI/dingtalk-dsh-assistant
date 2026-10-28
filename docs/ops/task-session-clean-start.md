@@ -279,3 +279,13 @@ DSH新版不再支持subagent配置的toolFilter。当前配置中仅拒绝4个s
 ## 协调调度关系只读升级
 
 A 正式完成后调度 B 的关系投影及任务页前置等待说明同时修改 Assistant 与 Observer，无 schema 迁移，不重建业务库、不重放触发或通知。沿用本页原生双包 Check、排空、退出、安装和独立回读流程；部署核对包 SHA/版本、profile、新旧 PID、3080/18998、健康、入站与自启恢复后，再用既有真实关系只读验收。协调页只表达等待前置、待下发、下发成功/失败及真实原因，B 的执行或完成状态仅在 B 任务页；不能据 B active/fulfilled 猜测协调成功。任务页前置等待须可点击具体前置任务，多前置依真实 all 契约列未满足项，不虚构任一触发。隔离正式命令夹具覆盖等待到下发，生产不可为截图手改任务/回执；不存在真实等待中的关系时，应明确原生等待态未验证，而不是造生产状态。合法实体 ID 往返、单次计划时区与取消前未发送文案随本版只读修正，既有真实发送结果仍保留。
+
+### 普通换包与历史恢复检查边界
+
+原生部署脚本的普通换包在 Check 和退出后使用 `inspect-quiescent-ledger.mjs current-control <db> online|offline <expectedPid>`：在同一只读事务中核对原 owner 身份、当前 Task/Execution/Group 的 drained 与 operation/notification 的 starting。unknown 保留原记录，不重放。普通换包不执行全库 quick_check，也不扫描已经排空的历史会话日志；检查快照仍不是原子排空，必须经过原生 SIGINT、精确旧 PID 和子进程退出、端口关闭后再核对控制事实。双包与 profile SHA、安装结果、新 PID 和启动健康门禁不变。
+
+`-RestartMaintenanceProposal` 仍走完整 inspectLedger 历史恢复审计；冷启动和运行时原有完整性检查也保持不变。本次缩短的是普通部署前后重复历史审计，不降低启动恢复合同。
+
+### 历史纯观察协调正式退役
+
+先 POST `/coordination/:id/retire-observation/check`，再向去掉 `/check` 的同一路径提交。两次 body 均为 `{groupId, sourceId, expectedRevision, reason}`；sourceId 必须来自该动态协调，使用本地身份与配置的 webActor。check 零写，提交在事务内重新核对版本和资格：拒绝非观察成员、时间计划、下游依赖或命令执行痕迹。保留原 Task、来源原文、完成证明以及 starting、unknown、delivered 通知，只退役无发送许可的 prepared 通知。该动作不发送群消息；提交后独立读取协调、通知和关联 Task，核对仅目标协调退役及任务事实未变。
