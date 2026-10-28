@@ -9,7 +9,7 @@ import { freezeCoordinationMembers } from '../packages/dingtalk-dsh-assistant/co
 
 async function fixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'artifact-correction-'))
-  const store = await openDynamicTaskStore({ dbPath: join(root, 'tasks.db'), instanceId: 'artifact-correction', initialize: true, webActorId: 'u' })
+  const store = await openDynamicTaskStore({ dbPath: join(root, 'tasks.db'), instanceId: 'artifact-correction', initialize: true, webActorId: options.permission ? 'operator' : 'u' })
   t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }) })
   const command = (kind, args, id = randomUUID()) => store.command({ id, kind, args: JSON.parse(JSON.stringify(args)) })
   const query = (kind, args = {}) => store.query({ kind, ...args })
@@ -44,11 +44,11 @@ async function fixture(t, options = {}) {
   return { store, command, query, before, graph, correction, respond, taskId, members, coordinationId, execution }
 }
 
-for (const variant of ['valid', 'wrong-owner', 'stale-input', 'private', 'missing-source', 'unknown-mode', 'undrained', 'claude', 'operation', 'stale-task']) test(`execution permission correction atomically validates ${variant}`, async t => {
+for (const variant of ['valid', 'wrong-actor', 'untrusted-operator', 'stale-input', 'private', 'missing-source', 'unknown-mode', 'undrained', 'claude', 'operation', 'stale-task']) test(`execution permission correction atomically validates ${variant}`, async t => {
   const f = await fixture(t, { permission: true, backend: variant === 'claude' ? 'claude-code' : 'dsh', undrained: variant === 'undrained', operation: variant === 'operation' })
   const permission = { executionId: f.execution.executionId, expectedInputVersion: variant === 'stale-input' ? 2 : 1,
-    mode: variant === 'unknown-mode' ? 'all' : 'danger-full-access', reason: '恢复原发布', actorId: variant === 'wrong-owner' ? 'other' : 'u', requirementRevision: 1, controlRevision: 1 }
-  const source = { sourceId: 'permission-source', groupId: 'g', messageId: 'permission-source', actorId: 'u', text: '恢复原发布成员原生完整权限', timestamp: '',
+    mode: variant === 'unknown-mode' ? 'all' : 'danger-full-access', reason: '恢复原发布', actorId: variant === 'wrong-actor' ? 'other' : variant === 'untrusted-operator' ? 'u' : 'operator', requirementRevision: 1, controlRevision: 1 }
+  const source = { sourceId: 'permission-source', groupId: 'g', messageId: 'permission-source', actorId: variant === 'untrusted-operator' ? 'u' : 'operator', text: '恢复原发布成员原生完整权限', timestamp: '',
     channel: variant === 'private' ? 'private' : 'web', requestIdentity: { humanRequestId: 'help', ...(variant === 'missing-source' ? {} : { executionPermissionCorrection: permission }) } }
   const args = { taskId: f.taskId, requestId: 'help', sourceId: source.sourceId, source, expectedRequirementRevision: variant === 'stale-task' ? 2 : 1, expectedControlRevision: 1, executionPermissionCorrection: permission }
   const before = await f.query('execution.get', { executionId: f.execution.executionId }), wakes = await f.query('wake.list')
@@ -61,6 +61,7 @@ for (const variant of ['valid', 'wrong-owner', 'stale-input', 'private', 'missin
     return
   }
   await f.command('task.human.respond', args, 'permission-reply')
+  assert.notEqual((await f.query('task.get', { taskId: f.taskId })).ownerActorId, source.actorId)
   const after = await f.query('execution.get', { executionId: f.execution.executionId })
   assert.deepEqual(after.permissionCorrection, { ...permission, sourceId: source.sourceId, recordedAt: after.permissionCorrection.recordedAt })
   for (const key of ['sessionId', 'inputVersion', 'requirementRevision', 'controlRevision', 'status', 'results']) assert.deepEqual(after[key], before[key])

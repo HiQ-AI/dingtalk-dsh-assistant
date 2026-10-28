@@ -1537,7 +1537,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       || !Number.isSafeInteger(correction.expectedInputVersion) || correction.expectedInputVersion < 1 || correction.expectedInputVersion > execution.inputVersion
       || correction.requirementRevision !== task.requirementRevision || correction.controlRevision !== task.controlRevision
       || !['read-only', 'workspace-write', 'danger-full-access'].includes(correction.mode) || !recordedAt
-      || source?.channel !== 'web' || source.actorId !== config.webActorId || source.actorId !== task.ownerActorId
+      || source?.channel !== 'web' || source.actorId !== config.webActorId
       || correction.actorId !== source.actorId || source.groupId !== task.groupId || !task.sourceRefs.includes(sourceId)
       || !task.humanRequests?.some(request => request.requestId === source.requestIdentity?.humanRequestId
         && request.status === 'answered' && request.audience === 'operator' && request.sourceId === sourceId && request.actorId === correction.actorId)
@@ -1567,7 +1567,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (args.executionPermissionCorrection) {
       const correction = args.executionPermissionCorrection
       const execution = await query('execution.get', { executionId: correction.executionId })
-      if (request.audience !== 'operator' || config.webActorId !== task.ownerActorId
+      if (request.audience !== 'operator'
         || execution?.taskId !== task.taskId || execution.inputVersion !== correction.expectedInputVersion
         || !execution.drained || execution.recovering || !['succeeded', 'failed', 'cancelled', 'stale'].includes(execution.status)
         || executionBackend(execution) !== 'dsh' || !['read-only', 'workspace-write', 'danger-full-access'].includes(correction.mode)

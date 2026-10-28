@@ -1063,7 +1063,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const permission = a.executionPermissionCorrection
       if (permission) {
         const execution = get('dynamic_executions', text(permission.executionId, 'executionId'))
-        if (!webReply || request.audience !== 'operator' || source.actorId !== task.ownerActorId || permission.actorId !== source.actorId
+        if (!webReply || request.audience !== 'operator' || permission.actorId !== source.actorId
           || source.requestIdentity?.humanRequestId !== request.requestId
           || permission.requirementRevision !== task.requirementRevision || permission.controlRevision !== task.controlRevision
           || canonical(source.requestIdentity?.executionPermissionCorrection ?? null) !== canonical(permission)

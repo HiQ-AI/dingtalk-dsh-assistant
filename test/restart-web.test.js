@@ -27,6 +27,37 @@ try{WaitFor {$false} 'EXPECTED_TIMEOUT' 0;throw 'TIMEOUT_ACCEPTED'}catch{if($_.E
 })
 
 const source = resolve('scripts/restart-web.ps1').replaceAll("'", "''")
+test('SHA包缓存拒绝漂移及reparse，同版本新字节使用新路径', { skip: process.platform !== 'win32' }, async t => {
+ const root=await mkdtemp(resolve('docs/tmp/immutable-package-'))
+ t.after(()=>rm(root,{recursive:true,force:true}))
+ const deployment=resolve('docs/acceptance/task-session-runtime-repair/scripts/deploy-task-session-native.ps1').replaceAll("'","''")
+ const command=String.raw`
+$ErrorActionPreference='Stop'
+$ast=[Management.Automation.Language.Parser]::ParseFile('${deployment}',[ref]$null,[ref]$null)
+foreach($name in @('Hash','AssertPackagePath','ImmutablePackage')){
+ $fn=$ast.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq$name},$true)
+ . ([scriptblock]::Create($fn.Extent.Text))
+}
+$root='${root.replaceAll("'","''")}';$packageCacheRoot=Join-Path $root 'cache';$package=Join-Path $root 'same-version.tgz'
+Set-Content -LiteralPath $package -Value 'version-one';$one=Hash $package;$first=ImmutablePackage $package $one
+if((Hash $first)-ne$one-or$first-notlike "*$one*"){throw 'FIRST_IDENTITY'}
+if((ImmutablePackage $package $one)-ne$first){throw 'NOT_REUSED'}
+Set-Content -LiteralPath $package -Value 'version-two';$two=Hash $package;$second=ImmutablePackage $package $two
+if($first-eq$second-or(Hash $first)-ne$one-or(Hash $second)-ne$two){throw 'MUTABLE_IDENTITY'}
+Set-Content -LiteralPath $second -Value 'corrupt'
+try{ImmutablePackage $package $two;throw 'CORRUPT_ACCEPTED'}catch{if($_.Exception.Message-ne'DEPLOY_IMMUTABLE_PACKAGE_MISMATCH'){throw}}
+if((Get-Content $second -Raw)-notmatch'corrupt'){throw 'CACHE_OVERWRITTEN'}
+$link=Join-Path $root 'linked';New-Item -ItemType Junction -Path $link -Target $packageCacheRoot|Out-Null
+try{$packageCacheRoot=$link;try{ImmutablePackage $package $two;throw 'REPARSE_ACCEPTED'}catch{if($_.Exception.Message-ne'DEPLOY_PACKAGE_REPARSE'){throw}}}finally{[IO.Directory]::Delete($link)}
+$text=$ast.Extent.Text
+if($text.IndexOf('if($Check){')-ge$text.IndexOf('$assistantInstallPackage=ImmutablePackage')){throw 'CHECK_CAN_MATERIALIZE'}
+if(-not$text.Contains("'apply',"+'$profile,$installationPolicyProposal')-or-not$text.Contains("'verify',"+'$profile,$installationPolicyProposal')){throw 'POLICY_OVERRIDE_NOT_PINNED'}
+'IMMUTABLE_PACKAGE_PASS'
+`
+ const result=spawnSync('pwsh',['-NoProfile','-Command',command],{encoding:'utf8',windowsHide:true,timeout:15000})
+ assert.equal(result.status,0,result.stderr||result.stdout)
+ assert.match(result.stdout,/IMMUTABLE_PACKAGE_PASS/)
+})
 function scenario(mode, check = false) {
  const setup = String.raw`
 $ErrorActionPreference='Stop'

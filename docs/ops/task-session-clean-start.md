@@ -332,6 +332,7 @@ Windows 原生受限 shell 为任务目录配置写入授权时，需要宿主�
 
 统一outputs是业务产物归档位置，不表示已授权代码检出与真实Git元数据都只能只读。Git worktree的.git文件常指向其他检出下的common-dir，权限核对必须读取真实git-dir/common-dir。Windows MSYS认证辅助进程命名对象拒绝与文件夹拒绝分别诊断，不能把它误报为凭据失效，也不能通过复制检出或更换认证方式绕过。
 
-当前原生后端仅有read-only/workspace-write/danger-full-access模式；多目录文件授权不能单独解决MSYS命名对象。在用户已明确要求修复原发布权限时，复用`POST /tasks/:taskId/human-requests/:requestId/reply/check`及相同无`/check`答复入口，附`executionPermissionCorrection:{executionId,expectedInputVersion,mode,reason}`。先Check零写，真实应用必须同Task owner/operator、任务版本、目标原执行/输入版本、排空与无未决效果全部匹配；不允许模型输入自行携带此授权。纠正保留在正式source及原execution，Host核验后只对该execution的原会话设置原生mode，不提升Owner/同伴、不修改profile、不改变产物根/原会话cwd，不新增业务授权或重放操作。
+当前原生后端仅有read-only/workspace-write/danger-full-access模式；多目录文件授权不能单独解决MSYS命名对象。在用户已明确要求修复原发布权限时，复用`POST /tasks/:taskId/human-requests/:requestId/reply/check`及相同无`/check`答复入口，附`executionPermissionCorrection:{executionId,expectedInputVersion,mode,reason}`。先Check零写，真实应用必须配置的operator、任务版本、目标原执行/输入版本、排空与无未决效果全部匹配；不允许模型输入自行携带此授权。纠正保留在正式source及原execution，Host核验后只对该execution的原会话设置原生mode，不提升Owner/同伴、不修改profile、不改变产物根/原会话cwd，不新增业务授权或重放操作。
 
 选择danger-full-access意味着该发布会话以当前Windows用户权限运行原生工具，适用于受限token确实无法完成已授权Git等运行需求的恢复；业务范围仍限已明确授权的检出、Git元数据及环境。恢复后应核对原execution实际新输入、原生mode与Git真实结果，不能只凭答复接收或execution succeeded判定UAT已发布。复用已有有效测试/构建，按原作者原执行仅完成剩余交付。
+安装器会把包复制到按 SHA256 派生的不可变目录后交给官方CLI，避免同版本、同file路径重打包被pnpm旧缓存命中。Check不创建缓存；源/缓存目录链拒绝reparse，源和复制后摘要都核验，已有缓存摘要冲突直接拒绝，不覆盖。policy的有效提案只把packagePath换成同一不可变路径，apply/verify及CLI一致，原提案保持。安装失败后先保留失败收据、核对精确旧PID退出/端口关闭/离线账本及包摘要，按上述原安装阶段接续，不再SIGINT或重放业务。

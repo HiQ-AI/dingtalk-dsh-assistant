@@ -293,7 +293,7 @@ for (const permission of [false, true]) test(`operator technical reply retains b
     }
     seen.push(input)
     return [call('execution_submit', { output: { status: 'completed', summary: '测试夹具仅记录输入，没有执行外部部署', evidence: [], limitations: [], artifacts: [] } })]
-  }, { config: { webActorId: permission ? 'native-user' : 'operator-user' } })
+  }, { config: { webActorId: 'operator-user' } })
   await h.service.ingest({ groupId: 'native-group', messageId: 'business-authorization', senderOpenDingTalkId: 'native-user', text: objective, occurredAt: new Date().toISOString() })
   await h.service.whenIdle()
   const before = (await h.query('task.list'))[0], original = (await h.query('execution.list'))[0], request = await pending(h)
@@ -332,8 +332,9 @@ for (const permission of [false, true]) test(`operator technical reply retains b
   for (const request of h.requests) for (const message of request.messages.filter(message => message.source?.taskSession))
     assert.ok(Buffer.byteLength(message.content[0].text) <= 3000, '恢复后仍保留Host的UTF8预算')
   assert.equal(seen.at(-1).sources.find(source => source.messageId === 'business-authorization').text, objective)
-  assert.equal(seen.at(-1).sources.find(source => source.text === reply).actorId, permission ? 'native-user' : 'operator-user')
+  assert.equal(seen.at(-1).sources.find(source => source.text === reply).actorId, 'operator-user')
   if (permission) {
+    assert.notEqual(before.ownerActorId, 'operator-user', '技术操作人不同于业务发起人仍可恢复原执行')
     assert.equal(executions[0].permissionCorrection.mode, 'danger-full-access')
     const events = (await readFile(await findSessionLog(h.root, original.sessionId), 'utf8')).trim().split('\n').map(JSON.parse)
     const modes = events.filter(event => event.type === 'sandbox/mode')
