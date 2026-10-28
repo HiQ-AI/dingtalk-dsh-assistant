@@ -11,7 +11,7 @@ import { installObserverTracePages } from '../packages/dingtalk-dsh-assistant/ob
 const args = process.argv.slice(2), apply = args.includes('--apply'), indexesOnly=args.includes('--indexes-only')
 const value = key => { const i=args.indexOf(key);return i<0?undefined:args[i+1] }
 const target = value('--database')
-if(!target)throw new Error('Usage: --database <offline.sqlite> [--indexes-only [--expected-owner <pid:token>]] [--apply] [--backup <consistent-backup.sqlite> --expected-sha256 <digest>]')
+if(!target)throw new Error('Usage: --database <offline.sqlite> [--indexes-only] [--expected-owner <pid:token>] [--apply] [--backup <consistent-backup.sqlite> --expected-sha256 <digest>]')
 const path=resolve(target), expected=value('--expected-sha256'), backup=value('--backup')
 if(indexesOnly&&(!existsSync(path)||!statSync(path).isFile()||statSync(path).size===0))throw new Error('OBSERVER_MIGRATION_UNINITIALIZED_DATABASE')
 const hash=async file=>{const digest=createHash('sha256');for await(const chunk of createReadStream(file))digest.update(chunk);return digest.digest('hex')}
@@ -38,9 +38,9 @@ try{
  if(apply)db.exec('BEGIN EXCLUSIVE')
  if(dynamic){
   const owner=db.prepare("SELECT value FROM dynamic_meta WHERE key='owner'").get()?.value,expectedOwner=value('--expected-owner')
-  if(indexesOnly&&expectedOwner!==undefined&&owner!==expectedOwner)throw new Error('OBSERVER_MIGRATION_OWNER_MISMATCH')
+  if(expectedOwner!==undefined&&owner!==expectedOwner)throw new Error('OBSERVER_MIGRATION_OWNER_MISMATCH')
   if(owner){
-   if(!indexesOnly||expectedOwner!==owner||!/^([1-9][0-9]*):[^:]+$/u.test(owner))throw new Error('OBSERVER_MIGRATION_ACTIVE_OWNER')
+   if(expectedOwner!==owner||!/^([1-9][0-9]*):[^:]+$/u.test(owner))throw new Error('OBSERVER_MIGRATION_ACTIVE_OWNER')
    try{process.kill(Number(owner.split(':')[0]),0);throw new Error('OBSERVER_MIGRATION_ACTIVE_OWNER')}catch(cause){if(cause.code!=='ESRCH')throw cause}
   }
  }

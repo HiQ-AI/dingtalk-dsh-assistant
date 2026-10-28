@@ -79,3 +79,5 @@
 - SG12（进行中）：用户反馈本地看板仍503。已实证动态库无observer_*索引，原始HTTP任务/待答复/详情503、群/话题200，实际Chrome看板可见原错误。索引only脚本29项相关验证通过，原c5发布已排空，等待最后只读核验与Owner自然排空后处理。方案docs/spec/local-observer-index-recovery.md。
 
 - SG12完成：同包恢复PID13436，indexes-only迁移887ms，原正文/身份/schema不变；真实8API200及Chrome列表/原详情已恢复，原v4任务显示已结束。新部署验收增加observer-readiness，防止health正常但看板503误报成功。证据round-10.md。
+
+| SG13 | 已归档任务物理迁移 | 已标记32任务及历史入归档表，正文/身份守恒、服务恢复 | 已完成 | round-11.md；浏览器详情未收敛，API详情通过 |

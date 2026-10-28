@@ -34,3 +34,8 @@ observer-source-identity-preserved,10,PASS,round-10.md
 observer-real-http-pages-detail,10,PASS,round-10.md
 observer-real-browser-board-detail,10,PASS,round-10.md
 deployment-observer-readiness-gate,10,PASS,round-10.md
+archived-physical-migration-conservation,11,PASS,round-11.md
+archived-live-controls-preserved,11,PASS,round-11.md
+archived-restart-http-history-detail,11,PASS,round-11.md
+archived-browser-history-list,11,PASS,round-11.md
+archived-browser-detail,11,UNVERIFIED,round-11.md
