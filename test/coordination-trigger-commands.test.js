@@ -148,7 +148,7 @@ test('per-slot instruction creation and Task effects survive lost acknowledgemen
   let armed=true
   const mocked=t.mock.method(DatabaseSync.prototype,'exec',function(sql){
     const result=original.call(this,sql)
-    if(sql==='COMMIT'&&armed){armed=false;throw new Error('injected per-slot ACK loss')}
+    if(sql==='COMMIT'&&armed&&this.prepare("SELECT 1 FROM sqlite_master WHERE name='dynamic_meta'").get()){armed=false;throw new Error('injected per-slot ACK loss')}
     return result
   })
   await assert.rejects(f.command('coordination.job.command',{jobId:job.id,fence:job.fence},'slot-ack'),{code:'DYNAMIC_COMMIT_ACK_UNKNOWN'})
@@ -168,7 +168,7 @@ test('lost commit acknowledgement is reconciled by the original Task command rec
   let armed = true
   const mocked = t.mock.method(DatabaseSync.prototype, 'exec', function (sql) {
     const result = original.call(this, sql)
-    if (sql === 'COMMIT' && armed) { armed = false; throw new Error('injected lost commit acknowledgement') }
+    if (sql === 'COMMIT' && armed && this.prepare("SELECT 1 FROM sqlite_master WHERE name='dynamic_meta'").get()) { armed = false; throw new Error('injected lost commit acknowledgement') }
     return result
   })
   await assert.rejects(f.command('coordination.job.command', { jobId: job.id, fence: job.fence }, 'commit-ack-unknown'), { code: 'DYNAMIC_COMMIT_ACK_UNKNOWN' })

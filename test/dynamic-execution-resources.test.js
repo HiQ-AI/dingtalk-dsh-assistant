@@ -1,3 +1,4 @@
+import {createTaskLedgerDetails} from '../packages/dingtalk-dsh-assistant/task-ledger-details.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
@@ -45,7 +46,16 @@ async function fixture(t, options = {}) {
     async restoreLegacyFixture(rewrite, options = {}) {
       await store.close()
       const db = new DatabaseSync(config.dbPath)
-      try { rewrite(db) } finally { db.close() }
+      const details=createTaskLedgerDetails(root)
+      try {
+        // This fixture intentionally recreates pre-externalization inline records.
+        // Decode before changing the historical digest; never mutate a bound reference.
+        for(const table of ['dynamic_executions','dynamic_receipts'])for(const row of db.prepare(`SELECT id,body FROM ${table}`).all()){
+          const value=details.decode(JSON.parse(row.body),{table,id:row.id})
+          db.prepare(`UPDATE ${table} SET body=? WHERE id=?`).run(JSON.stringify(value),row.id)
+        }
+        rewrite(db)
+      } finally { details.close(); db.close() }
       store = await openDynamicTaskStore({ ...config, initialize: false, ...options })
     },
     async reopen(overrides = {}) { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false, ...overrides }) } }
