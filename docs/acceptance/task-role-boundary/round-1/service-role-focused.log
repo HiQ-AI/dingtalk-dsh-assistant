@@ -1,0 +1,31 @@
+✔ simple existing-file delivery uses one executor and owner reads the delivered evidence (4367.7725ms)
+✖ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (8464.1058ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14150.2516
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:50:38
+✖ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (8464.1058ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-service-native.test.js:817:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

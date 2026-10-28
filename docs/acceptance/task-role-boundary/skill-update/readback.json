@@ -1,0 +1,69 @@
+{
+  "changedFiles": [
+    {
+      "path": "D:\\dsh_home\\skills\\group-file-delivery\\SKILL.md",
+      "beforeSha256": "c8ca4ec3ff7d7f995589cfd0ec6b61c27204dedfde198952d17c70a1f3dc2c5e",
+      "afterSha256": "289a4e4908691a4d392a2f51884471ea28ad505d21ffd5c98761b3b451c40a4b",
+      "beforeBytes": 2345,
+      "afterBytes": 3202
+    },
+    {
+      "path": "D:\\dsh_home\\skills\\group-file-delivery\\references\\procedure.md",
+      "beforeSha256": "c6e8583fd43539b458c5f838dd576d2e77b98675ffbe599848a2d5c824729f3e",
+      "afterSha256": "73333890d1a0cb7ef2b114eaeada3e0fdf858f836d70330f561fc9f7e6cd3803",
+      "beforeBytes": 9748,
+      "afterBytes": 10462
+    },
+    {
+      "path": "D:\\dsh_home\\skills\\business-development\\SKILL.md",
+      "beforeSha256": "f0bf509088393c6d50d77f317cc5cfe3060e4b9db23c2e8796d1e93c36ed521c",
+      "afterSha256": "9777ed19b23256cc49f0e094ac42c9cbb092c7cd847a17d1d97d2f3381f6a8e2",
+      "beforeBytes": 3825,
+      "afterBytes": 4363
+    }
+  ],
+  "relativeLinks": [
+    {
+      "from": "group-file-delivery/SKILL.md",
+      "target": "references/procedure.md",
+      "exists": true
+    },
+    {
+      "from": "group-file-delivery/SKILL.md",
+      "target": "references/source-map.json",
+      "exists": true
+    },
+    {
+      "from": "group-file-delivery/references/procedure.md",
+      "target": "../SKILL.md",
+      "exists": true
+    },
+    {
+      "from": "business-development/SKILL.md",
+      "target": "../group-file-delivery/SKILL.md",
+      "exists": true
+    },
+    {
+      "from": "business-development/SKILL.md",
+      "target": "references/procedure.md",
+      "exists": true
+    },
+    {
+      "from": "business-development/SKILL.md",
+      "target": "references/page-verification.md",
+      "exists": true
+    },
+    {
+      "from": "business-development/SKILL.md",
+      "target": "references/source-map.json",
+      "exists": true
+    }
+  ],
+  "structuralValidation": {
+    "group-file-delivery": "PASS",
+    "business-development": "PASS"
+  },
+  "limits": [
+    "Only syntax/frontmatter/reference checks; not a model behavior or real DingTalk send test."
+  ]
+}

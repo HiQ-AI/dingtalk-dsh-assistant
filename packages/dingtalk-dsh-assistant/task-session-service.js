@@ -1153,6 +1153,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             return { accepted: true }
           } })
         if (!submitted && runResult.status === 'no_submission') {
+          // 补充输入会在安全步骤使旧回合停止；旧绑定不能写技术阻塞，排空后由原唤醒接续最新版本。
+          if (!await currentTask(binding)) return
           // 复核未提交判断时保留候选唤醒，用既有有界退避恢复，不能把技术失败当成已审阅。
           if (humanReview && !runResult.reason) throw Object.assign(new Error('TASK_SESSION_NO_SUBMISSION'), { code: 'TASK_SESSION_NO_SUBMISSION', phase: 'decision' })
           if (dialogue) fail('TASK_DIALOGUE_NO_REPLY')

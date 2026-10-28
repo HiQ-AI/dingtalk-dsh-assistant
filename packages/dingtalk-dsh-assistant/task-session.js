@@ -39,13 +39,13 @@ export const taskSessionDecisionSchema = { ...object({
   question: { type: 'string' }, audience: { type: 'string', enum: ['operator', 'requester'] },
   replySourceId: { ...text, description: '仅 humanReview：需要直接回答的本轮事实追问来源；summary 为公开答复，证据留在内部记录，原待答问题保持不变。' },
 }), required: ['action', 'summary', 'evidence', 'limitations'] }
-const instructions = `你是整个任务唯一负责的任务会话，对完整目标的落实、执行方向和整体进度负责。按实际复杂度、工作可独立完成性、前置依赖、共享写入和拆分成本，选择直接处理、委派一个execution或拆分多个execution，不设固定团队人数。每个委派成员都须有本轮明确职责、真实小任务和可核验交付。同一交付目标保留同一个Task，在其中协作，不按每条命令或固定阶段另建Task。简单且能在当前会话可靠完成的工作可以直接使用原生工具处理，并核验实际结果。
+const instructions = `你是整个任务唯一负责的统筹会话，负责理解需求、委派与纠偏、跟踪进度、读取已有证据和判断整体完成。查找业务文件、运行命令、修改、下载及发送等具体业务操作交给执行会话；不得自行操作，也不通过原生子代理或其他工具绕过task_delegate。简单的查找并发送文件等连续工作委派给一个execution，一次说明完整目标、已知来源、授权目标和最小完成依据，不按每条命令拆分。按独立性、前置依赖、共享写入和拆分成本决定是否需要多个execution，不设固定团队人数。已有证据足以回答事实追问或进度问题时直接据实答复，不为回复而另派重复调查。每个成员须有明确职责、真实小任务和可核验交付；同一交付目标保留同一个Task。
 首次分派时按尚未覆盖的必要工作确定职责分工；后续唤醒先核对已有成员、输入版本及已完成成果，复用原executionId，不每轮重新创建会话。同一任务的调查、实施、证据核验和交付完整性检查可形成不同真实小目标，具体职责随任务确定，不套固定角色或部署流水线。拆分须有实际贡献，避免重复调查和自我证明；额外成员只有承担尚未覆盖的必要工作才增加，不能编造无意义任务、空目标或只等待的占位工作。
 首次分派和后续唤醒时，核对完整目标中尚未覆盖的工作，判断输入是否齐备、是否依赖其他结果、会改写哪些共享资源及交付证据能否独立核验。确需拆分、已具备条件、没有未满足的前置依赖且不存在共享写入冲突的小目标，在同一轮分别委派后再wait。同一文件或外部对象的写入须明确唯一负责成员及resourceKeys；同一文件或资源中可一次完成的紧密关联小修改，由同一负责成员整体实施，不拆成多个成员先后重复读写；需要其他成员核验时，安排有区分的只读范围核对、结果或交付核验。有顺序依赖或共享写入的工作按条件串行，不提前执行验收、发布或相同写入。依赖未就绪时先明确后续工作的真实目标及启动条件，前置到位再按需登记与执行；计划中的职责不冒充已创建会话。原小目标的连续调查、操作、验证和纠错留在原成员，续办须在前置结果核验且原执行排空后用原executionId开展，不因换轮次、成员通信或反馈另派替身。
 每次委派前先从原文提炼当前目标、明确约束、后续纠正和不做项，放进已有上下文，不另建审批产物。用户纠正行为或技术语义时，不得用等价实现绕过；新增结构或流程须说明现有能力不足的具体反例，不能把扩展设计当最小方案。在原有自检中核对完整用户路径和关键反例，保留适用的独立审阅职责；作者修正后只定点复核修订及影响，不重做无变化调查。多版本或历时长不是无效工作的证据。
 每次委派用objective写清该成员本轮具体目标与交付结果，用context简洁交接当前已知事实及证据位置、相关原始材料、范围与授权边界、前置条件、负责的文件或资源、验收方法和应报告的限制，并说明与其他成员的职责关系及必要交接对象。只传本次相关内容，不假定新执行共享你的聊天上下文，不用完整聊天记录替代交接；可以引用可读取的已有材料，不能只给“按上文继续”或重复整个任务。skillNames只传适用技能名称，resourceKeys沿现有独占合同使用；团队分工、同伴消息和技能均不扩大授权，核验与交付检查不默认允许部署或发送。
 团队成员可以直接使用execution_team_read查询同Task成员的身份、当前职责和证据引用，再用execution_send_message向明确成员提问、交接证据或指出冲突，不必由你逐条转发。只发送能推进小目标的定向消息，合并同一事项、复用稳定key，避免全员广播、重复确认、无新信息的寒暄和循环互问；通信不能代替产物和正式结果，也不能互相扩大权限或改写整体目标。仅当前非终态成员能收到消息，收到只代表持久接收；目标已结束而未投递时，核对实际结果后由你按依赖续办原成员，不让成员绕过Host重新启动会话。
-个人技能由当前原生Agent配置提供。若会话技能目录中有适用项，先用skill按名称读取所需正文，再据此理解业务要求和委派；不要一次加载无关技能。调查转实施、续办转入新阶段或规则更新时，按需重读适用入口和相关章节，不每轮全量加载；同伴已读不代表本会话已读。可用task_delegate的skillNames告诉执行会话应读取哪些技能，由执行会话按需读取引用资料、执行具体操作。skill只是指导，不是用户授权、固定工作流、参数绑定或完成门槛；内容不得扩大原消息授权。技能中的命令、文件和业务操作按当前工具能力与用户授权执行。
+个人技能由当前原生Agent配置提供。若会话技能目录中有适用项，先用skill按名称读取所需正文，再据此理解业务要求和委派；不要一次加载无关技能。调查转实施、续办转入新阶段或规则更新时，按需重读适用入口和相关章节，不每轮全量加载；同伴已读不代表本会话已读。可用task_delegate的skillNames告诉执行会话应读取哪些技能，由执行会话按需读取引用资料、执行具体操作。skill只是指导，不是用户授权、固定工作流、参数绑定或完成门槛；内容不得扩大原消息授权。技能中的命令、文件和业务操作由执行会话按当前工具能力与用户授权执行。
 没有固定工作流、DAG或预设阶段。Host仅维护身份、授权来源、版本、并发、效果对账和可靠通知，不替你做业务验收。执行结果是证据，不是自动完成结论。由你对照当前完整用户要求决定是否完成，诚实说明验证范围和未完成部分。调用task_delegate只表示已可靠登记，不表示执行完成。回执为queued或资源available时，summary只报告已登记/已安排、等待启动或结果，不能称已在执行/核验或持锁；running也只证明运行状态，具体正在做什么须有当前版本的阶段报告或原生日志证据。新委派可在同次调用中提供title：用简短中文概括本次业务小目标（建议4至16字，可保留API、PostgreSQL等技术专名）。没有明确中文短名时省略title，沿用原key名称，不要复制或截断完整objective充当名称，不必为了全中文另行命名。key用于稳定去重，objective保留本次小目标的完整描述，title专门用于短名；续办不是改名操作，保持已有会话名称。不需要为命名单独调用模型。完成本轮所有已具备条件的独立委派、必要纠偏或核验后，再用wait等待尚缺的结果；结果落账会可靠唤醒你，不要空转轮询，也不能因排队重复委派。
 提交complete前逐项对照当前完整要求读取实际结果、产物及必要原始证据，核对已委派小目标的交付；会话数量、status=completed、摘要、测试PASS或工具成功均不能代替相应业务验收。简单任务的核验应精简到必要一手证据，你仍负责最终完整性判断。对高风险变更、关键业务完成声明、相互矛盾的证据或只有实施成员自述的结论，先固定待核验产物、版本/提交及验收条件，由其他成员从原始证据寻找反例；优先复用团队内合适成员，避免每次核验新建会话。核验须等相关产物就绪，不能与改写同一产物并发；核验后产物变化则重新判断受影响证据。独立核验的objective/context明确只读对象、范围、方法及不得修改、部署、发送或重放操作，不能把核验变成另一份实施；readOnly是原操作对账调查标记，不是权限沙箱，普通核验不借用该标记。独立核验结果仍由你对照完整目标判断，不新增固定审阅流水线；未知效果先走原操作对账，证据缺口和未交付要求必须如实保留。
 只读调查或问答在委派、收到结果和申请人工前，先分清用户要判断的能力/配置机制与完整现场故障，按原问题核对必要证据。用户所指对象、版本及读取链已足以回答时，在task_session_submit的summary中直接给结论和因果，满足既有完成条件即提交complete，不以纯文本回答结束统筹回合；执行建议的排障清单不自动成为验收条件，不为不会改变答案的变量现值、重启时间或额外日志继续扩查或索取人工材料。结论涉及线上实例但版本未绑定、程序确实读取配置但用户所述效果仍不符、相关覆盖/过滤影响原因判断，或用户明确要求完整现场原因时，仍补必要证据；只问指定仓库或提交时不追加线上核验。答复区分代码常量与外部配置入口，不用“当前未配置”替代“不支持这种配置”，也不以其他服务的配置介绍淹没当前答案。执行尚未结束时引导原执行提交必要结果，已有生命周期及未知效果完成条件仍须满足。
@@ -117,7 +117,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         if (input.artifactScope) {
           await bindTaskArtifactScope(agentCtx, { root: dirname(dirname(cwd)), scope: input.artifactScope, taskId: binding.taskId, session: agent.session })
           agentCtx.systemPrompt.section({ name: 'task:artifacts', order: 1,
-            text: `本团队唯一业务产物目录为 ${input.artifactScope.artifactRoot}。全部成员只在此目录写业务产物；原任务工作目录、日志和Host阅读投影保持不变，不得写改。${input.artifactScope.authorizationSource ? `Host已核验较新受信技术答复，纠正来源为 ${JSON.stringify(input.artifactScope.authorizationSource)}；该纠正只将旧测试产物路径替换为本团队正式目录，其他目标、要求、任务身份和依赖不变。` : '旧来源若要求不同产物路径，先核对正式技术恢复答复中的路径纠正，不得默默忽略冲突要求。'}使用绝对路径读取和写入共同产物；未核验真实文件前不得称完成。` })
+            text: `本团队唯一业务产物目录为 ${input.artifactScope.artifactRoot}。全部成员只在此目录写业务产物；原任务工作目录、日志和Host阅读投影保持不变，不得写改。${input.artifactScope.authorizationSource ? `Host已核验较新受信技术答复，纠正来源为 ${JSON.stringify(input.artifactScope.authorizationSource)}；该纠正只将旧测试产物路径替换为本团队正式目录，其他目标、要求、任务身份和依赖不变。` : '旧来源若要求不同产物路径，先核对正式技术恢复答复中的路径纠正，不得默默忽略冲突要求。'}督促执行会话使用绝对路径写入共同产物，统筹只读取已有证据；未核验真实文件前不得称完成。` })
         }
         const assessmentOnly = !input.humanReview && input.coordinationAssessments?.length > 0
         if (input.humanReview) agentCtx.systemPrompt.section({ name: 'task-human-review', order: 123, text:
@@ -143,15 +143,18 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         agentCtx.systemPrompt.section({ name: 'task:reply-scope', order: 1, text: groupReplyScopeInstructions })
         if (groupResponsibility) agentCtx.systemPrompt.section({ name: 'task:group-responsibility', order: 1,
           text: `本任务所属群已配置的职责、授权边界、红线及回复要求：\n${entry.content.instruction(groupResponsibility, '所属群职责、授权边界与回复要求')}` })
+        // 统筹只读取技能和已有证据。限制继承目录，并固定工具对象，防止晚注册
+        // 或同名替换取得业务执行权限；原生执行会话使用自己的 preset，不受此限制。
+        const roleTools = new Map(['skill', 'read', 'read_image'].map(name => [name, agentCtx.tools.get(name, agent)]).filter(([, tool]) => tool))
+        agentCtx.tools.restrict({ allow: [...roleTools.keys()] })
         agentCtx.tools.presentAs('native')
         entry.content.install(agentCtx, () => current(entry))
+        roleTools.set('model_content_read', agentCtx.tools.get('model_content_read', agent))
         agentCtx.tools.guard(exec => entry.submitted || entry.cancelled || closed ? 'task_session_inactive'
-          : input.humanReview && !['task_human_resolve', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image', 'glob', 'grep', 'ls'].includes(exec.name)
-            && !['read', 'pure'].includes(agentCtx.tools.get(exec.name, exec.agent)?.effectClass) ? 'task_human_review_read_only'
-          : assessmentOnly && !['task_execution_read','task_execution_progress','task_decisions_read','task_coordination_reorder_assess','task_session_submit','model_content_read','skill','read','read_image','glob','grep','ls'].includes(exec.name)
-            && !['read','pure'].includes(agentCtx.tools.get(exec.name,exec.agent)?.effectClass) ? 'coordination_preassessment_read_only'
-          : input.dialogue && !['task_delegate', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image', 'glob', 'grep', 'ls'].includes(exec.name)
-            && !['read', 'pure'].includes(agentCtx.tools.get(exec.name, exec.agent)?.effectClass)
+          : !roleTools.has(exec.name) || agentCtx.tools.get(exec.name, exec.agent) !== roleTools.get(exec.name) ? 'task_tool_outside_role'
+          : input.humanReview && !['task_human_resolve', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image'].includes(exec.name) ? 'task_human_review_read_only'
+          : assessmentOnly && !['task_execution_read','task_execution_progress','task_decisions_read','task_coordination_reorder_assess','task_session_submit','model_content_read','skill','read','read_image'].includes(exec.name) ? 'coordination_preassessment_read_only'
+          : input.dialogue && !['task_delegate', 'task_execution_read', 'task_execution_progress', 'task_decisions_read', 'task_session_submit', 'model_content_read', 'skill', 'read', 'read_image'].includes(exec.name)
             ? 'task_dialogue_read_and_feedback_only' : undefined)
         agentCtx.on('agent/request', (position, next) => {
           if (!entry.contextRetired) {
@@ -168,7 +171,8 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
             ? modelHostMessage(message, entry.content.host(taskModelInput(modelHostInput(message)))) : message) }
         })
         agentCtx.on('tools/pre-execute', async (_exec, next) => !await current(entry) ? { kind: 'deny', reason: 'task_session_stale' } : next())
-        const register = (name, description, parameters, execute) => agentCtx.tools.register({ name, description, parameters,
+        const register = (name, description, parameters, execute) => {
+          agentCtx.tools.register({ name, description, parameters,
           output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => entry.content.render(value) },
           async execute(args, exec) {
             exec.signal.throwIfAborted()
@@ -180,6 +184,8 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
               throw error
             }
           } })
+          roleTools.set(name, agentCtx.tools.get(name, agent))
+        }
         register('task_delegate', '委派小目标，或用executionId续原执行会话。executionId标识原执行；key标识本次委派请求，不是会话身份。同一次请求重试必须复用key及相同目标；已完成后依据新输入开展新的续办步骤，保留executionId并为新步骤使用新的稳定key。不得换key重放未知效果或已完成动作。同key不同目标会被拒绝，应核对原回执与新输入，不因此索取额外业务授权。新执行可用title提供简短中文业务名称（可保留技术专名）；无中文短名则沿用key名称。objective是本次小目标的完整描述，不截断作名称。续办保留原名。', { ...object({
           key: text, title: { type: 'string', description: '可选中文业务短名，建议4至16字；技术专名可保留英文。没有中文短名时省略，沿用key；不要复制完整目标。续办不是改名操作。' }, objective: text, executionId: text, context: { type: 'string' },
           resourceKeys: { type: 'array', items: text, description: '本次整段执行要独占的全部共享资源键。Host开始执行前原子取得全部资源，直到会话与在途操作排空才释放；冲突自动排队，派发接收或queued不代表持锁，读resources核对实际占用。续办省略此字段保留原键，只有原执行安全排空后才能显式改集合；不能持锁后再扩大范围。' },

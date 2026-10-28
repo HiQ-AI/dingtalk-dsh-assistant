@@ -135,7 +135,7 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
   assert.equal(resumed.sources.find(item => item.actorId === 'business-responsible').text, answer)
   assert.equal((await h.query('execution.list')).length, 0, '复核工具无法派发执行')
   assert.equal((await h.query('operation.list')).length, 0, '复核没有写操作')
-  if (failure === 'none') assert.match(JSON.stringify(h.toolResults.find(item => item.name === 'write')), /task_human_review_read_only/)
+  if (failure === 'none') assert.match(JSON.stringify(h.toolResults.find(item => item.name === 'write')), /task_tool_outside_role/)
   const decisions = await h.query('task.decisions', { taskId: original.taskId })
   assert.ok(decisions.decisions.some(item => item.decision.summary.includes('未回答环境')))
   assert.ok(decisions.decisions.some(item => item.decision.summary.includes('已保存完整业务答复')))
