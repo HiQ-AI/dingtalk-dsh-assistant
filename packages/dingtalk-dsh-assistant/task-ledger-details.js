@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, realpathSync } from 'node:fs'
+import { closeSync, lstatSync, mkdirSync, openSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 const error = code => { throw Object.assign(new Error(code), { code }) }
@@ -56,14 +56,25 @@ function projection(key, value, table) {
 }
 
 function checkedDirectory(path, create, boundary) {
-  const parent = dirname(path)
-  if (parent !== path && path !== boundary) checkedDirectory(parent, create, boundary)
-  if (!existsSync(path)) {
-    if (!create) error('TASK_DETAIL_MISSING')
-    try { mkdirSync(path) } catch (e) { if (e.code !== 'EEXIST') throw e }
+  const ancestry = []
+  for (let entry = path;; entry = dirname(entry)) {
+    ancestry.push(entry)
+    if (entry === boundary || dirname(entry) === entry) break
   }
-  const stat = lstatSync(path)
-  if (!stat.isDirectory() || stat.isSymbolicLink() || relative(resolve(path), realpathSync(path)) !== '') error('TASK_DETAIL_PATH_UNSAFE')
+  for (const entry of ancestry.reverse()) {
+    let stat
+    try { stat = lstatSync(entry) }
+    catch (e) {
+      if (e.code !== 'ENOENT') throw e
+      if (!create) error('TASK_DETAIL_MISSING')
+      try { mkdirSync(entry) } catch (e) { if (e.code !== 'EEXIST') throw e }
+      stat = lstatSync(entry)
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) error('TASK_DETAIL_PATH_UNSAFE')
+  }
+  // Every component is still checked. Resolve the complete path once instead of
+  // resolving every overlapping ancestor (quadratic filesystem probes on Windows).
+  if (relative(resolve(path), realpathSync(path)) !== '') error('TASK_DETAIL_PATH_UNSAFE')
 }
 
 export function createTaskLedgerDetails(root) {
@@ -82,14 +93,19 @@ export function createTaskLedgerDetails(root) {
     return path
   }
   const connections = new Map()
-  let active
+  let active, readScope
   function database(owner, create) {
+    const key = JSON.stringify([owner?.type, owner?.id]), checked = !create && readScope?.get(key)
+    if (checked && connections.get(checked.path) === checked.entry) return checked.entry.db
     const dir = directory(owner, create), path = join(dir, 'objects.sqlite')
-    if (!existsSync(path)) {
+    let stat
+    try { stat = lstatSync(path) }
+    catch (e) {
+      if (e.code !== 'ENOENT') throw e
       if (!create) error('TASK_DETAIL_MISSING')
       try { closeSync(openSync(path, 'wx', 0o600)) } catch (e) { if (e.code !== 'EEXIST') throw e }
+      stat = lstatSync(path)
     }
-    const stat = lstatSync(path)
     if (!stat.isFile() || stat.isSymbolicLink()) error('TASK_DETAIL_PATH_UNSAFE')
     let entry = connections.get(path)
     if (entry && (entry.ino !== stat.ino || entry.dev !== stat.dev)) error('TASK_DETAIL_PATH_UNSAFE')
@@ -109,6 +125,7 @@ export function createTaskLedgerDetails(root) {
       // Bound native handles even when a query spans many task owners.
       if (connections.size > 32) { const [key, old] = connections.entries().next().value; old.db.close(); connections.delete(key) }
     }
+    if (!create && readScope) readScope.set(key, { path, entry })
     return entry.db
   }
   function readObject(owner, digest) {
@@ -170,6 +187,12 @@ export function createTaskLedgerDetails(root) {
   }
   return {
     root,
+    // A synchronous store query has no await/yield between selected records.
+    // Validate each owner/container once in that read; later queries revalidate.
+    readSnapshot(read) {
+      const previous = readScope; readScope = new Map()
+      try { return read() } finally { readScope = previous }
+    },
     encode(table, value, hint) {
       if (Object.hasOwn(value, '_hostDetail')) error('TASK_DETAIL_RESERVED_FIELD')
       const keys = table === 'dynamic_receipts' ? ['result','taskDecision','completionEvent'] : fields[table] ?? []

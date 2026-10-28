@@ -2024,6 +2024,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }))
     },
     async query(q) {
+      return details.readSnapshot(() => {
       if (closed) fail('DYNAMIC_STORE_CLOSED')
       record(q)
       let value
@@ -2124,6 +2125,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (q.kind === 'task.get' && value && restartReopenEligible(value)) value = { ...value, restartRecoveryEligible: true }
       if (q.kind === 'task.list') value = value.map(task => restartReopenEligible(task) ? { ...task, restartRecoveryEligible: true } : task)
       return clone(value)
+      })
     },
     async close() {
       if (closed) return

@@ -52,7 +52,7 @@ values do not consume that budget). Long arrays use 128-item leaf chunks; a tree
 exceeding 8,192 references falls back atomically to 32,768-character JSON chunks,
 so the writer cannot publish a graph exceeding the reader's reference budget.
 Legacy array-node records remain readable. No directory-wide enumeration
-or verification scan runs on a list request.
+or verification scan runs on a list request. Within one synchronous query, records for the same owner reuse its already validated open container; the next query revalidates paths and identity. Every object digest is still verified. Canonical path resolution is performed once per complete path rather than once per overlapping ancestor.
 
 ## Polling is not a permanent command history
 
