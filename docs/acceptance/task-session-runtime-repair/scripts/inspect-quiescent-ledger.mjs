@@ -207,7 +207,6 @@ export function inspectCurrentControl(dbPath, mode, expectedOwnerPid) {
 export function inspectStartup(dbPath) {
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
-    if (db.prepare('PRAGMA quick_check').get().quick_check !== 'ok') throw Error('START_DATABASE_CORRUPT')
     const meta = Object.fromEntries(db.prepare('SELECT key,value FROM dynamic_meta').all().map(row => [row.key, row.value]))
     const marker = JSON.parse(readFileSync(dbPath + '.initialized', 'utf8'))
     if (marker.version !== 1 || !meta.instanceId || !meta.initToken || marker.phase !== 'initialized' || marker.instanceId !== meta.instanceId || marker.initToken !== meta.initToken

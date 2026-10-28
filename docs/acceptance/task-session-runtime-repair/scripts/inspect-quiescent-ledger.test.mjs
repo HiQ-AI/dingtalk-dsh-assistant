@@ -266,9 +266,41 @@ test('ordinary package control checks current ownership, drain and effects witho
 
 test('ordinary deployment selects current controls while maintenance retains historical audit and captured child identities', async () => {
  const source = await readFile(new URL('./deploy-task-session-native.ps1', import.meta.url), 'utf8')
- assert.match(source, /\$ledgerProof=if\(\$RestartMaintenanceProposal\).*\$agentWorkspace.*else\{RunNode @\(\$ledger,'current-control',\$db,'online'/)
+ assert.match(source, /\$ledgerProof=if\(\$RestartMaintenanceProposal\).*\$agentWorkspace.*\$controlMode=if\(\$ResumeNativeDispose\)\{'offline'\}else\{'online'\};RunNode @\(\$ledger,'current-control',\$db,\$controlMode/)
  assert.match(source, /\$offlineArgs=if\(\$RestartMaintenanceProposal\).*\$agentWorkspace.*else\{@\(\$ledger,'current-control',\$db,'offline'/)
  assert.ok(source.indexOf('$originalDescendants=@(Descendants $ExpectedPid)') < source.indexOf('$signaler=Start-Process'))
  assert.match(source, /foreach\(\$child in \$originalDescendants\)/)
  assert.match(source, /\$remaining\.CreationDate -eq \$child\.CreationDate/)
+})
+
+test('resume validates original stop evidence, rejects mismatched package and live captured children', async t => {
+ const root=await mkdtemp(join(tmpdir(),'deploy-resume-test-'))
+ t.after(()=>rm(root,{recursive:true,force:true}))
+ const script=new URL('./deploy-task-session-native.ps1',import.meta.url).pathname.replace(/^\/([A-Z]:)/,'$1')
+ const fixture=join(root,'check.ps1')
+ await writeFile(fixture, `
+$ErrorActionPreference='Stop'
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('${script.replaceAll("'","''")}',[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'PARSE_FAILED'}
+$block=$ast.Find({param($a) $a -is [Management.Automation.Language.IfStatementAst] -and $a.Extent.Text.StartsWith('if($ResumeNativeDispose){') -and $a.Extent.Text.Contains('$savedControl=')},$true).Extent.Text
+$ResumeNativeDispose=$true;$ExpectedPid=123;$ExpectedPackageSha256='package';$ExpectedProfileSha256='profile';$EvidenceDirectory='D:/evidence'
+$control=@{pid=123;packageSha256='package';profileSha256='profile';creationDate='2026-10-28T08:00:00'}
+$signal=@{targetPid=123;signalSent='CTRL_C_EVENT'}
+$failure=@{phase='native-dispose';error='DEPLOY_NATIVE_NOT_QUIESCENT'}
+function Get-Content($path){if($path.EndsWith('control.json')){$control|ConvertTo-Json}elseif($path.EndsWith('signal.json')){$signal|ConvertTo-Json}elseif($path.EndsWith('failure.json')){$failure|ConvertTo-Json}else{@{ProcessId=456;CreationDate='2026-10-28T08:00:00'}|ConvertTo-Json}}
+function PortOwners{ @() };function Descendants{ @() };function Test-Path { $capturedPresent }
+function Get-CimInstance { if($childAlive){[pscustomobject]@{CreationDate=[datetime]'2026-10-28T08:00:00'}} }
+. ([scriptblock]::Create($block));if(-not$original.CreationDate){throw 'VALID_RESUME_REJECTED'}
+$original=$null;$control.packageSha256='changed'
+try { . ([scriptblock]::Create($block));throw 'MISMATCH_ACCEPTED' } catch { if($_.Exception.Message-ne'DEPLOY_RESUME_EVIDENCE_MISMATCH'){throw} }
+$control.packageSha256='package';$capturedPresent=$true;$childAlive=$true
+try { . ([scriptblock]::Create($block));throw 'CHILD_ACCEPTED' } catch { if($_.Exception.Message-ne'DEPLOY_RESUME_CHILD_PROCESS_REMAINS'){throw} }
+$childAlive=$false;$original=[pscustomobject]@{ProcessId=123}
+try { . ([scriptblock]::Create($block));throw 'OWNER_ACCEPTED' } catch { if($_.Exception.Message-ne'DEPLOY_RESUME_PROCESS_REMAINS'){throw} }
+'RESUME_GATES_PASS'
+`)
+ const result=spawnSync('pwsh',['-NoProfile','-File',fixture],{encoding:'utf8',windowsHide:true})
+ assert.equal(result.status,0,result.stdout+result.stderr)
+ assert.match(result.stdout,/RESUME_GATES_PASS/)
 })

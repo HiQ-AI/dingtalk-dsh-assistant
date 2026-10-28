@@ -289,3 +289,9 @@ A 正式完成后调度 B 的关系投影及任务页前置等待说明同时修
 ### 历史纯观察协调正式退役
 
 先 POST `/coordination/:id/retire-observation/check`，再向去掉 `/check` 的同一路径提交。两次 body 均为 `{groupId, sourceId, expectedRevision, reason}`；sourceId 必须来自该动态协调，使用本地身份与配置的 webActor。check 零写，提交在事务内重新核对版本和资格：拒绝非观察成员、时间计划、下游依赖或命令执行痕迹。保留原 Task、来源原文、完成证明以及 starting、unknown、delivered 通知，只退役无发送许可的 prepared 通知。该动作不发送群消息；提交后独立读取协调、通知和关联 Task，核对仅目标协调退役及任务事实未变。
+
+原生退出已完成但部署在 `native-dispose` 因剩余子进程超时时，先核对原实例捕获子树、命令用途和精确 PID/创建时间，按实际生命周期处理归属明确的进程；不得把仍活动的业务进程当监听器清理。保留原 `control.json`、`signal.json`、`failure.json` 及处置证据。随后以原参数和原 EvidenceDirectory 增加 `-ResumeNativeDispose -Check`：仅接受原生退出超时、原 PID 已退出、双端口关闭、原包/profile 和 Observer 安装 manifest 一致、计划任务仍禁用及 offline current-control 通过。支持的仅为普通双包换包，不支持带维护/PTY/policy 提案的续接。Check 零写零信号；正式去掉 Check 后锁内复核并从安装阶段续接，保留原失败并新增 resume 证据，不再次发退出信号或先启动旧包。新部署会记录 `captured-descendants.json`，续接按 PID/创建时间逐项检查；旧失败若缺此快照，必须独立留存已核对的原子树及处置证据，不能伪造历史捕获结果。
+
+## 正常启动不扫描全库
+
+动态任务库正常打开及 inspectStartup 不执行 quick_check / integrity_check / foreign_key_check。结构、版本、初始化标记、instanceId、ingress epoch 和 owner 接管校验仍在，读取当前任务/执行/通知以恢复运行不等于审计全部历史。需要全库完整性审计时显式使用历史维护检查 inspectLedger，不能在普通启动和换包路径隐式调用。

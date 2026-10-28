@@ -389,3 +389,5 @@ Web对原任务的补充、重开和取消沿已有话题继续，保留原文�
 本机桌面重启入口与零写入预检见[任务会话启动说明](docs/ops/task-session-clean-start.md#本机桌面重启入口)。
 
 原生 edit 的空路径、空匹配串及新旧内容相同属于写入前参数拒绝。仅在原调用参数、精确错误回执、任务身份和正常回合终态全部核对且执行排空后，对账为 failed/noEffect；不重放编辑。IO、权限、取消和其他歧义错误继续保持 unknown。
+
+正常启动不运行全库 quick_check、integrity_check 或 foreign_key_check；仅核验 schema、初始化标记、实例/epoch 与 owner 身份并恢复当前控制状态。全库完整性审计只在明确运维/迁移检查时执行，不作为普通启动或换包的前置步骤。
