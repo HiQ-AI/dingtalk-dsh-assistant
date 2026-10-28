@@ -2,10 +2,57 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, access, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
+import { installTaskSessionPersistence } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
+import { taskWorkspace } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
+import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 import { coordinationArtifactScope, bindTaskArtifactScope } from '../packages/dingtalk-dsh-assistant/task-artifact-scope.js'
 import { available, reason, nativeTaskHost, nativeShell, latestInput, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
 
 const quote = value => `'${value.replaceAll("'", "''")}'`
+test('历史全权限在原生Host恢复绑定时收紧，保留原会话历史和只读模式且错误scope零写',
+  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+    const root = await mkdtemp(join(process.cwd(), 'docs', 'tmp', 'artifact-mode-'))
+    const host = await nativeTaskHost(root, () => { assert.fail('权限恢复不得调用模型') })
+    let handle
+    t.after(async () => { await handle?.dispose(); await host.close(); await rm(root, { recursive: true, force: true }) })
+    const taskId = 'historical-owner', sessionId = 'original-owner', cwd = await taskWorkspace(root, taskId)
+    const scope = await coordinationArtifactScope(root, { coordinationId: 'original-team', memberTaskIds: [taskId] })
+    const router = await installTaskSessionPersistence(host.ctx, { root }), binding = { taskId, sessionId }
+    await router.register({ ...binding, cwd })
+    handle = await router.runOwned(binding, () => host.ctx.agents.create({ sessionId, meta: { cwd }, setup: async (_ctx, agent) => {
+      setSandboxMode(agent.session, 'danger-full-access')
+      host.ctx.sandboxPolicy.bindArtifactRoot(agent.session, { ownerId: scope.ownerId, artifactRoot: scope.artifactRoot })
+    } }))
+    await host.ctx.sessions.flush(handle.agent.session)
+    const before = await inspectSession(host.ctx.sessionPersistence, sessionId)
+    await handle.dispose(); handle = undefined
+    handle = await router.runOwned(binding, () => host.ctx.agents.resume({ resumeSessionId: sessionId, setup: async (ctx, agent) => {
+      const session = agent.session, args = { root, scope, taskId, session }
+      const seq = session.seq
+      await assert.rejects(bindTaskArtifactScope(ctx, { ...args, taskId: 'foreign' }), { code: 'TASK_ARTIFACT_BINDING_INVALID' })
+      const other = await coordinationArtifactScope(root, { coordinationId: 'other-team', memberTaskIds: [taskId] })
+      await assert.rejects(bindTaskArtifactScope(ctx, { ...args, scope: other }), /ARTIFACT_POLICY_BINDING_CHANGED/)
+      assert.equal(session.seq, seq)
+      await bindTaskArtifactScope(ctx, args)
+      assert.equal(host.ctx.sandboxPolicy.resolve({ session }).mode, 'workspace-write')
+      assert.equal(host.ctx.sandboxPolicy.resolve({ session }).workspaceRoot, scope.artifactRoot)
+      assert.throws(() => host.ctx.sandboxPolicy.resolve({ session, mode: 'danger-full-access' }), /ARTIFACT_POLICY_MODE_REQUIRED/)
+      setSandboxMode(session, 'read-only')
+      const readonlySeq = session.seq
+      await bindTaskArtifactScope(ctx, args)
+      assert.equal(session.seq, readonlySeq)
+      assert.equal(host.ctx.sandboxPolicy.resolve({ session }).mode, 'read-only')
+    } }))
+    await host.ctx.sessions.flush(handle.agent.session)
+    const after = await inspectSession(host.ctx.sessionPersistence, sessionId)
+    assert.deepEqual(after.events.slice(0, before.events.length), before.events)
+    assert.equal(handle.agent.session.id, sessionId)
+    assert.equal(after.meta.cwd, before.meta.cwd)
+    assert.deepEqual(after.events.slice(before.events.length).filter(e => e.type === 'sandbox/mode').map(e => e.data.mode), ['workspace-write', 'read-only'])
+    assert.equal(after.events.filter(e => e.type === 'sandbox/mode' && e.data.artifactRoot).length, 1)
+    assert.equal(host.requests.length, 0)
+  })
 test('official artifact binding makes native FS and shell share one root and reject outside writes',
   { skip: !available ? reason : false, timeout: 60000 }, async t => {
     const root = await mkdtemp(join(process.env.CLAUDE_JOB_DIR ? join(process.env.CLAUDE_JOB_DIR, 'tmp') : join(process.cwd(), 'docs', 'tmp'), 'artifact-native-'))

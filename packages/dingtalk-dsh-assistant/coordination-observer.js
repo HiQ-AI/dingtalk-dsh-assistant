@@ -41,6 +41,7 @@ function currentProof(member, task) {
     && proof.contextRevision === (task.contextRevision ?? 0)
 }
 function workResult({ schedule, occurrence, members, tasks, executions, coordination, jobs, cancelledBeforeSend }) {
+  if (coordination.retirement?.kind === 'observation-only') return resultView('cancelled', '错误观察已退役')
   const reminder = (occurrence?.action ?? schedule?.action)?.kind === 'message-reminder'
   if (occurrence?.deliveryState === 'failed') return resultView('delivery_failed', reminder ? '提醒发送失败' : '结果通知发送失败', 'danger')
   if (occurrence?.deliveryState === 'unknown') return resultView('delivery_unknown', reminder ? '提醒是否送达尚未确认' : '结果通知是否送达尚未确认', 'warning')
@@ -248,7 +249,7 @@ export function createCoordinationObserver(query) {
         }).join('；') : text(schedule?.action?.text ?? occurrence?.action?.text)
           ?? (kind === 'trigger' ? '条件触发查询'
             : currentMembers.map(member => text(tasks.find(task => task.taskId === member.taskId)?.title) ?? text(member.command?.args?.text)).filter(Boolean).join('、'))
-        const updatedAt = lastStamp([coordination.createdAt, ...sourceHistory.map(source => source.createdAt),
+        const updatedAt = lastStamp([coordination.createdAt, coordination.retirement?.at, ...sourceHistory.map(source => source.createdAt),
           ...entityOccurrences.flatMap(item => [item.acceptedAt, item.cancelledAt]), ...entityJobs.map(item => item.updatedAt),
           ...(schedule?.history ?? []).map(item => item.changedAt),
           notification?.updatedAt, ...currentMembers.map(member => tasks.find(task => task.taskId === member.taskId)?.updatedAt)])

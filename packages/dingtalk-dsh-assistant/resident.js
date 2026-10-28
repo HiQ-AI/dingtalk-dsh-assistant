@@ -155,6 +155,7 @@ export async function apply(ctx, config = {}) {
   runtime.coordinationSourceDetail = tasks.coordinationSourceDetail
   runtime.coordinationWork = tasks.coordinationWork
   runtime.coordinationWorkDetail = tasks.coordinationWorkDetail
+  runtime.retireCoordinationObservation = tasks.retireCoordinationObservation
   runtime.createTask = tasks.createTask
   runtime.appendTaskContext = tasks.appendTaskContext
   runtime.reopenTask = tasks.reopenTask

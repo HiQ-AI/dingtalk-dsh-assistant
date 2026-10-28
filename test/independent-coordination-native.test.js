@@ -3,10 +3,51 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:http'
+import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
 import { coordinationContextSchema } from '../packages/dingtalk-dsh-assistant/independent-coordination-planner.js'
 
 const model = { enabled: true, provider: 'native-task-test', model: 'coordination-controlled' }
+
+test('原生HTTP精确退役历史纯观察协调，check不发送且工作终态不受旧版本阻塞覆盖',
+  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'retire-observation-native-'))
+    let host, server, calls = 0
+    t.after(async () => { if (server) await new Promise(resolve => server.close(resolve)); await host?.close(); await rm(root, { recursive: true, force: true }) })
+    host = await nativeTaskHost(root, () => { calls++; assert.fail('只读退役不得派发模型') }, { config: { coordination: model } })
+    const command = (kind, args, id = `${kind}:${Math.random()}`) => host.service.store.command({ kind, args, id })
+    for (const taskId of ['A', 'B', 'C', 'D']) await command('task.create', { taskId, groupId: 'native-group', request: `原UPR事项${taskId}` })
+    const source = (await command('coordination.reserve', { unitId: 'old-progress', revision: 1, groupId: 'native-group', original: '修复了没' })).result.source
+    await command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'old-progress', members: ['A', 'B', 'C', 'D'].map(taskId => ({
+      instructionId: taskId, taskId, observation: true, dependencies: [], command: { id: `coordination-command:old-progress:${taskId}`, kind: 'coordination.observe',
+        args: { taskId, expectedRequirementRevision: 1, expectedControlRevision: 1, expectedContextRevision: 0, expectedRunSequence: 1 } } })) })
+    await command('task.supplement', { taskId: 'A', messageId: 'updated', text: '新增事实', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+    const before = await host.query('task.list'), wakes = await host.query('wake.list')
+    assert.equal((await host.service.coordinationWorkDetail('dispatch:old-progress')).work.result.code, 'blocked')
+    server = createServer((request, response) => handleRequest(request, response, host.service))
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${server.address().port}/coordination/old-progress/retire-observation`
+    const body = { groupId: 'native-group', sourceId: source.id, expectedRevision: 1, reason: '误建纯观察正式退役' }
+    const post = async (suffix, payload = body, headers = {}) => {
+      const response = await fetch(url + suffix, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(payload) })
+      return { status: response.status, body: await response.json() }
+    }
+    assert.equal((await post('/check', body, { origin: 'https://untrusted.example' })).status, 403)
+    assert.equal((await post('/check', { ...body, actorId: 'forged' })).status, 400)
+    assert.equal((await post('/check', { ...body, expectedRevision: 2 })).status, 409)
+    assert.equal((await post('/check')).body.eligible, true)
+    assert.equal((await host.query('coordination.get', { coordinationId: 'old-progress' })).coordination.revision, 1)
+    const retired = await post('')
+    assert.equal(retired.status, 200); assert.equal(retired.body.state, 'cancelled')
+    assert.equal(retired.body.retirement.actorId, 'native-user')
+    assert.equal((await post('')).body.replayed, true)
+    const work = await host.service.coordinationWorkDetail('dispatch:old-progress')
+    assert.equal(work.work.result.code, 'cancelled'); assert.equal(work.work.result.label, '错误观察已退役')
+    assert.equal(work.work.plan.state, 'cancelled'); assert.equal(work.work.counts.blocked, 0); assert.equal(work.work.counts.waiting, 0)
+    assert.deepEqual(await host.query('task.list'), before); assert.deepEqual(await host.query('wake.list'), wakes)
+    assert.deepEqual(await host.query('notification.list'), []); assert.equal(host.sent.length, 0); assert.equal(calls, 0)
+  })
 
 test('即时进度询问经原生路由与query工具一次答复四项任务，恢复不唤醒或重发',
   { skip: !available ? reason : false, timeout: 30000 }, async t => {

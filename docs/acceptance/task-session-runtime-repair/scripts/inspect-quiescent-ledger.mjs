@@ -179,11 +179,34 @@ export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerP
       drained: unstartedTaskClaims.length === 0 && !busy.length, maintenanceCutoverReady: !!maintenance && unstartedTaskClaims.length === 0, maintenance, unstartedTaskClaims, unstartedCliExecutions, verifiedSessions, unknownOperations: tables.operations.filter(row => row.state === 'unknown').length, unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').length }
   } finally { db.close() }
 }
+// 普通换包只核对当前控制事实；历史日志完整性审计仍由 inspectLedger 承担。
+export function inspectCurrentControl(dbPath, mode, expectedOwnerPid) {
+  if (!['online', 'offline'].includes(mode)) throw Error('DEPLOY_CONTROL_MODE_INVALID')
+  if (!Number.isSafeInteger(expectedOwnerPid) || expectedOwnerPid < 1) throw Error('DEPLOY_EXPECTED_PID_REQUIRED')
+  const db = new DatabaseSync(dbPath, { readOnly: true })
+  try {
+    db.exec('BEGIN')
+    const owner = db.prepare("SELECT value FROM dynamic_meta WHERE key='owner'").get()?.value
+    const ownerPid = owner ? Number(owner.split(':')[0]) : undefined
+    if (owner && ownerPid !== expectedOwnerPid) throw Error('DEPLOY_OWNER_IDENTITY')
+    let alive = true
+    try { process.kill(expectedOwnerPid, 0) } catch (error) { if (error.code !== 'ESRCH') throw error; alive = false }
+    if (mode === 'online' && (!owner || !alive)) throw Error('DEPLOY_OWNER_IDENTITY')
+    if (mode === 'offline' && alive) throw Error('DEPLOY_OWNER_NOT_RELEASED')
+    const count = (table, field, value) => db.prepare(`SELECT count(*) AS count FROM dynamic_${table} WHERE json_extract(body, '$.${field}') = ?`).get(value).count
+    const pending = Object.fromEntries(['tasks', 'executions', 'groups'].map(table => [table, count(table, 'drained', 0)]))
+    if (Object.values(pending).some(Boolean)) throw Error('DEPLOY_NOT_DRAINED')
+    const startingOperations = count('operations', 'state', 'starting'), startingNotifications = count('notifications', 'state', 'starting')
+    if (startingOperations || startingNotifications) throw Error('DEPLOY_STARTING_EFFECT')
+    return { scope: 'current-control', quiescent: true, candidateOnly: mode === 'online', drained: true, pending,
+      ownerReleased: !owner, ownerProcessExited: !alive, staleOwner: !!owner && !alive,
+      unknownOperations: count('operations', 'state', 'unknown'), unknownNotifications: count('notifications', 'state', 'unknown') }
+  } finally { db.close() }
+}
 // 冷启动走正式 Host 的恢复事务，不把部署要求的 turn/end 当作崩溃恢复前提。
 export function inspectStartup(dbPath) {
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
-    if (db.prepare('PRAGMA quick_check').get().quick_check !== 'ok') throw Error('START_DATABASE_CORRUPT')
     const meta = Object.fromEntries(db.prepare('SELECT key,value FROM dynamic_meta').all().map(row => [row.key, row.value]))
     const marker = JSON.parse(readFileSync(dbPath + '.initialized', 'utf8'))
     if (marker.version !== 1 || !meta.instanceId || !meta.initToken || marker.phase !== 'initialized' || marker.instanceId !== meta.instanceId || marker.initToken !== meta.initToken
@@ -202,6 +225,6 @@ export function inspectStartup(dbPath) {
   } finally { db.close() }
 }
 if (process.argv[1]?.endsWith('inspect-quiescent-ledger.mjs')) {
-  try { console.log(JSON.stringify(process.argv[2] === 'startup' ? inspectStartup(process.argv[3]) : process.argv[2] === 'package' ? inspectPackage(...process.argv.slice(3)) : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline', process.argv[5] === undefined ? undefined : Number(process.argv[5]), process.argv[6] === undefined ? undefined : JSON.parse(readFileSync(process.argv[6], 'utf8'))))) }
+  try { console.log(JSON.stringify(process.argv[2] === 'current-control' ? inspectCurrentControl(process.argv[3], process.argv[4], Number(process.argv[5])) : process.argv[2] === 'startup' ? inspectStartup(process.argv[3]) : process.argv[2] === 'package' ? inspectPackage(...process.argv.slice(3)) : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline', process.argv[5] === undefined ? undefined : Number(process.argv[5]), process.argv[6] === undefined ? undefined : JSON.parse(readFileSync(process.argv[6], 'utf8'))))) }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }

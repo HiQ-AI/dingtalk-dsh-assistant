@@ -1,6 +1,23 @@
 # Coordination Observer API
 
-The loopback observer exposes persisted coordination entities and source history through read-only GET routes. The work browser uses entities; source endpoints remain diagnostic/history readers. The existing Host/Origin checks still apply; no route writes the coordination ledger.
+The loopback observer exposes persisted coordination entities and source history through read-only GET routes. The work browser uses entities; source endpoints remain diagnostic/history readers. GET routes never write the coordination ledger. The explicit observation-retirement POST operation below is a separate, locally authenticated maintenance action.
+
+## 历史纯观察协调退役
+
+先调用 `POST /coordination/:coordinationId/retire-observation/check`，通过后调用 `POST /coordination/:coordinationId/retire-observation`。两个入口使用完全相同的严格 JSON 请求体，不接受额外字段、查询参数或请求方指定操作者：
+
+```json
+{"groupId":"精确原群ID","sourceId":"动态协调来源ID","expectedRevision":1,"reason":"纯进度询问被误建为持续观察，正式退役"}
+```
+
+`sourceId` 是原协调实体的 `sourceId`（`dynamic_coordination_sources` 身份），不是原钉钉消息 ID。入口要求本机连接、合法 Host/Origin、当前订阅群及已配置的 `webActorId`；操作者由服务端注入。缺身份返回 403，版本已变化返回 409，错误字段返回 400。
+
+- `/check` 调用只读查询，不更新状态、修订、通知或命令回执。返回 `{eligible,alreadyRetired,coordinationId,groupId,sourceId,revision,memberIds,taskIds}`；已退役时另有 `retirement`。
+- 正式提交在同一事务内重新检查群、来源、修订及结构；check 通过不能豁免提交时的竞争检查。只允许活动、全部成员均为 `coordination.observe` 的安排，无待澄清项、执行/派发痕迹、定时或触发实例/作业、外部下游依赖。拒绝返回 `DYNAMIC_COORDINATION_OBSERVATION_RETIREMENT_FORBIDDEN`，不产生部分写入。
+- 成功将原协调改为 `cancelled`、修订加一，记录 `retirement={kind:"observation-only",actorId,reason,expectedRevision,sourceId,at}` 和历史审计；观察成员控制改为 `cancelled`，保留原状态与完成证明。原任务、需求、会话、来源和唤醒队列不变，不重放业务。
+- 仅 `prepared` 且没有发送许可、尝试、令牌、ACK 或回读的相关通知改为 `superseded`。`starting`、`unknown`、`delivered` 原样保留；未知发送仍只能沿原回读对账，不重发、不自动撤回或更正群消息。
+- 返回 `{coordinationId,state,revision,retirement,retiredNotificationIds,replayed}`。同一请求重试复用正式回执；已退役后不同原因、操作者或版本不允许覆盖原审计。
+- 工作行保留，`result={code:"cancelled",label:"错误观察已退役",tone:"neutral"}`，不再以旧版本或原任务诊断显示待核对；该结果不宣称原业务任务完成。
 
 ## `GET /state/coordination-work`
 

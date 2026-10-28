@@ -6,6 +6,8 @@
 
 运行看板的 **协调工作** 页按持久实体展示：每笔定时安排跨改期只有一行，独立无计划触发按触发身份展示，其余不受计划管理的任务按协调批次展示一笔调度；创建、修改和查询消息只作历史，不重复成工作。默认按既有群列表顺序选中首个有效群，保留手选、紧凑列表、分页、5 秒刷新、独立键盘焦点及任务详情往返。列表只有一个实际主要结果：提醒的发送失败、送达未知、待送达和已送达按真实通知事实表达；任务协调突出“前置任务正式完成 → 调度目标任务”的关系，只报告等待前置、待调度、调度成功或真实调度失败，不混入目标任务的执行中或完成状态。目标任务执行由其任务页面负责；等待前置时列出尚未满足的具体任务并支持跳转。调度成功只能来自真实命令回执，不能从目标任务 active、fulfilled 或 completed 反推。详情分开显示计划控制、实际触发结果与真实后续触发/重试记录，取消或暂停不抹去已有送达和失败事实；无记录不承诺重试。原文、变更、历史触发与证据按需展开。实体接口为 `/state/coordination-work`，旧来源接口保留历史诊断，不制造未接纳或被拒绝输入的工作行。读取沿用本机 resident 的 Host/Origin 边界，正文与证据不是脱敏公共导出。见[看板设计合同](docs/manual/observer-design-contract.md)和[API 合同](docs/api/coordination-observer.md)；源码功能不表示共享部署已升级。
 
+历史上由纯进度询问误建的独立观察协调，可通过本地 `POST /coordination/:id/retire-observation/check` 零写核对，再向同路径去掉 `/check` 提交精确退役；请求绑定 `groupId`、协调来源 `sourceId`、`expectedRevision` 和 `reason`，操作者取已配置的 Web 身份。只有无执行命令、定时计划或下游依赖的纯观察安排可退役。原任务、来源、历史完成证明和已开始/未知/已送达通知保持；未开始发送的候选通知退役，不另发群消息。协调工作保留原行并显示“错误观察已退役”，详情仍可查原证据。接口与拒绝条件见 [API 合同](docs/api/coordination-observer.md)。
+
 `dingtalk-dsh-assistant` 把钉钉群聊接入 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness)。当前 resident 将消息单元独占交给话题链或独立任务协调层：普通讨论与单项交办沿话题处理，多任务安排和定时计划可不依附 Topic，直接关联原 Task，不创建一个总 Task 替代它们。任务会话（Owner）持续负责完整目标，独立执行会话使用所选后端的实际工具完成受托工作。
 
 当前源码不再装配固定 workflow、DAG、阶段或节点调度器。从旧 workflow 体系切换到任务会话体系，按[任务会话清洁启动 Runbook](docs/ops/task-session-clean-start.md)使用全新任务库与 Resident domain，保留隔离的旧数据，不导入旧任务或重发旧通知。已经使用任务会话体系的实例升级协调账本，则按[协调账本 v1→v2 迁移 Runbook](docs/ops/coordination-ledger-migration.md)保留原任务与回执；不要把这两种升级场景混用。本文描述源码行为，不表示已发布、已部署或通过真实钉钉验收。
@@ -134,7 +136,7 @@ DSH 模型故障冷却期间补充需求后，到期复核仍会沿原执行身�
   groups/<groupId的摘要>/             群会话 cwd
 ```
 
-协调团队由受信协调账的唯一成员关系确定，共同产物根复用 `taskFilePath(workspaceRoot, coordinationId, 'outputs')`，不由消息路径、标题或模型自行选择。Owner 与 DSH 执行成员均通过原生 `sandboxPolicy.bindArtifactRoot` 绑定同一个根，shell 和 nativeFS 使用相同的受限写边界；原 Task 的 cwd、会话 ID、日志和 Host 阅读投影不搬迁。缺少原生 API、多协调归属、周期范围或外部执行后端无法承载该合同均明确拒绝，不退回全权限。旧来源中的测试路径需要纠正时，沿原 operator 人工申请的 `reply/check` 与正式 `reply` 提交 `artifactScopeCorrection`（coordinationId、expectedRevision、reason）；Host 派生正式根、核验同团队同所有者，并把受信纠正来源提供给全队，不修改完成账本或手动释放后继。
+协调团队由受信协调账的唯一成员关系确定，共同产物根复用 `taskFilePath(workspaceRoot, coordinationId, 'outputs')`，不由消息路径、标题或模型自行选择。Owner 与 DSH 执行成员均通过原生 `sandboxPolicy.bindArtifactRoot` 绑定同一个根，shell 和 nativeFS 使用相同的受限写边界；原 Task 的 cwd、会话 ID、日志和 Host 阅读投影不搬迁。缺少原生 API、多协调归属、周期范围或外部执行后端无法承载该合同均明确拒绝，不退回全权限。历史会话若仍为 danger-full-access，仅在受信 Host 恢复且原生绑定校验通过后追加 workspace-write 模式事件；已有 read-only 和审批策略保持，原会话及产物绑定不重建。旧来源中的测试路径需要纠正时，沿原 operator 人工申请的 `reply/check` 与正式 `reply` 提交 `artifactScopeCorrection`（coordinationId、expectedRevision、reason）；Host 派生正式根、核验同团队同所有者，并把受信纠正来源提供给全队，不修改完成账本或手动释放后继。
 
 统筹与 DSH 原生执行的日志由官方 JSONL 后端直接写入任务目录，保持原生 replay、恢复和压缩能力；不是日志副本。CLI 的受管输入、工具回执和排空记录保存在上述 `claude-events.jsonl`，CLI 自身会话续办沿原身份处理，不能当作 DSH Session replay。群会话使用新 profile 配置的原生持久化根；旧会话不接入当前运行时，不能一概认定在 `%DSH_HOME%/sessions`。会话 ID、后端、路由、控制库与工作目录需一致恢复。在线更换 Agent 工作区被拒绝；离线搬迁与恢复要求见[清洁启动 Runbook](docs/ops/task-session-clean-start.md#回退)。
 
@@ -387,3 +389,5 @@ Web对原任务的补充、重开和取消沿已有话题继续，保留原文�
 本机桌面重启入口与零写入预检见[任务会话启动说明](docs/ops/task-session-clean-start.md#本机桌面重启入口)。
 
 原生 edit 的空路径、空匹配串及新旧内容相同属于写入前参数拒绝。仅在原调用参数、精确错误回执、任务身份和正常回合终态全部核对且执行排空后，对账为 failed/noEffect；不重放编辑。IO、权限、取消和其他歧义错误继续保持 unknown。
+
+正常启动不运行全库 quick_check、integrity_check 或 foreign_key_check；仅核验 schema、初始化标记、实例/epoch 与 owner 身份并恢复当前控制状态。全库完整性审计只在明确运维/迁移检查时执行，不作为普通启动或换包的前置步骤。

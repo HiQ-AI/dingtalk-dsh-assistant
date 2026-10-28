@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS dynamic_task_events(sequence INTEGER PRIMARY KEY AUTO
 CREATE TABLE IF NOT EXISTS dynamic_coordination_consumers(id TEXT PRIMARY KEY,body TEXT NOT NULL CHECK(json_valid(body)));
 `
 
-export function coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, apply, now, validateOwner, triggerState = () => ({ eligible: true }), notifyTask = () => {} }) {
+export function coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, apply, now, validateOwner, webActorId, triggerState = () => ({ eligible: true }), notifyTask = () => {} }) {
   const version = task => ({ requirementRevision: task.requirementRevision, contextRevision: task.contextRevision ?? 0,
     controlRevision: task.controlRevision, runSequence: task.runSequence })
   const current = member => {
@@ -516,6 +516,31 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
       source.acceptedRevision = coordination.revision; source.acceptedKind = 'change'; put('dynamic_coordination_sources', source)
       return { coordination, affected }
     }
+    if (kind === 'coordination.retireObservation') {
+      const check = checkObservationRetirement(a), coordination = get('dynamic_coordination', a.coordinationId)
+      if (check.alreadyRetired) return { coordination, check }
+      const retirement = { kind: 'observation-only', actorId: a.actorId, reason: a.reason,
+        expectedRevision: a.expectedRevision, sourceId: a.sourceId, at: now() }
+      coordination.revision++; coordination.state = 'cancelled'; coordination.retirement = retirement
+      ;(coordination.history ??= []).push({ kind: 'observation-retired', oldRevision: a.expectedRevision,
+        revision: coordination.revision, sourceId: a.sourceId, reason: a.reason, at: retirement.at })
+      for (const id of coordination.memberIds) {
+        const member = get('dynamic_coordination_members', id)
+        member.control = 'cancelled'; member.retirement = clone(retirement)
+        put('dynamic_coordination_members', member)
+      }
+      const retiredNotificationIds = []
+      for (const notification of all('dynamic_notifications')) if (notification.kind === 'coordination'
+        && notification.payload?.fact?.coordinationId === coordination.id && notification.state === 'prepared'
+        && !notification.sendPermit && !notification.dispatchToken && !notification.sendStartedAt
+        && !notification.sendAttemptCount && !notification.ack && !notification.receipt) {
+        notification.state = 'superseded'; notification.updatedAt = retirement.at
+        notification.retirement = { reason: 'coordination-observation-retired', at: retirement.at }
+        put('dynamic_notifications', notification); retiredNotificationIds.push(notification.id)
+      }
+      put('dynamic_coordination', coordination)
+      return { coordination, retiredNotificationIds }
+    }
     if (kind === 'coordination.cancel') {
       const coordination = get('dynamic_coordination', a.coordinationId)
       if (coordination.revision !== a.expectedRevision) fail('DYNAMIC_COORDINATION_REVISION_STALE')
@@ -528,6 +553,35 @@ export function coordinationLedger({ get, put, all, fail, text, integer, array, 
     }
     fail('DYNAMIC_COMMAND_UNKNOWN', kind)
   }
+  function checkObservationRetirement(a) {
+    if (!webActorId || a.actorId !== webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
+    const coordination = get('dynamic_coordination', text(a.coordinationId, 'coordinationId'))
+    text(a.groupId, 'groupId'); text(a.sourceId, 'sourceId'); text(a.reason, 'reason'); integer(a.expectedRevision, 'expectedRevision')
+    if (coordination.groupId !== a.groupId || coordination.sourceId !== a.sourceId) fail('DYNAMIC_COORDINATION_SCOPE_FORBIDDEN')
+    const previous = coordination.retirement
+    if (previous) {
+      if (previous.kind !== 'observation-only' || previous.expectedRevision !== a.expectedRevision
+        || previous.actorId !== a.actorId || previous.reason !== a.reason) fail('DYNAMIC_COORDINATION_REVISION_STALE')
+      return { eligible: true, alreadyRetired: true, coordinationId: coordination.id, groupId: coordination.groupId,
+        sourceId: coordination.sourceId, revision: coordination.revision, memberIds: [...coordination.memberIds], retirement: clone(previous) }
+    }
+    if (coordination.revision !== a.expectedRevision || coordination.state !== 'active') fail('DYNAMIC_COORDINATION_REVISION_STALE')
+    const source = get('dynamic_coordination_sources', a.sourceId)
+    const members = coordination.memberIds.map(id => get('dynamic_coordination_members', id))
+    if (source.state !== 'accepted' || source.coordinationId !== coordination.id || source.groupId !== a.groupId
+      || source.dispatchOwner !== 'coordination' || source.frozen || !members.length || coordination.pendingClarifications?.length
+      || members.some(member => member.coordinationId !== coordination.id || member.observation !== true
+        || member.command?.kind !== 'coordination.observe' || member.dependencies?.length || member.receipt || member.hostHandoffAt
+        || member.createCommand || member.requiresTrigger || member.reorderAssessment || member.recurringOccurrenceId || member.recurringTemplateScheduleId
+        || member.existingInputs?.length || get('dynamic_receipts', member.command.id, true))) fail('DYNAMIC_COORDINATION_OBSERVATION_RETIREMENT_FORBIDDEN')
+    const ids = new Set(coordination.memberIds)
+    if (all('dynamic_coordination_members').some(member => member.coordinationId !== coordination.id && member.dependencies?.some(id => ids.has(id)))
+      || ['schedules', 'occurrences', 'jobs'].some(name => all(`dynamic_coordination_${name}`).some(item => item.coordinationId === coordination.id))
+      || all('dynamic_executions').some(execution => execution.instructionScope?.instructionIds?.some(id => ids.has(id))))
+      fail('DYNAMIC_COORDINATION_OBSERVATION_RETIREMENT_FORBIDDEN')
+    return { eligible: true, alreadyRetired: false, coordinationId: coordination.id, groupId: coordination.groupId,
+      sourceId: coordination.sourceId, revision: coordination.revision, memberIds: [...coordination.memberIds], taskIds: members.map(member => member.taskId) }
+  }
   const coverage = taskId => taskMembers(taskId).filter(m => m.state === 'applied' && current(m)).map(m => m.id).sort()
-  return { command, gate, coverage, scope, claimScope, view, waiting, current, version, instantiateRecurring }
+  return { command, gate, coverage, scope, claimScope, view, waiting, current, version, instantiateRecurring, checkObservationRetirement }
 }

@@ -9,6 +9,19 @@ import { isolationBinding, isolationDigest, hasRestartIsolation } from '../packa
 import { openDynamicTaskStore, pendingTaskHumanReview } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { projectTaskTimeline, latestExecutionRoundTiming } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 
+test('正常初始化与重启不触发全库完整性审计，任务身份保持', async t => {
+  const prepare = DatabaseSync.prototype.prepare
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
+    assert.doesNotMatch(sql, /PRAGMA\s+(?:quick_check|integrity_check|foreign_key_check)/iu)
+    return prepare.call(this, sql)
+  })
+  const f = await fixture(t)
+  await f.command('task.create', { taskId: 'retained', request: '保留原任务' })
+  const before = await f.query({ kind: 'task.get', taskId: 'retained' })
+  await f.reopen()
+  assert.deepEqual(await f.query({ kind: 'task.get', taskId: 'retained' }), before)
+})
+
 test('执行后端固定于创建定义，续办及重启不改派；CLI反馈不伪称原生模型准入', async t => {
   const f = await fixture(t), owner = await f.task()
   await assert.rejects(f.command('execution.dispatch', { binding: owner.binding, key: 'invalid', prompt: '核验', definition: { executionBackend: 'other' } }), { code: 'TASK_EXECUTION_BACKEND_INVALID' })
