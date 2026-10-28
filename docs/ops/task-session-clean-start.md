@@ -209,7 +209,7 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 
 部署此功能前，先使用 `scripts/sandbox-artifact-policy.mjs` 为精确原生 `dsh-sandbox-policy` 制作并核验支持 `bindArtifactRoot(session,{ownerId,artifactRoot})` 的补丁包，按其 Check/Apply/Verify 流程固定 tgz 摘要与 profile override，再按本页正常排空部署插件。仅安装 Assistant 不会补齐原生 API；缺少 API 时插件明确拒绝进入绑定任务，不退回宽权限。不得直接改 node_modules、全局替换 policy.resolve、修改旧 session.header 或切换 danger-full-access。
 
-原生绑定把 `sandbox/mode` 携带完整产物绑定的 事件持久化于各原会话；相同绑定幂等、不同绑定拒绝，每次解析重验目录链。Owner 与 DSH 执行通过同一 API 绑定共同产物根，shell 与 native FS 使用同一策略并拒绝根外业务写；平台临时区域维持原生语义，不作为业务产物目录。绑定会话拒绝模型请求 full-access 绕过。外部执行后端不能据此自动视为已受原生策略约束，须独立支持或拒绝，不能静默放行。
+原生绑定把 `sandbox/mode` 携带完整产物绑定的 事件持久化于各原会话；相同绑定幂等、不同绑定拒绝，每次解析重验目录链。Owner 与 DSH 执行通过同一 API 绑定共同产物根，shell 与 native FS 使用同一策略并拒绝根外业务写；平台临时区域维持原生语义，不作为业务产物目录。绑定会话拒绝模型请求 full-access 绕过。历史 danger-full-access 会话由受信 Host 的原会话恢复流程在 scope、目录及既有绑定全部校验通过后，通过原生 setSandboxMode 追加 workspace-write 事件；read-only 与审批策略保持，不修改旧事件、不重建会话。普通 Remote 命令不能绕过 TASK_SESSION_HOST_WRITER_REQUIRED；部署后等待原 pending wakes 接续，并独立回读新模式事件、同一会话及唤醒消费。外部执行后端不能据此自动视为已受原生策略约束，须独立支持或拒绝，不能静默放行。
 
 核验需同时实跑根内 native write 与 shell 写入、另一个团队及原 cwd 的根外拒绝、跨 Task 原生 read、持久重启后同绑定、旧 header.cwd 不变；再验证原协调链的正式完成事件自然释放后继。原路径要求发生冲突时通过正式技术恢复说明明确纠正，不能仅口头通知而假称冻结需求已经重写，不能手改 Task 或完成账。原生能力证据不等于真实群业务验收通过。
 
@@ -301,3 +301,19 @@ node --input-type=module -e 'import {readFile} from "node:fs/promises"; import {
 ## 协调调度关系只读升级
 
 A 正式完成后调度 B 的关系投影及任务页前置等待说明同时修改 Assistant 与 Observer，无 schema 迁移，不重建业务库、不重放触发或通知。沿用本页原生双包 Check、排空、退出、安装和独立回读流程；部署核对包 SHA/版本、profile、新旧 PID、3080/18998、健康、入站与自启恢复后，再用既有真实关系只读验收。协调页只表达等待前置、待下发、下发成功/失败及真实原因，B 的执行或完成状态仅在 B 任务页；不能据 B active/fulfilled 猜测协调成功。任务页前置等待须可点击具体前置任务，多前置依真实 all 契约列未满足项，不虚构任一触发。隔离正式命令夹具覆盖等待到下发，生产不可为截图手改任务/回执；不存在真实等待中的关系时，应明确原生等待态未验证，而不是造生产状态。合法实体 ID 往返、单次计划时区与取消前未发送文案随本版只读修正，既有真实发送结果仍保留。
+
+### 普通换包与历史恢复检查边界
+
+原生部署脚本的普通换包在 Check 和退出后使用 `inspect-quiescent-ledger.mjs current-control <db> online|offline <expectedPid>`：在同一只读事务中核对原 owner 身份、当前 Task/Execution/Group 的 drained 与 operation/notification 的 starting。unknown 保留原记录，不重放。普通换包不执行全库 quick_check，也不扫描已经排空的历史会话日志；检查快照仍不是原子排空，必须经过原生 SIGINT、精确旧 PID 和子进程退出、端口关闭后再核对控制事实。双包与 profile SHA、安装结果、新 PID 和启动健康门禁不变。
+
+`-RestartMaintenanceProposal` 仍走完整 inspectLedger 历史恢复审计；冷启动和运行时原有完整性检查也保持不变。本次缩短的是普通部署前后重复历史审计，不降低启动恢复合同。
+
+### 历史纯观察协调正式退役
+
+先 POST `/coordination/:id/retire-observation/check`，再向去掉 `/check` 的同一路径提交。两次 body 均为 `{groupId, sourceId, expectedRevision, reason}`；sourceId 必须来自该动态协调，使用本地身份与配置的 webActor。check 零写，提交在事务内重新核对版本和资格：拒绝非观察成员、时间计划、下游依赖或命令执行痕迹。保留原 Task、来源原文、完成证明以及 starting、unknown、delivered 通知，只退役无发送许可的 prepared 通知。该动作不发送群消息；提交后独立读取协调、通知和关联 Task，核对仅目标协调退役及任务事实未变。
+
+原生退出已完成但部署在 `native-dispose` 因剩余子进程超时时，先核对原实例捕获子树、命令用途和精确 PID/创建时间，按实际生命周期处理归属明确的进程；不得把仍活动的业务进程当监听器清理。保留原 `control.json`、`signal.json`、`failure.json` 及处置证据。随后以原参数和原 EvidenceDirectory 增加 `-ResumeNativeDispose -Check`：仅接受原生退出超时、原 PID 已退出、双端口关闭、原包/profile 和 Observer 安装 manifest 一致、计划任务仍禁用及 offline current-control 通过。支持的仅为普通双包换包，不支持带维护/PTY/policy 提案的续接。Check 零写零信号；正式去掉 Check 后锁内复核并从安装阶段续接，保留原失败并新增 resume 证据，不再次发退出信号或先启动旧包。新部署会记录 `captured-descendants.json`，续接按 PID/创建时间逐项检查；旧失败若缺此快照，必须独立留存已核对的原子树及处置证据，不能伪造历史捕获结果。
+
+## 正常启动不扫描全库
+
+动态任务库正常打开及 inspectStartup 不执行 quick_check / integrity_check / foreign_key_check。结构、版本、初始化标记、instanceId、ingress epoch 和 owner 接管校验仍在，读取当前任务/执行/通知以恢复运行不等于审计全部历史。需要全库完整性审计时显式使用历史维护检查 inspectLedger，不能在普通启动和换包路径隐式调用。

@@ -1724,6 +1724,16 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     },
     coordinationSources: coordinationObserver.coordinationSources, coordinationSourceDetail: coordinationObserver.coordinationSourceDetail,
     coordinationWork: coordinationObserver.coordinationWork, coordinationWorkDetail: coordinationObserver.coordinationWorkDetail,
+    async retireCoordinationObservation({ checkOnly = false, ...args }) {
+      if (closed || !legacy.getGroup(args.groupId)) fail('DYNAMIC_COORDINATION_SCOPE_FORBIDDEN')
+      if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
+      const input = { ...args, actorId: config.webActorId }
+      if (checkOnly) return query('coordination.retireObservation.check', input)
+      const receipt = await command('coordination.retireObservation', input, `retire-observation:${hash(input)}`)
+      return { coordinationId: receipt.result.coordination.id, state: receipt.result.coordination.state,
+        revision: receipt.result.coordination.revision, retirement: receipt.result.coordination.retirement,
+        retiredNotificationIds: receipt.result.retiredNotificationIds ?? [], replayed: receipt.replayed === true }
+    },
     listActivities: observation.listActivities, listTaskTimings: observation.listTaskTimings, listPerformance: observation.listPerformance, getActivityAuditStatus: observation.getActivityAuditStatus,
     listAlerts: () => [
       ...residentStore.listGroups().flatMap(group => {

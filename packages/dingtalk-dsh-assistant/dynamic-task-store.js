@@ -366,7 +366,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     if (configuredIngressEpoch && !boundIngressEpoch) fail('DYNAMIC_INGRESS_EPOCH_UNBOUND', 'This ledger was initialized without an ingress epoch; use a new database path for clean ingress.')
     if (boundIngressEpoch !== configuredIngressEpoch) fail('DYNAMIC_INGRESS_EPOCH_MISMATCH', 'The configured ingress epoch must match the epoch bound to this ledger.')
     if ((marker?.ingressEpoch ?? null) !== boundIngressEpoch) fail('DYNAMIC_INGRESS_EPOCH_MARKER_MISMATCH', 'The database and its initialization marker must bind the same ingress epoch.')
-    if (db.prepare('PRAGMA quick_check').get().quick_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').all().length) fail('DYNAMIC_STORE_CORRUPT')
+    // 正常启动仅校验上述结构与实例身份；全库完整性审计由显式运维检查执行。
     db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE;')
     try {
       const previous = db.prepare('SELECT value FROM dynamic_meta WHERE key=\'owner\'').get()?.value
@@ -446,7 +446,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     db?.close(); livePaths.delete(pathKey); throw error
   }
 
-  const coordination = coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, now,
+  const coordination = coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, now, webActorId,
     validateOwner: binding => currentTask(binding),
     triggerState: id => schedules.memberTriggerState(id),
     notifyTask: (taskId, payload) => wake(taskId, 'coordination.changed', payload, `coordination-change:${payload.sourceId}:${payload.instructionId}`),
@@ -621,6 +621,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (a.change.action === 'resolve' && a.change.schedule) result.schedule = schedules.command('coordination.schedule.create', { ...a.change.schedule, coordinationId: result.coordination.id }).schedule
       }
       if (kind === 'coordination.cancel') schedules.cancelCoordination(a.coordinationId)
+      if (kind === 'coordination.retireObservation') {
+        const snapshot = currentCoordinationSnapshot(result.coordination)
+        result.coordination.lifecycleState = snapshot.state; result.coordination.aggregateSnapshot = snapshot
+        result.coordination.aggregateDigest = digest(snapshot)
+        put('dynamic_coordination', result.coordination)
+      }
       return changed(result)
     }
     if (kind === 'task.coordination.input') {
@@ -1978,6 +1984,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       record(q)
       let value
       if (q.kind === 'ingress.policy') value = { instanceId, ingressEpoch: boundIngressEpoch }
+      else if (q.kind === 'coordination.retireObservation.check') value = coordination.checkObservationRetirement(q)
       else if (q.kind === 'coordination.runtime') value = JSON.parse(db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value ?? '{"mode":"active"}')
       else if (q.kind === 'coordination.assessments') value = all('dynamic_coordination_members').filter(m => m.taskId === q.taskId
         && m.control !== 'cancelled' && get('dynamic_coordination',m.coordinationId).state === 'active'

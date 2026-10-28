@@ -12,7 +12,7 @@ import { coordinationContextRecoveryIdentity } from '../packages/dingtalk-dsh-as
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'coordination-'))
-  const options = { dbPath: join(dir, 'task.sqlite'), instanceId: 'test', initialize: true }
+  const options = { dbPath: join(dir, 'task.sqlite'), instanceId: 'test', initialize: true, webActorId: 'operator' }
   let store = await openDynamicTaskStore(options)
   t.after(async () => { await store.close(); await rm(dir, { recursive: true, force: true }) })
   const command = (kind, args, id = randomUUID()) => store.command({ kind, args, id })
@@ -27,6 +27,84 @@ async function fixture(t) {
     async close() { await store.close() },
     async migrate() { store = await openDynamicTaskStore({ ...options, migrate: true }) } }
 }
+
+async function observationRetirementFixture(t) {
+  const f = await fixture(t)
+  for (const id of ['A', 'B', 'C', 'D']) await f.task(id)
+  const binding = (await f.command('task.claim', { taskId: 'A' })).result.binding
+  await f.command('task.complete', { binding, summary: '原A完成', result: {} })
+  await f.command('task.drained', { binding })
+  const source = await f.reserve('progress-query')
+  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: ['A', 'B', 'C', 'D'].map(taskId => ({
+    instructionId: taskId, taskId, observation: true, dependencies: [], command: { id: `coordination-command:batch:${taskId}`, kind: 'coordination.observe',
+      args: { taskId, expectedRequirementRevision: 1, expectedControlRevision: 1, expectedContextRevision: 0, expectedRunSequence: 1 } } })) })
+  await f.command('task.supplement', { taskId: 'B', messageId: 'later', text: '后续资料', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  const args = { coordinationId: 'batch', groupId: 'group', sourceId: source.id, expectedRevision: 1, actorId: 'operator', reason: '纯进度询问被误建为持续观察，正式退役' }
+  const raw = () => {
+    const db = new DatabaseSync(f.options.dbPath, { readOnly: true })
+    try { return db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()
+      .map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]) } finally { db.close() }
+  }
+  return { ...f, args, raw }
+}
+
+test('纯观察退役check零写，正式提交只终结原观察义务并保留四任务和通知证据', async t => {
+  const f = await observationRetirementFixture(t)
+  for (const state of ['prepared', 'starting', 'unknown', 'delivered']) {
+    const notificationId = `old-${state}`
+    await f.command('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
+      payload: { conversationId: 'group', text: '原通知', fact: { coordinationId: 'batch', eventId: `accepted:${state}` } } })
+    if (state !== 'prepared') {
+      const started = (await f.command('notification.start', { notificationId })).result.notification
+      if (state !== 'starting') await f.command('notification.receipt', { notificationId, dispatchToken: started.dispatchToken, state })
+    }
+  }
+  const raw = f.raw(), tasks = await f.query({ kind: 'task.list' }), wakes = await f.query({ kind: 'wake.list' })
+  const notices = await f.query({ kind: 'notification.list' }), members = (await f.query({ kind: 'coordination.get', coordinationId: 'batch' })).members
+  assert.equal((await f.query({ kind: 'coordination.retireObservation.check', ...f.args })).eligible, true)
+  assert.deepEqual(f.raw(), raw, 'check不新增receipt或更新任何行')
+  const result = (await f.command('coordination.retireObservation', f.args, 'retire-exact')).result
+  assert.equal(result.coordination.state, 'cancelled'); assert.equal(result.coordination.lifecycleState, 'cancelled')
+  assert.equal(result.coordination.revision, 2)
+  assert.deepEqual(result.retiredNotificationIds, ['old-prepared'])
+  assert.deepEqual(await f.query({ kind: 'task.list' }), tasks)
+  assert.deepEqual(await f.query({ kind: 'wake.list' }), wakes)
+  for (const notice of notices.filter(item => item.state !== 'prepared'))
+    assert.deepEqual(await f.query({ kind: 'notification.get', notificationId: notice.id }), notice)
+  const after = (await f.query({ kind: 'coordination.get', coordinationId: 'batch' })).members
+  assert.ok(after.every(member => member.control === 'cancelled'))
+  assert.deepEqual(after.find(member => member.taskId === 'A').completionProof, members.find(member => member.taskId === 'A').completionProof)
+  assert.equal((await f.command('coordination.aggregate', { coordinationId: 'batch' })).result.notification, undefined)
+  await f.reopen()
+  assert.equal((await f.command('coordination.retireObservation', f.args, 'retire-exact')).replayed, true)
+  assert.equal((await f.query({ kind: 'coordination.retireObservation.check', ...f.args })).alreadyRetired, true)
+  assert.equal((await f.command('coordination.retireObservation', f.args)).result.coordination.revision, 2)
+})
+
+for (const patch of [{ actorId: 'other' }, { groupId: 'other' }, { sourceId: 'other' }, { expectedRevision: 2 }])
+  test(`退役身份或版本不匹配拒绝：${JSON.stringify(patch)}`, async t => {
+    const f = await observationRetirementFixture(t), before = f.raw()
+    await assert.rejects(f.query({ kind: 'coordination.retireObservation.check', ...f.args, ...patch }), /REQUIRED|FORBIDDEN|STALE/)
+    await assert.rejects(f.command('coordination.retireObservation', { ...f.args, ...patch }), /REQUIRED|FORBIDDEN|STALE/)
+    assert.deepEqual(f.raw(), before)
+  })
+
+for (const variant of ['downstream', 'schedule', 'executable']) test(`非纯独立观察拒绝退役：${variant}`, async t => {
+  const f = await observationRetirementFixture(t)
+  if (variant === 'schedule') await f.command('coordination.schedule.create', { coordinationId: 'batch', scheduleId: 'scheduled', timezone: 'Asia/Shanghai',
+    rule: { kind: 'daily', time: '09:00' }, action: { kind: 'read-query', taskIds: ['B'] }, target: { conversationId: 'group', recipientIds: [] } })
+  else {
+    await f.task('E')
+    const source = await f.reserve('real-action')
+    await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'other', members: [{ ...f.member('E', variant === 'downstream' ? ['B'] : []),
+      command: { ...f.member('E').command, id: 'coordination-command:other:E' } }] })
+    if (variant === 'executable') f.args = { ...f.args, coordinationId: 'other', sourceId: source.id }
+  }
+  const before = f.raw()
+  await assert.rejects(f.query({ kind: 'coordination.retireObservation.check', ...f.args }), /OBSERVATION_RETIREMENT_FORBIDDEN/)
+  await assert.rejects(f.command('coordination.retireObservation', f.args), /OBSERVATION_RETIREMENT_FORBIDDEN/)
+  assert.deepEqual(f.raw(), before)
+})
 
 async function contextReconsiderationFixture(t) {
   const f = await fixture(t), refs = [{ unitId: 'quoted-unit', unitRevision: 1 }]

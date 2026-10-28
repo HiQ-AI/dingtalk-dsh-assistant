@@ -1,5 +1,6 @@
 param(
  [switch]$Check,
+ [switch]$ResumeNativeDispose,
  [Parameter(Mandatory)][string]$Package,
  [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedPackageSha256,
  [Parameter(Mandatory)][int]$ExpectedPid,
@@ -75,14 +76,31 @@ if([bool]$ObserverPackage -ne [bool]$ExpectedObserverPackageSha256){throw 'DEPLO
 if($ObserverPackage -and (Hash $ObserverPackage)-ne$ExpectedObserverPackageSha256.ToLowerInvariant()){throw 'DEPLOY_OBSERVER_HASH_MISMATCH'}
 if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_PROFILE_HASH_MISMATCH'}
 $original=Get-CimInstance Win32_Process -Filter "ProcessId=$ExpectedPid"
+if($ResumeNativeDispose){
+ if($PtyUpgradeProposal-or$ArtifactPolicyProposal-or$RestartMaintenanceProposal){throw 'DEPLOY_RESUME_PATCH_UNSUPPORTED'}
+ $savedControl=Get-Content (Join-Path $EvidenceDirectory 'control.json') -Raw|ConvertFrom-Json
+ $savedSignal=Get-Content (Join-Path $EvidenceDirectory 'signal.json') -Raw|ConvertFrom-Json
+ $savedFailure=Get-Content (Join-Path $EvidenceDirectory 'failure.json') -Raw|ConvertFrom-Json
+ if($savedControl.pid-ne$ExpectedPid-or$savedControl.packageSha256-ne$ExpectedPackageSha256-or$savedControl.profileSha256-ne$ExpectedProfileSha256-or$savedFailure.phase-ne'native-dispose'-or$savedFailure.error-ne'DEPLOY_NATIVE_NOT_QUIESCENT'-or$savedSignal.targetPid-ne$ExpectedPid-or$savedSignal.signalSent-ne'CTRL_C_EVENT'){throw 'DEPLOY_RESUME_EVIDENCE_MISMATCH'}
+ if($original-or(PortOwners 3080).Count-or(PortOwners 18998).Count-or@(Descendants $ExpectedPid).Count){throw 'DEPLOY_RESUME_PROCESS_REMAINS'}
+ $capturedPath=Join-Path $EvidenceDirectory 'captured-descendants.json'
+ if(Test-Path -LiteralPath $capturedPath){
+  foreach($captured in @(Get-Content $capturedPath -Raw|ConvertFrom-Json)){
+   $remaining=Get-CimInstance Win32_Process -Filter "ProcessId=$($captured.ProcessId)"
+   if($remaining-and$remaining.CreationDate-eq[datetime]$captured.CreationDate){throw 'DEPLOY_RESUME_CHILD_PROCESS_REMAINS'}
+  }
+ }
+ $original=[pscustomobject]@{CreationDate=$savedControl.creationDate}
+}else{
 if(-not$original-or$original.CommandLine-notlike "*--require D:\dsh_home\launchers\web-module-loader.cjs*"-or$original.CommandLine-notlike '*profiles\web\node_modules\@deepseek-ai\dsh\lib\bin.js web --no-open*'){throw 'DEPLOY_UNEXPECTED_PROCESS'}
 foreach($port in @(3080,18998)){$owners=PortOwners $port;if($owners.Count-ne1-or$owners[0]-ne$ExpectedPid){throw 'DEPLOY_PORT_IDENTITY_MISMATCH'}}
+}
 $task=Get-ScheduledTask -TaskName $taskName
 $actions=@($task.Actions)
 $expectedAction='-NoProfile -WindowStyle Hidden -Command "$env:DSH_HOME=''D:\dsh_home''; & ''D:\dsh_home\launchers\start-web.ps1'' -ProjectRoot ''D:\project\dingtalk-dsh-assistant'' *> ''D:\project\dingtalk-dsh-assistant\docs\tmp\dsh-web-local\web.log''"'
 if($actions.Count-ne1-or$actions[0].Execute-ne'C:\Program Files\PowerShell\7\pwsh.exe'-or$actions[0].WorkingDirectory-ne'D:\project\dingtalk-dsh-assistant'-or$actions[0].Arguments-cne$expectedAction-or$task.Settings.RestartCount-ne0){throw 'DEPLOY_SCHEDULED_TASK_IDENTITY'}
 $wasEnabled=[bool]$task.Settings.Enabled
-$consoleProof=ReadConsoleProof
+$consoleProof=if($ResumeNativeDispose){if($wasEnabled){throw 'DEPLOY_RESUME_AUTOSTART_ENABLED'};$wasEnabled=[bool]$savedControl.taskEnabled;@{resumed=$true;signals=0}}else{ReadConsoleProof}
 $packageProof=RunNode @($checker,'package',$Package,(Join-Path $workspace 'packages/dingtalk-dsh-assistant'))
 if($ObserverPackage){$observerProof=RunNode @($checker,'package',$ObserverPackage,(Join-Path $workspace 'packages/dingtalk-dsh-observer'))}
 $maintenanceArgs=@()
@@ -91,7 +109,7 @@ if($RestartMaintenanceProposal){
  $maintenanceProposalHash=Hash $RestartMaintenanceProposal
  $maintenanceArgs=@('online',[string]$ExpectedPid,$RestartMaintenanceProposal)
 }
-$ledgerProof=RunNode (@($ledger,$db,$agentWorkspace)+$maintenanceArgs)
+$ledgerProof=if($RestartMaintenanceProposal){RunNode (@($ledger,$db,$agentWorkspace)+$maintenanceArgs)}else{$controlMode=if($ResumeNativeDispose){'offline'}else{'online'};RunNode @($ledger,'current-control',$db,$controlMode,[string]$ExpectedPid)}
 if($PtyUpgradeProposal){$ptyProposalSha256=Hash $PtyUpgradeProposal;$ptyCheck=RunNode @($ptyHelper,'check',$profile,$PtyUpgradeProposal);if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'}}
 $artifactPolicyCheck=$null
 if($ArtifactPolicyProposal){
@@ -105,14 +123,18 @@ $previousCliHome=$env:DSH_HOME
 try{$env:DSH_HOME='D:/dsh_home';& $node $entry plugin --help *> $null;if($LASTEXITCODE){throw 'DEPLOY_CLI_PREFLIGHT_FAILED'}}finally{$env:DSH_HOME=$previousCliHome}
 $observerManifest="$profile/node_modules/@zzusp/dingtalk-dsh-observer/package.json"
 $observerHash=Hash $observerManifest
+if($ResumeNativeDispose-and$observerHash-ne$savedControl.observerManifestSha256){throw 'DEPLOY_RESUME_OBSERVER_CHANGED'}
 if($Check){@{checkOnly=$true;writes=0;signals=0;console=$consoleProof;packageSha256=Hash $Package;profileSha256=Hash $patch;pid=$ExpectedPid;ledger=($ledgerProof|ConvertFrom-Json)}|ConvertTo-Json -Depth 5;exit 0}
-if(Test-Path -LiteralPath $EvidenceDirectory){throw 'DEPLOY_EVIDENCE_ALREADY_EXISTS'}
-New-Item -ItemType Directory -Path $EvidenceDirectory|Out-Null
+if(-not$ResumeNativeDispose){
+ if(Test-Path -LiteralPath $EvidenceDirectory){throw 'DEPLOY_EVIDENCE_ALREADY_EXISTS'}
+ New-Item -ItemType Directory -Path $EvidenceDirectory|Out-Null
+}
 $lockPath=Join-Path $workspace 'docs/tmp/task-session-deployment.lock'
 $deploymentLock=$null
 try{
  [IO.Directory]::CreateDirectory((Split-Path -Parent $lockPath))|Out-Null
  $deploymentLock=[IO.File]::Open($lockPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+ if(-not$ResumeNativeDispose){
  Record 'control' @{backupCreated=$false;pid=$ExpectedPid;creationDate=$original.CreationDate;packageSha256=Hash $Package;profileSha256=Hash $patch;taskEnabled=$wasEnabled;observerManifestSha256=$observerHash;package=($packageProof|ConvertFrom-Json)}
  ProcessIdentity
  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_PROFILE_CHANGED'}
@@ -123,16 +145,27 @@ try{
    Record 'restart-maintenance-preflight' ($ledgerProof|ConvertFrom-Json)
  }
  $phase='native-dispose'
+ $originalDescendants=@(Descendants $ExpectedPid)
+ Record 'captured-descendants' @($originalDescendants|Select-Object ProcessId,ParentProcessId,Name,CreationDate)
  $signalOut=Join-Path $EvidenceDirectory 'signal.json';$signalErr=Join-Path $EvidenceDirectory 'signal.stderr.log'
  $signalArgs=@('-NoProfile','-File',(Join-Path $PSScriptRoot 'stop-web-console.ps1'),'-ExpectedPid',[string]$ExpectedPid)
  $signaler=Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList $signalArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput $signalOut -RedirectStandardError $signalErr
  $signaler.WaitForExit();if($signaler.ExitCode){throw 'DEPLOY_NATIVE_SIGNAL_FAILED'}
  WaitFor {
   if(Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue){return $false}
+  foreach($child in $originalDescendants){
+   $remaining=Get-CimInstance Win32_Process -Filter "ProcessId=$($child.ProcessId)" -ErrorAction SilentlyContinue
+   if($remaining -and $remaining.CreationDate -eq $child.CreationDate){return $false}
+  }
   if((PortOwners 3080).Count-or(PortOwners 18998).Count){return $false}
-  try{$offlineArgs=@($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid);if($RestartMaintenanceProposal){$offlineArgs+=$RestartMaintenanceProposal};$script:offlineProof=RunNode $offlineArgs;return $true}catch{return $false}
+  try{$offlineArgs=if($RestartMaintenanceProposal){@($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid,$RestartMaintenanceProposal)}else{@($ledger,'current-control',$db,'offline',[string]$ExpectedPid)};$script:offlineProof=RunNode $offlineArgs;return $true}catch{return $false}
  } 'DEPLOY_NATIVE_NOT_QUIESCENT'
  if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
+ }else{
+  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()-or(Get-ScheduledTask -TaskName $taskName).Settings.Enabled-or(Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue)-or(PortOwners 3080).Count-or(PortOwners 18998).Count){throw 'DEPLOY_RESUME_STATE_CHANGED'}
+  $offlineProof=RunNode @($ledger,'current-control',$db,'offline',[string]$ExpectedPid)
+  Record 'resume-native-dispose' @{observedAt=[DateTime]::UtcNow.ToString('o');priorFailure=$savedFailure;signals=0}
+ }
  Record 'quiescent' @{ledger=($offlineProof|ConvertFrom-Json);pid=$ExpectedPid;creationDate=$original.CreationDate;remainingDescendants=0;runtimePortClosed=$true;observedAt=[DateTime]::UtcNow.ToString('o');shutdown='SIGINT'}
  if($RestartMaintenanceProposal){
   if((Hash $RestartMaintenanceProposal)-ne$maintenanceProposalHash){throw 'DEPLOY_MAINTENANCE_PROPOSAL_CHANGED'}

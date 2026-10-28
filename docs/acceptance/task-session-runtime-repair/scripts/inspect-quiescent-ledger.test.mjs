@@ -235,3 +235,72 @@ for(const kind of ['hardlink','ancestor-link'])test(`Claude journal ${kind} is r
  assert.throws(()=>inspectLedger(f.path,f.root),/DEPLOY_CLAUDE_LOG_PATH_INVALID/)
  assert.deepEqual(await readFile(target),before)
 })
+
+test('ordinary package control checks current ownership, drain and effects without historic logs', async t => {
+ const { inspectCurrentControl } = await import('./inspect-quiescent-ledger.mjs')
+ const { path, db } = await unstartedFixture(t)
+ db.prepare("UPDATE dynamic_meta SET value=? WHERE key='owner'").run(`${process.pid}:current`)
+ for (const name of ['tasks','executions','groups']) db.exec(`DELETE FROM dynamic_${name}`)
+ db.prepare('INSERT INTO dynamic_tasks VALUES (?)').run(JSON.stringify({taskId:'old',sessionBound:true,sessionId:'missing-history',drained:true}))
+ assert.equal(inspectCurrentControl(path,'online',process.pid).scope,'current-control')
+ assert.throws(()=>inspectCurrentControl(path,'offline',process.pid),/OWNER_NOT_RELEASED/)
+ assert.throws(()=>inspectCurrentControl(path,'online',1),/OWNER_IDENTITY/)
+ assert.throws(()=>inspectCurrentControl(path,'bad',process.pid),/MODE_INVALID/)
+ for (const name of ['tasks','executions','groups']) {
+  db.prepare(`INSERT INTO dynamic_${name} VALUES (?)`).run(JSON.stringify({drained:false}))
+  assert.throws(()=>inspectCurrentControl(path,'online',process.pid),/NOT_DRAINED/)
+  db.exec(`DELETE FROM dynamic_${name} WHERE json_extract(body,'$.drained')=0`)
+ }
+ for (const name of ['operations','notifications']) {
+  db.prepare(`INSERT INTO dynamic_${name} VALUES (?)`).run(JSON.stringify({state:'starting'}))
+  assert.throws(()=>inspectCurrentControl(path,'online',process.pid),/STARTING_EFFECT/)
+  db.exec(`DELETE FROM dynamic_${name}`)
+  db.prepare(`INSERT INTO dynamic_${name} VALUES (?)`).run(JSON.stringify({state:'unknown'}))
+ }
+ const child=spawnSync(process.execPath,['-e',''],{windowsHide:true});assert.equal(child.status,0)
+ db.prepare("UPDATE dynamic_meta SET value=? WHERE key='owner'").run(`${child.pid}:stale`)
+ const proof=inspectCurrentControl(path,'offline',child.pid)
+ assert.equal(proof.staleOwner,true);assert.equal(proof.unknownOperations,1);assert.equal(proof.unknownNotifications,1)
+ assert.equal(db.prepare("SELECT value FROM dynamic_meta WHERE key='owner'").get().value,`${child.pid}:stale`)
+})
+
+test('ordinary deployment selects current controls while maintenance retains historical audit and captured child identities', async () => {
+ const source = await readFile(new URL('./deploy-task-session-native.ps1', import.meta.url), 'utf8')
+ assert.match(source, /\$ledgerProof=if\(\$RestartMaintenanceProposal\).*\$agentWorkspace.*\$controlMode=if\(\$ResumeNativeDispose\)\{'offline'\}else\{'online'\};RunNode @\(\$ledger,'current-control',\$db,\$controlMode/)
+ assert.match(source, /\$offlineArgs=if\(\$RestartMaintenanceProposal\).*\$agentWorkspace.*else\{@\(\$ledger,'current-control',\$db,'offline'/)
+ assert.ok(source.indexOf('$originalDescendants=@(Descendants $ExpectedPid)') < source.indexOf('$signaler=Start-Process'))
+ assert.match(source, /foreach\(\$child in \$originalDescendants\)/)
+ assert.match(source, /\$remaining\.CreationDate -eq \$child\.CreationDate/)
+})
+
+test('resume validates original stop evidence, rejects mismatched package and live captured children', async t => {
+ const root=await mkdtemp(join(tmpdir(),'deploy-resume-test-'))
+ t.after(()=>rm(root,{recursive:true,force:true}))
+ const script=new URL('./deploy-task-session-native.ps1',import.meta.url).pathname.replace(/^\/([A-Z]:)/,'$1')
+ const fixture=join(root,'check.ps1')
+ await writeFile(fixture, `
+$ErrorActionPreference='Stop'
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('${script.replaceAll("'","''")}',[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'PARSE_FAILED'}
+$block=$ast.Find({param($a) $a -is [Management.Automation.Language.IfStatementAst] -and $a.Extent.Text.StartsWith('if($ResumeNativeDispose){') -and $a.Extent.Text.Contains('$savedControl=')},$true).Extent.Text
+$ResumeNativeDispose=$true;$ExpectedPid=123;$ExpectedPackageSha256='package';$ExpectedProfileSha256='profile';$EvidenceDirectory='D:/evidence'
+$control=@{pid=123;packageSha256='package';profileSha256='profile';creationDate='2026-10-28T08:00:00'}
+$signal=@{targetPid=123;signalSent='CTRL_C_EVENT'}
+$failure=@{phase='native-dispose';error='DEPLOY_NATIVE_NOT_QUIESCENT'}
+function Get-Content($path){if($path.EndsWith('control.json')){$control|ConvertTo-Json}elseif($path.EndsWith('signal.json')){$signal|ConvertTo-Json}elseif($path.EndsWith('failure.json')){$failure|ConvertTo-Json}else{@{ProcessId=456;CreationDate='2026-10-28T08:00:00'}|ConvertTo-Json}}
+function PortOwners{ @() };function Descendants{ @() };function Test-Path { $capturedPresent }
+function Get-CimInstance { if($childAlive){[pscustomobject]@{CreationDate=[datetime]'2026-10-28T08:00:00'}} }
+. ([scriptblock]::Create($block));if(-not$original.CreationDate){throw 'VALID_RESUME_REJECTED'}
+$original=$null;$control.packageSha256='changed'
+try { . ([scriptblock]::Create($block));throw 'MISMATCH_ACCEPTED' } catch { if($_.Exception.Message-ne'DEPLOY_RESUME_EVIDENCE_MISMATCH'){throw} }
+$control.packageSha256='package';$capturedPresent=$true;$childAlive=$true
+try { . ([scriptblock]::Create($block));throw 'CHILD_ACCEPTED' } catch { if($_.Exception.Message-ne'DEPLOY_RESUME_CHILD_PROCESS_REMAINS'){throw} }
+$childAlive=$false;$original=[pscustomobject]@{ProcessId=123}
+try { . ([scriptblock]::Create($block));throw 'OWNER_ACCEPTED' } catch { if($_.Exception.Message-ne'DEPLOY_RESUME_PROCESS_REMAINS'){throw} }
+'RESUME_GATES_PASS'
+`)
+ const result=spawnSync('pwsh',['-NoProfile','-File',fixture],{encoding:'utf8',windowsHide:true})
+ assert.equal(result.status,0,result.stdout+result.stderr)
+ assert.match(result.stdout,/RESUME_GATES_PASS/)
+})

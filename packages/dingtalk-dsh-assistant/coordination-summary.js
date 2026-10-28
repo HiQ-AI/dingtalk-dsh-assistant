@@ -28,7 +28,7 @@ export function coordinationSnapshot({ coordination, members, tasks, schedules, 
   const failed = items.some(m => !['template','fulfilled','superseded'].includes(m.state) && (m.blocker || m.waitingReason?.code === 'target_version_changed'))
     || occurrences.some(o => !o.cancelledAt && (['failed','expired','blocked'].includes(o.actionState) || o.deliveryState === 'failed'))
   let state = 'active'
-  if (coordination.state === 'cancelled') state = fulfilled ? 'partially_completed' : 'cancelled'
+  if (coordination.state === 'cancelled') state = coordination.retirement?.kind === 'observation-only' ? 'cancelled' : fulfilled ? 'partially_completed' : 'cancelled'
   else if (coordination.state === 'needs_clarification' || pendingClarifications.length) state = 'needs_attention'
   else if (failed) state = fulfilled ? 'partially_completed' : 'needs_attention'
   else if (!activePlan && !unsettled && !remaining.length && (items.length || occurrences.length || schedules.length))

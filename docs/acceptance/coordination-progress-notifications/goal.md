@@ -27,10 +27,16 @@
 | SG3 | 通知生成与触发修复 | 具体事项、准确状态、无无价值重复 | 已完成 | round-3.md，41项摘要测试通过 |
 | SG4 | 集成验证与交付 | 定向测试、文档、PR 独立回读 | 已完成 | 302项集成及127项最终回归通过；PR #281 OPEN独立回读 |
 
+| SG5 | 受控本地部署 | 包摘要、安装版本、新进程、健康及旧观察止扰只读核验 | 已完成 | docs/tmp/coordination-progress-deployment-20261028/ |
+
+| SG6 | 历史错误协调正式收口 | 精确退役原纯观察安排，保留四任务及已送达，工作不再待核对 | 已完成 | round-5.md；正式revision2及错误观察已退役 |
+
+| SG7 | 原v4 Owner模式故障恢复 | 原会话模式纠正并真实接续，原成果保留 | 已完成 | report.md；原生seq7446/7449，lease165，工具成功回包 |
+
 ## 当前检查点
-- 当前子目标：SG4
-- 唯一下一步：本轮源码交付已完成；上线时按更新runbook安装并独立核验。
-- 未闭环项：本轮源码交付无；正式安装和真实模型/渠道未验证，不能声称线上已修复。
+- 当前子目标：SG7
+- 唯一下一步：本轮技术修复完成；原v4 Owner继续原授权业务交付。
+- 未闭环项：原UAT2业务交付由原任务继续；历史wakes尚未全部ack，全局recover耗时阶段未收敛。
 
 ## 进展
 - 2026-10-28：主检出较旧，已 fetch 并创建最新 main 独立 worktree。最新 coordination-summary.js 有固定“原事项”和版本变化文案，但递归来源尚未证实。
@@ -45,3 +51,14 @@
 - 正式 profile：D:/dsh_home/profiles/web/cordis.patch.yml；存储配置指向 D:/dsh_home/storages/dingtalk-dsh-assistant-v9-pr116；Assistant 端口 18998；当前动态账本为 D:/baibu-agent/.dsh/task-sessions.sqlite。
 
 - PR：https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/281；2026-10-28独立回读 number=281,state=OPEN。
+
+- 2026-10-28：用户明确授权部署；PR #281 已 MERGED，merge SHA 4a6471d4cf4fc5b680a7d31c1427e1ec60113456。源码与当前 HEAD 无差异。正式任务会话实例无旧 workflow maintenance，按 task-session-clean-start 原生双包入口部署。
+
+
+- 2026-10-28：SG5本地部署完成，新PID32564，Assistant2.2.1，包SHA256 2409c86b9b38f4fe619fef2c060bf3109d495f5ef89a140f51fa26fd917fd3f7；配置摘要保持，transportReady=true，degraded/3为部署前已有。旧汇总revision10、通知11、已送达10保持；当前安装代码投影验证四事项标题，历史aggregate缓存未刷新。证据docs/tmp/coordination-progress-deployment-20261028。非必要全库扫描精简仍待修复。
+
+- SG6进展：精确退役入口210+1通过，部署检查67通过，PR285 OPEN，已打包。现场原v4 Owner继续派发本地验证，current-control拒绝busy；已请求用户选择正式暂停/恢复或自然排空。尚未调用退役接口，不可声称原卡片已收口。
+
+- 去全扫版本已安装，新PID5600，57.5秒健康，入站/DWS正常，原协调已正式退役；v4模式RPC被Host writer拒绝，正在受信绑定路径内修复，未改原会话历史。
+
+- 最终现场：PID44064在线，错误观察原工作卡已正式退役；原v4会话workspace-write事件seq7446及新轮次seq7449实际工具回包。需求/控制13不变。原wakes尚未ack，UAT2业务未完成；全局恢复历史登记慢的确切阶段未收敛。见report.md。
