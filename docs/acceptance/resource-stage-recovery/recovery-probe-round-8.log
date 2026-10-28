@@ -1,0 +1,49 @@
+✔ only the two bounded local launch recipes are supported; arbitrary shell extensions reject (1.4439ms)
+✔ existing native probe proves bounded isolation without a new service: PG (3.856ms)
+✔ existing native probe proves bounded isolation without a new service: Maven (1.2665ms)
+✔ scoped probe rejects host still alive (0.7992ms)
+✔ scoped probe rejects old host runner alive (1.3286ms)
+✔ scoped probe rejects unattributed legacy producer alive (0.6827ms)
+✔ scoped probe rejects residual writer (0.5831ms)
+✔ scoped probe rejects listener remains (0.536ms)
+✔ scoped probe rejects provider version changed (0.5327ms)
+✔ scoped probe rejects wrong fatal evidence (0.7012ms)
+✔ scoped probe rejects discarded local effects (0.6368ms)
+✔ scoped probe rejects fake echo command (0.5342ms)
+✔ scoped probe rejects missing final LF (0.9683ms)
+✔ scoped probe rejects LF converted to CRLF (0.5037ms)
+✔ scoped probe rejects probe not producer-settled (0.4858ms)
+✔ scoped probe rejects probe failed (0.4239ms)
+✔ scoped probe rejects foreign probe (0.5289ms)
+✔ scoped probe rejects no reviewed scope (0.2761ms)
+✔ managed plan is rebuilt from original native evidence and bound to the current investigation (1.5655ms)
+✔ actual PowerShell producer filter excludes unrelated Claude and retains DSH ownership and original-source descendants (771.4235ms)
+✔ managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader (11133.4602ms)
+✖ managed native entry rejects changed bytes, stale digest, command injection and native guard denial before launching (4336.6868ms)
+ℹ tests 22
+ℹ suites 0
+ℹ pass 21
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16145.6248
+
+✖ failing tests:
+
+test at test\native-restart-scope-runner-native.test.js:100:1
+✖ managed native entry rejects changed bytes, stale digest, command injection and native guard denial before launching (4336.6868ms)
+  AssertionError [ERR_ASSERTION]: failed-native
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/native-restart-scope-runner-native.test.js:126:11)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -1,13 +1,81 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { available, reason, nativeTaskHost, latestInput, modelToolValues, resolveContextInput, waitUntil } from './fixtures/task-session-native-host.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
+import { createTaskSessions } from '../packages/dingtalk-dsh-assistant/task-session.js'
 
 const call = (name, args) => ({ name, args })
 const submit = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
+
+test('原生资源目录工具驱动准备到发布的原会话续办，目录别名实际落为canonical锁', { skip: !available ? reason : false, timeout: 60000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'native-resource-stage-'))
+  await mkdir(join(root, '.dsh'))
+  await writeFile(join(root, '.dsh', 'shared-resources.json'), JSON.stringify({ version: 1, resources: [
+    { key: 'publish:example:uat', aliases: ['old:uat'], purpose: 'publication', description: '隔离测试发布目标' },
+  ] }))
+  let catalogRead = false
+  const readRounds = new Set(), observed = []
+  const h = await nativeTaskHost(root, async request => {
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      if (!catalogRead) { catalogRead = true; return [call('task_resource_catalog', {})] }
+      const execution = input.executions[0]
+      if (!execution) {
+        const directory = modelToolValues(request).findLast(item => item.enabled === true && item.version === 1)
+        assert.equal(directory.resources[0].purpose, 'publication')
+        return [call('task_delegate', { key: 'prepare', objective: '准备：本地核验源码', resourcePhase: 'prepare', resourceKeys: [] }), submit('wait', '等待本地准备结果')]
+      }
+      if (!execution.drained) return [submit('wait', '原执行尚未排空')]
+      if (execution.resourcePhase === 'prepare') return [call('task_delegate', { key: 'publish', executionId: execution.executionId,
+        objective: '发布：取得共享环境后核验准备结果', resourcePhase: 'publish', resourceKeys: ['old:uat'] }), submit('wait', '等待同一成员发布核验')]
+      return [submit('complete', '两阶段的原生资源证据已核对')]
+    }
+    if (!readRounds.has(input.objective)) { readRounds.add(input.objective); return [call('execution_resources_read', {})] }
+    const snapshot = modelToolValues(request).findLast(item => item.resources && item.executionId)
+    assert.ok(snapshot)
+    observed.push(snapshot)
+    return [call('execution_submit', { output: { status: 'completed', summary: '已核对本轮阶段与资源', evidence: [], limitations: [], artifacts: [] } })]
+  })
+  t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'native-resource-stage', objective: '准备后再联合取得发布资源，复用原执行' })
+  await h.service.whenIdle()
+  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal(observed.length, 2)
+  assert.equal(observed[0].resourcePhase, 'prepare')
+  assert.equal(observed[0].resources.state, 'none')
+  assert.equal(observed[1].resourcePhase, 'publish')
+  assert.equal(observed[1].resources.state, 'held')
+  assert.deepEqual(observed[1].resources.keys, ['publish:example:uat'])
+  assert.equal(observed[1].executionId, observed[0].executionId)
+  assert.equal(observed[1].sessionId, observed[0].sessionId)
+  assert.equal((await h.query('execution.list', { taskId: task.taskId })).length, 1)
+  assert.deepEqual(await h.query('resource.list'), [])
+  assert.deepEqual(await h.query('operation.list'), [])
+  assert.equal(h.toolResults.some(item => item.result.isError), false)
+})
+
+test('旧执行缺resourcePhase时原生读取仍为lossless JSON，旧Host未提供目录回调可只读空目录', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'native-resource-legacy-view-'))
+  let step = 0
+  const h = await nativeTaskHost(root, async () => step++ === 0
+    ? [call('task_resource_catalog', {}), call('task_execution_read', { executionId: 'legacy-execution' })]
+    : [submit('wait', '旧执行读取成功')], { resident: true })
+  const manager = createTaskSessions({ ctx: h.ctx, isCurrent: async () => true, getWorkspaceDir: async () => root })
+  t.after(async () => { try { await manager.close(); await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
+  const result = await manager.run({ binding: { kind: 'task-session', taskId: 'legacy-task', sessionId: 'legacy-owner', leaseEpoch: 1, sessionBound: false },
+    provider: 'native-task-test', model: 'controlled', agentPreset: 'native-test', input: { task: { title: '旧执行读取', objective: '保留历史记录' }, wakes: [] },
+    onSessionBound: async () => {}, submit: async () => ({ accepted: true }),
+    readExecution: async () => ({ executionId: 'legacy-execution', inputVersion: 1, status: 'succeeded', document: null,
+      resources: { state: 'released', keys: [], holder: null, blocking: [] } }),
+  })
+  assert.equal(result.status, 'submitted')
+  const reads = h.toolResults.filter(item => ['task_resource_catalog', 'task_execution_read'].includes(item.name))
+  assert.equal(reads.length, 2)
+  assert.ok(reads.every(item => !item.result.isError), JSON.stringify(reads))
+})
 
 // 真实 Host 和账本串联两轮同会话续办；模型只脚本化选工具，不伪造资源回执。
 for (const resourceKeys of [['uat2'], []]) test(`执行原生工具读取自身租约并在续办刷新，初始资源=${resourceKeys.join(',') || 'none'}`, { skip: !available ? reason : false, timeout: 60000 }, async t => {
@@ -29,8 +97,11 @@ for (const resourceKeys of [['uat2'], []]) test(`执行原生工具读取自身�
       return [submit('complete', '已核对两轮独立租约')]
     }
     if (latestInput(request).objective.startsWith('协作核对')) {
-      const team = modelToolValues(request).findLast(item => Array.isArray(item.executions))
-      if (!team) return [call('execution_team_read', {})]
+      const projected = modelToolValues(request).findLast(item => Array.isArray(item.executions) || item.contextReadRequired)
+      if (!projected) return [call('execution_team_read', {})]
+      let team
+      try { team = resolveContextInput(request, projected) }
+      catch (error) { if (error.contextReads) return error.contextReads.map(args => call('model_content_read', args)); throw error }
       const original = team.executions.find(item => item.inputVersion === 2)
       assert.ok(original?.result)
       return [call('execution_submit', { output: { status: 'completed', summary: '已核对原成员续办身份和结果', evidence: [original.executionId], limitations: [], artifacts: [] } })]

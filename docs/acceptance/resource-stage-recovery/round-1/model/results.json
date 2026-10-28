@@ -1,0 +1,356 @@
+{
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "high",
+  "sourceDigests": {
+    "taskSession": "3d4b80efb28b1847c8835968951bdcbbe86a417fcd8e1d63b5d44c1bc7138f57",
+    "scenarios": "debeb3f279dbb537df03ae90b3b95bc66a2f710b14fc37454c3b4d299a0a77f3",
+    "evaluator": "3cb6f198bd0a4c5381b5ec48ec06fb6756d72a90afad1384e089d43f5cc56697"
+  },
+  "cases": [
+    {
+      "id": "publication-held-for-local-preparation",
+      "artifactDirectory": "case-001",
+      "pass": false,
+      "error": "tool output failures invalidate this evaluation\n\n2 !== 0\n",
+      "actions": [
+        {
+          "tool": "read-progress"
+        },
+        {
+          "tool": "read-execution",
+          "executionId": "original"
+        },
+        {
+          "tool": "feedback",
+          "args": {
+            "key": "original-release-publication-for-local-prepare",
+            "executionId": "original",
+            "feedback": true,
+            "objective": "目标仍是修复导入回显，完成必要验证后部署到已获准 UAT。当前文档显示尚需本地 mock/测试夹具修复、独立工作树清理和重编译，这些不访问共享发布对象，却计划持续持有共享发布资源，须调整。请停止新增共享发布操作，不要持发布资源继续上述本地准备；在当前安全点报告已发生效果、所有在途作业及终态证据，提交阶段交接并结束本轮使会话与操作安全排空，由 Host 释放资源。不要自行强制释放或切换资源集合。待统筹核对排空后，将沿原执行以 prepare 阶段和必要准备资源续办本地修复与验证；发布前置齐备后再联合申请 publish 所需资源完成已授权 UAT 部署，不新增业务审批。",
+            "context": "已核对原始用户要求、当前第1轮文档及资源记录：资源状态 held、阶段 publish，文档明确当前持有 publication:sample:uat；后续动作仅为本地准备。文档称此前共享操作均已终态且无后台作业，但原执行仍 running、drained=false，须以 Host 排空结果为切换前提。现有两位只读成员已完成范围和材料核对，无需重复调查或另派执行。此次仅纠正资源占用与阶段不匹配，不改变目标、授权或立即切阶段。"
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "导入回显修复还缺本地测试准备和验证，尚未完成 UAT 部署。发现本地准备期间仍占用共享发布资源，已要求先到安全点结束本轮、等待资源释放，再继续本地修复验证；部署授权不变。",
+            "evidence": [
+              "当前执行文档明确：下一步为修复 mock、清理独立工作树和重编译，不访问共享发布对象。",
+              "资源记录显示仍持有共享发布资源，处于发布阶段；原执行尚未排空。",
+              "纠偏提醒已送达，尚未消费；下一必要结果是安全点交接及 Host 确认排空，之后沿原执行切回准备阶段续办。"
+            ],
+            "limitations": [
+              "尚不能确认资源已释放或纠偏已落实。",
+              "必要验证及 UAT 部署结果尚未提交；资源目录和执行详情读取失败，本轮已用现有目录快照核对资源状态与既有反馈，未直接切换资源。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_execution_progress",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\resource-stage-recovery\\round-1\\model\\case-001\\original.md"
+          }
+        },
+        {
+          "sequence": 22,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\resource-stage-recovery\\round-1\\model\\case-001\\scope-review.md"
+          }
+        },
+        {
+          "sequence": 23,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\resource-stage-recovery\\round-1\\model\\case-001\\evidence-review.md"
+          }
+        },
+        {
+          "sequence": 27,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "947076a2eadafef3efd4a0a4a6afd47aa18be26612aea1b639fdbd967c66b3ea:sha256:5a236ea7147667ea3332199ebbc469405a4ffac04c12bea6f3cef2684a1719e1",
+            "path": "/sources/user-request"
+          }
+        },
+        {
+          "sequence": 32,
+          "tool": "task_execution_read",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 33,
+          "toolError": "INVALID_TOOL_OUTPUT"
+        },
+        {
+          "sequence": 34,
+          "tool": "task_resource_catalog",
+          "args": {}
+        },
+        {
+          "sequence": 35,
+          "toolError": "TOOL_ERROR"
+        },
+        {
+          "sequence": 36,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "947076a2eadafef3efd4a0a4a6afd47aa18be26612aea1b639fdbd967c66b3ea:sha256:6bbf31cd8af46c1b7107134065b48e600e8cbd94c237e2dfdce51eaf8765d53d"
+          }
+        },
+        {
+          "sequence": 41,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "947076a2eadafef3efd4a0a4a6afd47aa18be26612aea1b639fdbd967c66b3ea:sha256:5a236ea7147667ea3332199ebbc469405a4ffac04c12bea6f3cef2684a1719e1",
+            "path": "/executions/original"
+          }
+        },
+        {
+          "sequence": 46,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "947076a2eadafef3efd4a0a4a6afd47aa18be26612aea1b639fdbd967c66b3ea:sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          }
+        },
+        {
+          "sequence": 48,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "947076a2eadafef3efd4a0a4a6afd47aa18be26612aea1b639fdbd967c66b3ea:sha256:7272b3eabb156f14afcd6e3c23bd0a3451d217de91da7ba9d09b27d9b8abbaa8"
+          }
+        },
+        {
+          "sequence": 50,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "947076a2eadafef3efd4a0a4a6afd47aa18be26612aea1b639fdbd967c66b3ea:sha256:4fbf380e8eb584db2106fdae4ab93f32c2fcdc1cfdc7e6041e7ff29c20667c75"
+          }
+        },
+        {
+          "sequence": 55,
+          "tool": "task_delegate",
+          "args": {
+            "key": "original-release-publication-for-local-prepare",
+            "executionId": "original",
+            "feedback": true,
+            "objective": "目标仍是修复导入回显，完成必要验证后部署到已获准 UAT。当前文档显示尚需本地 mock/测试夹具修复、独立工作树清理和重编译，这些不访问共享发布对象，却计划持续持有共享发布资源，须调整。请停止新增共享发布操作，不要持发布资源继续上述本地准备；在当前安全点报告已发生效果、所有在途作业及终态证据，提交阶段交接并结束本轮使会话与操作安全排空，由 Host 释放资源。不要自行强制释放或切换资源集合。待统筹核对排空后，将沿原执行以 prepare 阶段和必要准备资源续办本地修复与验证；发布前置齐备后再联合申请 publish 所需资源完成已授权 UAT 部署，不新增业务审批。",
+            "context": "已核对原始用户要求、当前第1轮文档及资源记录：资源状态 held、阶段 publish，文档明确当前持有 publication:sample:uat；后续动作仅为本地准备。文档称此前共享操作均已终态且无后台作业，但原执行仍 running、drained=false，须以 Host 排空结果为切换前提。现有两位只读成员已完成范围和材料核对，无需重复调查或另派执行。此次仅纠正资源占用与阶段不匹配，不改变目标、授权或立即切阶段。"
+          }
+        },
+        {
+          "sequence": 60,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "导入回显修复还缺本地测试准备和验证，尚未完成 UAT 部署。发现本地准备期间仍占用共享发布资源，已要求先到安全点结束本轮、等待资源释放，再继续本地修复验证；部署授权不变。",
+              "evidence": [
+                "当前执行文档明确：下一步为修复 mock、清理独立工作树和重编译，不访问共享发布对象。",
+                "资源记录显示仍持有共享发布资源，处于发布阶段；原执行尚未排空。",
+                "纠偏提醒已送达，尚未消费；下一必要结果是安全点交接及 Host 确认排空，之后沿原执行切回准备阶段续办。"
+              ],
+              "limitations": [
+                "尚不能确认资源已释放或纠偏已落实。",
+                "必要验证及 UAT 部署结果尚未提交；资源目录和执行详情读取失败，本轮已用现有目录快照核对资源状态与既有反馈，未直接切换资源。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "导入回显修复还缺本地测试准备和验证，尚未完成 UAT 部署。发现本地准备期间仍占用共享发布资源，已要求先到安全点结束本轮、等待资源释放，再继续本地修复验证；部署授权不变。",
+          "evidence": [
+            "当前执行文档明确：下一步为修复 mock、清理独立工作树和重编译，不访问共享发布对象。",
+            "资源记录显示仍持有共享发布资源，处于发布阶段；原执行尚未排空。",
+            "纠偏提醒已送达，尚未消费；下一必要结果是安全点交接及 Host 确认排空，之后沿原执行切回准备阶段续办。"
+          ],
+          "limitations": [
+            "尚不能确认资源已释放或纠偏已落实。",
+            "必要验证及 UAT 部署结果尚未提交；资源目录和执行详情读取失败，本轮已用现有目录快照核对资源状态与既有反馈，未直接切换资源。"
+          ]
+        }
+      },
+      "semanticReviewRequired": "应首次发现即向原执行反馈，在安全点提交并排空后按准备资源续办；不能仅说进展正常、现在就换键、抢锁或另派替身。"
+    },
+    {
+      "id": "closure-with-repeated-evidence-work",
+      "artifactDirectory": "case-002",
+      "pass": false,
+      "error": "tool output failures invalidate this evaluation\n\n1 !== 0\n",
+      "actions": [
+        {
+          "tool": "read-progress"
+        },
+        {
+          "tool": "read-execution",
+          "executionId": "original"
+        },
+        {
+          "tool": "feedback",
+          "args": {
+            "key": "original-close-delivery-feedback",
+            "executionId": "original",
+            "feedback": true,
+            "objective": "停止重复读取未变化的提交、API 输出和报告，停止改写第三版总结或复制同一日志；复用现有有效证据，一次提交简洁的最终交付结果并结束本轮、排空。结果应列明指定 UAT 的实际候选、镜像摘要、工作负载和对应原始读回引用，说明实际完成的定向只读业务验证及未覆盖范围；不新增浏览器或业务写入测试，不重放已完成的发布。若确有影响完成的新缺口，仅报告具体缺口及依据，不继续泛化完善材料。",
+            "context": "当前用户完整要求为“将已验证修复交付到指定 UAT，并报告实际验证范围”。当前 original.md 第12—16行显示：候选与断言未变，已有原始读回和独立核验，无未知效果或在途作业；上次决定仅剩正式提交结果，但本轮再次重读相同材料，下一计划仍是改写总结和复制日志，尚未提交。这些重复动作没有新增验收价值，已偏离最后交付动作。职责和授权不变，仍由原执行收口，不另建执行或报告。统筹待正式结果及排空后核对完成；现有其他成员成果直接复用。"
+          }
+        },
+        {
+          "tool": "decision",
+          "decision": {
+            "action": "wait",
+            "summary": "现有材料表明 UAT 发布与定向只读验证已有证据，但最终交付结果尚未提交。发现重复重读和改写报告，已要求停止这些重复工作，直接复用证据提交实际交付结果与验证范围；落实情况待核对。",
+            "evidence": [
+              "已核对用户要求：将已验证修复交付到指定 UAT，并报告实际验证范围。",
+              "当前执行文档记录候选和断言未变化，已有原始读回及独立核验，无未知效果或在途作业；剩余动作仅为提交简洁结果并结束。",
+              "当前执行文档同时记录重复读取相同提交、API 输出及报告，计划再次改写总结，未提出新证据缺口。",
+              "已向原负责成员发出聚焦纠偏，要求停止重复整理，提交候选、镜像、工作负载、证据引用和实际验证范围；反馈已接收、尚未消费。"
+            ],
+            "limitations": [
+              "尚未收到最终交付结果，原负责成员尚未结束，暂不宣告全部完成。",
+              "下一检查点是正式结果及排空状态，再对照实际证据核对交付与验证范围；不新增测试或重复发布。"
+            ]
+          }
+        }
+      ],
+      "nativeTrace": [
+        {
+          "sequence": 16,
+          "tool": "task_execution_progress",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 21,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\resource-stage-recovery\\round-1\\model\\case-002\\original.md"
+          }
+        },
+        {
+          "sequence": 22,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\resource-stage-recovery\\round-1\\model\\case-002\\scope-review.md"
+          }
+        },
+        {
+          "sequence": 23,
+          "tool": "read",
+          "args": {
+            "file_path": "D:\\codex\\worktrees\\task-resource-lease\\dingtalk-dsh-assistant\\docs\\acceptance\\resource-stage-recovery\\round-1\\model\\case-002\\evidence-review.md"
+          }
+        },
+        {
+          "sequence": 27,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "b5f64214a2d2f9de7e4f866152a43f3cea0ba67b2bee1a36058165a15c95df82:sha256:8db41d4c34da5ae7278054de5fce8c2d1db414fd23f27305f70db37814ae7c8b",
+            "path": "/sources/user-request"
+          }
+        },
+        {
+          "sequence": 32,
+          "tool": "task_execution_read",
+          "args": {
+            "executionId": "original"
+          }
+        },
+        {
+          "sequence": 33,
+          "toolError": "INVALID_TOOL_OUTPUT"
+        },
+        {
+          "sequence": 34,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "b5f64214a2d2f9de7e4f866152a43f3cea0ba67b2bee1a36058165a15c95df82:sha256:bbadf5095a189b24295194859ed41873dbcfffde5ad7eb520c57004d671cb191"
+          }
+        },
+        {
+          "sequence": 39,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "b5f64214a2d2f9de7e4f866152a43f3cea0ba67b2bee1a36058165a15c95df82:sha256:8db41d4c34da5ae7278054de5fce8c2d1db414fd23f27305f70db37814ae7c8b",
+            "path": "/executions/original"
+          }
+        },
+        {
+          "sequence": 44,
+          "tool": "model_content_read",
+          "args": {
+            "contentRef": "b5f64214a2d2f9de7e4f866152a43f3cea0ba67b2bee1a36058165a15c95df82:sha256:8db41d4c34da5ae7278054de5fce8c2d1db414fd23f27305f70db37814ae7c8b",
+            "path": "/executions/original/feedback"
+          }
+        },
+        {
+          "sequence": 49,
+          "tool": "task_delegate",
+          "args": {
+            "key": "original-close-delivery-feedback",
+            "executionId": "original",
+            "feedback": true,
+            "objective": "停止重复读取未变化的提交、API 输出和报告，停止改写第三版总结或复制同一日志；复用现有有效证据，一次提交简洁的最终交付结果并结束本轮、排空。结果应列明指定 UAT 的实际候选、镜像摘要、工作负载和对应原始读回引用，说明实际完成的定向只读业务验证及未覆盖范围；不新增浏览器或业务写入测试，不重放已完成的发布。若确有影响完成的新缺口，仅报告具体缺口及依据，不继续泛化完善材料。",
+            "context": "当前用户完整要求为“将已验证修复交付到指定 UAT，并报告实际验证范围”。当前 original.md 第12—16行显示：候选与断言未变，已有原始读回和独立核验，无未知效果或在途作业；上次决定仅剩正式提交结果，但本轮再次重读相同材料，下一计划仍是改写总结和复制日志，尚未提交。这些重复动作没有新增验收价值，已偏离最后交付动作。职责和授权不变，仍由原执行收口，不另建执行或报告。统筹待正式结果及排空后核对完成；现有其他成员成果直接复用。"
+          }
+        },
+        {
+          "sequence": 54,
+          "tool": "task_session_submit",
+          "args": {
+            "decision": {
+              "action": "wait",
+              "summary": "现有材料表明 UAT 发布与定向只读验证已有证据，但最终交付结果尚未提交。发现重复重读和改写报告，已要求停止这些重复工作，直接复用证据提交实际交付结果与验证范围；落实情况待核对。",
+              "evidence": [
+                "已核对用户要求：将已验证修复交付到指定 UAT，并报告实际验证范围。",
+                "当前执行文档记录候选和断言未变化，已有原始读回及独立核验，无未知效果或在途作业；剩余动作仅为提交简洁结果并结束。",
+                "当前执行文档同时记录重复读取相同提交、API 输出及报告，计划再次改写总结，未提出新证据缺口。",
+                "已向原负责成员发出聚焦纠偏，要求停止重复整理，提交候选、镜像、工作负载、证据引用和实际验证范围；反馈已接收、尚未消费。"
+              ],
+              "limitations": [
+                "尚未收到最终交付结果，原负责成员尚未结束，暂不宣告全部完成。",
+                "下一检查点是正式结果及排空状态，再对照实际证据核对交付与验证范围；不新增测试或重复发布。"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "status": "submitted",
+        "decision": {
+          "action": "wait",
+          "summary": "现有材料表明 UAT 发布与定向只读验证已有证据，但最终交付结果尚未提交。发现重复重读和改写报告，已要求停止这些重复工作，直接复用证据提交实际交付结果与验证范围；落实情况待核对。",
+          "evidence": [
+            "已核对用户要求：将已验证修复交付到指定 UAT，并报告实际验证范围。",
+            "当前执行文档记录候选和断言未变化，已有原始读回及独立核验，无未知效果或在途作业；剩余动作仅为提交简洁结果并结束。",
+            "当前执行文档同时记录重复读取相同提交、API 输出及报告，计划再次改写总结，未提出新证据缺口。",
+            "已向原负责成员发出聚焦纠偏，要求停止重复整理，提交候选、镜像、工作负载、证据引用和实际验证范围；反馈已接收、尚未消费。"
+          ],
+          "limitations": [
+            "尚未收到最终交付结果，原负责成员尚未结束，暂不宣告全部完成。",
+            "下一检查点是正式结果及排空状态，再对照实际证据核对交付与验证范围；不新增测试或重复发布。"
+          ]
+        }
+      },
+      "semanticReviewRequired": "应沿原执行主动收敛到正式提交和排空，复用已有证据；不能认可继续完善材料、另派重复核验、增加验收或提前宣布完成。"
+    }
+  ]
+}

@@ -53,6 +53,58 @@ function webFailure() {
  return f
 }
 
+test('managed probe child errors retain their original operation identity and exact failure readback gates', async () => {
+ const make = () => {
+  const f = webFailure(), command = 'Write-Output probe-fixture\n'
+  const nativeArguments = { command, description: 'fixture probe', timeoutMs: 60000 }, scriptDigest = hash({ command })
+  const nativeResult = { isError: true, content: [{ type: 'text', text: 'Error: native producer failed before completion' }] }
+  const callId = `${f.call.data.callId}:restart-scope`
+  f.call.data.name = 'execution_restart_scope_probe'
+  f.call.data.arguments = JSON.stringify({ expectedOperationDigest: 'a'.repeat(64), expectedScriptDigest: scriptDigest })
+  f.operation.definition.toolName = f.operation.result.toolName = 'pwsh'
+  f.operation.definition.argumentsDigest = hash(nativeArguments)
+  f.operation.key = `native:execution:1:1:${callId}`
+  f.operation.result.callId = callId; f.operation.result.resultDigest = hash(nativeResult.content)
+  f.value = { probeCallId: callId, scriptDigest, nativeArguments, nativeResult,
+   operationObservation: { result: structuredClone(nativeResult), cancelled: false, postExecutionDecision: 'accept' } }
+  f.sync = () => { f.result.data.message.content = [{ type: 'text', text: JSON.stringify(f.value) }] }
+  f.sync(); return f
+ }
+ const f = make(), unchanged = structuredClone(f.operation)
+ const context = await readNativeOperationContext(f)
+ assert.equal(context.managedParentCallId, 'call-1')
+ assert.equal(context.result.toolCallId, f.operation.result.callId)
+ assert.equal(context.result.isError, true)
+ const proof = await inspectInvestigatedNativeFailure(f)
+ assert.equal(proof.kind, 'native-investigated-failure')
+ assert.equal(proof.operationId, f.operation.operationId)
+ assert.equal(proof.partialEffectsPossible, true)
+ assert.equal(proof.noEffect, undefined)
+ assert.deepEqual(f.operation, unchanged)
+ for (const change of [
+  x => { x.value.nativeArguments.command = x.value.nativeArguments.command.trimEnd() },
+  x => { x.value.nativeResult.isError = false },
+  x => { x.value.operationObservation.result.content[0].text = 'different' },
+  x => { x.result.data.message.isError = false },
+  x => { x.operation.key = 'other' },
+  x => { x.operation.result.resultDigest = 'wrong' },
+  x => { x.value.probeCallId = 'other:restart-scope' },
+  x => { x.original.push(structuredClone(x.result)) },
+ ]) {
+  const changed = make(); change(changed); changed.sync()
+  assert.equal(await readNativeOperationContext(changed), null)
+  assert.equal(await inspectInvestigatedNativeFailure(changed), null)
+ }
+ const blocked = make()
+ blocked.value.nativeResult.content = [{ type: 'text', text: 'post-execute policy refused the original failure' }]
+ blocked.sync()
+ const blockContext = await readNativeOperationContext(blocked)
+ assert.equal(blockContext.result.isError, true)
+ assert.equal(blockContext.finalPolicyResult.isError, true)
+ assert.notEqual(hash(blockContext.result.content), hash(blockContext.finalPolicyResult.content))
+ assert.equal((await inspectInvestigatedNativeFailure(blocked)).kind, 'native-investigated-failure')
+})
+
 for (const drained of [true, false]) test(`Host restart running acknowledgement and successful investigation do not invent a terminal result: drained=${drained}`, async () => {
  const f = fixture()
  f.operation.result = null

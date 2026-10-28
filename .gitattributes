@@ -18,3 +18,8 @@ docs/acceptance/dsh-unified-upgrade/fixtures/*.patch -text whitespace=-blank-at-
 # 复盘补丁保留统一 diff 的空白上下文行和原始字节；不放宽源码检查。
 docs/acceptance/group-confirmation-review/*.patch -text whitespace=-blank-at-eol,-blank-at-eof
 docs/acceptance/group-confirmation-review/round-*/*.patch -text whitespace=-blank-at-eol,-blank-at-eof
+# 个人技能安装补丁和新公共脚本以已核验字节回放，不能被 checkout 的换行转换改写。
+docs/acceptance/resource-stage-recovery/acceptance-helpers/*.patch -text whitespace=-blank-at-eol,-blank-at-eof
+docs/acceptance/resource-stage-recovery/scripts/read-registry-manifest.ps1 -text
+# 原始测试失败输出保留字节，诊断器生成的空白不按源码空白错误处理。
+docs/acceptance/resource-stage-recovery/**/*.log -text whitespace=-blank-at-eol,-blank-at-eof

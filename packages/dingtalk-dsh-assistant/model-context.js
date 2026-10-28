@@ -221,11 +221,11 @@ function directory(records, identity, summary) {
 }
 export function executionDirectory(executions, { historical = false } = {}) {
   return directory(executions, 'executionId', execution => terminalExecutions.has(execution.status) ? {
-    ...fields(execution, ['executionId', 'key', 'status', 'drained', 'inputVersion', 'requirementRevision', 'controlRevision', 'document']),
+    ...fields(execution, ['executionId', 'key', 'status', 'drained', 'resourcePhase', 'inputVersion', 'requirementRevision', 'controlRevision', 'document']),
     input: executionInputDirectory(execution.input, true),
     ...(execution.result ? { result: fields(execution.result, ['current', 'receivedAt', 'recovery']), resultRef: deferModelContent(execution.result) } : {}),
   } : ({ ...fields(execution,
-    ['executionId', 'sessionId', 'taskId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'inputDigest', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'progressReview', 'providerRecovery', 'document']),
+    ['executionId', 'sessionId', 'taskId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'resourcePhase', 'inputVersion', 'inputDigest', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'progressReview', 'providerRecovery', 'document']),
     ...(execution.stageProgress ? { stageProgress: execution.stageProgress } : {}),
     input: executionInputDirectory(execution.input, historical),
     // Keep the Host recovery decision visible without reinjecting the full result.
@@ -306,7 +306,7 @@ export function taskModelInput(input) {
   const currentExecutions = relevant.map(execution => {
     // 日常交接从本轮文档读取完整职责、进度和证据；原账仍保存在 catalog。
     if (execution.document) return { ...fields(execution,
-      ['executionId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'providerRecovery', 'document']),
+      ['executionId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'resourcePhase', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'providerRecovery', 'document']),
       input: fields(execution.input, ['title', 'recoveryReadOnly', 'readbackOperationId', 'skillNames']),
       ...(execution.result ? { result: fields(execution.result, ['current', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'receivedAt', 'recovery']), resultInCatalog: true } : {}) }
     const active = !terminalExecutions.has(execution.status)
@@ -317,7 +317,7 @@ export function taskModelInput(input) {
     // 当前团队成员的职责和自述用于定位/续办；完整证据仍在原目录中验收。
     const summary = decisionContent(execution.result?.payload?.output?.summary)
     return { ...fields(execution,
-      ['executionId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'providerRecovery']),
+      ['executionId', 'key', 'status', 'drained', 'recovering', 'cancelRequested', 'resourcePhase', 'inputVersion', 'leaseEpoch', 'requirementRevision', 'controlRevision', 'providerRecovery']),
       input: { ...executionInputDirectory(execution.input),
         ...(execution.input?.objective !== undefined ? { objective: objective.value } : {}) },
       ...(active && execution.stageProgress ? { stageProgress: stage.value } : {}),

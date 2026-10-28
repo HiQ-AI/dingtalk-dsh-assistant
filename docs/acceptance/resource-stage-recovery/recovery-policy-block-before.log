@@ -1,0 +1,25 @@
+✖ managed native entry rejects tampering and policy denial; a failed real producer stays failed and its original call remains readable (6843.6068ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7392.0287
+
+✖ failing tests:
+
+test at test\native-restart-scope-runner-native.test.js:100:1
+✖ managed native entry rejects tampering and policy denial; a failed real producer stays failed and its original call remains readable (6843.6068ms)
+  AssertionError [ERR_ASSERTION]: Failed managed child must remain readable using its original operation identity
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/native-restart-scope-runner-native.test.js:143:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

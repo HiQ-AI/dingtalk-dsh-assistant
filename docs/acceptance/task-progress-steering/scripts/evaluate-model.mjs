@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { nativeTaskHost } from '../../../../test/fixtures/task-session-native-host.js'
 import { createTaskSessions } from '../../../../packages/dingtalk-dsh-assistant/task-session.js'
 import { inspectSession } from '../../../../packages/dingtalk-dsh-assistant/session-persistence.js'
-import { retrospectiveCorrectionScenarios, configurationInquiryScenarios } from '../../../../test/fixtures/task-progress-correction-scenarios.js'
+import { retrospectiveCorrectionScenarios, configurationInquiryScenarios, resourceClosureScenarios } from '../../../../test/fixtures/task-progress-correction-scenarios.js'
 
 // 使用生产统筹实现和真实模型；所有执行/日志读回为合成材料，禁止文件、网络和业务工具执行。
 // 参数：输出目录、已安装 Connect 入口、模型名称、推理深度、当前代理。沿当前登录，不读出或复制凭据。
@@ -23,6 +23,7 @@ const existingFeedback = consumed => [{ id: 'prior-direction', receivedAt: '2026
   consumedAt: consumed ? '2026-10-21T00:01:00Z' : null, modelStepEnteredAt: consumed ? '2026-10-21T00:01:00Z' : null,
   sequence: consumed ? 10 : null, text: '原目标只核对 A 文件，停止读取其他项目，核对 A 后报告。' }]
 const allCases = [
+  ...resourceClosureScenarios,
   ...retrospectiveCorrectionScenarios,
   ...configurationInquiryScenarios,
   { id: 'first-scope-drift', goal: '只核对 A 文件并报告，不处理其他项目。', delegated: '核对 A 文件后报告。',
@@ -50,7 +51,7 @@ const sessions = createTaskSessions({ ctx: h.ctx, isCurrent: async () => true, g
 const results = []
 const evidencePaths = new Set()
 // 错误的人工申请/取消也让模型真实选到合成出口，再判定失败；禁止后重试会掩盖第一次错误判断。
-const permitted = new Set(['task_execution_progress', 'task_execution_read', 'task_decisions_read', 'model_content_read', 'task_delegate', 'task_session_submit', 'task_request_human', 'task_execution_cancel'])
+const permitted = new Set(['task_execution_progress', 'task_execution_read', 'task_decisions_read', 'task_resource_catalog', 'model_content_read', 'task_delegate', 'task_session_submit', 'task_request_human', 'task_execution_cancel'])
 h.ctx.on('tools/pre-execute', async (exec, next) => {
   if (permitted.has(exec.name)) return next()
   // 生产内容引用可通过原生 read 读取；仅放行本轮生成的合成材料，真实工作区仍不可访问。
@@ -76,8 +77,9 @@ try {
     const resultWake = sample.lifecycle === 'result'
     const binding = { kind: 'task-session', taskId, sessionId: `owner-${caseNumber}`, leaseEpoch: 1, requirementRevision: 1, controlRevision: 1 }
     const execution = { taskId, executionId: 'original', sessionId: 'original-executor', status: resultWake ? 'succeeded' : 'running', drained: resultWake, inputVersion: 1, leaseEpoch: 1,
+      resourcePhase: sample.resources?.phase ?? 'prepare',
       input: { objective: sample.delegated }, feedback: structuredClone(sample.prior ?? []),
-      resources: { state: 'none', keys: [], holder: null, blocking: [] } }
+      resources: structuredClone(sample.resources ?? { state: 'none', keys: [], holder: null, blocking: [] }) }
     const output = summary => ({ current: true, requirementRevision: 1, controlRevision: 1, inputVersion: 1, leaseEpoch: 1,
       receivedAt: '2026-10-22T00:02:00Z', payload: { output: { status: 'completed', summary, evidence: sample.events, limitations: [], artifacts: [] } } })
     if (resultWake) execution.result = output(sample.resultSummary)
@@ -124,6 +126,7 @@ try {
         readProgress: async () => { actions.push({ tool: 'read-progress' }); return progress },
         readExecution: async executionId => { actions.push({ tool: 'read-execution', executionId }); return executions.find(item => item.executionId === executionId) },
         readDecisions: async () => ({ taskId, decisions: [], nextBefore: null }),
+        readResourceCatalog: async () => ({ enabled: true, version: 1, resources: [{ key: 'publication:sample:uat', aliases: [], purpose: 'publication', description: '本案例的共享发布目标' }] }),
         cancelExecution: async args => { actions.push({ tool: 'cancel', args }); return { received: true } },
         delegate: async args => {
           actions.push({ tool: args.feedback ? 'feedback' : args.executionId ? 'continue' : 'delegate', args })

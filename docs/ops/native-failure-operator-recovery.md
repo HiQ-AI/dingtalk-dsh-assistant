@@ -12,7 +12,26 @@
 
 原 operation 保持 `unknown`、原 job 观察值和缺失结果不变。受信的 Host 退出事实、精确原调用绑定、成功且排空的同任务调查，以及当前 operator 的正式 `reply/check`、`reply` 可以共同记录独立的 `host-restart-isolated` 审计；该审计不代表原命令成功或失败，也不补写 tool/result。
 
-通过 `nativeRestartResolutions` 提交 operationId、原 operationDigest 和 scopeEvidence。首次 check 只生成固定只读探针，返回 ready=false；必须在绑定的只读调查中真实运行该探针，再携带 probeExecutionId/probeCallId 检查。ready=true 后使用返回的 expectedIsolationDigest 确认，账本将确认、审计和原人类答复原子持久化。重复确认只能复用同一正文。
+通过 `nativeRestartResolutions` 提交 operationId、原 operationDigest 和 scopeEvidence。首次 check 只生成固定只读探针，返回 ready=false，同时返回 `requiredScopeProbes[].managedCall`。将其中的小参数对象交给原任务中绑定同一 `readbackOperationId` 的只读执行成员，调用 `execution_restart_scope_probe`。Host 从原账本和原生记录重建计划并核对两个摘要，直接将权威 command（包含末尾 LF）交给原生 `pwsh`；不用手抄长命令、trim、换行归一化或包裹第二层 shell。续办原调查成员即可，不为取计划新建成员。
+
+调用形式如下；值直接取本次 check 的 `managedCall.arguments`，不沿用历史摘要或其他操作的证据：
+
+```js
+execution_restart_scope_probe({
+  expectedOperationDigest, expectedScriptDigest,
+  scopeEvidence: { hostPid, hostLogPath, hostLogSha256,
+    producerScopeReviewed: true, localEffectsOnlyConfirmed: true,
+    excludeOriginalSourcesConfirmed: true }
+})
+```
+
+此入口只在当前 DSH 原生只读调查、且绑定原 operation 时提供，不接受 command、目标操作 ID 或后台运行参数。内层仍经过原生 guard、operation 账本、job 登记和结果处理。原生外层 `tool/call/result` 保留受管实参及子结果；正式读取同时验证 command 精确相等、唯一的同 root 原生 job、producer 完成记录及成功且排空的调查。摘要陈旧、命令有一个字节变化、权限拒绝、多个 job 或缺失结果都不能核销。
+
+工具调用成功和进程成功分开核对：原生前台 pwsh 即使返回 `isError=false`，也可能实际以非零退出码结束；受管入口要求 producer 的 `exit code: 0` 才返回成功。失败子结果保留在外层原生错误回执中，通用原操作调查按原 callId、参数及结果摘要读回，不换 operation 身份、不将 unknown 改成成功。原生 guard 在派发前拒绝时不产生已执行操作；不能为补证重放旧命令。
+
+结果策略还可能在进程完成后拒绝该调用。因此受管回执分别保留 `operationObservation`（Host 实际写入原操作账本时的结果、取消与策略观察）和 `nativeResult`（原生工具管线最终返回的结果）。通用读回只用前者匹配原账本摘要，同时通过 `finalPolicyResult` 呈现最终拒绝；不得把策略拒绝内容覆盖进旧摘要，也不能因原 job 已完成而把最终 block 当作成功。隔离凭证仍要求账本观察、最终工具结果、外层结果及 producer 记录全部满足成功条件。
+
+执行结束并完成原效果只读核验后，使用该执行的 executionId 和工具返回的 probeCallId 填回 scopeEvidence，再调用正式 check。ready=true 后使用返回的 expectedIsolationDigest 确认，账本将确认、审计和原人类答复原子持久化。原文 command 仍作为审计计划返回；已有完整的原生直接调用证据继续精确核验，不将手抄执行作为常规路径。重复确认只能复用同一正文。
 
 内置 Windows 核验仅识别限定的本地 PostgreSQL 启动和离线 Maven 编译配方。它核对 OOM 原日志及提供者文件摘要、Host 和其残存子进程、启动时间窗口内具有 DSH 提供者路径归属的生产者，以及命令特有的 PID、端口和保留目录。历史 Windows Job 身份不可恢复时明确记录 unavailable，不能声称已证明其退出码。任何权限拒绝、遗留生产者、未完成调查、跨任务绑定、陈旧摘要或保留物丢失均拒绝确认。operator 还必须审查该配方只影响本地且排除原生产来源。
 

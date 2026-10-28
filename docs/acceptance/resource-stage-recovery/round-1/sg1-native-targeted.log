@@ -1,0 +1,29 @@
+✖ 原生资源目录工具驱动准备到发布的原会话续办，目录别名实际落为canonical锁 (3333.546ms)
+✔ 旧执行缺resourcePhase时原生读取仍为lossless JSON，旧Host未提供目录回调可只读空目录 (642.01ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4598.4075
+
+✖ failing tests:
+
+test at test\task-execution-resources-native.test.js:13:1
+✖ 原生资源目录工具驱动准备到发布的原会话续办，目录别名实际落为canonical锁 (3333.546ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 2
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-execution-resources-native.test.js:46:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

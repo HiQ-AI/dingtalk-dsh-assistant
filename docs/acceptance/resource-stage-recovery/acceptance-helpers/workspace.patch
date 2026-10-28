@@ -1,0 +1,30 @@
+--- a/docs/ops/woodpecker-uat.md
++++ b/docs/ops/woodpecker-uat.md
+@@ -97,6 +97,27 @@
+ 
+ 随后用当前仓库可信客户端上传，直接消费已准备检出。不要等合入后才安装工具/新克隆；也不为了抢赢 Poller 跳过最终 SHA 核对。匹配 Cron 已在途仍正常上传，由服务完成替换。
+ 
++## Registry 清单只读核验
++
++使用 `scripts/read-registry-manifest.ps1` 按成功构建/推送的精确摘要读取。Registry、repository 与摘要从本次可信流水线及目标镜像引用取得，不使用日志里任意一段 sha256。凭据仍由当前环境已有受管 Registry 配置/Secret 入口提供；在同一进程构造完整 Authorization 为 SecureString，不新建凭据、不要求人工抄写、不输出原值。匿名 Registry 可省略该参数。
++
++```powershell
++# 以下变量均来自本轮已核对的目标；$registryAuthorization 来自已有受管凭据入口。
++$manifestJson = & D:/baibu-agent/scripts/read-registry-manifest.ps1 `
++  -Registry $registryOrigin -Repository $imageRepository `
++  -ExpectedDigest $pushedDigest -Authorization $registryAuthorization
++$manifestExitCode = $LASTEXITCODE
++$manifest = $manifestJson | ConvertFrom-Json -ErrorAction Stop
++if ($manifestExitCode -ne 0 -or $manifest.verified -ne $true) {
++  throw 'registry_manifest_unverified: inspect safe reason and original build identity'
++}
++$manifest
++```
++
++脚本只做一次摘要寻址 GET，不跟重定向、不自动登录、不写 Registry。先对原始 HTTP 响应字节算 SHA256，再严格 UTF-8 解码和 JSON 解析，避免 PowerShell byte[] 被转成文本或 JSON 重排影响摘要；已有 `Docker-Content-Digest` 头也必须相等，无该头仍可用原始字节与已知构建摘要相等证明内容身份。输出仅白名单摘要，错误正文、认证头与异常详情不入日志。HTTP、JSON/结构失败与摘要不符分别保留 reason；不能将解析器失败报告为产品失败或据此重建。
++
++`kind=image-manifest` 返回配置摘要和层数量；`kind=image-index` 返回子清单摘要及实际存在的平台字段。索引摘要不能直接与 Pod imageID 比较，按当前节点 OS/architecture/variant 定位唯一对应子清单，再按子摘要调用本脚本。平台缺失/不唯一或链路不全保持未确认，不猜第一项。此检查不替代全部 Pod、外部健康和业务回归。
++
+ ## Dataset UAT2 运行核验
+ 
+ 2026-10-20 当前目标为 `hiqlcd-app-uat2/deployment/dataset`，容器 `dataset`，入口 `https://editor2.hiqdat.dev`。每次仍从目标 Deployment、实际网关路由及当前仓库配置核对，不把这组参数推广到其他环境。

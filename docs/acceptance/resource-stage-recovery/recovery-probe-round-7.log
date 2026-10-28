@@ -1,0 +1,30 @@
+✔ only the two bounded local launch recipes are supported; arbitrary shell extensions reject (1.2125ms)
+✔ existing native probe proves bounded isolation without a new service: PG (3.4814ms)
+✔ existing native probe proves bounded isolation without a new service: Maven (1.197ms)
+✔ scoped probe rejects host still alive (0.74ms)
+✔ scoped probe rejects old host runner alive (1.1726ms)
+✔ scoped probe rejects unattributed legacy producer alive (0.655ms)
+✔ scoped probe rejects residual writer (0.5584ms)
+✔ scoped probe rejects listener remains (0.5253ms)
+✔ scoped probe rejects provider version changed (0.469ms)
+✔ scoped probe rejects wrong fatal evidence (0.6153ms)
+✔ scoped probe rejects discarded local effects (0.5572ms)
+✔ scoped probe rejects fake echo command (0.4498ms)
+✔ scoped probe rejects missing final LF (0.8196ms)
+✔ scoped probe rejects LF converted to CRLF (0.3972ms)
+✔ scoped probe rejects probe not producer-settled (0.3999ms)
+✔ scoped probe rejects probe failed (0.3387ms)
+✔ scoped probe rejects foreign probe (0.4388ms)
+✔ scoped probe rejects no reviewed scope (0.2166ms)
+✔ managed plan is rebuilt from original native evidence and bound to the current investigation (1.2603ms)
+✔ actual PowerShell producer filter excludes unrelated Claude and retains DSH ownership and original-source descendants (767.2683ms)
+✔ managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader (7070.0306ms)
+✔ managed native entry rejects changed bytes, stale digest, command injection and native guard denial before launching (2147.3235ms)
+ℹ tests 22
+ℹ suites 0
+ℹ pass 22
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9916.9437
