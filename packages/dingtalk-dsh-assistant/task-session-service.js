@@ -68,7 +68,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   await mkdir(dirname(config.dbPath), { recursive: true })
   const store = suppliedStore ?? await openDynamicTaskStore({ dbPath: config.dbPath, instanceId: config.instanceId,
     initialize: config.initialize === true, migrate: config.migrate === true, ingressEpoch: config.ingressEpoch, webActorId: config.webActorId,
-    detailRoot: root, resourceCatalog: await readExecutionResourceCatalog(root), startupObserver })
+    resourceCatalog: await readExecutionResourceCatalog(root), startupObserver })
   let persistence, resourceCatalog
   try {
     resourceCatalog = createExecutionResourceCatalog(await store.query({ kind: 'resource.catalog' }))

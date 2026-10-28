@@ -1,9 +1,10 @@
+import {installTaskArchive,archiveTaskRows} from '../packages/dingtalk-dsh-assistant/task-archive.js'
 import { installObserverLegacyExecutionPages } from '../packages/dingtalk-dsh-assistant/observer-legacy-execution-pages.js'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { createReadStream, statSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { installObserverPagination } from '../packages/dingtalk-dsh-assistant/observer-pagination.js'
+import { installObserverPagination,installObserverArchivePagination } from '../packages/dingtalk-dsh-assistant/observer-pagination.js'
 import { installObserverTracePages } from '../packages/dingtalk-dsh-assistant/observer-trace-pages.js'
 
 // Deliberately separate from HTTP/startup. Run only against a stopped, backed-up ledger.
@@ -30,8 +31,23 @@ try{
  if(apply)db.exec('BEGIN EXCLUSIVE')
  if(dynamic&&db.prepare("SELECT value FROM dynamic_meta WHERE key='owner'").get()?.value)throw new Error('OBSERVER_MIGRATION_ACTIVE_OWNER')
  noWal()
+ let archivedTasks=0
+ if(dynamic&&apply){
+  if(db.prepare('PRAGMA user_version').get().user_version===3&&db.prepare("SELECT value FROM dynamic_meta WHERE key='taskArchiveSchema'").get()?.value!=='1')throw new Error('DYNAMIC_SCHEMA_INVALID')
+  installTaskArchive(db,{indexes:true})
+ }
  let ready=dynamic?installObserverPagination(db,{migrate:apply}):installObserverTracePages(db,{migrate:apply})
  if(!dynamic&&db.prepare("SELECT 1 FROM sqlite_master WHERE name='business_tasks'").get())ready=installObserverLegacyExecutionPages(db,{migrate:apply})&&ready
+ if(dynamic&&apply){
+  installObserverArchivePagination(db)
+  let after=''
+  for(;;){
+   const rows=db.prepare("SELECT id FROM dynamic_tasks WHERE id>? AND coalesce(json_type(body,'$.archivedAt'),'null')!='null' ORDER BY id LIMIT 100").all(after)
+   if(!rows.length)break
+   for(const row of rows){archiveTaskRows(db,row.id);archivedTasks++}
+   after=rows.at(-1).id
+  }
+ }
  if(apply)db.exec('COMMIT')
- process.stdout.write(JSON.stringify({ready,applied:apply,requiresOfflineMigration:!ready})+'\n')
+ process.stdout.write(JSON.stringify({ready,applied:apply,requiresOfflineMigration:!ready,archivedTasks})+'\n')
 }catch(cause){if(db.isTransaction)db.exec('ROLLBACK');throw cause}finally{db.close();if(ownerLock?.isTransaction)ownerLock.exec('ROLLBACK');ownerLock?.close()}

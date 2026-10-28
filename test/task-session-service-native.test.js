@@ -970,9 +970,9 @@ test('native sequential handoff preserves one executor before independent review
   assert.equal((await h.query('operation.list', { taskId: created.taskId })).length, 1, 'Verification creates no second write effect')
 })
 
-test('native queued members complete once within the configured concurrency', { timeout: 45000 }, async t => {
-  const fixture = await nativeCase(t, 'task-queued-members-'), steps = new Map()
-  const objectives = Array.from({ length: 3 }, (_, index) => `independent-proof-${index + 1}`)
+test('native service runs eleven independent members within the configured concurrency and completes', { timeout: 45000 }, async t => {
+  const fixture = await nativeCase(t, 'task-eleven-members-'), steps = new Map()
+  const objectives = Array.from({ length: 11 }, (_, index) => `independent-proof-${index + 1}`)
   let delegated = false, peakRunning = 0
   const h = await fixture.host(async (request, host) => {
     const input = latestInput(request)
@@ -1000,11 +1000,11 @@ test('native queued members complete once within the configured concurrency', { 
     assert.ok(JSON.stringify(read.result).includes(input.objective), 'Each native member reads back its own file before submitting')
     return [call('execution_submit', { output: { status: 'completed', summary: input.objective, evidence: [file], limitations: [], artifacts: [file] } })]
   }, { config: { maxConcurrentExecutions: 2 } })
-  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'queued-members', objective: '分别生成并读取三份互不依赖的证据文件，全部核验后完成' })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'eleven-members', objective: '分别生成并读取十一份互不依赖的证据文件，全部核验后完成' })
   await h.service.whenIdle()
   const executions = await h.query('execution.list', { taskId: created.taskId })
-  assert.equal(executions.length, 3, JSON.stringify(h.toolResults.filter(item => item.result.isError)))
-  assert.equal(new Set(executions.map(item => item.sessionId)).size, 3)
+  assert.equal(executions.length, 11, JSON.stringify(h.toolResults.filter(item => item.result.isError)))
+  assert.equal(new Set(executions.map(item => item.sessionId)).size, 11)
   assert.ok(peakRunning > 0 && peakRunning <= 2)
   assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
   for (const execution of executions) {
@@ -1013,7 +1013,7 @@ test('native queued members complete once within the configured concurrency', { 
     assert.equal(await readFile(join(fixture.root, 'tasks', created.taskId, `${execution.input.objective}.txt`), 'utf8'), execution.input.objective)
     assert.match(await readFile(join(fixture.root, 'tasks', created.taskId, 'outputs', execution.executionId, 'round-1.md'), 'utf8'), new RegExp(execution.input.objective))
   }
-  assert.equal((await h.query('operation.list', { taskId: created.taskId })).length, 3)
+  assert.equal((await h.query('operation.list', { taskId: created.taskId })).length, 11)
   assert.ok(!h.toolResults.some(item => item.result.isError))
 })
 

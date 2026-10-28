@@ -1,13 +1,14 @@
 import {observerWorkMetadata} from '../packages/dingtalk-dsh-assistant/observer-work-index.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DatabaseSync } from 'node:sqlite'
-import { installObserverPagination, observerPage } from '../packages/dingtalk-dsh-assistant/observer-pagination.js'
+import { DatabaseSync, constants } from 'node:sqlite'
+import { installObserverPagination, installObserverArchivePagination, observerPage, observerGroupQuery } from '../packages/dingtalk-dsh-assistant/observer-pagination.js'
 
-function fixture(t) {
+function fixture(t,{archives=false}={}) {
  const db = new DatabaseSync(':memory:');t.after(()=>db.close())
  for(const name of ['tasks','executions','wakes','coordination_sources','sources','notifications','coordination']) db.exec(`CREATE TABLE dynamic_${name}(id TEXT PRIMARY KEY,body TEXT)`)
  const put=(table,id,value)=>db.prepare(`INSERT INTO dynamic_${table}(id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body`).run(id,JSON.stringify({id,...value}))
+ if(archives)for(const name of ['tasks','executions','wakes','notifications','receipts'])db.exec(`CREATE TABLE dynamic_archived_${name}(id TEXT PRIMARY KEY,sequence INTEGER NOT NULL,body TEXT)` )
  installObserverPagination(db,{migrate:true})
  return {db,put,page:q=>observerPage(db,q,'test')}
 }
@@ -112,27 +113,127 @@ test('work SQL read model excludes historical bodies while retaining the exact r
 })
 
 
-test('page hydration reads selected IDs only and summary execution pages read no detail',t=>{
- const {db,put}=fixture(t),reads=[]
- for(let n=0;n<25;n++)put('tasks',`t${n}`,{taskId:`t${n}`,status:'active',drained:true,updatedAt:'same'})
- const hydrate=(table,id)=>{reads.push([table,id]);return {taskId:id,request:'full',dialogue:['private']}}
- const result=observerPage(db,{collection:'tasks',offset:10,limit:3},'test',hydrate)
- assert.equal(reads.length,3)
- assert.deepEqual(reads.map(x=>x[1]),result.items.map(x=>x.taskId))
- assert(result.items.every(item=>item.request==='full'&&item.dialogue===undefined))
- put('executions','e',{executionId:'e',taskId:'t',status:'succeeded',sequence:1,drained:true})
- observerPage(db,{collection:'executions',taskId:'t',summary:true,limit:1},'test',hydrate)
- assert.equal(reads.length,3)
+
+test('archive move retains task/topic/human indexes and materializes only selected primary keys',t=>{
+ const {db,put,page}=fixture(t,{archives:true})
+ for(let n=0;n<1000;n++)put('tasks',`t${String(n).padStart(4,'0')}`,{taskId:`t${n}`,groupId:'g',status:'completed',drained:true,updatedAt:'same',archivedAt:'archive',topicRefs:[{topicId:'topic'}],humanRequests:[{requestId:`r${n}`,status:'answered',createdAt:'same',question:'full question'}],request:'full request '.repeat(300)})
+ db.exec('INSERT INTO dynamic_archived_tasks SELECT id,rowid,body FROM dynamic_tasks; DELETE FROM dynamic_tasks;')
+ assert.equal(db.prepare('SELECT count(*) n FROM observer_task_index').get().n,1000)
+ const seen=[];const observed={prepare(sql){const st=db.prepare(sql);return {get:(...a)=>st.get(...a),all:(...a)=>{const rows=st.all(...a);if(sql.includes(' AS body'))seen.push({sql,args:a,rows:rows.length});return rows}}}}
+ const result=observerPage(observed,{collection:'tasks',archived:true,topicId:'topic',groupId:'g',offset:510,limit:10},'test')
+ assert.equal(result.total,1000);assert.equal(result.items.length,10)
+ assert(result.items.every(item=>item.request.length>400&&item.archivedAt==='archive'))
+ assert.equal(seen.reduce((n,x)=>n+x.rows,0),10)
+ const plan=db.prepare('EXPLAIN QUERY PLAN '+seen[0].sql).all(...seen[0].args)
+ assert(plan.some(row=>/SEARCH a USING INDEX/.test(row.detail)));assert(!plan.some(row=>/SCAN [ad]$/.test(row.detail)))
+ assert.equal(page({collection:'tasks',limit:10}).total,0)
+ assert.equal(page({collection:'authorizations',taskId:'t0000',requestId:'r0',limit:1}).items[0].humanRequests[0].question,'full question')
+ const revision=result.revision;put('tasks','live',{taskId:'live',status:'active',drained:true,updatedAt:'later'})
+ assert.throws(()=>page({collection:'tasks',archived:true,offset:520,limit:10,revision}),{code:'OBSERVER_PAGE_STALE'})
+})
+
+test('archived execution summaries and exact authorization notice remain readable',t=>{
+ const {db,put,page}=fixture(t,{archives:true})
+ put('tasks','task',{taskId:'task',status:'completed',drained:true,archivedAt:'archive',humanRequests:[{requestId:'request',status:'answered',createdAt:'time',question:'full question '.repeat(100)}]})
+ for(let n=0;n<23;n++)put('executions',`e${n}`,{executionId:`e${n}`,taskId:'task',status:'succeeded',drained:true,input:{title:'title',prompt:'large prompt'},createdAt:'same'})
+ put('notifications','notice',{id:'notice',taskId:'task',payload:{humanRequestId:'request',audience:'operator',text:'full notice',conversationId:'g',sourceMessageId:'message'}})
+ db.exec('INSERT INTO dynamic_archived_executions SELECT id,rowid,body FROM dynamic_executions; DELETE FROM dynamic_executions; INSERT INTO dynamic_archived_notifications SELECT id,rowid,body FROM dynamic_notifications; DELETE FROM dynamic_notifications; INSERT INTO dynamic_archived_tasks SELECT id,rowid,body FROM dynamic_tasks; DELETE FROM dynamic_tasks;')
+ const first=page({collection:'executions',taskId:'task',summary:true,limit:10}), second=page({collection:'executions',taskId:'task',summary:true,offset:10,limit:10,revision:first.revision}),last=page({collection:'executions',taskId:'task',summary:true,offset:20,limit:10,revision:first.revision})
+ assert.equal(first.total,23);assert.equal(last.items.length,3);assert.equal(new Set([...first.items,...second.items,...last.items].map(x=>x.executionId)).size,23)
+ assert.equal(first.items[0].input.prompt,undefined)
+ const authorization=page({collection:'authorizations',taskId:'task',requestId:'request',limit:1}).items[0]
+ assert.equal(authorization.observerNotice.payload.text,'full notice')
+ assert.equal(authorization.humanRequests[0].question,'full question '.repeat(100))
+ assert.equal(page({collection:'tasks',archived:true,limit:1}).items[0].executionCount,23)
+ assert.equal(observerGroupQuery(db,{kind:'observer.message-contexts',groupId:'g',messageIds:['message']}).notifications[0].payload.text,'full notice')
+ db.exec("DELETE FROM dynamic_archived_tasks WHERE id='task'");assert.equal(page({collection:'tasks',archived:true,limit:1}).total,0)
+ db.exec("INSERT INTO observer_task_index VALUES('missing',NULL,'completed',1,'same')")
+ assert.throws(()=>page({collection:'tasks',archived:true,limit:1}),{code:'OBSERVER_PAGE_DATA_MISSING'})
 })
 
 
-test('authorization pages hydrate selected task/request details rather than SQL-assembled projections',t=>{
- const {db,put}=fixture(t),reads=[]
- for(let n=0;n<25;n++) put('tasks',`t${n}`,{taskId:`t${n}`,objective:'preview',humanRequests:[{requestId:`r${n}`,status:'waiting-reply',createdAt:'same'}]})
- const result=observerPage(db,{collection:'authorizations',filter:'pending',limit:2,offset:5},'test',(table,id)=>{
-  reads.push([table,id]);return {objective:'full objective',humanRequests:[{requestId:'r'+id.slice(1),status:'waiting-reply',question:'full question '.repeat(100)}]}
- })
- assert.equal(result.total,25)
- assert.equal(reads.length,2)
- assert(result.items.every(item=>item.objective==='full objective'&&item.humanRequests.length===1&&item.humanRequests[0].question.length>400))
+test('work metadata retains archived completion and command proof without materializing archived payloads',t=>{
+ const {db,put}=fixture(t,{archives:true}),large='historical payload '.repeat(10000)
+ for(const table of ['coordination_members','coordination_schedules','coordination_occurrences','coordination_jobs','coordination_sources','receipts'])if(!db.prepare("SELECT 1 FROM sqlite_master WHERE name=?").get('dynamic_'+table))db.exec(`CREATE TABLE dynamic_${table}(id TEXT PRIMARY KEY,body TEXT)`)
+ put('coordination','c',{id:'c',groupId:'g',state:'active'})
+ put('coordination_members','m',{id:'m',coordinationId:'c',taskId:'task',state:'fulfilled',command:{id:'cmd'},completionProof:{commandId:'done',eventId:'event',requirementRevision:1,contextRevision:0,controlRevision:1,runSequence:1}})
+ put('tasks','task',{taskId:'task',status:'completed',control:'active',title:'title',request:large,completion:{commandId:'done',instructionIds:['m'],result:large},requirementRevision:1,contextRevision:0,controlRevision:1,runSequence:1,archivedAt:'archive'})
+ put('executions','e',{executionId:'e',taskId:'task',status:'succeeded',drained:true,input:large,result:large})
+ put('receipts','cmd',{id:'cmd',result:{task:{taskId:'task',requirementRevision:1,contextRevision:0,controlRevision:1,runSequence:1,dialogue:large}}})
+ db.exec("INSERT INTO dynamic_archived_tasks SELECT id,rowid,body FROM dynamic_tasks; DELETE FROM dynamic_tasks; INSERT INTO dynamic_archived_executions SELECT id,rowid,body FROM dynamic_executions; DELETE FROM dynamic_executions; INSERT INTO dynamic_archived_receipts SELECT id,rowid,body FROM dynamic_receipts; UPDATE dynamic_receipts SET body=json_object('archivedTaskId','task') WHERE id='cmd';")
+ const captured=[];const observed={prepare(sql){const st=db.prepare(sql);return {get:(...a)=>st.get(...a),all:(...a)=>{const rows=st.all(...a);captured.push({sql,args:a,rows});return rows}}}}
+ const model=observerWorkMetadata(observed,{groupId:'g'})
+ assert.equal(model.tasks[0].status,'completed');assert.equal(model.tasks[0].completion.commandId,'done')
+ assert.equal(model.executions[0].executionId,'e');assert.equal(model.receipts[0].result.task.taskId,'task')
+ assert(!JSON.stringify(model).includes(large))
+ assert(captured.every(entry=>entry.rows.every(row=>!String(row.body).includes(large))))
+ const receiptQuery=captured.find(entry=>entry.sql.includes('LEFT JOIN dynamic_archived_receipts'))
+ const plan=db.prepare('EXPLAIN QUERY PLAN '+receiptQuery.sql).all(...receiptQuery.args)
+ assert(plan.some(row=>/SEARCH a USING INDEX/.test(row.detail)));assert(!plan.some(row=>/SCAN a/.test(row.detail)))
+ db.exec("DELETE FROM dynamic_archived_receipts WHERE id='cmd'")
+ assert.throws(()=>observerWorkMetadata(db,{groupId:'g'}),{code:'DYNAMIC_ARCHIVE_RECEIPT_MISSING'})
+})
+
+
+test('late archive schema installs hooks explicitly once while GET remains free of DDL',t=>{
+ const {db,put,page}=fixture(t)
+ for(const name of ['tasks','executions','wakes','notifications'])db.exec(`CREATE TABLE dynamic_archived_${name}(id TEXT PRIMARY KEY,sequence INTEGER NOT NULL,body TEXT)`)
+ put('tasks','task',{taskId:'task',status:'completed',drained:true,archivedAt:'archive',request:'original'})
+ const before=db.prepare('PRAGMA schema_version').get().schema_version
+ assert.equal(page({collection:'tasks',archived:true,limit:1}).items[0].request,'original')
+ assert.equal(db.prepare('PRAGMA schema_version').get().schema_version,before)
+ assert.equal(installObserverArchivePagination(db),true)
+ const installed=db.prepare('PRAGMA schema_version').get().schema_version
+ assert.equal(installObserverArchivePagination(db),true)
+ assert.equal(db.prepare('PRAGMA schema_version').get().schema_version,installed)
+ db.exec('INSERT INTO dynamic_archived_tasks SELECT id,rowid,body FROM dynamic_tasks; DELETE FROM dynamic_tasks;')
+ assert.equal(page({collection:'tasks',archived:true,limit:1}).items[0].request,'original')
+})
+
+
+test('task state refresh and counts never read historical execution bodies after control indexing',t=>{
+ const {db,put,page}=fixture(t,{archives:true})
+ put('tasks','task',{taskId:'task',status:'active',control:'active',drained:true,lastDecision:{action:'wait'}})
+ for(let n=0;n<100;n++)put('executions',`done-${n}`,{executionId:`done-${n}`,taskId:'task',status:'succeeded',drained:true,inputHistory:['large history '.repeat(1000)]})
+ put('executions','pending',{executionId:'pending',taskId:'task',status:'succeeded',drained:false})
+ assert.equal(db.prepare("SELECT state FROM observer_task_index WHERE id='task'").get().state,'running')
+ put('executions','pending',{executionId:'pending',taskId:'task',status:'succeeded',drained:true})
+ assert.equal(db.prepare("SELECT state FROM observer_task_index WHERE id='task'").get().state,'waiting')
+ const plan=db.prepare("EXPLAIN QUERY PLAN SELECT 1 FROM observer_execution_index e WHERE e.task_id=? AND (e.state IN ('queued','running') OR e.drained=0)").all('task')
+ assert(plan.some(row=>/COVERING INDEX observer_execution_state/.test(row.detail)))
+ let forbiddenReads=0
+ db.setAuthorizer((action,table,column)=>{if(action===constants.SQLITE_READ&&table==='dynamic_executions'&&column==='body'){forbiddenReads++;return constants.SQLITE_DENY}return constants.SQLITE_OK})
+ try {
+  db.exec("UPDATE dynamic_tasks SET body=json_set(body,'$.updatedAt','now') WHERE id='task'")
+  put('wakes','wake',{taskId:'task',state:'acked'})
+  const result=page({collection:'tasks',limit:1})
+  assert.equal(result.items[0].executionCount,101);assert.equal(result.items[0].completedExecutionCount,101)
+  assert.equal(forbiddenReads,0)
+ } finally {db.setAuthorizer(null)}
+ db.exec("INSERT INTO dynamic_archived_executions SELECT id,rowid,body FROM dynamic_executions; DELETE FROM dynamic_executions;")
+ assert.equal(db.prepare('SELECT count(*) n FROM observer_execution_index WHERE drained=1').get().n,101)
+ assert.equal(db.prepare("SELECT state FROM observer_task_index WHERE id='task'").get().state,'waiting')
+ // Repeating an explicit migration must retain archive-aware delete hooks.
+ installObserverPagination(db,{migrate:true})
+ put('tasks','task',{taskId:'task',status:'completed',drained:true,archivedAt:'archive'})
+ db.exec('INSERT INTO dynamic_archived_tasks SELECT id,rowid,body FROM dynamic_tasks; DELETE FROM dynamic_tasks;')
+ assert.equal(page({collection:'tasks',archived:true,limit:1}).items[0].executionCount,101)
+})
+
+test('legacy execution index stays readable without DDL and explicit migration adds control metadata',t=>{
+ const {db,put,page}=fixture(t)
+ put('tasks','task',{taskId:'task',status:'active',control:'active',drained:true,lastDecision:{action:'wait'}})
+ put('executions','execution',{executionId:'execution',taskId:'task',status:'succeeded',drained:false})
+ for(const trigger of db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'").all())if(trigger.sql.includes('drained')||trigger.sql.includes('observer_execution_index'))db.exec(`DROP TRIGGER ${trigger.name}`)
+ db.exec('DROP INDEX observer_execution_state; ALTER TABLE observer_execution_index DROP COLUMN drained;')
+ const version=db.prepare('PRAGMA schema_version').get().schema_version
+ assert.equal(page({collection:'executions',taskId:'task',limit:1}).items[0].executionId,'execution')
+ assert.equal(db.prepare('PRAGMA schema_version').get().schema_version,version)
+ assert(!db.prepare('PRAGMA table_info(observer_execution_index)').all().some(column=>column.name==='drained'))
+ installObserverPagination(db,{migrate:true})
+ assert.equal(db.prepare("SELECT drained FROM observer_execution_index WHERE id='execution'").get().drained,0)
+ let forbiddenReads=0
+ db.setAuthorizer((action,table,column)=>{if(action===constants.SQLITE_READ&&table==='dynamic_executions'&&column==='body'){forbiddenReads++;return constants.SQLITE_DENY}return constants.SQLITE_OK})
+ try {db.exec("UPDATE dynamic_tasks SET body=json_set(body,'$.updatedAt','after-migration') WHERE id='task'");assert.equal(forbiddenReads,0)} finally {db.setAuthorizer(null)}
+ assert.equal(db.prepare("SELECT state FROM observer_task_index WHERE id='task'").get().state,'running')
 })

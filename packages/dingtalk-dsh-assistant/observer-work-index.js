@@ -3,7 +3,26 @@ import {installObserverPagination} from './observer-pagination.js'
 // prompts/results, source bodies, receipt snapshots, evidence and history payloads.
 export function observerWorkMetadata(db,{groupId}={}){
  if(!installObserverPagination(db))throw Object.assign(new Error('OBSERVER_PAGINATION_MIGRATION_REQUIRED'),{code:'OBSERVER_PAGINATION_MIGRATION_REQUIRED'})
- const project=(table,names,where='',args=[],extra=[])=>db.prepare(`SELECT json_object(${[...names.flatMap(name=>[`'${name}'`,`json_extract(body,'$.${name}')`]),...extra.flatMap(([name,expression])=>[`'${name}'`,expression])].join(',')}) body FROM dynamic_${table} ${where} ORDER BY rowid`).all(...args).map(row=>{const value=JSON.parse(row.body);if(value.observation!==null)value.observation=!!value.observation;if(value.deliveryError){value.deliveryError.knownNotSent=!!value.deliveryError.knownNotSent;value.deliveryError.retryable=!!value.deliveryError.retryable;}return value})
+ const exists=name=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)
+ const project=(table,names,where='',args=[],extra=[])=>{
+  const expression=(body='body',id='id')=>`json_object(${[...names.flatMap(name=>[`'${name}'`,`json_extract(${body},'$.${name}')`]),...extra.flatMap(([name,value])=>[`'${name}'`,value==='id'?id:value.replace(/\bbody\b/g,body)])].join(',')})`
+  const active=`dynamic_${table}`, archived=`dynamic_archived_${table}`
+  let sql,parameters=args
+  if(table==='receipts'&&exists(archived)) {
+   sql=`SELECT ${expression('coalesce(a.body,r.body)','r.id')} body,json_type(r.body,'$.archivedTaskId') IS NOT NULL AND a.id IS NULL AS archive_missing FROM ${active} r LEFT JOIN ${archived} a ON a.id=r.id ${where.replace(/\bid\b/g,'r.id')} ORDER BY r.rowid`
+  } else {
+   sql=`SELECT rowid AS sequence,${expression()} body FROM ${active} ${where}`
+   if(['tasks','executions','notifications'].includes(table)&&exists(archived)){
+    sql+=` UNION ALL SELECT sequence,${expression()} body FROM ${archived} a ${where}${where?' AND':' WHERE'} NOT EXISTS(SELECT 1 FROM ${active} live WHERE live.id=a.id)`
+    parameters=[...args,...args]
+   }
+   sql+=' ORDER BY sequence'
+  }
+  return db.prepare(sql).all(...parameters).map(row=>{
+   if(row.archive_missing)throw Object.assign(new Error('DYNAMIC_ARCHIVE_RECEIPT_MISSING'),{code:'DYNAMIC_ARCHIVE_RECEIPT_MISSING'})
+   const value=JSON.parse(row.body);if(value.observation!==null)value.observation=!!value.observation;if(value.deliveryError){value.deliveryError.knownNotSent=!!value.deliveryError.knownNotSent;value.deliveryError.retryable=!!value.deliveryError.retryable;}return value
+  })
+ }
  const coords=project('coordination',['id','groupId','createdAt','state','sourceId','revision'],groupId?"WHERE json_extract(body,'$.groupId')=?":'',groupId?[groupId]:[],[['title',"substr(json_extract(body,'$.title'),1,400)"]])
  const ids=JSON.stringify(coords.map(item=>item.id)),scope="WHERE json_extract(body,'$.coordinationId') IN (SELECT value FROM json_each(?))"
  const action=path=>`json_object('kind',json_extract(body,'$.${path}.kind'),'instructionIds',json_extract(body,'$.${path}.instructionIds'),'taskIds',json_extract(body,'$.${path}.taskIds'),'text',substr(json_extract(body,'$.${path}.text'),1,400),'onIncomplete',json_object('instructionIds',json_extract(body,'$.${path}.onIncomplete.instructionIds')))`

@@ -12,6 +12,7 @@ test('offline CLI is read-only by default and requires the exact preserved backu
  const path=join(root,'ledger.sqlite'),backup=join(root,'backup.sqlite'),db=new DatabaseSync(path)
  db.exec('CREATE TABLE dynamic_meta(key TEXT PRIMARY KEY,value TEXT)')
  for(const name of ['tasks','executions','wakes','coordination_sources','sources','notifications','coordination'])db.exec(`CREATE TABLE dynamic_${name}(id TEXT PRIMARY KEY,body TEXT)`)
+ db.exec('CREATE TABLE dynamic_receipts(id TEXT PRIMARY KEY,digest TEXT,body TEXT);CREATE TABLE dynamic_task_events(sequence INTEGER PRIMARY KEY,id TEXT UNIQUE,body TEXT)')
  db.close()
  const run=(...args)=>spawnSync(process.execPath,[script.pathname.replace(/^\/([A-Za-z]:)/,'$1'),'--database',path,...args],{encoding:'utf8',timeout:15000})
  const before=await readFile(path)
