@@ -1,63 +1,67 @@
-# 本地运行时三项性能优化集成约定
+# 本地性能改进与验证边界
 
-## 范围与固定基线
+本轮同时整合启动、看板真分页和任务目录详情存储。基线为 main `644ff90c694e19f661177ffd7b5e595d452a9fae`（包含#272）；运行时代码检查点为 `891b2e6764526acd43da7052b69c409f06620bbf`。只提交draft PR，未部署、迁移或删除真实数据；原分页worktree和交付补丁继续保留。
 
-- 基线 `041277a23d443e527e67ca44272144edd2e42c38`（#284），分支 `codex/performance-local-runtime`。
-- 原分页worktree与含P2补丁保留。新集成worktree只处理代码、合成测试和PR，不改线上profile、ACL、全局safe.directory或真实任务数据；不合并/部署/真实迁移。
-- 最终一个draft PR同时交付启动、分页、任务详情目录存储；不能把分页单项当三项完成。不自行触发CI。
-- 当前新增会话 `sessionController unavailable` 由启动实现者单独诊断；本文件不归因插件、不重复采集现场。
+## 行为与读取边界
 
-## 当前接入状态
+| 路径 | 本次行为 | 核心证据 |
+|---|---|---|
+| 启动 | 必要完整性检查在只读worker运行，仍先校验再恢复；复用恢复记录并输出阶段耗时 | 32MiB合成数据校验期间Host timer仍推进；损坏与外键错误拒绝打开 |
+| 任务、执行、授权页 | 存储层先选ID，再恢复本页完整详情；执行摘要不读取详情 | SQL页读取量、稳定排序、数据变化409、页内授权/通知身份 |
+| 群消息、outbox、主题/上下文、协作、告警 | 元数据索引与页内正文分离；trace协调单元独立续读 | 群消息页内ID、SQL/内存边界、superseded过滤与100+单元续读 |
+| 文件与证据 | 有界派生块、摘要及账本绑定，不为一页读取完整原始JSON | Unicode、错绑/篡改拒绝、离线有界迁移 |
+| 控制数据库 | 任务/协作目录存完整详情，中央保留控制状态与投影；维护轮询不追加永久noop回执 | 持久化、重复命令、重启、缺失/损坏详情、未知效果不重放 |
+| 详情路径检查 | 重叠祖先不反复realpath；同一同步查询复用已校验的所有者句柄，下次查询重新校验 | 保留祖先链接、inode、记录身份与每个对象摘要验证 |
 
-分页与基线已3-way整合。`dynamic-task-store`唯一源码冲突已同时保留`resourceCatalog`和`paginationMigrate`；生成测试清单基于main重建321文件、历史3/删除0。独立冻结依赖安装完成，仓库隔离native profile解析37模块，不加载用户凭据。首组181/181通过。固定main的完整分页适用回归862/862、0跳过已终态，日志pagination-main-full.log；这是分页阶段，不能替代随后三项整合验证。
+首次群元数据仍可为O(N)，常驻消息尚是内存模型；不承诺所有首次读取或启动缓存与历史规模无关。详情外置也有额外IO成本。
 
-启动定稿210e55d5118794f8af4a6202c19d449374b0740f已接入，保留resourceCatalog/paginationMigrate/startupObserver；存储定稿尚未接入；实现者在各自固定基线worktree工作，不能复制中途文件。待收到明确提交/补丁、测试与容量证据后按语义整合共享文件，不用整文件覆盖消除冲突。
+## 最终按用户要求执行的核心验证
 
-## 分页与存储的接口要求
+用户09:41明确要求精简内部流程/计时夹具，不再以完整历史native/compat/history全绿作为PR前置。最终核心集合328/328，原生结果4/4，发布烟测14/14，均零跳过。
 
-1. `observer.page`/`observer.work-metadata`、任务状态/topic/human/execution窄索引仍需可查询的轻量字段。任务详情外置后，不得让SQL `json_extract`或索引trigger把文件引用当完整task body。状态、版本、时间、关联ID、有限标题/摘要可保留全局；对话、prompt/result、长错误、完整请求/回执应在任务目录。
-2. 列表先在存储层选页ID，再投影/读取本页需要的详情。任务列、执行摘要尽量只用轻量元数据；授权详情按本页request ID读取，不能为一条授权解码整任务历史或在file payload内切全数组充当分页。已有计数/排序/过滤/版本变化语义保留。
-3. 旧数据兼容、文件摘要/路径归属、原子可见性、失败回滚由存储实现提供既有语义；集成者验证SQL页、详情、CAS/恢复均一致，不直接重写在线库。离线维护默认只检查，不在打开既有库或GET时自动迁移。
-4. 启动实现保留新库/现有库和owner/资源目录语义，以及分页索引显式迁移边界。优先消除重复扫描和启动阻塞；不为性能额外增加用户流程、开关矩阵或门槛。
+```powershell
+$env:DSH_NATIVE_TEST_PROFILE = Join-Path (Get-Location) 'test/fixtures/native-profile/package.json'
+node --test --test-concurrency=1 `
+  test/dynamic-task-store.test.js test/task-ledger-details.test.js `
+  test/observer-pagination.test.js test/observer-group-pages.test.js `
+  test/observer-file-pages.test.js test/observer-trace-pages.test.js `
+  test/observer-pagination-migration.test.js test/observer-legacy-execution-pages.test.js `
+  test/task-startup-performance.test.js test/http.test.js test/observer-client.test.js `
+  test/task-topic-context-http.test.js test/task-message-projections.test.js `
+  test/coordination-fairness-native.test.js test/task-operator-notification-scan.test.js
+node --test --test-name-pattern 'native queued members complete once|native service cancellation stops the real execution process|empty owner recovery reviews the retained execution|resource read retries preserve image facts' test/task-session-service-native.test.js
+pnpm test:release-smoke
+node scripts/test-suites.mjs check
+```
 
-## 合成分页基准
+Windows测试使用既有短临时目录和授权执行上下文，没有修改ACL或全局safe.directory。映射323文件、历史3、删除文件0；本次有意删除了下面列出的内部流程测试，不能将“删除文件0”解释为未删测试案例。
 
-`node --expose-gc scripts/benchmark-observer-pages.mjs --base 041277a23d443e527e67ca44272144edd2e42c38`
+原始日志位于本地 `scratch/integration-evidence/`：`final-core-results.log`、`final-native-outcomes.log`、`final-release-smoke-core-scope.log`。测试时运行时代码与上述检查点一致；后续说明文档不改变运行时代码或发布清单。
 
-固定Git blob的原HTTP handler与当前handler；独立localhost内存fixture；1个冷样本和5个热样本，串行请求，消息正文约1030B。分页同时计入群summary与10条消息两次请求；旧handler一次返回整群。没有读真实库/服务、没有真实模型或业务资源。
+## 精简与保留
 
-| 消息数 | 旧响应bytes | 分页响应bytes（含summary） | 返回正文数 | 热P50 ms：旧/新 |
-|---|---|---|---|---|
-| 1000 | 1698951 | 17148 | 1000 → 10 | 24.3 / 19.461 |
-| 10000 | 17007952 | 17169 | 10000 → 10 | 266.848 / 19.994 |
+- 删除公平性文件中两组手工gate及精确step序列夹具；保留真实恢复和不重复效果的结果检查。
+- 公平性42排程缩为6个，去掉“恢复瞬间恰好20项”的内部批次断言；保留阻塞/成功结果、跨安排跨群推进、重启job身份与attempt不重复。
+- 原11成员压力流程缩为3成员，仍跨越并发配额2，验证排队、文件读回、全部完成和身份/操作数量；超过10执行身份的持久化仍由账本测试覆盖。
+- 资源入站去掉精确phase顺序、loopDelay临时数值和异步queue未落稳时整数组比较；保留重试、新来源、图片事实、重复来源复用与不重复读取/入账。
+- 资源目录缺失mock返回真实契约null，保留通知不重复发送、送达与撤回结果；未放松生产资源身份校验。
 
-数据来自 `scratch/integration-evidence/observer-benchmark.json`，含源码hash/Node版本/每个样本。此时后台有合成回归，时延只是观测，不是门槛或生产P95。消息已常驻内存；text getter访问不等于磁盘读取。空topic/outbox/source/notification，只验证消息API路径。基线handler的相对依赖用当前兼容helper，空辅助集合避免把其他领域改动当提速。P95仅5个热样本最大值。
+## 未完成与历史失败
 
-冷分页仍会触及N个常驻消息字段并构建元数据；热页触及10条，上下文选择10个ID。不能把全局冷索引或页内关联历史说成O(limit)。最终三项整合后再在同样数据/命令复测，原始体积和正确性证据比微秒排名重要。
+首轮 `pnpm test:all`：unit848/848；native-0为163/193，12失败、18取消，零跳过。随后用户改变验证范围，native-1、三个compat组及history未执行。不能把新核心结果拼作原全套通过。
 
-## 最终验证入口与证据规则
+原11成员单项在45秒预算下仍超时：候选诊断约72.6秒、路径调整后最近约60秒；main644约13.2秒只作对照，不是整合通过证据。CPU采样73.5秒中42.2秒在重复详情目录探测，说明了本次减少探测的依据，但不能声称已解决原大规模延迟。
 
-- `node scripts/test-suites.mjs check`：全部测试文件一次映射，未审查覆盖保守保留。
-- 分页完整适用集合：`scratch/integration-evidence/pagination-main-full.log`；固定main的新鲜实跑，不拼接旧679/680和局部结果。
-- 最终三项整合后按适用风险执行完整映射/相关历史与 `pnpm test:release-smoke`；使用仓库隔离native profile、Node24.19/所需Node22与JDK11、已有物理短TEMP。不能执行含全局ACL修改的CI准备脚本，不改断言预算。
-- 三项各自功能/失败路径、合成性能与存储占用数据都需证据；新session问题未确诊前不作根因宣称。
-- 最终代码冻结后独立审查，修复确定问题、实跑所需复验；按write-pr规则核PR正文、push前PR状态、创建后读回并附加PR。仅draft，不merge/deploy。
+新增运行中目录换链演练在Windows打开句柄后rename被EPERM拒绝，未绕过；原预置junction、身份替换、缺失/损坏详情回归保留。真实DSH页面、真实启动延迟和真实库迁移未执行。
 
-## Integration checkpoint (2026-10-28 UTC)
+历史sessionController报错未复现、根因未定；后续只读调用HTTP200/ok true。此次启动改进不作为修复该历史报错的证据。
 
-- Initial base remains `041277a23d443e527e67ca44272144edd2e42c38`; fetched main `644ff90c694e19f661177ffd7b5e595d452a9fae` includes merged PR #272. Incorporate it once after storage delivery; preserve first completion time, idempotent completion, source projections and ingress timing.
-- Startup plus pagination regression: 193/193 passed, zero skipped (`startup-pagination-integration.log`). This is additional integration coverage, not the final three-module run.
-- Historical sessionController failure is not reproduced and its root cause remains unknown. At 08:23:54 UTC enabled inventory and related services were active; `session/canOpenWorkspacePath` returned HTTP 200 / ok true. No screenshot-specific code or retry gate was added. Startup improvements do not establish a fix for that historical error.
-- `node-output-readout.js` remains a repository helper for unpublished historical execution modules. It is excluded from the published runtime allowlist because its legacy-only dependencies are not published. Existing extracted-package tests inspect every shipped relative import.
-- First release smoke attempt could not create fixtures under `C:/dsh-release-tests` (EPERM). No ACL changes were made; retry uses the authorized system temporary directory. Preserve both logs and distinguish environment failures from completed verification.
+## 合成基准及迁移
 
-- Release smoke retry under the authorized elevated execution context completed: 14/14 passed, zero skipped (`startup-pagination-release-smoke-elevated.log`). It covered actual packed bytes/import closure, native task flow, and extracted resident health. No global Git/ACL settings changed. This is startup + pagination only; storage/latest-main final verification remains pending.
+`node --expose-gc scripts/benchmark-observer-pages.mjs --base 644ff90c694e19f661177ffd7b5e595d452a9fae`
 
-## Final integration candidate
+1万条内存消息的HTTP响应17,007,952B变为17,169B（群摘要+10条消息）；5次串行样本中位约152ms变32ms。只用localhost合成夹具，非真实磁盘/浏览器/生产P95。
 
-- Main #272 is included by ancestry (`644ff90c694e19f661177ffd7b5e595d452a9fae`). The extracted message projection uses first `completedAt`, not mutable decision `updatedAt`.
-- Storage commits `2b98e8a7` and `2c5bc918` are integrated. Startup recovery hydrates nonterminal operations and selected executions; it reuses central execution projections for resource invariants. Observer pages select IDs before loading verified details; summary execution pages do not load detail objects. Group message contexts decode only the selected message IDs' raw stored rows, never an SQL-assembled envelope.
-- Initial combined checks: 28/28, zero skipped (`three-module-first.log`). Complete store plus page connection checks are running; these are not final whole-suite results.
-- Local review candidate: `224003c366fdf14c95506fda99c1f852349291d9`. Codec node-count mismatch is being repaired in the original storage worktree; no duplicate codec edit is made here.
-- New-main synthetic benchmark (`observer-benchmark-main644.json`): 1000 rows 1,698,951 to 17,148 bytes, warm median 23.355 to 13.732 ms; 10000 rows 17,007,952 to 17,169 bytes, 152.495 to 32.429 ms. Same limitations as the earlier benchmark apply; concurrency with regression work makes timings observational.
-- Remaining startup limitation: service compatibility caches still use normal full-record task/operation/execution/notification list APIs. Mandatory integrity no longer blocks Host timers and ledger recovery avoids terminal detail hydration, but this change does not prove all startup work independent of history size. No real-profile latency or migration has been measured.
+新代码兼容旧内联记录；外置后schema3使旧二进制拒绝打开。回滚保留原库及匹配原工作区。只提供显式离线副本迁移，不在启动或GET自动迁移；源库与工作区不删除。总磁盘需计入详情容器、派生证据和回滚副本，不等于中央库体积。
+
+完整入口及兼容限制见 `observer-pagination-coverage.md`、`observer-file-pagination.md`；运维说明见 `../ops/task-ledger-details.md`、`../ops/startup-performance.md`。
