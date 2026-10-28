@@ -182,7 +182,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     }
     return normalized
   }
-  topics = createTopicCoordinator({ store, quotedReminderContext, onInputSettled,
+  topics = createTopicCoordinator({ store, workflowPromptsEnabled: false, quotedReminderContext, onInputSettled,
     getAgent: (groupId, request) => request ? sessions.get(groupId, request) : !closed && store.getGroup(groupId) ? presence : undefined,
     dispatchRequest: (request, message) => {
       const work = sessions.dispatch(request, message)

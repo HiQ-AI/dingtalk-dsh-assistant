@@ -203,7 +203,7 @@ export function projectTopicContext(context) {
 }
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
-export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, quotedReminderContext, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
+export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, quotedReminderContext, workflowPromptsEnabled = true, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
   const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const collections = [routes, decisions, replies, reviews, titleMigrations, summaryMigrations]
   const isCurrentRequest = request => collections.some(collection => collection.get(request.requestId) === request)
@@ -534,7 +534,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.visibleMessages = Array.isArray(envelope.messages) ? envelope.messages : []
     request.inlineDelta = Array.isArray(envelope.messages)
     envelope.omittedDeltaCount = request.inlineDelta ? 0 : deltaMessages.length
-    const instruction = '按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit 和适用流程 ID/版本及选择原因；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。首包内联的 messages 和其他正文可直接使用，无需重复读取；仅遇到 section 指针时，用 group_decision_context_get 按 nextOffset 续读完整内容。流程索引为 promptIndex，按本请求 requestId 用 group_task_prompt_get 一次读取候选流程正文；不要猜测 section。group_decision_context_get 只接受 contextSections 列出的 section。查询已有 Task 用 group_task_list 和 group_task_context_get；需要历史时用 group_topic_context_get。'
+    const workflowAssessment = workflowPromptsEnabled ? '和适用流程 ID/版本及选择原因' : ''
+    const workflowReading = workflowPromptsEnabled ? '流程索引为 promptIndex，按本请求 requestId 用 group_task_prompt_get 一次读取候选流程正文；不要猜测 section。' : ''
+    const instruction = `按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit${workflowAssessment}；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。首包内联的 messages 和其他正文可直接使用，无需重复读取；仅遇到 section 指针时，用 group_decision_context_get 按 nextOffset 续读完整内容。${workflowReading}group_decision_context_get 只接受 contextSections 列出的 section。查询已有 Task 用 group_task_list 和 group_task_context_get；需要历史时用 group_topic_context_get。`
     const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n${instruction}`
     if (Buffer.byteLength(body, 'utf8') > DECISION_OUTPUT_MAX_BYTES) throw new Error('decision_context_budget_exceeded')
     const dispatch = () => {
