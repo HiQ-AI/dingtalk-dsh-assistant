@@ -669,6 +669,58 @@ test('configured group responsibility reaches group and task models and its repl
   assert.ok(h.sent.find(notification => notification.kind === 'topic-reply').payload.text.endsWith('\n\n- 测试群助理代回'))
 })
 
+test('simple existing-file delivery uses one executor and owner reads the delivered evidence', { timeout: 30000 }, async t => {
+  const fixture = await nativeCase(t, 'task-simple-file-')
+  const source = join(fixture.root, 'existing-template.txt'), contents = 'existing template, unchanged bytes\n'
+  await writeFile(source, contents)
+  let delegated = false, executorStep = 0, ownerRead = false
+  const h = await fixture.host(async request => {
+    const topicCalls = topicTaskCalls(request)
+    if (topicCalls) return topicCalls
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    if (names.includes('task_delegate')) {
+      assert.ok(!names.includes(nativeShell) && !names.includes('write'))
+      if (!delegated) {
+        delegated = true
+        return [call('task_delegate', { key: 'deliver-existing-file', objective: '将已定位的现有文件原样交付到任务目录',
+          context: `来源为 ${source}；只复制原文件到 delivered-template.txt 并读回，不重新生成、不修改内容、不发送外部消息。` }), decision('wait', '等待文件交付结果')]
+      }
+      assert.equal(input.executions.length, 1, '简单文件任务不追加固定审查成员')
+      const execution = input.executions[0]
+      if (!execution.drained || execution.status !== 'succeeded') return [decision('wait', '等待原执行完成')]
+      if (!ownerRead) {
+        ownerRead = true
+        return [call('task_execution_read', { executionId: execution.executionId }), call('read', { file_path: 'delivered-template.txt' })]
+      }
+      assert.ok(JSON.stringify(request.messages.filter(message => message.role === 'tool')).includes(contents.trim()))
+      return [decision('complete', '现有文件已原样交付。')]
+    }
+    assert.ok(names.includes(nativeShell) && names.includes('write'), '执行会话仍有实际业务操作能力')
+    if (executorStep++ === 0) return [call(nativeShell, {
+      command: nativeShell === 'pwsh' ? `Copy-Item -LiteralPath '${source}' -Destination 'delivered-template.txt'` : `cp '${source}' delivered-template.txt`,
+      description: '原样复制已定位的文件，不重新生成内容',
+    })]
+    if (executorStep === 2) return [call('read', { file_path: 'delivered-template.txt' })]
+    assert.ok(JSON.stringify(request.messages.filter(message => message.role === 'tool')).includes(contents.trim()))
+    return [call('execution_submit', { output: { status: 'completed', summary: '原文件已复制并读回',
+      evidence: ['delivered-template.txt'], limitations: ['仅验证本地文件交付，没有真实外发'], artifacts: ['delivered-template.txt'] } })]
+  })
+  await h.service.ingest({ ...message, messageId: 'existing-file-delivery', text: '测试助手，将现成模板原样交付到任务目录即可。' })
+  await h.service.whenIdle()
+  const [task] = await h.query('task.list'), [execution] = await h.query('execution.list')
+  assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal((await h.query('execution.list')).length, 1)
+  assert.equal(await readFile(join(fixture.root, 'tasks', task.taskId, 'delivered-template.txt'), 'utf8'), contents)
+  const writes = h.toolResults.filter(result => result.name === nativeShell)
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].sessionId, execution.sessionId)
+  assert.equal(writes[0].result.isError, false)
+  assert.ok(h.toolResults.some(result => result.name === 'read' && result.sessionId === task.sessionId && !result.result.isError))
+  await h.service.recover(); await h.service.whenIdle()
+  assert.equal((await h.query('execution.list')).length, 1)
+  assert.equal(h.toolResults.filter(result => result.name === nativeShell).length, 1, '完成后不重放文件交付')
+})
+
 test('native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback', { timeout: 30000 }, async t => {
   const fixture = await nativeCase(t, 'task-service-native-'), { root } = fixture
   const teamMessage = { ...message, text: '测试助手，分别生成 alpha、beta 和 gamma 的文件并用终端验证，再汇总结论。' }
@@ -683,26 +735,32 @@ test('native service routes authenticated source, delegates parallel execution, 
     if (names.includes('task_delegate')) {
       const key = 'owner:' + input.task.leaseEpoch, step = steps.get(key) ?? 0
       steps.set(key, step + 1)
-      assert.ok(names.includes(nativeShell) && names.includes('write') && names.includes('read'), '任务会话继承原生工具')
+      assert.ok(names.includes('read'), '统筹保留原始证据读取')
+      assert.ok(!names.includes(nativeShell) && !names.includes('write') && !names.includes('glob') && !names.includes('grep'), '统筹目录不暴露具体业务操作')
       if (!input.executions.length) {
         if (step === 0) {
           ownerRounds++
           const owner = host.ctx.agents.get(input.task.sessionId)
           owner.ctx.tools.register({ name: 'late_native_write', description: 'Native tool registered after session setup', parameters: { type: 'object' },
             output: { schema: { type: 'object' }, render: () => [] }, execute() { lateNativeCalls++; return {} } })
-          return [call('write', { file_path: 'owner-native-proof.txt', content: 'owner native proof' }), call('late_native_write', {})]
+          return [call('write', { file_path: 'owner-native-proof.txt', content: 'must not write' }), call('late_native_write', {}),
+            call(nativeShell, { command: nativeShell === 'pwsh' ? "Set-Content 'owner-shell-proof.txt' 'must not write'" : "printf 'must not write' > owner-shell-proof.txt", description: '统筹不得执行该业务命令' })]
         }
-        if (step === 1) return [call('read', { file_path: 'owner-native-proof.txt' }), call(nativeShell, { command: nativeShell === 'pwsh' ? "Get-Content -LiteralPath 'owner-native-proof.txt'" : 'cat owner-native-proof.txt', description: 'Read the task session native proof through its configured shell' })]
-        if (step === 2) return ['alpha', 'beta', 'gamma'].map(key => call('task_delegate', { key, objective: key,
+        if (step === 1) return ['alpha', 'beta', 'gamma'].map(key => call('task_delegate', { key, objective: key,
           context: handoffs[key], resourceKeys: ['file:' + key] }))
         const executions = await waitUntil(async () => { const executions = await host.query('execution.list'); return executions.length === 3 && executions.every(e => e.drained && e.status === 'succeeded') ? executions : null }, 'three native executors persisted before owner wait')
         assert.equal(executions.length, 3); sawResultsBeforeWait = true
         return [decision('wait', '等待已落账结果唤醒')]
       }
-      ownerRounds++
       assert.equal(input.executions.length, 3)
       assert.ok(input.executions.every(e => e.drained && e.status === 'succeeded'))
       assert.ok(input.wakes.some(wake => wake.kind.startsWith('execution.')))
+      if (step === 0) {
+        ownerRounds++
+        return ['alpha', 'beta', 'gamma'].map(key => call('read', { file_path: key + '-native-proof.txt' }))
+      }
+      for (const key of ['alpha', 'beta', 'gamma']) assert.ok(request.messages.some(message => message.role === 'tool'
+        && JSON.stringify(message.content).includes(key + '-native-proof.txt')), '统筹须实际读取执行产物')
       return [decision('complete', 'alpha、beta 和 gamma 已分别生成并实际验证。')]
     }
     assert.ok(names.includes('execution_submit'))
@@ -719,7 +777,8 @@ test('native service routes authenticated source, delegates parallel execution, 
         wrappedFilesystems.add(fs.identity)
         const readText = fs.readText
         fs.readText = async function (...args) {
-          if (!this.processPath(args[0]).endsWith('-native-proof.txt')) return readText.apply(this, args)
+          // 仅同步三个执行成员的首轮读取；统筹后续读证据不重新进入并发夹具。
+          if (!this.processPath(args[0]).endsWith('-native-proof.txt') || readOverlap.started >= 3) return readText.apply(this, args)
           readOverlap.started++; readOverlap.active++; readOverlap.peak = Math.max(readOverlap.peak, readOverlap.active)
           try {
             await waitUntil(() => readOverlap.started === 3, 'three real filesystem reads entered together', 3000)
@@ -756,12 +815,14 @@ test('native service routes authenticated source, delegates parallel execution, 
   const executionViews = await h.service.taskExecutions(task.taskId)
   assert.ok(executionViews.executions.every(execution => execution.workspaceDir === join(root, 'tasks', task.taskId)
     && execution.workingDirectory === join(root, 'tasks', task.taskId)))
-  assert.equal(task.status, 'completed')
+  assert.equal(task.status, 'completed', JSON.stringify({ alerts: h.service.listAlerts(), lastDecision: task.lastDecision,
+    failures: h.toolResults.filter(result => result.result.isError) }))
   assert.equal(task.topicRefs.length, 1)
   assert.equal(h.residentStore.getTopic(message.groupId, task.topicRefs[0].topicId).processedRevision, task.topicRefs[0].revision)
   assert.equal(ownerRounds, 2)
   assert.equal(sawResultsBeforeWait, true)
-  assert.equal(lateNativeCalls, 1)
+  assert.equal(lateNativeCalls, 0, '晚注册工具不能绕过统筹职责边界')
+  for (const file of ['owner-native-proof.txt', 'owner-shell-proof.txt']) await assert.rejects(readFile(join(root, 'tasks', task.taskId, file)), { code: 'ENOENT' })
   assert.equal(readOverlap.peak, 3, 'Native concurrency-safe filesystem calls must overlap')
   assert.equal(h.sent.length, 2); assert.equal(h.readbacks.length, 2)
   const echo = await h.service.ingest({ ...message, messageId: 'native-notification-2', senderOpenDingTalkId: 'notification-sender', text: 'completion echo' })
@@ -785,7 +846,7 @@ test('native service routes authenticated source, delegates parallel execution, 
   assert.equal(ownerLog.events.findLast(event => event.type === 'session/title')?.data.title, task.title)
   assert.equal(ownerLog.events.filter(e => e.type === 'plugin:dingtalk/task-session').length, 1)
   assert.equal(ownerLog.events.filter(e => e.type === 'user/message' && e.data.source?.taskSession && !e.data.source.taskContextHistory).length, 2)
-  assert.ok(h.toolResults.some(result => result.name === 'late_native_write' && !result.result.isError))
+  for (const name of ['write', nativeShell, 'late_native_write']) assert.ok(h.toolResults.some(result => result.sessionId === task.sessionId && result.name === name && result.result.isError), '统筹的实际越界调用须被拒绝')
   for (const execution of executions) {
     const log = await inspectSession(h.ctx.sessionPersistence, execution.sessionId), cwd = join(root, 'tasks', task.taskId)
     assert.ok(log.events.some(event => event.type === 'permission/preset' && event.data.preset === 'danger-full-access'))

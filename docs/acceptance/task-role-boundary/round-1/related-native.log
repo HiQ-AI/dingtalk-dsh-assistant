@@ -1,0 +1,72 @@
+✔ official session follow reads a cold Host-owned task without acquiring its writer and the Host resumes next lease (7590.3896ms)
+✖ 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：none (8700.2311ms)
+✔ 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：empty (12120.4933ms)
+✔ 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：tool-limit (3917.2339ms)
+✔ 待实施批准期间事实追问立即引用回复，内部证据不外发且不恢复旧执行 (5315.4148ms)
+✔ 积压的两条事实追问均送达且无关来源不空转：同一唤醒=true (2976.2974ms)
+✔ 积压的两条事实追问均送达且无关来源不空转：同一唤醒=false (5935.5187ms)
+✔ operator technical reply retains business sources and shared scope protocol in the same resumed execution (8208.1093ms)
+✔ 技术申请进入Web和登录人私聊，精确引用及真实作者恢复原任务，零技术群询问 (3023.6744ms)
+✔ 人工外发问题在入账前拒绝已知运行标识，内部证据与业务链接原样保留 (1120.4712ms)
+✔ native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text (2784.5872ms)
+✔ an execution result cannot bypass human waiting; reply reads the original execution and continues the original task (12065.4397ms)
+✔ a native blocked decision without a human question is corrected into an explicit durable request (2905.3791ms)
+✔ original-group human input preserves clarification but fences explicit authorization change: changed=false (21666.269ms)
+✔ original-group human input preserves clarification but fences explicit authorization change: changed=true (6268.7343ms)
+✔ Web answer recalls its delivered operator notification once without recalling group replies (2868.1334ms)
+✔ task model defaults and explicit selection preserve the execution selection (2.3228ms)
+✔ native create and resume use the current exact task model on the original session; missing model never creates or resumes (1904.3548ms)
+✔ native service isolates task model from delegated execution: old config (4171.2699ms)
+✔ native service isolates task model from delegated execution: explicit-owner (4558.796ms)
+✖ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (30047.4732ms)
+ℹ package begin: 0ms
+ℹ package staged: 464ms
+✔ actual extracted resident starts and serves health without legacy entrypoints or personal assets (19047.8927ms)
+ℹ package begin: 0ms
+ℹ package staged: 666ms
+ℹ package packed: 6845ms
+ℹ package extracted: 7019ms
+ℹ package bytes-and-imports-verified: 10675ms
+ℹ package dependency-links-ready: 10856ms
+ℹ package resident-host-ready: 17316ms
+ℹ package resident-listening: 18572ms
+ℹ package resident-health-verified: 18624ms
+ℹ package resident-closed: 18681ms
+ℹ package temporary-files-removed: 19046ms
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (1.2747ms)
+✔ native execution documents keep each input round and the owner reads the new duty and plan (10412.4331ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: false (12681.268ms)
+✔ native progress review reads the current execution document without replaying or bypassing human wait: true (13393.1942ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=false (14613.7768ms)
+✔ scripted progress decision waits for evidence or steers the original execution once: detour=true (16282.1191ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 26
+ℹ fail 1
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 252655.3161
+
+✖ failing tests:
+
+test at test\task-session-human-native.test.js:43:56
+✖ 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：none (8700.2311ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /task_human_review_read_only/. Input:
+  
+  '{"name":"write","sessionId":"task-session-d98d5254-5601-4623-abfe-ba7dc43d4bb6","result":{"isError":true,"error":{"message":"task_tool_outside_role"},"content":[{"type":"text","text":"Error: task_tool_outside_role"}]}}'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-human-native.test.js:138:34)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '{"name":"write","sessionId":"task-session-d98d5254-5601-4623-abfe-ba7dc43d4bb6","result":{"isError":true,"error":{"message":"task_tool_outside_role"},"content":[{"type":"text","text":"Error: task_tool_outside_role"}]}}',
+    expected: /task_human_review_read_only/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at test\task-session-package-native.test.js:16:29
+✖ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (30047.4732ms)
+  'test timed out after 30000ms'

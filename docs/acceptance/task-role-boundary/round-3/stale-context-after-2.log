@@ -1,0 +1,11 @@
+✔ stale owner no-submission drains and resumes the same session with the supplement without technical backoff (5087.341ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: true (2492.5844ms)
+✔ restart recovers only a legacy acknowledged no-submission with exact transient native proof: false (2276.0137ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10841.5582

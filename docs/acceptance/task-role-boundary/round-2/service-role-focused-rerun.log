@@ -1,0 +1,10 @@
+✔ simple existing-file delivery uses one executor and owner reads the delivered evidence (8551.7535ms)
+✔ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (14496.1034ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 24179.5648

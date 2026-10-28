@@ -1,0 +1,57 @@
+✔ 原生网页工具错误不建立未知效果，仍可完成后续读取 (11626.9995ms)
+✔ running reminder and coordinator clarification preserve one native shell job with received and consumed receipts (20192.2218ms)
+✔ native completion race drains then resumes the original execution without replaying its shell effect (20848.8254ms)
+✔ real coordinator input enforces explicit context semantics without default cancellation: missing (6087.4579ms)
+✔ real coordinator input enforces explicit context semantics without default cancellation: preserve (8606.993ms)
+✔ real coordinator input enforces explicit context semantics without default cancellation: replan (9920.1658ms)
+✔ real coordinator input enforces explicit context semantics without default cancellation: cancel (4656.6544ms)
+✔ owner injects one authoritative source body across task, Web identity and materials (1926.8061ms)
+ℹ {"scope":"actual native owner scripted adapter UTF-8 JSON bytes","bodyCopies":[0,0],"metrics":[{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2,"systemBytes":27850,"schemaBytes":8994,"adapterRequestBytes":49572},{"currentHostBytes":2905,"oldHostBytes":2,"toolHistoryBytes":2488,"systemBytes":27850,"schemaBytes":8994,"adapterRequestBytes":52517}]}
+✔ 不同群成员续办已完成任务，旧授权拒绝显式重试仍保留原任务和会话 (3783.3521ms)
+✔ 话题历史自身通知不阻断人工补充-native-user (2726.1532ms)
+✔ 话题历史自身通知不阻断人工补充-colleague (2929.3648ms)
+✔ 话题历史未准入真实消息仍拒绝更新且不发送成功回复-native-user (4523.8751ms)
+✔ 180 legacy task Host markers retire without changing audit or foreign context, including compacted surface replay (583.9416ms)
+ℹ {"scope":"actual native foldSurface UTF-8 JSON message bytes; source/task identity retained","legacyHostCount":180,"beforeBytes":65206,"afterBytes":983,"newInputBytes":282,"retainedBaselineBytes":0,"afterCompactionBytes":1170,"rawAuditEvents":367}
+{"contextProof":{"ownerRequests":11,"latestInputBytes":4941,"totalRequestBytes":103972}}
+✔ owner keeps one current Host snapshot and delegates non-recursive execution context across three generations (12817.6352ms)
+✔ 32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects (137301.3586ms)
+ℹ {"scope":"native owner scripted adapter, UTF-8 JSON bytes; no provider tokens","metrics":[{"lease":1,"inputVersion":0,"currentInputBytes":2198,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2844,"messagesBytes":34282,"adapterRequestBytes":52482},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":56582,"adapterRequestBytes":74782},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":58282,"adapterRequestBytes":76482},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":61483,"adapterRequestBytes":79683},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":63033,"adapterRequestBytes":81233},{"lease":2,"inputVersion":1,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":64610,"adapterRequestBytes":82810},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":161250,"adapterRequestBytes":179450},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":162950,"adapterRequestBytes":181150},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":166151,"adapterRequestBytes":184351},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":167701,"adapterRequestBytes":185901},{"lease":6,"inputVersion":5,"currentInputBytes":2456,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3135,"messagesBytes":169278,"adapterRequestBytes":187478},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":868870,"adapterRequestBytes":887070},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":870574,"adapterRequestBytes":888774},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":873778,"adapterRequestBytes":891978},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":875332,"adapterRequestBytes":893532},{"lease":33,"inputVersion":32,"currentInputBytes":2460,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":3140,"messagesBytes":876912,"adapterRequestBytes":895112},{"lease":34,"inputVersion":32,"currentInputBytes":2101,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2745,"messagesBytes":912251,"adapterRequestBytes":930451},{"lease":34,"inputVersion":32,"currentInputBytes":2101,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2745,"messagesBytes":915455,"adapterRequestBytes":933655},{"lease":34,"inputVersion":32,"currentInputBytes":2101,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2745,"messagesBytes":917009,"adapterRequestBytes":935209},{"lease":34,"inputVersion":32,"currentInputBytes":2101,"retainedHostCount":0,"retainedBaselineBytes":0,"hostMessagesBytes":2745,"messagesBytes":918589,"adapterRequestBytes":936789}]}
+✔ configured group responsibility reaches group and task models and its reply signature survives notification formatting (1676.6302ms)
+✔ simple existing-file delivery uses one executor and owner reads the delivered evidence (5787.2462ms)
+✔ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (14262.5754ms)
+✔ native sequential handoff preserves one executor before independent review of the fixed artifact (12043.5552ms)
+✔ native service runs eleven independent members within the configured concurrency and completes (48152.7963ms)
+✔ native executor resumes in the same titled task workspace and all task sessions share the process cwd (14143.0401ms)
+✔ native service reopens an unknown notification for readback without resending completed business work (7103.3975ms)
+✔ native service cancellation stops the real execution process, drains the session, and rejects late completion (5285.9081ms)
+✔ native requirement update resumes the same owner with new sources and fences the interrupted old execution result (5809.3251ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=1 (8747.7498ms)
+✔ native capacity queues promote every task and execution: tasks=1, executions=2 (10958.363ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=1 (11875.6288ms)
+✔ native capacity queues promote every task and execution: tasks=2, executions=3 (6529.1309ms)
+✔ native shared resources queue without occupying task capacity and promote on drain (23244.8108ms)
+✔ native delegation rejects changed keys on receipt replay and preserves omitted continuation keys (11180.179ms)
+✔ recovering an idle owner with no pending wake does not consume a task slot (1394.6248ms)
+✔ native session creation failure has bounded recovery retries: persistent=false (2952.4664ms)
+✔ native session creation failure has bounded recovery retries: persistent=true (2661.7622ms)
+✔ native model failures settle without repeated owner requests: persistent=false (1520.8692ms)
+✔ native model failures settle without repeated owner requests: persistent=true (1425.7855ms)
+✔ empty owner recovery reviews the retained execution without replaying its completed native write (11445.6134ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=false (574.4079ms)
+✔ native owner empty-summary corrections are bounded and may recover: correctOnce=true (509.2156ms)
+✔ native topic routing rejects incomplete source coverage and accepts correction in the same real session (695.4966ms)
+✔ resident.apply boots and disposes with only its declared native service dependencies (440.9485ms)
+✔ resident listener startup failure disposes native resources and permits reopening the same task database (677.0103ms)
+✔ native board keeps a drained coordinator running while its delegated target is executing (4220.4725ms)
+✔ native single-member completion keeps an unknown tool effect unresolved without replay (4648.5927ms)
+✔ native recovery no-op preserves an undrained task writer conflict alert (754.6382ms)
+✔ execution document publication failure after claim drains the committed execution and exposes an alert (808.172ms)
+ℹ tests 45
+ℹ suites 0
+ℹ pass 45
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 471355.7309

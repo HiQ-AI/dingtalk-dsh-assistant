@@ -1,0 +1,30 @@
+✖ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (9545.7002ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10401.3189
+
+✖ failing tests:
+
+test at test\task-session-service-native.test.js:50:38
+✖ native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback (9545.7002ms)
+  AssertionError [ERR_ASSERTION]: {"alerts":[{"alertId":"task-blocked:task-4e610d4cc9d23e801dfba4cfa2fcd9bf","taskId":"task-4e610d4cc9d23e801dfba4cfa2fcd9bf","fingerprint":"task-blocked:task-4e610d4cc9d23e801dfba4cfa2fcd9bf","detail":"任务会话本轮未能提交有效决定，原任务和执行结果已保留。","status":"active","lastSeenAt":"2026-10-28T03:18:45.517Z"}],"lastDecision":{"action":"blocked","at":"2026-10-28T03:18:45.510Z","controlRevision":1,"decision":null,"evidence":[],"limitations":["TASK_SESSION_NO_SUBMISSION"],"question":null,"requirementRevision":1,"summary":"任务会话本轮未能提交有效决定，原任务和执行结果已保留。"},"failures":[{"name":"write","sessionId":"task-session-5f1b932f-f92b-48f3-a250-72b0126dd243","result":{"isError":true,"error":{"message":"task_tool_outside_role"},"content":[{"type":"text","text":"Error: task_tool_outside_role"}]}},{"name":"late_native_write","sessionId":"task-session-5f1b932f-f92b-48f3-a250-72b0126dd243","result":{"isError":true,"error":{"message":"task_tool_outside_role"},"content":[{"type":"text","text":"Error: task_tool_outside_role"}]}},{"name":"pwsh","sessionId":"task-session-5f1b932f-f92b-48f3-a250-72b0126dd243","result":{"isError":true,"error":{"message":"task_tool_outside_role"},"content":[{"type":"text","text":"Error: task_tool_outside_role"}]}},{"name":"read","sessionId":"task-session-5f1b932f-f92b-48f3-a250-72b0126dd243","result":{"isError":true,"error":{"message":"Timed out: three real filesystem reads entered together"},"content":[{"type":"text","text":"Error: Timed out: three real filesystem reads entered together"}]}},{"name":"read","sessionId":"task-session-5f1b932f-f92b-48f3-a250-72b0126dd243","result":{"isError":true,"error":{"message":"Timed out: three real filesystem reads entered together"},"content":[{"type":"text","text":"Error: Timed out: three real filesystem reads entered together"}]}},{"name":"read","sessionId":"task-session-5f1b932f-f92b-48f3-a250-72b0126dd243","result":{"isError":true,"error":{"message":"Timed out: three real filesystem reads entered together"},"content":[{"type":"text","text":"Error: Timed out: three real filesystem reads entered together"}]}}]}
+  + actual - expected
+  
+  + 'active'
+  - 'completed'
+  
+      at TestContext.<anonymous> (file:///D:/codex/worktrees/task-resource-lease/dingtalk-dsh-assistant/test/task-session-service-native.test.js:817:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'active',
+    expected: 'completed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

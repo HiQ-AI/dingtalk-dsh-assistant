@@ -1,0 +1,15 @@
+case,round,result,evidence
+owner-native-tools-and-skills,1,PASS,round-1/skills-native.log
+single-executor-existing-file,1,PASS,round-1/service-role-focused.log
+parallel-executor-with-owner-read,1,FAIL,round-1/service-role-focused.log
+stale-owner-context,1,FAIL,round-1/stale-context-before.log
+related-native-suite,1,FAIL,round-1/related-native.log
+skill-forward-six-scenarios,1,FAIL,skill-update/independent-behavior-review.md
+parallel-executor-with-owner-read,2,PASS,round-2/service-role-focused-rerun.log
+human-review-role-rejection,2,PASS,round-2/human-role-rerun.log
+packed-runtime-personal-skill,2,PASS,round-2/package-rerun.log
+stale-owner-context,2,FAIL,round-2/stale-context-after.log
+skill-forward-six-scenarios,2,PASS,skill-update/independent-behavior-review.md
+stale-owner-context,3,PASS,round-3/stale-context-after-2.log
+provider-native-suite,3,PASS,round-3/provider-native-regression.log
+service-native-suite,3,PASS,round-3/service-role-full.log
