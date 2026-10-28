@@ -1,0 +1,25 @@
+{
+  "files": [
+    {
+      "path": "business-development/references/procedure.md",
+      "beforeSha256": "f64935ac67dba3bafbd89b751f479d9551f87c2ad295b868c70fa1fef88f9fab",
+      "afterSha256": "6c788f97231a23c42c80a1b047aea61c9eaa523a6c8f811baaa640d3ad4dc6af",
+      "installedMatchesAfter": true,
+      "replayMatchesInstalled": true
+    },
+    {
+      "path": "review-code-implementation/references/checklist.md",
+      "beforeSha256": "bd1c89a2a0b7af23cb8c4fedd31ccf3f631177a087698a2a45c6058c7be710ac",
+      "afterSha256": "ef0c16e1cfa1e592d861e517b9419e699da38bc1c0f9b112f135912f80b17783",
+      "installedMatchesAfter": true,
+      "replayMatchesInstalled": true
+    }
+  ],
+  "patchCheckExit": 0,
+  "patchApplyExit": 0,
+  "check": "PASS",
+  "replayGitOptions": [
+    "core.autocrlf=false",
+    "core.eol=lf"
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "status": "PASS",
+  "patchReplay": "both patches applied to original bytes and matched installation",
+  "scriptRegressionReused": "script unchanged since round-1 4/4",
+  "files": [
+    {
+      "group": "workspace",
+      "path": "scripts/read-registry-manifest.ps1",
+      "beforeSha256": "9de152041a2cf179291b3bc5132c98e83ca09014bcbc5ad5e246f28c64f9613d",
+      "installedSha256": "263873fcb707789c7fbbab05df134ea12d9c6f53989acdc5db3fb62608c6ffa2",
+      "bytes": 7669
+    },
+    {
+      "group": "workspace",
+      "path": "docs/ops/woodpecker-uat.md",
+      "beforeSha256": "4a32b3b732c78518099debc21fd515bb9c657c3fe64b5aeb7651b7bea48d4c43",
+      "installedSha256": "f11a5ce922e159aef316f46ee08faf1337706a210d2488cc226739b86720d2e0",
+      "bytes": 20897
+    },
+    {
+      "group": "skills",
+      "path": "uat-deployment/SKILL.md",
+      "beforeSha256": "352e24a58e1c586e945fa8ebfd236efe88ecef911c71a2a36a39ea8ad4c8c569",
+      "installedSha256": "84e293e52ada8bbfba4e038c6c596e6102bbe61bbb9fd28bd29bd6d56ae10379",
+      "bytes": 4061
+    },
+    {
+      "group": "skills",
+      "path": "uat-deployment/references/procedure.md",
+      "beforeSha256": "7250b2aaf27559c7cc151add5bece6097dbf88b220d869aae2dee811340d1299",
+      "installedSha256": "7bdc70389ce270724ecb5c888470f0aa59bb5feb01c1aaad9370c507d3c25556",
+      "bytes": 21339
+    }
+  ]
+}

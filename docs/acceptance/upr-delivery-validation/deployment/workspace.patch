@@ -1,0 +1,52 @@
+--- a/scripts/read-registry-manifest.ps1
++++ b/scripts/read-registry-manifest.ps1
+@@ -55,6 +55,14 @@
+     }
+     $response = $client.SendAsync($request).GetAwaiter().GetResult()
+     $result.httpStatus = [int]$response.StatusCode
++    if ($result.httpStatus -eq 401) {
++        # 认证协议不匹配不是镜像摘要错误；仅回报协议名，不输出挑战参数或自行登录。
++        $result.reason = 'authentication_required'
++        $challenge = $response.Headers.WwwAuthenticate |
++            Where-Object { $_.Scheme -in @('Bearer', 'Basic') } | Select-Object -First 1
++        if ($null -ne $challenge) { $result.challengeScheme = $challenge.Scheme }
++        throw 'manifest_rejected'
++    }
+     if ($result.httpStatus -ne 200) { $result.reason = 'http_status'; throw 'manifest_rejected' }
+ 
+     # 在任何解码/JSON 操作前取得并校验原始字节，不能重新序列化后计算摘要。
+--- a/docs/ops/woodpecker-uat.md
++++ b/docs/ops/woodpecker-uat.md
+@@ -99,7 +99,7 @@
+ 
+ ## Registry 清单只读核验
+ 
+-使用 `scripts/read-registry-manifest.ps1` 按成功构建/推送的精确摘要读取。Registry、repository 与摘要从本次可信流水线及目标镜像引用取得，不使用日志里任意一段 sha256。凭据仍由当前环境已有受管 Registry 配置/Secret 入口提供；在同一进程构造完整 Authorization 为 SecureString，不新建凭据、不要求人工抄写、不输出原值。匿名 Registry 可省略该参数。
++同候选已有可信构建摘要和实际运行版本证据时直接复用，不为收口重复查询 Registry。需要澄清镜像身份时，使用 `scripts/read-registry-manifest.ps1` 按成功构建/推送的精确摘要读取。Registry、repository 与摘要从本次可信流水线及目标镜像引用取得，不使用日志里任意一段 sha256。凭据仍由当前环境已有受管 Registry 配置/Secret 入口提供；在同一进程构造完整 Authorization 为 SecureString，不新建凭据、不要求人工抄写、不输出原值。匿名 Registry 可省略该参数。
+ 
+ ```powershell
+ # 以下变量均来自本轮已核对的目标；$registryAuthorization 来自已有受管凭据入口。
+@@ -116,7 +116,11 @@
+ 
+ 脚本只做一次摘要寻址 GET，不跟重定向、不自动登录、不写 Registry。先对原始 HTTP 响应字节算 SHA256，再严格 UTF-8 解码和 JSON 解析，避免 PowerShell byte[] 被转成文本或 JSON 重排影响摘要；已有 `Docker-Content-Digest` 头也必须相等，无该头仍可用原始字节与已知构建摘要相等证明内容身份。输出仅白名单摘要，错误正文、认证头与异常详情不入日志。HTTP、JSON/结构失败与摘要不符分别保留 reason；不能将解析器失败报告为产品失败或据此重建。
+ 
+-`kind=image-manifest` 返回配置摘要和层数量；`kind=image-index` 返回子清单摘要及实际存在的平台字段。索引摘要不能直接与 Pod imageID 比较，按当前节点 OS/architecture/variant 定位唯一对应子清单，再按子摘要调用本脚本。平台缺失/不唯一或链路不全保持未确认，不猜第一项。此检查不替代全部 Pod、外部健康和业务回归。
++401 返回 `authentication_required`，如有标准挑战头仅回报 `challengeScheme`。Bearer Registry 需沿环境已有受管入口取得 pull 令牌后传入 `Bearer <token>`，不能把 Secret 中的 Basic 凭据直接当 Bearer 令牌或反复重试；不输出挑战参数/令牌，不自行新增认证服务。认证失败仅表示这次清单未读到，不能写成部署版本错误。
++
++`kind=image-manifest` 返回配置摘要和层数量；`kind=image-index` 返回子清单摘要及实际存在的平台字段。索引摘要不能直接与 Pod imageID 比较；已有平台对应关系可复用，需要补查时才按当前平台读取对应子清单，不猜第一项。此检查只解决镜像身份疑问，不替代工作负载就绪及实际入口核验。
++
++运行版本以 Pod spec 的镜像引用及实际 imageID 判断；status.image 可能显示 config 摘要，不能与 manifest 摘要直接判等。已有证据明确对应本次版本时即收口，不为展示字段不同额外读配置、重建或重部署。
+ 
+ ## Dataset UAT2 运行核验
+ 
+@@ -130,7 +134,9 @@
+ 
+ 旧 `db-uat2/api-ingress` 的 `uat2.hiqdat.dev/set/api` 不是当前目标入口；`editor2.hiqdat.dev/set/api/*` 可能回落前端 SPA 并返回 HTML 200，不能当健康接口或直接按 JSON 解析。
+ 
+-先核对 Deployment UID/所属 ReplicaSet/所有当前 Pod、generation/observedGeneration 和实际 imageID 与 Registry manifest；再检查外部健康/就绪。当前部署缺少 readiness/startup probe，Pod Ready 或 rollout 成功不能证明应用已能接流量。即使以后补上探针，也保留外部入口核验。
++前端检查公开入口及页面必需的自有主 JS/CSS 可加载即可，不枚举全部资源或要求前端返回后端 JSON。空 CSS 本身不判失败，只有加载异常时再比对该构建产物；可选第三方统计不阻塞交付。主资源 404 或返回 HTML 回落需要处理，不因检查器误判重新构建。
++
++确认目标工作负载已更新并就绪、当前运行镜像对应本次候选，再核验实际入口的健康/就绪。已有有效证据直接复用；对象归属或版本异常时再追查 ReplicaSet/UID 与 Registry，不要求正常部署逐字段补证。Pod Ready 或 rollout 成功本身不保证实际入口可用。
+ 
+ ```powershell
+ $healthJson = & D:/baibu-agent/scripts/read-uat-health.ps1 `

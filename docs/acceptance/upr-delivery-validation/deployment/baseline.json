@@ -1,0 +1,57 @@
+{
+  "scriptSha256": "9de152041a2cf179291b3bc5132c98e83ca09014bcbc5ad5e246f28c64f9613d",
+  "cases": [
+    {
+      "case": "auth-bearer",
+      "passed": false,
+      "exitCode": 1,
+      "result": {
+        "verified": false,
+        "reason": "http_status",
+        "httpStatus": 401,
+        "requestedDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340"
+      }
+    },
+    {
+      "case": "auth-no-challenge",
+      "passed": false,
+      "exitCode": 1,
+      "result": {
+        "verified": false,
+        "reason": "http_status",
+        "httpStatus": 401,
+        "requestedDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340"
+      }
+    },
+    {
+      "case": "manifest-ok",
+      "passed": true,
+      "exitCode": 0,
+      "result": {
+        "verified": true,
+        "reason": "verified",
+        "httpStatus": 200,
+        "requestedDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340",
+        "rawDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340",
+        "byteLength": 285,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "kind": "image-manifest",
+        "configDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "layerCount": 0
+      }
+    },
+    {
+      "case": "digest-mismatch",
+      "passed": true,
+      "exitCode": 1,
+      "result": {
+        "verified": false,
+        "reason": "body_digest_mismatch",
+        "httpStatus": 200,
+        "requestedDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "rawDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340",
+        "byteLength": 285
+      }
+    }
+  ]
+}

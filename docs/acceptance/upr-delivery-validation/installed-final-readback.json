@@ -1,0 +1,35 @@
+{
+  "files": [
+    {
+      "path": "D:\\dsh_home\\skills\\business-development\\references\\procedure.md",
+      "sha256": "6c788f97231a23c42c80a1b047aea61c9eaa523a6c8f811baaa640d3ad4dc6af",
+      "matches": true
+    },
+    {
+      "path": "D:\\dsh_home\\skills\\review-code-implementation\\references\\checklist.md",
+      "sha256": "ef0c16e1cfa1e592d861e517b9419e699da38bc1c0f9b112f135912f80b17783",
+      "matches": true
+    },
+    {
+      "path": "D:\\baibu-agent\\scripts\\read-registry-manifest.ps1",
+      "sha256": "263873fcb707789c7fbbab05df134ea12d9c6f53989acdc5db3fb62608c6ffa2",
+      "matches": true
+    },
+    {
+      "path": "D:\\baibu-agent\\docs\\ops\\woodpecker-uat.md",
+      "sha256": "f11a5ce922e159aef316f46ee08faf1337706a210d2488cc226739b86720d2e0",
+      "matches": true
+    },
+    {
+      "path": "D:\\dsh_home\\skills\\uat-deployment\\SKILL.md",
+      "sha256": "84e293e52ada8bbfba4e038c6c596e6102bbe61bbb9fd28bd29bd6d56ae10379",
+      "matches": true
+    },
+    {
+      "path": "D:\\dsh_home\\skills\\uat-deployment\\references\\procedure.md",
+      "sha256": "7bdc70389ce270724ecb5c888470f0aa59bb5feb01c1aaad9370c507d3c25556",
+      "matches": true
+    }
+  ],
+  "matches": true
+}
