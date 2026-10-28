@@ -14,3 +14,8 @@ known-not-sent-not-delivered,3,PASS,round-3-tests.log
 concrete-titles-neutral-version-status,3,PASS,round-3-tests.log
 business-state-dedup-and-full-fence,3,PASS,round-3-tests.log
 native-routing-query-restart,3,PASS,round-3-tests.log
+task-root-check-cas-inheritance,7,PASS,round-7.md
+original-and-new-confined-directory,7,PASS,round-7.md
+same-execution-technical-continuation,7,PASS,round-7.md
+extra-resource-regression,7,FAIL,round-7.md
+owner-prompt-local-install,7,PENDING,round-7.md

@@ -1,0 +1,15 @@
+{
+  "root": "D:/baibu-agent/tasks/coordination-454ebb161411b49cdcd1675d51411c5d/outputs",
+  "inside": {
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "outside": {
+    "exitCode": 1,
+    "stdout": "",
+    "stderr": "Set-Content: Access to the path 'D:\\baibu-agent\\tasks\\acl-outside-probe-20261028.txt' is denied.\r\n"
+  },
+  "insideContent": "acl-recovered",
+  "outsideExists": false
+}

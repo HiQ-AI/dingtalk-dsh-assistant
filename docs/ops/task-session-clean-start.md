@@ -317,3 +317,13 @@ A 正式完成后调度 B 的关系投影及任务页前置等待说明同时修
 ## 正常启动不扫描全库
 
 动态任务库正常打开及 inspectStartup 不执行 quick_check / integrity_check / foreign_key_check。结构、版本、初始化标记、instanceId、ingress epoch 和 owner 接管校验仍在，读取当前任务/执行/通知以恢复运行不等于审计全部历史。需要全库完整性审计时显式使用历史维护检查 inspectLedger，不能在普通启动和换包路径隐式调用。
+
+### 一次性准备任务目录继承权限
+
+Windows 原生受限 shell 为任务目录配置写入授权时，需要宿主当前用户对目录具备有效 WRITE_DAC 与 WRITE_OWNER。仅有 Modify 或目录所有者身份不足以证明两项都可用。`session-workspaces.js` 的 mkdir 沿用父目录 ACL，因此应在操作员指定的 Agent 工作区统一准备 `tasks` 根，不在每次任务或模型轮中修改权限。
+
+先执行 `pwsh -NoProfile -File scripts/prepare-task-directories.ps1 -WorkspaceRoot D:/baibu-agent -Check`。Check 不创建目录、不写证据或 ACL，返回 `aclSha256`、有效权限及 `needsChange`。`tasks` 必须已经存在；脚本拒绝相对路径、卷根、祖先 reparse 和 tasks owner 非当前用户。WorkspaceRoot 本身即操作员指定的授权根，脚本不额外推断业务授权，也不接受任意目标 Path。
+
+若需准备，使用刚读到的摘要执行 `pwsh -NoProfile -File scripts/prepare-task-directories.ps1 -WorkspaceRoot D:/baibu-agent -ExpectedAclSha256 <Check返回摘要> -EvidenceDirectory <绝对且不存在的证据目录>`。证据目录的父目录须已存在且没有 reparse。脚本仅给当前 SID 添加可继承的 FullControl allow（ObjectInherit、ContainerInherit、无传播限制），保留 owner/group/SACL、其他 SID、deny 和继承保护标志；不递归替换子 ACL。原 ACL 摘要不匹配会拒绝；写前 `before.json` 保存原 DACL SDDL/owner/group/保护状态与摘要，写后 `after.json` 保存独立读回及有效权限。验证失败自动恢复原 DACL 并核对摘要；证据应保留以供必要时按精确目标恢复，不能把其他目录的 SDDL套入。重复执行已具备规则时不写入，也不创建新证据目录。
+
+根规则通过系统继承覆盖未保护的既有后代与以后 mkdir 的目录。受保护子目录、显式 deny 或跨 reparse 目标不因此被改写；遇到具体目录失败应回读该目录的有效权限，不声称整棵历史树必然已修复。根准备完成后再分别验证既有产物目录和新建探针的继承及原生受限 shell 成功/越界拒绝；宿主权限准备不改变会话 workspace 边界。

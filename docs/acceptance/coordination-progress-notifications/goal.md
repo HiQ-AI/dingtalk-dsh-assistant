@@ -1,6 +1,6 @@
 # 进度询问与协调通知全路径修复
 
-> 状态：COMPLETE
+> 状态：ACTIVE
 > Goal ID：coordination-progress-notifications-20261028
 > 最近维护：2026-10-28T11:29:21+08:00
 > 权威目标：D:/codex/worktrees/coordination-progress-notifications/dingtalk-dsh-assistant/docs/acceptance/coordination-progress-notifications/goal.md
@@ -33,9 +33,13 @@
 
 | SG7 | 原v4 Owner模式故障恢复 | 原会话模式纠正并真实接续，原成果保留 | 已完成 | report.md；原生seq7446/7449，lease165，工具成功回包 |
 
+| SG8 | 同类目录前置保障 | tasks根一次性权限准备并继承，新建目录不再逐项审批 | 已完成 | round-7.md；现场根及新目录原生验证 |
+| SG9 | 能力判断与等待依据 | 不把未尝试能力说成不可用，保留实际失败工具/路径 | 源码完成待安装 | round-7.md；既有原生恢复1/1通过 |
+| SG10 | 系统回归与交付 | 各目录/恢复/续办场景正反例及现场恢复 | 部分完成 | round-7.md；额外资源组超时、提示待安装 |
+
 ## 当前检查点
-- 当前子目标：SG7
-- 唯一下一步：本轮技术修复完成；原v4 Owner继续原授权业务交付。
+- 当前子目标：SG10
+- 唯一下一步：提交目录根准备与能力事实提示修订；提示包待原任务自然排空后安装，不为此中断执行。
 - 未闭环项：原UAT2业务交付由原任务继续；历史wakes尚未全部ack，全局recover耗时阶段未收敛。
 
 ## 进展
@@ -62,3 +66,5 @@
 - 去全扫版本已安装，新PID5600，57.5秒健康，入站/DWS正常，原协调已正式退役；v4模式RPC被Host writer拒绝，正在受信绑定路径内修复，未改原会话历史。
 
 - 最终现场：PID44064在线，错误观察原工作卡已正式退役；原v4会话workspace-write事件seq7446及新轮次seq7449实际工具回包。需求/控制13不变。原wakes尚未ack，UAT2业务未完成；全局恢复历史登记慢的确切阶段未收敛。见report.md。
+
+- 用户追加：不能只修本次，要杜绝同类。原生官方诊断证实原outputs有效WRITE_DAC=true/WRITE_OWNER=false；授权后仅该根补当前用户FullControl，verification verified，未改文件/所有者。Owner所谓入口不存在已被tool schema及无delegate尝试反证。

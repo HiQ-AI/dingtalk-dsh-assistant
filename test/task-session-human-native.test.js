@@ -316,6 +316,10 @@ test('operator technical reply retains business sources and shared scope protoco
   assert.equal(seen.at(-1).sources.find(source => source.messageId === 'business-authorization').text, objective)
   assert.equal(seen.at(-1).sources.find(source => source.text === reply).actorId, 'operator-user')
   assert.equal(seen.at(-1).task.objective, after.objective)
+  assert.deepEqual(seen.map(input => input.objective), ['准备原交付', '按原来源继续完整UAT交付'], '技术恢复只续办剩余阶段，不重跑已完成准备')
+  const continuations = h.toolResults.filter(result => result.name === 'task_delegate')
+  assert.equal(continuations.length, 2, '初次委派和原执行续办各一次，不重复派发')
+  assert.ok(continuations.every(result => !result.result.isError), '续办依据真实工具接收回执，不凭模型声明能力恢复')
   for (const scope of scopes) {
     assert.match(scope, /不自动撤销此前已明确授予的范围/)
     assert.match(scope, /明确暂停、撤销、仅准备或改变目标环境则优先/)

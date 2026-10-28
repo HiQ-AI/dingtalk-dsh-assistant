@@ -1,0 +1,69 @@
+[
+  {
+    "owner": "百部\\64554",
+    "protected": false,
+    "rules": [
+      {
+        "FileSystemRights": 2032127,
+        "InheritanceFlags": 3,
+        "PropagationFlags": 0,
+        "IsInherited": false,
+        "AccessControlType": 0
+      }
+    ],
+    "path": "D:/baibu-agent/tasks"
+  },
+  {
+    "owner": "百部\\64554",
+    "protected": false,
+    "rules": [
+      {
+        "FileSystemRights": 2032127,
+        "InheritanceFlags": 0,
+        "PropagationFlags": 0,
+        "IsInherited": false,
+        "AccessControlType": 0
+      },
+      {
+        "FileSystemRights": 2032127,
+        "InheritanceFlags": 3,
+        "PropagationFlags": 0,
+        "IsInherited": true,
+        "AccessControlType": 0
+      }
+    ],
+    "path": "D:/baibu-agent/tasks/task-919269e0a12b67f8977cd8329b00e839"
+  },
+  {
+    "owner": "百部\\64554",
+    "protected": false,
+    "rules": [
+      {
+        "FileSystemRights": 2032127,
+        "InheritanceFlags": 0,
+        "PropagationFlags": 0,
+        "IsInherited": false,
+        "AccessControlType": 0
+      },
+      {
+        "FileSystemRights": 2032127,
+        "InheritanceFlags": 3,
+        "PropagationFlags": 0,
+        "IsInherited": true,
+        "AccessControlType": 0
+      }
+    ],
+    "path": "D:/baibu-agent/tasks/coordination-454ebb161411b49cdcd1675d51411c5d/outputs"
+  },
+  {
+    "owner": "百部\\64554",
+    "rules": [
+      {
+        "FileSystemRights": 2032127,
+        "InheritanceFlags": 3,
+        "IsInherited": true
+      }
+    ],
+    "path": "D:/baibu-agent/tasks/coordination-454ebb161411b49cdcd1675d51411c5d/outputs/inheritance-probe-20261028"
+  }
+]
