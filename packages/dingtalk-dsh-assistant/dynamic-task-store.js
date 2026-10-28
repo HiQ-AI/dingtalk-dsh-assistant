@@ -1,5 +1,6 @@
 import {observerWorkMetadata} from './observer-work-index.js'
 import { installObserverPagination, observerPage, observerGroupQuery } from './observer-pagination.js'
+import { createTaskLedgerDetails } from './task-ledger-details.js'
 import { executionSessionTitle } from './session-workspaces.js'
 import { checkTaskStoreIntegrity } from './task-store-integrity.js'
 import { createStartupMetrics } from './startup-metrics.js'
@@ -103,7 +104,7 @@ function durableMarker(path, value, initial = false) {
 
 /** New-instance initialization is explicit. An ingress epoch can only be bound to a new ledger.
  * legacyDbPath is an offline, read-only inspection API, not a production compatibility path. */
-export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, migrate = false, migrationExpectedDigest, paginationMigrate = false, legacyDbPath, ingressEpoch, webActorId, resourceCatalog: configuredResourceCatalog, startupObserver } = {}) {
+export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, migrate = false, migrationExpectedDigest, paginationMigrate = false, legacyDbPath, ingressEpoch, webActorId, resourceCatalog: configuredResourceCatalog, startupObserver, detailRoot } = {}) {
   const startup = createStartupMetrics(startupObserver)
   if (migrationExpectedDigest !== undefined && !/^[a-f0-9]{64}$/.test(migrationExpectedDigest)) fail('DYNAMIC_ARGUMENT_INVALID', 'migrationExpectedDigest')
   if (!isAbsolute(dbPath ?? '') || !text(instanceId, 'instanceId') || typeof initialize !== 'boolean'
@@ -127,13 +128,43 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   let db, closed = false, healthy = true
   const incarnation = `${process.pid}:${randomUUID()}`
   const now = () => new Date().toISOString()
-  const all = (table, where = '', args = []) => db.prepare(`SELECT body FROM ${table} ${where}`).all(...args).map(row => JSON.parse(row.body))
+  const details = createTaskLedgerDetails(detailRoot ?? (basename(dirname(dbPath)) === '.dsh' ? dirname(dirname(dbPath)) : dirname(dbPath)))
+  let detailReadCache, detailReadCacheBytes = 0
+  const decode = (body, table, id) => {
+    const key = `${table}:${id ?? ''}:${body}`
+    if (detailReadCache?.has(key)) return JSON.parse(detailReadCache.get(key))
+    const value = details.decode(JSON.parse(body), { table, ...(id === undefined ? {} : { id }) })
+    if (detailReadCache && detailReadCache.size < 256) {
+      const encoded = JSON.stringify(value), bytes = Buffer.byteLength(encoded) + Buffer.byteLength(key)
+      if (detailReadCacheBytes + bytes <= 8 * 1024 * 1024) { detailReadCache.set(key, encoded); detailReadCacheBytes += bytes }
+    }
+    return value
+  }
+  const encode = (table, value, hint) => {
+    const compact = details.encode(table, value, hint)
+    if (compact._hostDetail) db.exec('PRAGMA user_version=3') // Older binaries must reject externalized rows.
+    return canonical(compact)
+  }
+  const receiptHint = args => {
+    if (args.binding?.taskId || args.taskId) return { taskId: args.binding?.taskId ?? args.taskId }
+    if (args.coordinationId) return { coordinationId: args.coordinationId }
+    if (args.notificationId) { const n = get('dynamic_notifications', args.notificationId, true); return { taskId: n?.taskId, coordinationId: n?.payload?.fact?.coordinationId } }
+    if (args.operationId) return { taskId: get('dynamic_operations', args.operationId, true)?.taskId }
+    if (args.executionId) return { taskId: get('dynamic_executions', args.executionId, true)?.taskId }
+    if (args.instructionId) { const m = get('dynamic_coordination_members', args.instructionId, true); return { coordinationId: m?.coordinationId } }
+    return {}
+  }
+  const all = (table, where = '', args = []) => db.prepare(`SELECT body FROM ${table} ${where}`).all(...args).map(row => decode(row.body, table))
   const get = (table, id, optional = false) => {
     const row = db.prepare(`SELECT body FROM ${table} WHERE id=?`).get(text(id, 'id'))
     if (!row && !optional) fail('DYNAMIC_NOT_FOUND', `${table}:${id}`)
-    return row ? JSON.parse(row.body) : null
+    return row ? decode(row.body, table, id) : null
   }
-  const put = (table, value) => db.prepare(`INSERT INTO ${table}(id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body`).run(value.id, canonical(value))
+  const put = (table, value) => {
+    const prior = db.prepare(`SELECT body FROM ${table} WHERE id=?`).get(value.id)
+    if (prior && canonical(decode(prior.body, table, value.id)) === canonical(value)) return
+    db.prepare(`INSERT INTO ${table}(id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body`).run(value.id, encode(table, value))
+  }
   const saveTask = task => { task.updatedAt = now(); put('dynamic_tasks', task); return task }
   const execs = taskId => all('dynamic_executions', 'WHERE json_extract(body,\'$.taskId\')=? ORDER BY rowid', [taskId])
   const ops = taskId => all('dynamic_operations', taskId ? 'WHERE json_extract(body,\'$.taskId\')=? ORDER BY rowid' : 'ORDER BY rowid', taskId ? [taskId] : [])
@@ -292,6 +323,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   const transaction = fn => {
     if (closed || !healthy) fail('DYNAMIC_STORE_CLOSED')
     db.exec('BEGIN IMMEDIATE')
+    detailReadCache = new Map(); detailReadCacheBytes = 0
     let committing = false
     try {
       const owner = db.prepare('SELECT value FROM dynamic_meta WHERE key=\'owner\'').get()?.value
@@ -302,7 +334,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (db.isTransaction) db.exec('ROLLBACK')
       if (committing) throw Object.assign(new Error('DYNAMIC_COMMIT_ACK_UNKNOWN'), { code: 'DYNAMIC_COMMIT_ACK_UNKNOWN', cause: error })
       throw error
-    }
+    } finally { detailReadCache = undefined }
   }
   const importLegacy = () => {
     if (!legacyDbPath) return
@@ -356,8 +388,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       db.prepare('INSERT INTO dynamic_meta(key,value) VALUES (?,?)').run('initToken', marker.initToken)
       if (configuredIngressEpoch) db.prepare('INSERT INTO dynamic_meta(key,value) VALUES (?,?)').run('ingressEpoch', configuredIngressEpoch)
       db.exec('COMMIT')
-    } else if (![1, VERSION].includes(version) || db.prepare('PRAGMA application_id').get().application_id !== APPLICATION) fail('DYNAMIC_SCHEMA_INVALID')
+    } else if (![1, VERSION, 3].includes(version) || db.prepare('PRAGMA application_id').get().application_id !== APPLICATION) fail('DYNAMIC_SCHEMA_INVALID')
     if (version === 1 && !migrate) fail('DYNAMIC_MIGRATION_REQUIRED', 'Offline v1 to v2 migration requires explicit migrate=true after draining writers.')
+    const stagedMigration = db.prepare("SELECT value FROM dynamic_meta WHERE key='detailMigration'").get()?.value
+    if (stagedMigration && JSON.parse(stagedMigration).complete !== true) fail('DYNAMIC_DETAIL_MIGRATION_INCOMPLETE')
     const initToken = db.prepare("SELECT value FROM dynamic_meta WHERE key='initToken'").get()?.value
     if (marker && initToken !== marker.initToken) fail('DYNAMIC_INITIALIZATION_MARKER_MISMATCH')
     const requiredTables = ['meta','tasks','executions','operations','wakes','notifications','legacy_blockers','sources','groups','receipts','resource_locks'].map(name => `dynamic_${name}`)
@@ -407,11 +441,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         ON dynamic_sources(json_extract(body,'$.groupId'),json_extract(body,'$.actorId'))
         WHERE coalesce(json_extract(body,'$.routed'),0)=0 AND json_type(body,'$.processingCompleted') IS NULL`)
       // Recovery never authorizes a second send. Tool/process state must first be drained or reconciled.
-      const startupOperations = ops(), startupExecutions = all('dynamic_executions')
+      const startupOperations = all('dynamic_operations', "WHERE coalesce(json_extract(body,'$.state'),'') NOT IN ('succeeded','failed','cancelled')")
+      const startupExecutions = db.prepare('SELECT body FROM dynamic_executions').all().map(row => JSON.parse(row.body))
       for (const operation of startupOperations) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
       const blockingExecutions = new Set(startupOperations.filter(operationBlocksRecovery).map(operation => JSON.stringify([operation.taskId, operation.executionId])))
-      for (const notification of all('dynamic_notifications')) if (notification.state === 'starting') { notification.state = 'unknown'; put('dynamic_notifications', notification) }
-      for (const execution of startupExecutions) if (!execution.drained) {
+      for (const notification of all('dynamic_notifications', "WHERE json_extract(body,'$.state')='starting'")) { notification.state = 'unknown'; put('dynamic_notifications', notification) }
+      for (const execution of all('dynamic_executions', "WHERE coalesce(json_extract(body,'$.drained'),1)=0")) {
         execution.recovering = true
         const segment = execution.timeline?.segments.at(-1)
         if (segment?.state === 'running') { segment.state = 'unknown'; execution.timeline.complete = false }
@@ -420,13 +455,13 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       // Records written before instruction attribution existed remain an explicit
       // existing input; neither restart nor a later arrangement grants coverage.
-      for (const execution of startupExecutions) if (!execution.instructionScope) {
+      for (const execution of all('dynamic_executions', "WHERE coalesce(json_type(body,'$.instructionScope'),'null')='null'")) {
         execution.instructionScope = { kind: 'existing', taskId: execution.taskId, inputVersion: execution.inputVersion,
           requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
           runSequence: get('dynamic_tasks', execution.taskId).runSequence, contextRevision: null, instructionIds: [], boundAt: now() }
         put('dynamic_executions', execution)
       }
-      for (const task of all('dynamic_tasks')) if (!task.drained) { task.recovering = true; saveTask(task) }
+      for (const task of all('dynamic_tasks', "WHERE coalesce(json_extract(body,'$.drained'),1)=0")) { task.recovering = true; saveTask(task) }
       for (const group of all('dynamic_groups')) if (!group.drained) { group.recovering = true; put('dynamic_groups', group) }
       importLegacy()
       // 旧版活动执行未取得资源锁，不能在升级恢复时伪造此前已串行的保证。
@@ -453,7 +488,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     } catch (error) { startup.record('task-store.recovery', recoveryStarted, 'failed'); if (db.isTransaction) db.exec('ROLLBACK'); throw error }
   } catch (error) {
     try { if (db?.isTransaction) db.exec('ROLLBACK'); db?.prepare("DELETE FROM dynamic_meta WHERE key='owner' AND value=?").run(incarnation) } catch {}
-    db?.close(); livePaths.delete(pathKey); throw error
+    db?.close(); details.close(); livePaths.delete(pathKey); throw error
   }
 
   const coordination = coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, now,
@@ -465,10 +500,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const previous = db.prepare('SELECT digest,body FROM dynamic_receipts WHERE id=?').get(command.id)
       if (previous) {
         if (previous.digest !== requestDigest) fail('DYNAMIC_COMMAND_ID_CONFLICT')
-        return JSON.parse(previous.body)
+        return decode(previous.body, 'dynamic_receipts', command.id)
       }
       const value = { ...reduce(command.kind, command.args, command.id), replayed: false }
-      db.prepare('INSERT INTO dynamic_receipts(id,digest,body) VALUES (?,?,?)').run(command.id, requestDigest, canonical(value))
+      db.prepare('INSERT INTO dynamic_receipts(id,digest,body) VALUES (?,?,?)').run(command.id, requestDigest, encode('dynamic_receipts', value, { ...receiptHint(command.args), id: command.id }))
       return value
     } })
   const schedules = coordinationSchedules({ get, put, all, fail, text, integer, array, record, clone, digest, now,
@@ -481,12 +516,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const row = db.prepare('SELECT digest,body FROM dynamic_receipts WHERE id=?').get(command.id)
       if (!row) return null
       if (row.digest !== digest({ kind: command.kind, args: command.args })) fail('DYNAMIC_COMMAND_ID_CONFLICT')
-      return JSON.parse(row.body)
+      return decode(row.body, 'dynamic_receipts', command.id)
     } })
   const taskEvents = (after = 0, limit = 100) => {
     if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('DYNAMIC_ARGUMENT_INVALID')
     const rows = db.prepare('SELECT sequence,body FROM dynamic_task_events WHERE sequence>? ORDER BY sequence LIMIT ?').all(after, limit + 1)
-    const events = rows.slice(0, limit).map(row => ({ ...JSON.parse(row.body), sequence: row.sequence }))
+    const events = rows.slice(0, limit).map(row => ({ ...decode(row.body, 'dynamic_task_events'), sequence: row.sequence }))
     return { events, nextCursor: events.at(-1)?.sequence ?? after, hasMore: rows.length > limit }
   }
   const controlNotice = payload => {
@@ -1876,7 +1911,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
       const unitIds = refs.map(unit => digest({ unitId: unit.unitId, revision: unit.unitRevision }))
       const coordinated = new Map(db.prepare('SELECT body FROM dynamic_coordination_sources WHERE id IN (SELECT value FROM json_each(?))')
-        .all(JSON.stringify(unitIds)).map(row => JSON.parse(row.body)).filter(item => item.sourceRefs?.includes(source.sourceId))
+        .all(JSON.stringify(unitIds)).map(row => decode(row.body, 'dynamic_coordination_sources')).filter(item => item.sourceRefs?.includes(source.sourceId))
         .map(item => [`${item.unitId}:${item.revision}`, item]))
       for (const unit of units) {
         const ledger = coordinated.get(key(unit))
@@ -1932,6 +1967,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   return Object.freeze({
     info: Object.freeze({ dbPath, instanceId, version: VERSION, ingressEpoch: boundIngressEpoch }),
     get healthy() { return !closed && healthy },
+    async maintain({ kind, args = {} }) {
+      if (!['coordination.aggregate','coordination.observe.reconcile','coordination.schedule.scan'].includes(kind)) fail('DYNAMIC_MAINTENANCE_KIND_INVALID')
+      record(args)
+      return clone(transaction(() => ({ ...reduce(kind, args, `maintenance:${randomUUID()}`), replayed: false })))
+    },
     async command(command) {
       record(command); const id = text(command.id, 'id'), kind = text(command.kind, 'kind'), args = record(command.args ?? {})
       const requestDigest = digest({ kind, args })
@@ -1939,7 +1979,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const previous = db.prepare('SELECT digest,body FROM dynamic_receipts WHERE id=?').get(id)
         if (previous) {
           if (previous.digest !== requestDigest) fail('DYNAMIC_COMMAND_ID_CONFLICT')
-          return { ...JSON.parse(previous.body), replayed: true, dispatchEligible: false }
+          return { ...decode(previous.body, 'dynamic_receipts', id), replayed: true, dispatchEligible: false }
         }
         // 与任务状态在同一事务保存完整决定；失败命令不留伪决定，同一命令重试不重复追加。
         const recordsDecision = ['task.wait', 'task.complete', 'task.dialogue.reply'].includes(kind)
@@ -1968,7 +2008,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             const event = { id: `task-completed:${id}`, eventVersion: 1, kind: 'task.completed', taskId: task.taskId,
               commandId: id, taskDecisionReceiptId: id, ...coordination.version(task),
               instructionCoverage, result: clone(task.completion.result), recordedAt: now() }
-            const inserted = db.prepare('INSERT INTO dynamic_task_events(id,body) VALUES (?,?)').run(event.id, canonical(event))
+            const inserted = db.prepare('INSERT INTO dynamic_task_events(id,body) VALUES (?,?)').run(event.id, encode('dynamic_task_events', event))
             value.completionEvent = { ...event, sequence: Number(inserted.lastInsertRowid) }
             for (const coverage of instructionCoverage) {
               const member = get('dynamic_coordination_members', coverage.instructionId)
@@ -1979,7 +2019,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             }
           }
         }
-        db.prepare('INSERT INTO dynamic_receipts(id,digest,body) VALUES (?,?,?)').run(id, requestDigest, canonical(value))
+        db.prepare('INSERT INTO dynamic_receipts(id,digest,body) VALUES (?,?,?)').run(id, requestDigest, encode('dynamic_receipts', value, { ...receiptHint(args), id }))
         return value
       }))
     },
@@ -1991,6 +2031,25 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if(q.kind==='observer.revision')return `${incarnation}:${db.prepare('SELECT total_changes() n').get().n}`
       if(['observer.group-version','observer.group-metadata','observer.message-contexts'].includes(q.kind))return observerGroupQuery(db,q)
       if (q.kind === 'observer.page') return observerPage(db, q, incarnation)
+      if (['task.index','execution.index','coordination.index'].includes(q.kind)) {
+        const table = { 'task.index': 'dynamic_tasks', 'execution.index': 'dynamic_executions', 'coordination.index': 'dynamic_coordination' }[q.kind]
+        const conditions = [], params = []
+        if (q.taskId) { conditions.push("json_extract(body,'$.taskId')=?"); params.push(q.taskId) }
+        if (q.groupId) { conditions.push("json_extract(body,'$.groupId')=?"); params.push(q.groupId) }
+        const limit = q.limit ?? 100, after = q.after ?? 0
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(after) || after < 0) fail('DYNAMIC_ARGUMENT_INVALID')
+        conditions.push('rowid>?'); params.push(after, limit + 1)
+        const names = ['id','taskId','executionId','groupId','status','state','control','drained','recovering','createdAt','updatedAt','archivedAt',
+          'requirementRevision','contextRevision','controlRevision','runSequence','sessionId','sessionBound','leaseEpoch','inputVersion','inputDigest',
+          'sourceId','revision','nextDueAt','aggregateDigest']
+        const projection = names.flatMap(name => [`'${name}'`, `json_extract(body,'$.${name}')`]).join(',')
+        const rows = db.prepare(`SELECT rowid AS sequence,json_object(${projection},'title',substr(json_extract(body,'$.title'),1,400),
+          'lastDecision',json_object('action',json_extract(body,'$.lastDecision.action'),'summary',substr(json_extract(body,'$.lastDecision.summary'),1,400)),
+          'detailStorage',CASE WHEN json_type(body,'$._hostDetail')='object' THEN 'external' ELSE 'inline' END) body
+          FROM ${table} WHERE ${conditions.join(' AND ')} ORDER BY rowid LIMIT ?`).all(...params)
+        const items = rows.slice(0, limit).map(row => ({ ...JSON.parse(row.body), sequence: row.sequence }))
+        return { items, nextAfter: rows.length > limit ? items.at(-1).sequence : null }
+      }
       if (q.kind === 'ingress.policy') value = { instanceId, ingressEpoch: boundIngressEpoch }
       else if (q.kind === 'coordination.runtime') value = JSON.parse(db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value ?? '{"mode":"active"}')
       else if (q.kind === 'coordination.assessments') value = all('dynamic_coordination_members').filter(m => m.taskId === q.taskId
@@ -2013,10 +2072,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         get('dynamic_tasks', q.taskId)
         const before = q.before ?? Number.MAX_SAFE_INTEGER, limit = q.limit ?? 20
         if (!Number.isSafeInteger(before) || before < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('DYNAMIC_ARGUMENT_INVALID')
-        const rows = db.prepare(`SELECT rowid AS sequence,json_extract(body,'$.taskDecision') AS decision FROM dynamic_receipts
+        const rows = db.prepare(`SELECT rowid AS sequence,id,body FROM dynamic_receipts
           WHERE json_type(body,'$.taskDecision')='object' AND json_extract(body,'$.taskDecision.taskId')=? AND rowid<?
           ORDER BY rowid DESC LIMIT ?`).all(q.taskId, before, limit + 1)
-        const decisions = rows.slice(0, limit).map(row => ({ ...JSON.parse(row.decision), sequence: row.sequence }))
+        const decisions = rows.slice(0, limit).map(row => ({ ...decode(row.body, 'dynamic_receipts', row.id).taskDecision, sequence: row.sequence }))
         value = { taskId: q.taskId, decisions, nextBefore: rows.length > limit ? decisions.at(-1).sequence : null }
       }
       else if (q.kind === 'task.list') value = all('dynamic_tasks').filter(item => !q.groupId || item.groupId === q.groupId)
@@ -2057,10 +2116,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'source.list') value = all('dynamic_sources').filter(item => (!q.groupId || item.groupId === q.groupId) && (!q.unrouted || !item.routed) && (!q.status || (q.status === 'routed' ? !!item.routed : !item.routed)))
       else if (q.kind === 'group.get') value = get('dynamic_groups', q.groupId, true)
       else if (q.kind === 'group.list') value = all('dynamic_groups')
-      else if (q.kind === 'receipt.get') { const row = db.prepare('SELECT body FROM dynamic_receipts WHERE id=?').get(q.id); value = row ? JSON.parse(row.body) : null }
-      else if (q.kind === 'recovery.pending') value = { tasks: all('dynamic_tasks').filter(item => !item.drained),
-        groups: all('dynamic_groups').filter(item => !item.drained), executions: all('dynamic_executions').filter(item => !item.drained || item.status === 'queued'),
-        operations: ops().filter(item => operationBlocksRecovery(item)), notifications: all('dynamic_notifications').filter(item => !['delivered','failed'].includes(item.state)), legacy: legacy() }
+      else if (q.kind === 'receipt.get') { const row = db.prepare('SELECT body FROM dynamic_receipts WHERE id=?').get(q.id); value = row ? decode(row.body, 'dynamic_receipts', q.id) : null }
+      else if (q.kind === 'recovery.pending') value = { tasks: all('dynamic_tasks', "WHERE coalesce(json_extract(body,'$.drained'),1)=0"),
+        groups: all('dynamic_groups').filter(item => !item.drained), executions: all('dynamic_executions', "WHERE coalesce(json_extract(body,'$.drained'),1)=0 OR json_extract(body,'$.status')='queued'"),
+        operations: all('dynamic_operations', "WHERE json_extract(body,'$.state') NOT IN ('succeeded','failed','cancelled')").filter(item => operationBlocksRecovery(item)), notifications: all('dynamic_notifications', "WHERE json_extract(body,'$.state') NOT IN ('delivered','failed')"), legacy: legacy() }
       else fail('DYNAMIC_QUERY_UNKNOWN', q.kind)
       if (q.kind === 'task.get' && value && restartReopenEligible(value)) value = { ...value, restartRecoveryEligible: true }
       if (q.kind === 'task.list') value = value.map(task => restartReopenEligible(task) ? { ...task, restartRecoveryEligible: true } : task)
@@ -2070,7 +2129,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (closed) return
       try { if (healthy) transaction(() => db.prepare('DELETE FROM dynamic_meta WHERE key=\'owner\' AND value=?').run(incarnation));
         else db.prepare("DELETE FROM dynamic_meta WHERE key='owner' AND value=?").run(incarnation) }
-      finally { closed = true; db.close(); livePaths.delete(pathKey) }
+      finally { closed = true; db.close(); details.close(); livePaths.delete(pathKey) }
     },
   })
 }

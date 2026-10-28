@@ -68,7 +68,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   await mkdir(dirname(config.dbPath), { recursive: true })
   const store = suppliedStore ?? await openDynamicTaskStore({ dbPath: config.dbPath, instanceId: config.instanceId,
     initialize: config.initialize === true, migrate: config.migrate === true, ingressEpoch: config.ingressEpoch, webActorId: config.webActorId,
-    resourceCatalog: await readExecutionResourceCatalog(root), startupObserver })
+    detailRoot: root, resourceCatalog: await readExecutionResourceCatalog(root), startupObserver })
   let persistence, resourceCatalog
   try {
     resourceCatalog = createExecutionResourceCatalog(await store.query({ kind: 'resource.catalog' }))
@@ -124,9 +124,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   const refreshTasks = async () => { taskCache.clear(); for (const task of await query('task.list')) taskCache.set(task.taskId, topicTaskView(task)) }
   function topicTaskView(task) { return { ...task, state: task.status === 'completed' ? 'completed' : task.control === 'cancelled' ? 'cancelled' : task.control === 'paused' || task.drained ? 'waiting' : 'running', inputVersion: task.requirementRevision, runSequence: task.runSequence ?? 1, topicRefs: task.topicRefs ?? [], appliedOperations: task.appliedOperations ?? [], acceptanceCriteria: task.requirements ?? [], taskPromptRefs: [] } }
-  const command = async (kind, args, id = `${kind}:${randomUUID()}`) => {
+  const command = async (kind, args, id) => {
     if (kind === 'execution.continue' || kind === 'execution.retry-provider') await refreshExecutionDocument(args.executionId ?? args.binding.executionId)
-    const receipt = await store.command({ id, kind, args: clean(args) })
+    const receipt = !id && store.maintain && ['coordination.aggregate','coordination.observe.reconcile','coordination.schedule.scan'].includes(kind)
+      ? await store.maintain({ kind, args: clean(args) })
+      : await store.command({ id: id ?? `${kind}:${randomUUID()}`, kind, args: clean(args) })
     // 幂等收据保存的是当时快照；通知当前态须独立回读，不能用旧 prepared 覆盖已送达缓存。
     if (receipt.replayed && receipt.result?.notification)
       receipt.result.notification = await query('notification.get', { notificationId: receipt.result.notification.id })

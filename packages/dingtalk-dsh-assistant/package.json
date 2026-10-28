@@ -44,6 +44,7 @@
     "startup-metrics.js",
     "task-store-integrity.js",
     "task-store-integrity-worker.js",
+    "task-ledger-details.js",
     "environment.js",
     "execution-context.js",
     "execution-resource-catalog.js",

@@ -349,7 +349,7 @@ async function summaryFixture(t) {
     command: { id: 'coordination-command:coordination:instruction', kind: 'task.supplement',
       args: { taskId: 'A', expectedRequirementRevision: 1, expectedControlRevision: 1, messageId: 'material', text: '补充材料', request: '核查UPR导入及材料' } } }] })
   const binding = (await command('task.claim', { taskId: 'A' })).result.binding
-  return { command, query: args => store.query(args), binding,
+  return { command, maintain: args => store.maintain(args), dbPath: options.dbPath, query: args => store.query(args), binding,
     restart: async () => { await store.close(); store = await openDynamicTaskStore(options) } }
 }
 
@@ -427,14 +427,16 @@ for (const phase of ['aggregate', 'permit', 'unknown', 'delivered']) test(`历�
   await command('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
     payload: { kind: 'coordination', conversationId: 'group', text: '旧观察摘要', fact: { coordinationId: 'coordination',
       eventId: 'summary:1', snapshotDigest: aggregate.coordination.aggregateDigest, summaryRevision: 1 } } })
+  const historicalCoordination=(await store.query({kind:'coordination.get',coordinationId:'coordination'})).coordination
+  const historicalNotice=await store.query({kind:'notification.get',notificationId})
   await store.close()
   // 只在隔离库播种升级前已存在的通知状态；不调用新版本的发送许可来伪造旧行为。
   const db = new DatabaseSync(options.dbPath)
-  const coordination = JSON.parse(db.prepare('SELECT body FROM dynamic_coordination WHERE id=?').get('coordination').body)
+  const coordination = historicalCoordination
   coordination.summaryNotificationId = notificationId; coordination.summaryRevision = 1
   db.prepare('UPDATE dynamic_coordination SET body=? WHERE id=?').run(JSON.stringify(coordination), 'coordination')
   if (['unknown', 'delivered'].includes(phase)) {
-    const notice = JSON.parse(db.prepare('SELECT body FROM dynamic_notifications WHERE id=?').get(notificationId).body)
+    const notice = historicalNotice
     notice.state = phase; notice.sendPermit = { notificationId }; notice.dispatchToken = 'old-permit'
     db.prepare('UPDATE dynamic_notifications SET body=? WHERE id=?').run(JSON.stringify(notice), notificationId)
   }
@@ -451,4 +453,25 @@ for (const phase of ['aggregate', 'permit', 'unknown', 'delivered']) test(`历�
   assert.equal(notices.length, 1)
   assert.equal(notices[0].state, ['unknown', 'delivered'].includes(phase) ? phase : 'superseded')
   assert.deepEqual(await store.query({ kind: 'task.get', taskId: 'A' }), task)
+})
+
+
+test('Host coordination inspections stop unchanged durable growth without replaying notification effects', async t => {
+  const f = await summaryFixture(t)
+  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: 'synthetic blocker' })
+  const first = (await f.maintain({ kind: 'coordination.aggregate', args: { coordinationId: 'coordination' } })).result
+  assert.ok(first.notification)
+  const before = new DatabaseSync(f.dbPath, { readOnly: true })
+  const receipts = before.prepare('SELECT count(*) n FROM dynamic_receipts').get().n
+  const changes = before.prepare('PRAGMA data_version').get().data_version
+  for (let i=0;i<20;i++) {
+    await f.maintain({ kind: 'coordination.observe.reconcile', args: { coordinationId: 'coordination' } })
+    const result = (await f.maintain({ kind: 'coordination.aggregate', args: { coordinationId: 'coordination' } })).result
+    assert.equal(result.changed, false)
+    assert.equal(result.notification, undefined)
+  }
+  assert.equal(before.prepare('SELECT count(*) n FROM dynamic_receipts').get().n, receipts)
+  assert.equal(before.prepare('PRAGMA data_version').get().data_version, changes, 'unchanged passes must not write central state')
+  before.close()
+  assert.deepEqual((await f.query({ kind: 'notification.list' })).map(n => n.id), [first.notification.id])
 })

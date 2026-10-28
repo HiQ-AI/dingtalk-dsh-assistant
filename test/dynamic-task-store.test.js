@@ -2015,8 +2015,10 @@ test('execution timing never guesses legacy or interrupted intervals; terminal b
   await f.command('execution.result', { binding: finished, output: { done: true } })
   const fixed = (await f.query({ kind: 'execution.get', executionId: finished.executionId })).runTiming
   const legacy = await f.execution(owner.binding, 'legacy')
+  const historical = await f.query({kind:'execution.get',executionId:legacy.executionId})
+  delete historical.runTiming; delete historical.timeline
   const db = new DatabaseSync(f.config.dbPath)
-  db.prepare("UPDATE dynamic_executions SET body=json_remove(body,'$.runTiming','$.timeline') WHERE id=?").run(legacy.executionId)
+  db.prepare("UPDATE dynamic_executions SET body=? WHERE id=?").run(JSON.stringify(historical),legacy.executionId)
   db.close()
   await f.command('execution.result', { binding: legacy, output: {} })
   await f.command('execution.drained', { binding: legacy })
@@ -2178,7 +2180,8 @@ for(const failure of ['running-writer','unknown-error','missing-digest','foreign
  await f.command('task.wait',{binding:owner.binding,action:'wait',summary:'Preserve unknown'});await f.command('task.drained',{binding:owner.binding})
  await f.command('task.control',{taskId:'task',control:'cancelled',expectedControlRevision:1})
  if(failure==='foreign-session'||failure==='foreign-task'){
-  const db=new DatabaseSync(f.config.dbPath),op=JSON.parse(db.prepare('SELECT body FROM dynamic_operations WHERE id=?').get(operationId).body)
+  const op=await f.query({kind:'operation.get',operationId}),db=new DatabaseSync(f.config.dbPath)
+  // Seed a complete legacy inline record, not a mutated external-detail projection.
   op.dispatchBinding[failure==='foreign-task'?'taskId':'sessionId']='foreign';db.prepare('UPDATE dynamic_operations SET body=? WHERE id=?').run(JSON.stringify(op),operationId);db.close()
  }
  assert.notEqual((await f.query({kind:'task.get',taskId:'task'})).restartRecoveryEligible,true)
