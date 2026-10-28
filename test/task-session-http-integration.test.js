@@ -161,6 +161,29 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     assert.notEqual((await post(dialoguePath, { requestId: 'after-cancel', text: '不能自动恢复任务' })).status, 202)
     assert.equal((await post(dialoguePath, { requestId: 'chat', text: '现在进度怎样？' })).status, 202, 'saved request remains idempotent after terminal state')
     assert.equal((await service.taskDialogue(taskId)).messages.length, 1)
+    await service.whenIdle()
+    // The fixture also checks retired-mode endpoints below. Select the actual
+    // native runtime capability while exercising its supported reopen route.
+    runtime.isTaskSessionMode = () => true
+    runtime.reopenTask = args => service.reopenTask(args)
+    const stopped = await service.taskDetail(taskId)
+    const completedExecutions = await service.store.query({ kind: 'execution.list', taskId })
+    assert.equal(stopped.drained, true)
+    const reopenBody = { requestId: 'maintenance-reopen', context: 'Resume the original task without replaying completed work',
+      expectedRequirementRevision: stopped.requirementRevision, expectedControlRevision: stopped.controlRevision }
+    const foreignReopen = await fetch(base + `/tasks/${taskId}/reopen`, { method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://outside.invalid' }, body: JSON.stringify(reopenBody) })
+    assert.equal(foreignReopen.status, 403)
+    const reopened = await post(`/tasks/${taskId}/reopen`, reopenBody)
+    assert.equal(reopened.status, 200, JSON.stringify(reopened.body))
+    assert.equal(reopened.body.taskId, taskId)
+    assert.equal(reopened.body.session.sessionId, sessionId)
+    assert.equal(reopened.body.runSequence, stopped.runSequence + 1)
+    await service.whenIdle()
+    assert.deepEqual(await service.store.query({ kind: 'execution.list', taskId }), completedExecutions)
+    assert.equal((await post(`/tasks/${taskId}/reopen`, reopenBody)).status, 200, 'same formal request is idempotent')
+    delete runtime.isTaskSessionMode
+    delete runtime.reopenTask
     assert.equal((await (await fetch(base + '/state/tasks')).json()).length, 1)
     assert.equal((await post('/tasks/old/context', { requestId: 'old', progressImpact: 'replan', context: '禁止恢复', expectedRequirementRevision: 1, expectedControlRevision: 1 })).status, 404)
     for (const path of ['/tasks/old/reopen', '/tasks/old/reports/r/retry', '/authorizations/old/decision', '/workflows/message/requests/r/answer']) assert.equal((await post(path, {})).status, 410)

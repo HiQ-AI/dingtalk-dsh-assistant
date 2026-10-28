@@ -181,14 +181,35 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   })
   const restartReopenEligible = task => {
     if (task.status !== 'cancelled' || task.control !== 'cancelled' || !task.drained || task.archivedAt) return false
+    const executions = execs(task.taskId)
     const unresolved = ops(task.taskId).filter(operationBlocksRecovery)
-    return unresolved.length > 0
-            && unresolved.every(operation => operation.state === 'unknown' && operation.recoveryReason === 'host_restart'
+    const interrupted = operation => operation.state === 'unknown' && operation.recoveryReason === 'host_restart'
               && operation.result == null && ['running','stopping'].includes(operation.job?.status) && ['pwsh','bash'].includes(operation.definition?.toolName)
-              && execs(task.taskId).some(execution => execution.executionId === operation.executionId && execution.sessionBound && execution.cancelRequested
-                && operation.job.owner === execution.sessionId && operation.dispatchBinding?.sessionId === execution.sessionId))
-            && execs(task.taskId).every(execution => execution.drained || execution.cancelRequested && execution.recovering
-              && unresolved.some(operation => operation.executionId === execution.executionId))
+              && executions.some(execution => execution.executionId === operation.executionId && execution.sessionBound && execution.cancelRequested
+                && operation.job.owner === execution.sessionId && operation.dispatchBinding?.sessionId === execution.sessionId)
+    const terminalIdentityFailure = operation => operation.state === 'unknown'
+      && operation.result?.isError === true && operation.result.errorCode === 'execution_background_identity_missing'
+      && ['pwsh','bash'].includes(operation.definition?.toolName) && operation.result.toolName === operation.definition.toolName
+      && typeof operation.result.callId === 'string' && !!operation.result.callId
+      && typeof operation.result.resultDigest === 'string' && !!operation.result.resultDigest
+      && executions.some(execution => execution.executionId === operation.executionId && execution.sessionBound
+        && execution.drained && terminalExecutions.has(execution.status)
+        && operation.dispatchBinding?.taskId === task.taskId && operation.dispatchBinding.executionId === execution.executionId
+        && operation.dispatchBinding.sessionId === execution.sessionId)
+    const terminalJobObservation = operation => operation.state === 'unknown'
+      && ['pwsh','bash'].includes(operation.definition?.toolName)
+      && ['completed','failed','killed'].includes(operation.job?.status) && Number.isFinite(operation.job.finishedAt)
+      && operation.result?.jobReceipt?.jobId === operation.job.jobId
+      && executions.some(execution => execution.executionId === operation.executionId && execution.sessionBound
+        && execution.drained && terminalExecutions.has(execution.status) && operation.job.owner === execution.sessionId
+        && operation.dispatchBinding?.taskId === task.taskId && operation.dispatchBinding.executionId === execution.executionId
+        && operation.dispatchBinding.sessionId === execution.sessionId)
+    // Explicit reopen never resumes an old execution. Outstanding observations
+    // keep the existing bound-readback-only gate until the operator audits them.
+    return unresolved.every(operation => interrupted(operation) || terminalIdentityFailure(operation) || terminalJobObservation(operation))
+      && executions.every(execution => execution.drained && terminalExecutions.has(execution.status)
+        || execution.cancelRequested && execution.recovering
+          && unresolved.some(operation => operation.executionId === execution.executionId && interrupted(operation)))
   }
   const restartRecoveryPending = task => (task.restartRecoveryOperations ?? []).filter(id => { const operation = get('dynamic_operations', id, true); return operation && operationBlocksRecovery(operation) })
   const assertRestartRecoveryDispatch = (task, a) => {
@@ -1467,8 +1488,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const job = operation.job, execution = get('dynamic_executions', operation.executionId)
       if (!execution.drained || execution.recovering || operation.state !== 'unknown' || !job || job.owner !== operation.ownerBinding.sessionId
         || !['completed','failed','killed'].includes(job.status) || !Number.isFinite(job.finishedAt)) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
-      operation.state = job.status === 'completed' ? 'succeeded' : 'failed'
-      operation.result = { jobReceipt: clone(job), previousObservation: clone(operation.result ?? null), reconciled: true, partialEffectsPossible: job.status !== 'completed' }
+      operation.state = job.cancelled === true ? 'cancelled' : job.status === 'completed' ? 'succeeded' : 'failed'
+      operation.result = { jobReceipt: clone(job), previousObservation: clone(operation.result ?? null), reconciled: true, partialEffectsPossible: job.cancelled === true || job.status !== 'completed' }
       operation.evidenceRef = `native-job:${operation.operationId}:${digest(job)}`
       operation.updatedAt = stamp; put('dynamic_operations', operation); releaseOperation(operation)
       wake(task.taskId, 'operation.reconciled', { operationId: operation.operationId, state: operation.state }, `wake:${commandId}`)

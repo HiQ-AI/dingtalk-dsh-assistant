@@ -2084,10 +2084,106 @@ test('cancelled Host-interrupted task reopens only into bound readonly recovery,
 })
 
 
-test('ordinary cancelled task cannot be reopened through interrupted recovery exception', async t => {
+test('maintenance-cancelled drained task reopens explicitly without replaying execution', async t => {
  const f=await fixture(t),owner=await f.task()
+ const binding=await f.execution(owner.binding,'completed-before-maintenance')
+ await f.command('execution.result',{binding,output:{delivered:true}})
+ await f.command('execution.drained',{binding})
+ const original=await f.query({kind:'execution.get',executionId:binding.executionId})
  await f.command('task.wait',{binding:owner.binding,action:'wait',summary:'No interrupted operations'})
  await f.command('task.drained',{binding:owner.binding})
  await f.command('task.control',{taskId:'task',control:'cancelled',expectedControlRevision:1})
- await assert.rejects(f.command('task.reopen',{taskId:'task',request:'Not a Host recovery',expectedRequirementRevision:1,expectedControlRevision:2}),{code:'DYNAMIC_TASK_NOT_QUIESCENT'})
+ assert.equal((await f.query({kind:'task.get',taskId:'task'})).restartRecoveryEligible,true)
+ await assert.rejects(f.command('task.reopen',{taskId:'task',request:'Resume',expectedRequirementRevision:1,expectedControlRevision:1}),{code:'DYNAMIC_TASK_REVISION_STALE'})
+ const args={taskId:'task',request:'Explicitly resume after deployment',expectedRequirementRevision:1,expectedControlRevision:2}
+ const reopened=await f.command('task.reopen',args,'maintenance-reopen')
+ assert.equal(reopened.result.task.status,'active');assert.equal(reopened.result.task.runSequence,2)
+ assert.deepEqual(reopened.result.task.restartRecoveryOperations,[])
+ assert.equal((await f.command('task.reopen',args,'maintenance-reopen')).replayed,true)
+ assert.deepEqual(await f.query({kind:'execution.get',executionId:binding.executionId}),original)
+ await f.reopen()
+ assert.deepEqual(await f.query({kind:'execution.get',executionId:binding.executionId}),original)
+})
+
+test('maintenance reopen with a terminal native identity failure stays readonly until formal audit',async t=>{
+ const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding),operationId='historical-identity-error'
+ await f.command('execution.sessionBound',{binding})
+ await f.command('operation.prepare',{binding,operationId,key:'original-call',definition:{toolName:'pwsh',argumentsDigest:'args'},resourceKeys:[]})
+ await f.command('operation.start',{binding,operationId})
+ await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'original-call',toolName:'pwsh',resultDigest:'original-digest',isError:true,errorCode:'execution_background_identity_missing'}})
+ await f.command('execution.result',{binding,output:{blocked:true}});await f.command('execution.drained',{binding})
+ await f.command('task.wait',{binding:owner.binding,action:'wait',summary:'Preserve failure for audit'});await f.command('task.drained',{binding:owner.binding})
+ await f.command('task.control',{taskId:'task',control:'cancelled',expectedControlRevision:1})
+ const original=await f.query({kind:'operation.get',operationId})
+ assert.equal((await f.query({kind:'task.get',taskId:'task'})).restartRecoveryEligible,true)
+ const reopened=(await f.command('task.reopen',{taskId:'task',request:'Reconcile only',expectedRequirementRevision:1,expectedControlRevision:2})).result.task
+ assert.deepEqual(reopened.restartRecoveryOperations,[operationId]);assert.deepEqual(await f.query({kind:'operation.get',operationId}),original)
+ const current=(await f.command('task.claim',{taskId:'task'})).result
+ await assert.rejects(f.command('execution.dispatch',{binding:current.binding,key:'business',prompt:'must not replay'}),{code:'DYNAMIC_RESTART_RECOVERY_READ_ONLY'})
+ await assert.rejects(f.command('execution.dispatch',{binding:current.binding,key:'wrong-readback',prompt:'inspect',definition:{recoveryReadOnly:true},input:{readbackOperationId:'other'}}),{code:'DYNAMIC_RESTART_RECOVERY_READ_ONLY'})
+ const readback=(await f.command('execution.dispatch',{binding:current.binding,key:'bound-readback',prompt:'inspect existing evidence',definition:{recoveryReadOnly:true},input:{readbackOperationId:operationId}})).result.execution
+ assert.equal(readback.status,'queued');assert.equal((await f.query({kind:'operation.list'})).length,1)
+ await f.reopen()
+ assert.deepEqual(await f.query({kind:'operation.get',operationId}),original)
+})
+
+test('maintenance reopen reconciles finished cancelled job receipts without inventing success or replay',async t=>{
+ const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding),operationId='finished-cancelled-job'
+ await f.command('execution.sessionBound',{binding})
+ await f.command('operation.prepare',{binding,operationId,key:'original',definition:{toolName:'pwsh',argumentsDigest:'args'},resourceKeys:[]})
+ await f.command('operation.start',{binding,operationId})
+ const job={jobId:'original-job',owner:binding.sessionId,startedAt:1,finishedAt:2,status:'completed',cancelled:true,detail:'exit code: 1'}
+ await f.command('operation.job',{binding,operationId,job})
+ await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'call',toolName:'pwsh',isError:false,jobReceipt:job,cancelled:true}})
+ await f.command('execution.result',{binding,output:{blocked:true}});await f.command('execution.drained',{binding})
+ await f.command('task.wait',{binding:owner.binding,action:'wait',summary:'Keep receipt facts'});await f.command('task.drained',{binding:owner.binding})
+ await f.command('task.control',{taskId:'task',control:'cancelled',expectedControlRevision:1})
+ const original=await f.query({kind:'operation.get',operationId})
+ assert.equal((await f.query({kind:'task.get',taskId:'task'})).restartRecoveryEligible,true)
+ await f.command('task.reopen',{taskId:'task',request:'Reconcile existing receipts only',expectedRequirementRevision:1,expectedControlRevision:2})
+ const current=(await f.command('task.claim',{taskId:'task'})).result
+ await assert.rejects(f.command('execution.dispatch',{binding:current.binding,key:'write',prompt:'do not replay'}),{code:'DYNAMIC_RESTART_RECOVERY_READ_ONLY'})
+ assert.deepEqual(await f.query({kind:'operation.get',operationId}),original)
+ const reconciled=(await f.command('operation.reconcile-job',{binding:current.binding,operationId})).result.operation
+ assert.equal(reconciled.state,'cancelled');assert.equal(reconciled.result.partialEffectsPossible,true)
+ assert.deepEqual(reconciled.result.jobReceipt,job);assert.deepEqual(reconciled.result.previousObservation,original.result)
+ assert.equal((await f.query({kind:'execution.list'})).length,1)
+ assert.equal((await f.command('execution.dispatch',{binding:current.binding,key:'new-business',prompt:'new authorized step'})).result.execution.status,'queued')
+})
+
+for(const failure of ['running-writer','unknown-error','missing-digest','foreign-session','foreign-task']) test('maintenance reopen rejects insufficient recovery evidence: '+failure,async t=>{
+ const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding),operationId='unproven'
+ await f.command('execution.sessionBound',{binding})
+ await f.command('operation.prepare',{binding,operationId,key:'original',definition:{toolName:'pwsh',argumentsDigest:'args'},resourceKeys:[]})
+ await f.command('operation.start',{binding,operationId})
+ await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'call',toolName:'pwsh',isError:true,
+  errorCode:failure==='unknown-error'?'OTHER_FAILURE':'execution_background_identity_missing',...(failure==='missing-digest'?{}:{resultDigest:'digest'})}})
+ if(failure!=='running-writer'){await f.command('execution.result',{binding,output:{blocked:true}});await f.command('execution.drained',{binding})}
+ await f.command('task.wait',{binding:owner.binding,action:'wait',summary:'Preserve unknown'});await f.command('task.drained',{binding:owner.binding})
+ await f.command('task.control',{taskId:'task',control:'cancelled',expectedControlRevision:1})
+ if(failure==='foreign-session'||failure==='foreign-task'){
+  const db=new DatabaseSync(f.config.dbPath),op=JSON.parse(db.prepare('SELECT body FROM dynamic_operations WHERE id=?').get(operationId).body)
+  op.dispatchBinding[failure==='foreign-task'?'taskId':'sessionId']='foreign';db.prepare('UPDATE dynamic_operations SET body=? WHERE id=?').run(JSON.stringify(op),operationId);db.close()
+ }
+ assert.notEqual((await f.query({kind:'task.get',taskId:'task'})).restartRecoveryEligible,true)
+ await assert.rejects(f.command('task.reopen',{taskId:'task',request:'Must remain stopped',expectedRequirementRevision:1,expectedControlRevision:2}),{code:'DYNAMIC_TASK_NOT_QUIESCENT'})
+ assert.equal((await f.query({kind:'operation.get',operationId})).state,'unknown')
+})
+
+test('maintenance reopen retains an audited unknown Host job beside a native failure',async t=>{
+ const f=await isolatedRestartLedger(t,true)
+ await f.command('task.human.resolve-failures',f.confirm)
+ const retained=await f.query({kind:'operation.get',operationId:f.operationId})
+ const owner=(await f.command('task.claim',{taskId:f.binding.taskId})).result,binding=await f.execution(owner.binding,'native-error'),operationId='later-native-error'
+ await f.command('execution.sessionBound',{binding})
+ await f.command('operation.prepare',{binding,operationId,key:'native-error',definition:{toolName:'pwsh',argumentsDigest:'args'},resourceKeys:[]})
+ await f.command('operation.start',{binding,operationId})
+ await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'error-call',toolName:'pwsh',isError:true,resultDigest:'digest',errorCode:'execution_background_identity_missing'}})
+ await f.command('execution.result',{binding,output:{blocked:true}});await f.command('execution.drained',{binding})
+ await f.command('task.wait',{binding:owner.binding,action:'wait',summary:'Historical audit only'});await f.command('task.drained',{binding:owner.binding})
+ await f.command('task.control',{taskId:f.binding.taskId,control:'cancelled',expectedControlRevision:1})
+ const reopened=(await f.command('task.reopen',{taskId:f.binding.taskId,request:'Close historical native failure only',expectedRequirementRevision:1,expectedControlRevision:2})).result.task
+ assert.deepEqual(reopened.restartRecoveryOperations,[operationId])
+ assert.deepEqual(await f.query({kind:'operation.get',operationId:f.operationId}),retained)
+ assert.equal(retained.state,'unknown');assert.equal(retained.job.status,'running');assert.equal(hasRestartIsolation(retained),true)
 })
