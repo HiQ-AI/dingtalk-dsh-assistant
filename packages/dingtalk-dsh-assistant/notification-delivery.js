@@ -84,7 +84,7 @@ export async function deliverTaskNotification(options) {
   return notificationFlight(options, false, () => deliverNotification(options))
 }
 
-async function deliverNotification({ notification, notifications, command, onStage = async () => {}, readbackOnly = false }) {
+async function deliverNotification({ notification, notifications, command, onStage = async () => {}, deferReadback = false, readbackOnly = false }) {
   const measure = async (current, phase, action) => {
     const stage = { spanId: `${phase}:${current.id}:${randomUUID()}`, stage: phase, requestId: current.id,
       attempt: phase === 'send' ? current.sendAttemptCount ?? 1 : (current.readbackAttemptCount ?? 0) + 1,
@@ -120,6 +120,7 @@ async function deliverNotification({ notification, notifications, command, onSta
       if (deliveredProof(proof)) await command('notification.reconcile', { notificationId: notification.id, phase: 'readback', state: 'delivered', receipt: safeNotificationDetail(proof), evidenceRef: evidence(proof) })
       else await command('notification.diagnostic', { notificationId: notification.id, nextAttemptAt: notificationRetryAt(notification, null, 'readback') })
     } catch (error) {
+      error.notificationPhase = 'readback'
       error.notificationRetryAt = notificationRetryAt(notification, error, 'readback')
       await command('notification.diagnostic', { notificationId: notification.id, error: notificationErrorDetail(error, 'readback'), nextAttemptAt: error.notificationRetryAt })
       throw error
@@ -140,6 +141,8 @@ async function deliverNotification({ notification, notifications, command, onSta
   try {
     ack = await measure(claimed, 'send', () => notifications.send(claimed))
     await command('notification.ack', { notificationId: claimed.id, dispatchToken: claimed.dispatchToken, ack: safeNotificationDetail(ack) }, `notification-ack:${claimed.id}:${claimed.dispatchToken}`)
+    // The service schedules confirmation separately after the ACK is durable.
+    if (deferReadback) return { acknowledged: true }
     phase = 'readback'
     const proof = notifications.readback ? await measure(claimed, 'readback', () => notifications.readback({ ...claimed, ack })) : undefined
     await command('notification.receipt', { notificationId: claimed.id, dispatchToken: claimed.dispatchToken,
@@ -148,6 +151,7 @@ async function deliverNotification({ notification, notifications, command, onSta
   } catch (error) {
     const rejected = phase === 'send' && knownPreSendRejection(error, claimed)
     if (!rejected) error.knownNotSent = false
+    error.notificationPhase = phase
     error.notificationRetryAt = notificationRetryAt(claimed, error, phase)
     await command('notification.receipt', { notificationId: claimed.id, dispatchToken: claimed.dispatchToken,
       phase, state: rejected ? 'failed' : 'unknown', receipt: safeNotificationDetail(ack), error: notificationErrorDetail(error, phase),

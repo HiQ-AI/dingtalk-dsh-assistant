@@ -28,7 +28,7 @@ for (const scenario of ['stale-snapshot', 'late-readback-error', 'recall-error']
     async command({ kind, args }) {
       if (kind === 'notification.start') { row.state = 'starting'; row.dispatchToken = 'send' }
       if (kind === 'notification.ack') row.ack = args.ack
-      if (kind === 'notification.receipt') { row.state = args.state; row.receipt = args.receipt }
+      if (kind === 'notification.receipt' || kind === 'notification.reconcile') { row.state = args.state; row.receipt = args.receipt }
       // 并行的精确送达证明已入账，随后旧快照的失败诊断只能保留历史事实。
       if (kind === 'notification.diagnostic' && scenario === 'late-readback-error') {
         row.state = 'delivered'; row.receipt = { messageId: 'actual', visible: true }
@@ -104,7 +104,7 @@ for (const scenario of ['recalled', 'not-due', 'no-adapter', 'due', 'expired-cla
       if (kind === 'notification.recall.result') row.recall = { ...row.recall, state: args.state }
       if (kind === 'notification.start') { row.state = 'starting'; row.dispatchToken = 'send'; return { dispatchEligible: true, result: { notification: structuredClone(row) } } }
       if (kind === 'notification.ack') row.ack = args.ack
-      if (kind === 'notification.receipt') { row.state = args.state; row.receipt = args.receipt }
+      if (kind === 'notification.receipt' || kind === 'notification.reconcile') { row.state = args.state; row.receipt = args.receipt }
       return { dispatchEligible: false, result: { notification: structuredClone(row) } }
     },
   }
@@ -191,3 +191,56 @@ for (const firstOutcome of ['delivered', 'unknown', 'rate-limited']) test(`通�
       assert.deepEqual(reads, ['first', 'second'], '未知效果等待退避，不在续队时重发或循环回读')
     }
   })
+
+for (const scenario of ['prepared', 'unknown', 'starting', 'send-pending']) test('notification send/readback scheduling: ' + scenario, { timeout: 5000 }, async t => {
+  const initialState = scenario === 'send-pending' ? 'prepared' : scenario
+  const root = await mkdtemp(join(tmpdir(), 'split-notification-'))
+  const sendEntered = Promise.withResolvers(), sendRelease = Promise.withResolvers(), entered = Promise.withResolvers(), release = Promise.withResolvers(), sentB = Promise.withResolvers()
+  let service
+  const sends = [], reads = []
+  const rows = ['a', 'b'].map(id => ({ id, kind: 'status', state: id === 'a' ? initialState : 'prepared', payload: { conversationId: id, text: id } }))
+  t.after(async () => { sendRelease.resolve(); release.resolve(); await service?.close(); await rm(root, { recursive: true, force: true }) })
+  const store = {
+    async query(q) {
+      if (q.kind === 'resource.catalog') return null
+      if (q.kind === 'notification.list') return structuredClone(rows)
+      if (q.kind === 'notification.get') return structuredClone(rows.find(row => row.id === q.notificationId))
+      if (q.kind === 'coordination.runtime') return { mode: 'active' }
+      if (q.kind === 'task.events') return { events: [], nextCursor: 0 }
+      return []
+    },
+    async command({ kind, args }) {
+      const row = rows.find(row => row.id === args.notificationId)
+      if (kind === 'notification.start') { row.state = 'starting'; row.dispatchToken = row.id }
+      if (kind === 'notification.ack') row.ack = args.ack
+      if (kind === 'notification.receipt' || kind === 'notification.reconcile') { row.state = args.state; row.receipt = args.receipt }
+      return { dispatchEligible: kind === 'notification.start', result: { notification: structuredClone(row) } }
+    },
+  }
+  const noop = async () => {}
+  service = await openTaskSessionService({ ctx: { agents: { get() {} }, sessions: { get() {} } },
+    config: { dbPath: join(root, 'unused.sqlite'), workspaceDir: root, instanceId: 'split' },
+    legacy: { getAgentConfig: () => ({ workspaceDir: root }) }, residentStore: { getGroup() {}, projectTaskNotification: noop, listGroups: () => [] }, store,
+    persistence: { register: noop, close: noop }, taskSessions: { close: noop }, executionSessions: { close: noop },
+    notifications: {
+      async send(row) { sends.push(row.id); if (row.id === 'a' && scenario === 'send-pending') { sendEntered.resolve(); await sendRelease.promise } if(row.id === 'b') sentB.resolve(); return { messageId: row.id } },
+      async readback(row) { reads.push(row.id); if(row.id === 'a') { entered.resolve(); await release.promise } return { messageId: row.id, visible: true } },
+    },
+  })
+  const idle = service.whenIdle()
+  if (scenario === 'send-pending') {
+    await sendEntered.promise
+    for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(sends, ['a'], 'pending send must retain the shared send lane')
+    sendRelease.resolve()
+  }
+  await entered.promise
+  await sentB.promise
+  assert.equal(rows[0].state, initialState === 'unknown' ? 'unknown' : 'starting', 'ACK alone must not prove delivery')
+  assert.deepEqual(sends, initialState === 'prepared' ? ['a', 'b'] : ['b'])
+  assert.equal(reads.filter(id => id === 'a').length, 1)
+  assert.ok(!reads.includes('b'), 'readback retains its original single slot while new sends continue')
+  release.resolve()
+  await idle; await service.whenIdle()
+  assert.ok(rows.every(row => row.state === 'delivered'))
+})

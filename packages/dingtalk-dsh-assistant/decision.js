@@ -1,5 +1,6 @@
 import { acceptanceCriteriaSchema, taskContextProgressImpactSchema, taskContextSemanticsProblem } from './task-input-contract.js'
 import { z } from 'zod'
+import { fixedTopicIds } from './fixed-topics.js'
 import { toToolJsonSchema } from './tool-schema.js'
 import { resolveTopicMessages, topicRefSchema } from './topic-model.js'
 
@@ -76,10 +77,12 @@ export const topicRouteSubmissionSchema = z.strictObject({
       replacesUnitIds: z.array(z.string().min(1)).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().trim().min(1).optional(),
       sourceRefs: z.array(unitSourceRefSchema).min(1),
       contextRefs: z.array(z.strictObject({ quote: z.string().min(1), purpose: z.string().min(1) })).default([]),
+      fixedTopic: z.enum(fixedTopicIds).optional(),
       topics: z.array(topicRouteTargetSchema), effectOwner: topicRouteOwnerSchema.optional(),
       dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(),
       reason: z.string().trim().min(1).optional(),
     }).superRefine((unit, ctx) => {
+      if (unit.fixedTopic && (unit.topics.length || unit.effectOwner || unit.dispatchOwner)) ctx.addIssue({ code: 'custom', message: '固定路由类别不关联业务 Topic 或其他派发方', path: ['fixedTopic'] })
       if (unit.topics.length === 0 && !unit.reason) ctx.addIssue({ code: 'custom', message: '无 Topic 归属的事项必须说明原因', path: ['reason'] })
       if (unit.replacesUnitIds.length && (!unit.effectInheritance || !unit.revisionReason)) ctx.addIssue({ code: 'custom', message: '事项拆分或合并必须声明效果继承方式和修订原因', path: ['replacesUnitIds'] })
       if (unit.topics.length > 1) {

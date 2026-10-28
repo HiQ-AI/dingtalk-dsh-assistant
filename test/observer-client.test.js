@@ -717,3 +717,30 @@ test('trace coordinator continuation requests its independent cursor and preserv
  assert.match(requests[0],/unitCursor=123/);assert.match(requests[0],/pageRevision=rev/)
  assert.equal(new URL('http://local'+requests[0]).searchParams.has('cursor'),false)
 })
+
+
+test('execution card slow refresh finishes once, keeps visible data on refresh errors, retries and clears on task change', async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const fragment=source.slice(source.indexOf('    function CardExecutionPage('),source.indexOf('    function ObserverContent('))
+ const states=[],refs=[],effects=[],requests=[];let stateIndex=0,refIndex=0,effectIndex=0,pendingEffects=[]
+ const Card=runInNewContext(`${fragment};CardExecutionPage`,{
+  useState:initial=>{const i=stateIndex++;if(!(i in states))states[i]=initial;return [states[i],v=>states[i]=typeof v==='function'?v(states[i]):v]},
+  useRef:initial=>{const i=refIndex++;return refs[i]??(refs[i]={current:initial})},
+  useEffect:(fn,deps)=>{const i=effectIndex++,old=effects[i];if(!old||deps.some((v,n)=>v!==old.deps[n]))pendingEffects.push(()=>{old?.cleanup?.();effects[i]={deps,cleanup:fn()}})},
+  get:(path,{signal})=>new Promise((resolve,reject)=>requests.push({path,signal,resolve,reject})),AbortController,
+  React:{createElement:(type,props,...children)=>({type,props,children}),Fragment:'fragment'},Button:'button',StateDot:'dot',ExecutionSessionDuration:'duration',
+  taskSession:()=>({sessionId:'owner'}),taskStateLabel:value=>value,colors:{accent:'blue',muted:'gray',danger:'red'},encodeURIComponent,
+ })
+ const render=(updatedAt,taskId='selected')=>{stateIndex=refIndex=effectIndex=0;const tree=Card({task:{taskId},updatedAt,navigate(){}});const batch=pendingEffects;pendingEffects=[];batch.forEach(fn=>fn());return tree}
+ const flush=async()=>{await Promise.resolve();await Promise.resolve()}
+ render(1);render(2);render(3);assert.equal(requests.length,1);assert.equal(requests[0].signal.aborted,false)
+ requests[0].resolve({total:1,nextOffset:null,executions:[{executionId:'e',sessionId:'s',title:'真实执行',status:'running',drained:false}]});await flush()
+ let tree=render(3);assert(JSON.stringify(tree).includes('真实执行'));assert(!JSON.stringify(tree).includes('正在读取执行记录'))
+ render(4);requests[1].reject(new Error('temporary'));await flush();tree=render(4)
+ assert(JSON.stringify(tree).includes('真实执行'));assert(JSON.stringify(tree).includes('temporary'))
+ const nodes=value=>value&&typeof value==='object'?[value,...(value.children??[]).flatMap(nodes)]:[]
+ const retry=nodes(tree).find(node=>node.type==='button'&&node.children.includes('重试'));assert(retry);retry.props.onClick();render(4);assert.equal(requests.length,3)
+ requests[2].resolve({total:0,nextOffset:null,executions:[]});await flush();tree=render(4);assert(JSON.stringify(tree).includes('暂无执行记录'))
+ render(5);tree=render(5,'other');assert.equal(requests[3].signal.aborted,true);assert(!JSON.stringify(tree).includes('真实执行'));assert(requests.at(-1).path.includes('/other/executions?summary=true'))
+ for(const effect of effects)effect?.cleanup?.()
+})

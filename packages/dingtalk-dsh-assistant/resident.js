@@ -118,6 +118,7 @@ export async function apply(ctx, config = {}) {
   const tasks = await openTaskSessionService({ ctx, config: { ...taskConfig, operatorUserId: initialEnvironment.dws.userId }, legacy: runtime, residentStore: store,
     startupObserver: sample => ctx.logger.info(`startup ${JSON.stringify(sample)}`),
     readMessage: readGroupMessage,
+    readMentioned: (groupId, message) => dwsAdapter.isMessageMentioned(groupId, message.messageId, message.occurredAt),
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
     notifications: {
       canDisclose: notification => dwsConfig.enabled === true && dwsConfig.writesAuthorized === true

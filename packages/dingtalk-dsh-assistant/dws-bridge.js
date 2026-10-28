@@ -48,6 +48,7 @@ function normalizeEvent(event) {
   if (typeof groupId !== 'string' || groupId === '' || typeof messageId !== 'string' || messageId === '') throw new Error('dws_event_identity_missing')
   const quoted = event.quotedMessage ?? event.quoted_message
   const text = typeof event.content === 'string' ? event.content : JSON.stringify(event.content ?? '')
+  const mentionedAgent = event.isInAtList ?? event.is_in_at_list
   const resourceRefs = normalizeResourceRefs(event.resourceRefs ?? event.resource_refs, text)
   return {
     groupId,
@@ -56,6 +57,7 @@ function normalizeEvent(event) {
     occurredAt: normalizeMessageTime(event.event_time ?? event.create_time ?? event.timestamp ?? new Date().toISOString()),
     rawOccurredAt: event.event_time ?? event.create_time ?? event.timestamp ?? null,
     ...(event.messageAiSendFlag === 'DWS' || event.message_ai_send_flag === 'DWS' ? { messageAiSendFlag: 'DWS' } : {}),
+    ...(typeof mentionedAgent === 'boolean' ? { mentionedAgent } : {}),
     senderName: meaningful(event.sender) ? event.sender : undefined,
     senderOpenDingTalkId: event.sender_open_dingtalk_id ?? event.sender_id ?? undefined,
     ...(resourceRefs.length > 0 ? { resourceRefs } : {}),
@@ -73,6 +75,7 @@ export function normalizeHistoryMessage(message, fallbackGroupId) {
   return {
     groupId, messageId, text, occurredAt: normalizeMessageTime(message.createTime ?? new Date().toISOString()), rawOccurredAt: message.createTime ?? null,
     ...(message.messageAiSendFlag === 'DWS' || message.message_ai_send_flag === 'DWS' ? { messageAiSendFlag: 'DWS' } : {}),
+    ...(typeof (message.isInAtList ?? message.is_in_at_list) === 'boolean' ? { mentionedAgent: message.isInAtList ?? message.is_in_at_list } : {}),
     senderName: meaningful(message.sender ?? message.senderName) ? message.sender ?? message.senderName : undefined,
     senderOpenDingTalkId: message.senderOpenDingTalkId ?? message.sender_open_dingtalk_id ?? message.senderId ?? undefined,
     ...(resourceRefs.length > 0 ? { resourceRefs } : {}),

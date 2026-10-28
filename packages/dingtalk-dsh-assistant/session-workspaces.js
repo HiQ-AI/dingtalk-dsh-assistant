@@ -159,7 +159,7 @@ export async function materializeExecutionDocument(root, execution) {
 }
 
 export const sessionPurposes = Object.freeze({
-  answer: '消息问答', owner: '任务负责', execution: '任务执行', resident: '群聊常驻',
+  platform: 'Agent平台问询', answer: '消息问答', owner: '任务负责', execution: '任务执行', resident: '群聊常驻',
   route: '消息归类', decision: '话题决策', review: '结果审阅', coordination: '任务协调',
 })
 

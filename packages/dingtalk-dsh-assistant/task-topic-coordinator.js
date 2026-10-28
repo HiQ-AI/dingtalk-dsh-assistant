@@ -6,6 +6,7 @@ import { createCoordinationResourceTools } from './coordination-resources.js'
 import { buildReplyReviewCandidates } from './decision.js'
 import { sessionWorkspace, nameSession } from './session-workspaces.js'
 import { groupReplyInstructions } from './group-message.js'
+import { createFixedTopicHandler } from './fixed-topic-handler.js'
 import { taskBoundaryInstructions } from './task-boundary-instructions.js'
 
 const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
@@ -34,7 +35,8 @@ export function taskIndexPage(tasks, offset, limit, query = '') {
 }
 
 // Topic owns routing and decision receipts; this adapter only supplies native request sessions.
-export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, validateReply, quotedReminderContext, coordinationEnabled = false, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
+export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, readPlatformTasks, readMentioned, validateReply, quotedReminderContext, coordinationEnabled = false, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
+  const fixedTopics = readPlatformTasks ? createFixedTopicHandler({ ctx, store, legacy, root, models, appendOutbox, readTasks: readPlatformTasks, readMentioned, onSettled: groupId => onInputSettled?.(groupId), onError }) : null
   // The original Topic protocol is retained, but retired workflow prompt catalogs
   // must not leak back into the generic task-session boundary.
   store = new Proxy(store, { get(target, key) {
@@ -53,6 +55,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
       try {
         const result = await target.routeMessages(args)
         await onRouted(args.groupId, args.routes.map(route => route.messageId))
+        fixedTopics?.schedule(args.groupId)
         return result
       } finally { if (stage) await onStage(request, { ...stage, completedAt: new Date().toISOString() }) }
     }
@@ -182,7 +185,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     }
     return normalized
   }
-  topics = createTopicCoordinator({ store, quotedReminderContext, onInputSettled,
+  topics = createTopicCoordinator({ store, workflowPromptsEnabled: false, fixedTopicsEnabled: !!fixedTopics, quotedReminderContext, onInputSettled,
     getAgent: (groupId, request) => request ? sessions.get(groupId, request) : !closed && store.getGroup(groupId) ? presence : undefined,
     dispatchRequest: (request, message) => {
       const work = sessions.dispatch(request, message)
@@ -203,7 +206,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     validateReplyReview, cancelTask: () => {}, onError: report, isClosing: () => closed,
   })
   return {
-    schedule: groupId => topics.schedule(groupId), applyAccepted: (...args) => topics.applyAccepted(...args), recover: () => topics.recover(),
+    schedule: async groupId => { const result = await topics.schedule(groupId); fixedTopics?.schedule(groupId); return result }, applyAccepted: (...args) => topics.applyAccepted(...args), recover: async () => { const result = await topics.recover(); for (const group of store.listGroups()) fixedTopics?.schedule(group.groupId); return result },
     messageProcessingRequests: groupId => topics.messageProcessingRequests(groupId),
     retryMessageRequest: args => topics.retryMessageRequest(args),
     async retryMessageHost({ groupId, messageId, messageVersion, activeUnitRefs, requestId, token }) {
@@ -243,9 +246,10 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
         await topics.drain()
         await new Promise(resolve => setTimeout(resolve, 10))
       }
+      await fixedTopics?.whenIdle()
       await serial
       await timingTail
     },
-    async close() { closed = true; await topics.close(); await sessions.close(); await serial; await timingTail; stopTiming?.() },
+    async close() { closed = true; await fixedTopics?.close(); await topics.close(); await sessions.close(); await serial; await timingTail; stopTiming?.() },
   }
 }

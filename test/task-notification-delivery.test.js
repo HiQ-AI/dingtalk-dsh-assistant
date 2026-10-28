@@ -556,3 +556,18 @@ test('manual notification recovery never replays effects from a replayed command
   await assert.rejects(notificationDelivery.retryTaskNotification(options), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE' })
   assert.equal(reads, 1)
 })
+
+test('deferred service confirmation persists ACK, recovers after restart and never resends', async t => {
+  const f = await fixture(t)
+  let sends = 0, reads = 0
+  const notifications = { async send() { sends++; return { openTaskId: 'accepted' } }, async readback() { reads++; return { messageId: 'actual', visible: true } } }
+  const result = await deliverTaskNotification({ notification: f.notification, command: f.command, notifications, deferReadback: true })
+  assert.equal(result.acknowledged, true)
+  assert.equal((await f.read()).state, 'starting')
+  assert.deepEqual((await f.read()).ack, { openTaskId: 'accepted' })
+  assert.equal(reads, 0)
+  await f.reopen()
+  await deliverTaskNotification({ notification: await f.read(), command: f.command, notifications, deferReadback: true })
+  assert.equal((await f.read()).state, 'delivered')
+  assert.equal(sends, 1); assert.equal(reads, 1)
+})

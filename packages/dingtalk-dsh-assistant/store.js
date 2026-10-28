@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
+import { activeFixedUnits, fixedTopicIds } from './fixed-topics.js'
 import { taskPlanSchema } from './task-plan.js'
 import { storedTaskCheckpointBaseSchema, storedTaskResultSchema } from './task-result.js'
 import { topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan } from './topic-model.js'
@@ -63,12 +64,13 @@ const replacementBusy = (group, replacesOutboundIds, decisionId) => replacesOutb
 
 const quotedMessageSchema = z.object({ messageId: z.string().min(1).optional(), senderName: z.string().min(1).optional(), occurredAt: z.union([z.string().min(1), z.number().finite()]).optional(), content: z.string() })
 const messageFactFields = {
+  mentionedAgent: z.boolean().optional(),
   taskSessionRefs: z.array(z.string().min(1)).optional(),
   resourceRefs: z.array(z.record(z.string(), z.unknown())).optional(),
   messageVersion: z.number().int().positive(), imageRefs: z.array(z.record(z.string(), z.unknown())).optional(), mediaUnavailable: z.array(z.string()).optional(),
   sourceKind: z.enum(['dingtalk', 'web', 'internal', 'migration']).optional(), migrationSource: z.string().optional(),
   ignoredRanges: z.array(sourceRangeSchema.extend({ reason: z.string().min(1) })).optional(),
-  units: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive(), unitKey: z.string().min(1), dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(), summary: z.string().min(1), sourceRanges: z.array(sourceRangeSchema), sourceAttachments: z.array(z.object({ imageRefId: z.string().min(1) }).strict()).default([]), contextRanges: z.array(sourceRangeSchema.extend({ purpose: z.string().min(1) })).default([]), predecessorUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().min(1).optional() }).refine((unit) => unit.sourceRanges.length + unit.sourceAttachments.length > 0, 'topic_unit_source_required')).optional(),
+  units: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive(), unitKey: z.string().min(1), fixedTopic: z.enum(fixedTopicIds).optional(), fixedTopicHandledAt: z.string().optional(), dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(), summary: z.string().min(1), sourceRanges: z.array(sourceRangeSchema), sourceAttachments: z.array(z.object({ imageRefId: z.string().min(1) }).strict()).default([]), contextRanges: z.array(sourceRangeSchema.extend({ purpose: z.string().min(1) })).default([]), predecessorUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().min(1).optional() }).refine((unit) => unit.sourceRanges.length + unit.sourceAttachments.length > 0, 'topic_unit_source_required')).optional(),
   activeUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(),
 }
 const inboundSchema = z.object({
@@ -138,7 +140,7 @@ const sourceDispatchSchema = z.object({
 const groupSchema = z.object({
   sourceDispatchOwnership: z.array(sourceDispatchSchema).default([]),
   coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed', 'superseded']), messageId: z.string().optional(), lastError: z.string().optional(), failurePhase: z.enum(['startup', 'dispatch']).optional(), failureCode: z.string().optional(), startupAttempt: z.number().int().nonnegative().optional(), supersededBy: z.string().optional(), supersedeReason: z.string().optional() })).default({}),
-  groupId: z.string().min(1), name: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
+  groupId: z.string().min(1), name: z.string().optional(), timezone: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
   messages: z.array(inboundSchema), outbox: z.array(outboundSchema),
   routingRevision: z.number().int().nonnegative(), topics: z.array(topicSchema), routeHistory: z.array(z.record(z.string(), z.unknown())), taskReservations: z.array(z.record(z.string(), z.unknown())),
 })
@@ -209,7 +211,7 @@ const schedulerSchema = z.object({
   taskSessionModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
   coordinationModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
   performanceProjection: performanceProjectionSchema.optional(),
-  tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), replySignature: z.string().max(80).optional(), agentWorkspaceDir: z.string().optional(), taskWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
+  tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), replySignature: z.string().max(80).optional(), timezone: z.string().optional(), agentWorkspaceDir: z.string().optional(), taskWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
   leafSessionPrompt: z.string().optional(), taskPrompts: z.array(taskPromptSchema).optional(), taskPromptsVersion: z.number().int().nonnegative().optional(), taskExecutionGuidance: z.string().optional(), taskEvidenceGuidance: z.string().optional(), maxConcurrentTasks: z.number().int().positive().max(50).optional(),
   // 已移除任务表格同步；仅保留历史字段声明，避免读取旧数据时剥离配置和状态。
   taskSheetSyncConfig: z.object({ enabled: z.boolean(), documentUrl: z.string().url(), nodeId: z.string().min(1), documentName: z.string().min(1), sheetId: z.string().min(1), sheetTitle: z.string().min(1), intervalMs: z.literal(180000) }).optional(),
@@ -283,6 +285,7 @@ function settleCompletedMessageDeliveries(messages, topics, sourceDispatchOwners
   return messages.map((message) => {
     const owned = sourceDispatchOwnership.filter(item => item.dispatchOwner === 'coordination'
       && item.sourceSnapshot.messageId === message.messageId && (message.activeUnitRefs ?? []).some(ref => ref.unitId === item.unitId && ref.unitRevision === item.unitRevision))
+    if (activeFixedUnits(message).length) return { ...message, agentDeliveryStatus: 'pending' }
     if (owned.some(item => !item.settled)) return { ...message, agentDeliveryStatus: 'pending' }
     if (message.routingStatus !== 'routed' || ['delivered', 'skipped'].includes(message.agentDeliveryStatus)) return message
     const activeEntries = topics.flatMap((topic) => {
@@ -610,6 +613,7 @@ export async function openResidentStore(storageDomain) {
     hasGroupConfiguration: () => scheduler.get('runtime')?.groupConfigurationInitialized === true,
     getAgentWorkspaceDir: () => scheduler.get('runtime')?.agentWorkspaceDir,
     getTaskWorkspaceDir: () => scheduler.get('runtime')?.taskWorkspaceDir,
+    getTimezone: () => scheduler.get('runtime')?.timezone,
     setAgentSettings: async patch => {
       await scheduler.update('runtime', current => ({ ...current, ...patch }))
     },
@@ -707,15 +711,17 @@ export async function openResidentStore(storageDomain) {
       .filter((activity) => taskId === undefined || activity.taskId === taskId)
       .sort(compareActivity)
       .slice(-ACTIVITY_PROJECTION_LIMIT_PER_TASK),
-    subscribe: ({ groupId, name, responsibility = '', residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
+    subscribe: ({ groupId, name, responsibility = '', timezone, residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
+      if (timezone !== undefined) new Intl.DateTimeFormat('en', { timeZone: timezone }).format()
       const existing = findGroupEntry(groupId)?.[1]
       if (existing !== undefined) return { created: false, group: existing }
-      const group = { groupId, ...(name ? { name } : {}), responsibility, residentSessionId: residentSessionId ?? `session-${randomUUID()}`, ...(residentAgentPreset ? { residentAgentPreset } : {}), nextSequence: 1, messages: [], outbox: [], topics: [], routingRevision: 0, routeHistory: [], taskReservations: [] }
+      const group = { groupId, ...(timezone ? { timezone } : {}), ...(name ? { name } : {}), responsibility, residentSessionId: residentSessionId ?? `session-${randomUUID()}`, ...(residentAgentPreset ? { residentAgentPreset } : {}), nextSequence: 1, messages: [], outbox: [], topics: [], routingRevision: 0, routeHistory: [], taskReservations: [] }
       await groups.put(groupId, group)
       return { created: true, group }
     }),
-    updateGroup: ({ groupId, name, responsibility, residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
-      if (name === undefined && responsibility === undefined && residentSessionId === undefined && residentAgentPreset === undefined) throw new Error('group_update_empty')
+    updateGroup: ({ groupId, name, responsibility, timezone, residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
+      if (name === undefined && responsibility === undefined && timezone === undefined && residentSessionId === undefined && residentAgentPreset === undefined) throw new Error('group_update_empty')
+      if (timezone !== undefined) new Intl.DateTimeFormat('en', { timeZone: timezone }).format()
       if (name !== undefined && typeof name !== 'string') throw new Error('group_name_invalid')
       if (responsibility !== undefined && typeof responsibility !== 'string') throw new Error('group_responsibility_invalid')
       if (residentSessionId !== undefined && typeof residentSessionId !== 'string') throw new Error('group_resident_session_invalid')
@@ -726,6 +732,7 @@ export async function openResidentStore(storageDomain) {
         ...group,
         ...(name !== undefined ? { name } : {}),
         ...(responsibility !== undefined ? { responsibility } : {}),
+        ...(timezone !== undefined ? { timezone } : {}),
         ...(residentSessionId !== undefined ? { residentSessionId } : {}),
         ...(residentAgentPreset !== undefined ? { residentAgentPreset } : {}),
       }))
@@ -739,7 +746,7 @@ export async function openResidentStore(storageDomain) {
       await groups.delete(entry[0])
       return { removed: true, groupId }
     }),
-    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
+    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       let duplicate = false, enriched = false, sequence
@@ -752,7 +759,7 @@ export async function openResidentStore(storageDomain) {
             ...(sameQuote && missingText(quotedMessage.content) && !missingText(previous.quotedMessage?.content) ? { content: previous.quotedMessage.content } : {}),
             ...(sameQuote && missingText(quotedMessage.senderName) && !missingText(previous.quotedMessage?.senderName) ? { senderName: previous.quotedMessage.senderName } : {}),
             ...(sameQuote && !quotedMessage.occurredAt && previous.quotedMessage?.occurredAt ? { occurredAt: previous.quotedMessage.occurredAt } : {}) } : previous.quotedMessage
-          const next = { ...previous, ...(messageAiSendFlag ? { messageAiSendFlag } : {}), ...(messageVersion > previous.messageVersion ? { text } : {}), ...(resourceRefs !== undefined ? { resourceRefs: mergeTaskResources(previous.resourceRefs, resourceRefs) } : {}), ...(senderName ? { senderName } : {}), ...(senderOpenDingTalkId ? { senderOpenDingTalkId } : {}),
+          const next = { ...previous, ...(mentionedAgent !== undefined ? { mentionedAgent } : {}), ...(messageAiSendFlag ? { messageAiSendFlag } : {}), ...(messageVersion > previous.messageVersion ? { text } : {}), ...(resourceRefs !== undefined ? { resourceRefs: mergeTaskResources(previous.resourceRefs, resourceRefs) } : {}), ...(senderName ? { senderName } : {}), ...(senderOpenDingTalkId ? { senderOpenDingTalkId } : {}),
             ...(nextQuote ? { quotedMessage: nextQuote } : {}), ...(imageRefs !== undefined ? { imageRefs } : {}), ...(mediaUnavailable !== undefined ? { mediaUnavailable } : {}) }
           if (JSON.stringify(next) === JSON.stringify(previous) && !(messageVersion > previous.messageVersion)) return latest
           const { resourceRefs: previousResources, messageAiSendFlag: _previousSendFlag, ...previousFacts } = previous
@@ -775,7 +782,7 @@ export async function openResidentStore(storageDomain) {
             }) }
         }
         sequence = latest.nextSequence
-        const accepted = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, quotedMessage,
+        const accepted = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage,
           imageRefs, mediaUnavailable, resourceRefs, sourceKind, messageVersion: messageVersion ?? 1, facts: [], routingStatus: 'pending', agentDeliveryStatus: 'pending' })
         return { ...latest, nextSequence: sequence + 1, messages: [...latest.messages, accepted] }
       })
@@ -1179,6 +1186,16 @@ export async function openResidentStore(storageDomain) {
       const updated = { ...message, taskSessionRefs: refs, routingStatus: 'routed', agentDeliveryStatus: 'delivered' }
       await groups.update(entry[0], group => ({ ...group, messages: group.messages.map(item => item.messageId === messageId ? updated : item) }))
       return updated
+    }),
+    markFixedTopicHandled: ({ groupId, messageId, messageVersion, unitId, unitRevision }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error('group_not_subscribed')
+      return groups.update(entry[0], latest => {
+        const source = latest.messages.find(message => message.messageId === messageId)
+        if (!source || source.messageVersion !== messageVersion || !activeFixedUnits(source).some(unit => unit.unitId === unitId && unit.unitRevision === unitRevision)) return latest
+        const messages = latest.messages.map(message => message !== source ? message : { ...message, units: message.units.map(unit => unit.unitId === unitId && unit.unitRevision === unitRevision ? { ...unit, fixedTopicHandledAt: new Date().toISOString() } : unit) })
+        return { ...latest, messages: settleCompletedMessageDeliveries(messages, latest.topics, latest.sourceDispatchOwnership) }
+      })
     }),
     markMessageAgentDelivery: ({ groupId, messageId, status, error, retryAt }) => serialize(groupId, async () => {
       if (!['pending', 'steered', 'delivered', 'failed', 'decision-retrying', 'decision-failed', 'decision-commit-failed', 'skipped'].includes(status)) throw new Error(`message_agent_delivery_status_invalid:${status}`)

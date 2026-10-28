@@ -191,6 +191,26 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
+    async isMessageMentioned(groupId, messageId, occurredAt) {
+      requireEnabled()
+      const instant = typeof occurredAt === 'number' ? occurredAt : Date.parse(occurredAt)
+      if (!Number.isFinite(instant)) throw new Error('dws_mention_time_required')
+      const start = new Date(instant - 1000).toISOString(), end = new Date(instant + 1000).toISOString()
+      let cursor = '0'
+      const seen = new Set()
+      while (!seen.has(cursor)) {
+        seen.add(cursor)
+        const response = await runner.run(withProfile(['chat', 'message', 'list-mentions', '--group', assertStableId(groupId, 'group_id'), '--start', start, '--end', end, '--limit', '50', '--cursor', cursor, '--format', 'json']))
+        if (response.exitCode !== 0) throw commandError('dws_mentions_read_failed', response)
+        const value = parseJson(response.stdout, 'list-mentions'), page = value.result ?? value
+        if (value.success === false || !Array.isArray(page.items) || typeof page.hasMore !== 'boolean') throw new Error('dws_mentions_read_incomplete')
+        if (page.items.some(item => item.msgId === messageId && item.openConversationId === groupId)) return true
+        if (!page.hasMore) return false
+        if (page.nextCursor === undefined || page.nextCursor === null || String(page.nextCursor) === '') throw new Error('dws_mentions_cursor_missing')
+        cursor = String(page.nextCursor)
+      }
+      throw new Error('dws_mentions_cursor_stalled')
+    },
     async readMessage(groupId, messageId) {
       requireEnabled()
       const result = await runner.run(withProfile(['chat', '+messages-mget', '--msg-ids', assertStableId(messageId, 'message_id'), '--format', 'json']))

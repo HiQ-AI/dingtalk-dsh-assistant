@@ -1,3 +1,4 @@
+import { FIXED_TOPICS } from './fixed-topics.js'
 import {isPendingDecision,topicDecisionRecovery} from './topic-model.js'
 const instant = value => typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' && value.trim() ? Date.parse(value) : NaN
 const timing = (start, end) => {
@@ -28,7 +29,7 @@ export function messageProcessingProjection(message, topics, source, requests, s
   const needsClarification = coordination.some(item => item.semanticState === 'needs_clarification')
   const unitsPending = message.activeUnitRefs?.some(ref => {
     const unit = message.units?.find(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
-    return !unit || unit.dispatchOwner === 'coordination' && !sourceDone
+    return !unit || unit.fixedTopic && !unit.fixedTopicHandledAt || unit.dispatchOwner === 'coordination' && !sourceDone
       && !coordination.some(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision && item.semanticState === 'needs_clarification')
   })
   const issues = [], recovery = []
@@ -110,5 +111,6 @@ export function messageProcessingProjection(message, topics, source, requests, s
       semantic: timing(message.occurredAt, completedAt),
       notificationE2e: timing(source?.receivedAt ?? message.receivedAt, deliveredAt),
       stages: source?.stages ?? [], issues, recovery,
+      fixedTopics: FIXED_TOPICS.filter(topic => message.units?.some(unit => unit.fixedTopic === topic.topicId && currentUnit(unit))),
     } }
 }
