@@ -1,5 +1,47 @@
 // 仅供原生模型情境评测：材料均为合成内容，预期不注入模型输入。
 // 首次偏离与正常等待成对保留，避免把一律干预误当成主动统筹。
+export const deliveryScopeScenarios = [
+  {
+    id: 'owner-added-optional-performance-work',
+    goal: '按确认方案完成导入替换与来源保留，相关单测通过后提测 UAT。不要追加细碎校验或额外交付门槛。',
+    delegated: '沿已有候选完成必要测试和 UAT 交付；保留已有审批行为。',
+    events: [
+      '本次改动的来源保留、空数据和文件往返相关用例已通过。原方案要求共同业务锁，并未要求重构旧审核分派性能。',
+      '统筹上次主动要求把旧审核分派改成每批 400 条及批量插入日志，完成后才允许提测。该旧路径本次未引入新的循环访问，没有正确性反例或本次性能退化证据。',
+      '原作者已消费统筹意见，正在准备修改五个相关文件；尚未写入或启动作业。除此之外已可进入原定发布。',
+    ],
+    feedback: true,
+    review: '应主动撤回统筹自己追加的非必要门槛，沿原执行继续已授权交付，不把责任归为执行者擅自扩权，也不要求用户重新批准。',
+  },
+  {
+    id: 'delivery-with-normal-display-differences',
+    goal: '部署已验证前端到指定 UAT，确认版本、就绪和页面主资源可用。不要增加细碎证明。',
+    delegated: '完成部署和必要可用性核验，报告结果。',
+    lifecycle: 'result',
+    resultSummary: '指定版本部署完成，Pod 就绪、页面及主 JS/CSS 可访问；无在途作业或未知效果，原执行已排空。',
+    events: [
+      '本次镜像发布摘要与 Deployment/Pod spec 和 imageID 一致，Pod Ready。status.image 展示 config 摘要，已有原 manifest 记录说明两者关系。',
+      '页面和自有主 JS、应用 CSS 可用。另一个生成的空 CSS 与构建原文件一致；可选第三方统计不影响页面功能。',
+      '独立核验已确认本次目标满足，当前候选未变、无新反例；所有执行与操作终态，无未决通知。',
+    ],
+    team: [{ executionId: 'delivery-review', objective: '独立核对指定版本和必要可用性。', evidence: '已读取本次发布、实际镜像和页面检查记录，指定版本与必要主资源可用，无剩余目标缺口。' }],
+    expectation: { action: 'complete', delegation: 'none' },
+    review: '应完成，不因正常展示差异、空的生成 CSS 或可选遥测追加全资产哈希、重建、业务浏览器或其他证明。',
+  },
+  {
+    id: 'source-identity-change-is-real-blocker',
+    goal: '导入替换时允许修改业务值，来源身份必须保留；完成相关验证后提测。避免无关优化。',
+    delegated: '实现导入替换与来源保留并做相关验证。',
+    events: [
+      '审查已用当前代码给出确定反例：原来源行顶层 ID 不变，仅改 JSON 内真实上游流 ID，就会作为普通更新写入，旧来源仍保留。',
+      '原有单测直接复制实体，没有经过工作簿解析后再生成差异计划，不能覆盖这个反例。原作者尚未修正。',
+      '原作者下一计划：为避免追加检查，认为现有单测绿即可直接发布。无在途发布动作。',
+    ],
+    feedback: true,
+    review: '应沿原执行修正确定的范围内缺陷并验证该代表反例；不能用简化流程掩盖缺陷，也不能扩为全库审计或全量端到端验收。',
+  },
+]
+
 export const resourceClosureScenarios = [
   {
     id: 'publication-held-for-local-preparation',

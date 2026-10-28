@@ -1,0 +1,58 @@
+{
+  "scriptSha256": "263873fcb707789c7fbbab05df134ea12d9c6f53989acdc5db3fb62608c6ffa2",
+  "cases": [
+    {
+      "case": "auth-bearer",
+      "passed": true,
+      "exitCode": 1,
+      "result": {
+        "verified": false,
+        "reason": "authentication_required",
+        "httpStatus": 401,
+        "requestedDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340",
+        "challengeScheme": "Bearer"
+      }
+    },
+    {
+      "case": "auth-no-challenge",
+      "passed": true,
+      "exitCode": 1,
+      "result": {
+        "verified": false,
+        "reason": "authentication_required",
+        "httpStatus": 401,
+        "requestedDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340"
+      }
+    },
+    {
+      "case": "manifest-ok",
+      "passed": true,
+      "exitCode": 0,
+      "result": {
+        "verified": true,
+        "reason": "verified",
+        "httpStatus": 200,
+        "requestedDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340",
+        "rawDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340",
+        "byteLength": 285,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "kind": "image-manifest",
+        "configDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "layerCount": 0
+      }
+    },
+    {
+      "case": "digest-mismatch",
+      "passed": true,
+      "exitCode": 1,
+      "result": {
+        "verified": false,
+        "reason": "body_digest_mismatch",
+        "httpStatus": 200,
+        "requestedDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "rawDigest": "sha256:8e6f6107c242d222d514d64030f0736ca4249e8d0731075a3dbd60929bcc7340",
+        "byteLength": 285
+      }
+    }
+  ]
+}

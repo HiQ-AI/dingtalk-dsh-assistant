@@ -1,0 +1,22 @@
+✔ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (26120.1621ms)
+ℹ package begin: 0ms
+ℹ package staged: 227ms
+ℹ package packed: 2431ms
+ℹ package extracted: 2524ms
+ℹ package bytes-and-imports-verified: 5559ms
+ℹ package dependency-links-ready: 5737ms
+ℹ package runtime-imports-ready: 6312ms
+ℹ package native-host-ready: 10791ms
+ℹ package message-ingested: 10842ms
+ℹ package native-task-idle: 24054ms
+ℹ package native-task-verified: 25507ms
+ℹ package native-host-closed: 25588ms
+ℹ package temporary-files-removed: 26117ms
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 26839.396

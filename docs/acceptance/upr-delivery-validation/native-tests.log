@@ -1,0 +1,16 @@
+﹣ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (0.7118ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ actual extracted resident starts and serves health without legacy entrypoints or personal assets (0.1381ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+✔ execution progress due is exactly ten minutes and respects the current running lifecycle (2.1214ms)
+﹣ native execution documents keep each input round and the owner reads the new duty and plan (0.3609ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ native progress review reads the current execution document without replaying or bypassing human wait: false (0.1797ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ native progress review reads the current execution document without replaying or bypassing human wait: true (0.3057ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ scripted progress decision waits for evidence or steers the original execution once: detour=false (0.0951ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+﹣ scripted progress decision waits for evidence or steers the original execution once: detour=true (0.0776ms) # Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; Cannot find module '@deepseek-ai/dsh-base'
+ℹ tests 8
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 7
+ℹ todo 0
+ℹ duration_ms 799.8013

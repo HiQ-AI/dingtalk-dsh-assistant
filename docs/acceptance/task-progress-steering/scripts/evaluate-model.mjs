@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { nativeTaskHost } from '../../../../test/fixtures/task-session-native-host.js'
 import { createTaskSessions } from '../../../../packages/dingtalk-dsh-assistant/task-session.js'
 import { inspectSession } from '../../../../packages/dingtalk-dsh-assistant/session-persistence.js'
-import { retrospectiveCorrectionScenarios, configurationInquiryScenarios, resourceClosureScenarios } from '../../../../test/fixtures/task-progress-correction-scenarios.js'
+import { retrospectiveCorrectionScenarios, configurationInquiryScenarios, resourceClosureScenarios, deliveryScopeScenarios } from '../../../../test/fixtures/task-progress-correction-scenarios.js'
 
 // 使用生产统筹实现和真实模型；所有执行/日志读回为合成材料，禁止文件、网络和业务工具执行。
 // 参数：输出目录、已安装 Connect 入口、模型名称、推理深度、当前代理。沿当前登录，不读出或复制凭据。
@@ -23,6 +23,7 @@ const existingFeedback = consumed => [{ id: 'prior-direction', receivedAt: '2026
   consumedAt: consumed ? '2026-10-21T00:01:00Z' : null, modelStepEnteredAt: consumed ? '2026-10-21T00:01:00Z' : null,
   sequence: consumed ? 10 : null, text: '原目标只核对 A 文件，停止读取其他项目，核对 A 后报告。' }]
 const allCases = [
+  ...deliveryScopeScenarios,
   ...resourceClosureScenarios,
   ...retrospectiveCorrectionScenarios,
   ...configurationInquiryScenarios,
