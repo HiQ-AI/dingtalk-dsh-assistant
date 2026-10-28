@@ -547,6 +547,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const parsed = z.strictObject({ requestId: requiredText.max(200), reply: requiredText.max(20000),
         expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
         artifactScopeCorrection: z.strictObject({ coordinationId: requiredText, expectedRevision: z.number().int().positive(), reason: requiredText.max(2000) }).optional(),
+        executionPermissionCorrection: z.strictObject({ executionId: requiredText, expectedInputVersion: z.number().int().positive(), mode: z.enum(['read-only', 'workspace-write', 'danger-full-access']), reason: requiredText.max(2000) }).optional(),
         nativeFailureResolutions: z.array(z.strictObject({ operationId: requiredText, expectedOperationDigest: z.string().regex(/^[a-f0-9]{64}$/u) })).min(1).max(8)
           .refine(items => new Set(items.map(item => item.operationId)).size === items.length).optional(),
         nativeRestartResolutions: z.array(z.strictObject({ operationId: requiredText, expectedOperationDigest: z.string().regex(/^[a-f0-9]{64}$/u),

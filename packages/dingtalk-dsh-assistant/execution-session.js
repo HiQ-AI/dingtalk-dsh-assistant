@@ -5,6 +5,7 @@ import { inspectSession, inboxHasPending } from './session-persistence.js'
 import { executionSessionTitle, nameSession, renameTaskSession } from './session-workspaces.js'
 import { sourceInterpretationInstructions } from './task-source-instructions.js'
 import { bindTaskArtifactScope, assertTaskArtifactScopePresent } from './task-artifact-scope.js'
+import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { isAbsolute, dirname, basename, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { installSessionSkillRefresh } from './session-skill-refresh.js'
@@ -338,18 +339,21 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         if (entry.input.artifactScope) {
           const permissions = ctx.get?.('permissionPresets') ?? ctx.permissionPresets
           if (!permissions?.set) throw failure('execution_permission_preset_unavailable')
-          permissions.set(agent.session, 'workspace-write')
+          const policy = agentCtx.get?.('sandboxPolicy') ?? agentCtx.sandboxPolicy
+          if (policy?.overrideOf(agent.session) === undefined) permissions.set(agent.session, 'workspace-write')
           await bindTaskArtifactScope(agentCtx, { root: dirname(dirname(entry.cwd)), scope: entry.input.artifactScope, taskId: entry.binding.taskId, session: agent.session })
           agentCtx.systemPrompt.section({ name: 'execution:artifacts', order: 1,
             text: `本团队唯一业务产物目录为 ${entry.input.artifactScope.artifactRoot}。${entry.input.artifactScope.authorizationSource ? `Host已核验同协调链受信技术答复 ${JSON.stringify(entry.input.artifactScope.authorizationSource)}，仅纠正旧fixture路径。` : ''}仅在该目录写业务产物；原任务工作目录、日志和执行文档保持不变。跨Task读取必须使用Host提供的正式绝对路径并核对真实文件，不得猜测、复制或写入其他目录。` })
         }
+        // 仅消费Host从正式执行账核对后传入的顶层纠正；模型input不提供权限。
+        if (entry.permissionCorrection) setSandboxMode(agent.session, entry.permissionCorrection.mode)
         const selected = ctx.sessionProjections.stateOf(agent.session, 'agentPreset')
         const mounted = await presets.mount(agentCtx, selected ?? definition.agentPreset ?? undefined)
         if (!selected) agent.session.append('agent-preset/selected', { agentPreset: mounted.id })
         // Only independent native executors receive the user-approved durable full-access preset.
         const permissions = ctx.get?.('permissionPresets') ?? ctx.permissionPresets
         if (!permissions?.set) throw failure('execution_permission_preset_unavailable')
-        if (!entry.input.artifactScope) permissions.set(agent.session, 'danger-full-access')
+        if (!entry.input.artifactScope && !entry.permissionCorrection) permissions.set(agent.session, 'danger-full-access')
         presetService = presets.serviceFor?.(agent, 'subprocess') ?? agentCtx.get?.('subprocess') ?? ctx.get?.('subprocess')
         const filesystem = presets.serviceFor?.(agent, 'fs') ?? agentCtx.get?.('fs') ?? ctx.get?.('fs')
         if (filesystem && !dynamicExecution(entry.binding)) {
@@ -750,7 +754,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     }
   }
 
-  async function run({ binding, input, title, definition, onSessionBound, onResult, onProgress, readResources, readTeam, sendMessage, readRestartScopeProbePlan, readFeedback, onFeedbackConsumed, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
+  async function run({ binding, input, permissionCorrection, title, definition, onSessionBound, onResult, onProgress, readResources, readTeam, sendMessage, readRestartScopeProbePlan, readFeedback, onFeedbackConsumed, validateOutput, classifyOutputError, recoveryContext, applyEdits, requestAuthorization, onNativeExecution: nativeExecutionHook = onNativeExecution }) {
     if (closed) return Promise.reject(failure('execution_sessions_closed'))
     try {
       validateBinding(binding)
@@ -766,8 +770,13 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       if (readRestartScopeProbePlan !== undefined && typeof readRestartScopeProbePlan !== 'function') throw failure('execution_callbacks_invalid')
       if (entries.has(executionKey(binding)) || sessions.has(binding.sessionId)) throw notDrained('execution_run_busy')
     } catch (error) { return Promise.reject(error) }
+    if (permissionCorrection !== undefined && (!dynamicExecution(binding) || definition.nativeTools !== true
+      || permissionCorrection?.executionId !== binding.executionId
+      || !['read-only', 'workspace-write', 'danger-full-access'].includes(permissionCorrection.mode)
+      || !Number.isSafeInteger(permissionCorrection.expectedInputVersion) || permissionCorrection.expectedInputVersion < 1 || permissionCorrection.expectedInputVersion > binding.inputVersion
+      || !permissionCorrection.sourceId || !permissionCorrection.actorId)) throw failure('execution_permission_correction_invalid')
     binding = Object.freeze(copy(binding))
-    const entry = { binding, input: copy(input), readResources, readTeam, sendMessage, readRestartScopeProbePlan, readFeedback, onFeedbackConsumed, feedbackVersion: 0, validateOutput, classifyOutputError, applyEdits, requestAuthorization, onProgress, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
+    const entry = { binding, input: copy(input), permissionCorrection: permissionCorrection === undefined ? undefined : copy(permissionCorrection), readResources, readTeam, sendMessage, readRestartScopeProbePlan, readFeedback, onFeedbackConsumed, feedbackVersion: 0, validateOutput, classifyOutputError, applyEdits, requestAuthorization, onProgress, onNativeExecution: nativeExecutionHook, cancelled: false, stale: false, attempted: false, accepted: false,
       correctableCalls: new Map(), submissionCorrections: 0, steps: 0, abort: new AbortController(), drained: Promise.withResolvers() }
     // 定义还可含 Controller 的 mapper/checker 函数；此边界只快照模型实际需要的字段。
     const fixedDefinition = copy({ provider: definition.provider, model: definition.model, ...(definition.reasoningEffort === undefined ? {} : { reasoningEffort: definition.reasoningEffort }), prompt: definition.prompt, ...(definition.agentPreset === undefined ? {} : { agentPreset: definition.agentPreset }), nativeTools: definition.nativeTools === true, recoveryReadOnly: definition.recoveryReadOnly === true, protectedPaths: definition.protectedPaths ?? [], allowedTools: definition.allowedTools, outputSchema: definition.outputSchema })

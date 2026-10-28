@@ -1,8 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, access, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, access, rm, mkdir, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { installTaskSessionPersistence } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
 import { taskWorkspace } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
@@ -10,9 +12,65 @@ import { coordinationArtifactScope, bindTaskArtifactScope } from '../packages/di
 import { available, reason, nativeTaskHost, nativeShell, latestInput, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
 
 const quote = value => `'${value.replaceAll("'", "''")}'`
-test('历史全权限在原生Host恢复绑定时收紧，保留原会话历史和只读模式且错误scope零写',
+function prepareOwnedFixture(root) {
+  if (process.platform !== 'win32') return
+  execFileSync('pwsh', ['-NoProfile', '-Command', `$ErrorActionPreference='Stop';$p=${quote(root)};$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$acl=Get-Acl -LiteralPath $p;if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value-ne$sid.Value){throw 'FIXTURE_OWNER'};$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow));Set-Acl -LiteralPath $p -AclObject $acl`], { windowsHide: true })
+}
+test('受信原生完整模式允许原临时Git工作树及MSYS，默认模式保留产物边界',
+  { skip: !available ? reason : process.platform !== 'win32', timeout: 60000 }, async t => {
+    const root = await mkdtemp(join(process.cwd(), 'docs', 'tmp', 'artifact-git-'))
+    prepareOwnedFixture(root)
+    const repository = join(root, 'repository'), checkout = join(root, 'checkout')
+    await mkdir(repository)
+    const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8', windowsHide: true })
+    git('init', '-q'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'fixture')
+    git('worktree', 'add', '-qb', 'candidate', checkout)
+    await writeFile(join(checkout, 'candidate.txt'), 'approved fixture')
+    const sh = join(git('--exec-path').trim(), '..', '..', '..', 'usr', 'bin', 'sh.exe')
+    const scope = await coordinationArtifactScope(root, { coordinationId: 'git-team', memberTaskIds: ['publisher'] })
+    const cwd = await taskWorkspace(root, 'publisher'), steps = new Map()
+    const host = await nativeTaskHost(root, async request => {
+      const label = latestInput(request).task.label
+      const step = steps.get(label) ?? 0; steps.set(label, step + 1)
+      if (step === 0) return [{ name: nativeShell, args: { description: '验证统一产物目录', command: `Set-Content -LiteralPath ${quote(join(scope.artifactRoot, label + '.txt'))} -Value ok` } }]
+      if (step === 1) return [{ name: nativeShell, args: { description: '验证真实Git元数据写权限', command: `git -C ${quote(checkout)} add candidate.txt; exit $LASTEXITCODE` } }]
+      if (step === 2) return [{ name: nativeShell, args: { description: '验证真实MSYS辅助进程', command: `& ${quote(sh)} -c 'exit 0'; exit $LASTEXITCODE` } }]
+      return []
+    }, { fsSandbox: true })
+    const handles = []
+    const router = await installTaskSessionPersistence(host.ctx, { root })
+    t.after(async () => { for (const h of handles) await h.dispose(); await host.close(); await rm(root, { recursive: true, force: true }) })
+    for (const label of ['default', 'full']) {
+      const identity = { taskId: 'publisher', sessionId: 'git-' + label }
+      await router.register({ ...identity, cwd })
+      const handle = await router.runOwned(identity, () => host.ctx.agents.create({ sessionId: identity.sessionId, meta: { cwd }, agentOptions: { provider: 'native-task-test', model: 'controlled' }, setup: async (ctx, agent) => {
+        await host.ctx.agentPresets.mount(ctx, 'native-test')
+        setSandboxMode(agent.session, label === 'full' ? 'danger-full-access' : 'workspace-write')
+        await bindTaskArtifactScope(ctx, { root, scope, taskId: 'publisher', session: agent.session })
+      } }))
+      handles.push(handle)
+      handle.agent.steer(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: JSON.stringify({ task: { label } }) }] }))
+      await handle.agent.whenIdle()
+      const results = host.toolResults.filter(r => r.sessionId === handle.agent.id && r.name === nativeShell)
+      assert.equal(results.length, 3, JSON.stringify({ results, all: host.toolResults, requests: host.requests.length, tail: handle.agent.session.snapshotEvents().slice(-3) }))
+      assert.equal(results[0].result.value?.exitCode, 0, JSON.stringify(results))
+      if (label === 'default') {
+        assert.notEqual(results[1].result.value?.exitCode, 0, JSON.stringify(results))
+        assert.equal(git('-C', checkout, 'diff', '--cached', '--name-only').trim(), '')
+        assert.notEqual(results[2].result.value?.exitCode, 0, JSON.stringify(results))
+      } else {
+        assert.equal(results[1].result.value?.exitCode, 0, JSON.stringify(results))
+        assert.equal(results[2].result.value?.exitCode, 0, JSON.stringify(results))
+        assert.equal(git('-C', checkout, 'diff', '--cached', '--name-only').trim(), 'candidate.txt')
+      }
+      assert.equal(handle.agent.session.header.cwd, cwd)
+      assert.equal(host.ctx.sessionProjections.stateOf(handle.agent.session, 'sandboxArtifactRoot').artifactRoot, scope.artifactRoot)
+    }
+  })
+test('原生Host已授权完整模式在恢复绑定时保留，原生逐次模式与只读模式均不改历史身份',
   { skip: !available ? reason : false, timeout: 30000 }, async t => {
     const root = await mkdtemp(join(process.cwd(), 'docs', 'tmp', 'artifact-mode-'))
+    prepareOwnedFixture(root)
     const host = await nativeTaskHost(root, () => { assert.fail('权限恢复不得调用模型') })
     let handle
     t.after(async () => { await handle?.dispose(); await host.close(); await rm(root, { recursive: true, force: true }) })
@@ -35,9 +93,9 @@ test('历史全权限在原生Host恢复绑定时收紧，保留原会话历史�
       await assert.rejects(bindTaskArtifactScope(ctx, { ...args, scope: other }), /ARTIFACT_POLICY_BINDING_CHANGED/)
       assert.equal(session.seq, seq)
       await bindTaskArtifactScope(ctx, args)
-      assert.equal(host.ctx.sandboxPolicy.resolve({ session }).mode, 'workspace-write')
+      assert.equal(host.ctx.sandboxPolicy.resolve({ session }).mode, 'danger-full-access')
       assert.equal(host.ctx.sandboxPolicy.resolve({ session }).workspaceRoot, scope.artifactRoot)
-      assert.throws(() => host.ctx.sandboxPolicy.resolve({ session, mode: 'danger-full-access' }), /ARTIFACT_POLICY_MODE_REQUIRED/)
+      assert.equal(host.ctx.sandboxPolicy.resolve({ session, mode: 'danger-full-access' }).mode, 'danger-full-access')
       setSandboxMode(session, 'read-only')
       const readonlySeq = session.seq
       await bindTaskArtifactScope(ctx, args)
@@ -49,13 +107,14 @@ test('历史全权限在原生Host恢复绑定时收紧，保留原会话历史�
     assert.deepEqual(after.events.slice(0, before.events.length), before.events)
     assert.equal(handle.agent.session.id, sessionId)
     assert.equal(after.meta.cwd, before.meta.cwd)
-    assert.deepEqual(after.events.slice(before.events.length).filter(e => e.type === 'sandbox/mode').map(e => e.data.mode), ['workspace-write', 'read-only'])
+    assert.deepEqual(after.events.slice(before.events.length).filter(e => e.type === 'sandbox/mode').map(e => e.data.mode), ['read-only'])
     assert.equal(after.events.filter(e => e.type === 'sandbox/mode' && e.data.artifactRoot).length, 1)
     assert.equal(host.requests.length, 0)
   })
 test('official artifact binding makes native FS and shell share one root and reject outside writes',
   { skip: !available ? reason : false, timeout: 60000 }, async t => {
     const root = await mkdtemp(join(process.env.CLAUDE_JOB_DIR ? join(process.env.CLAUDE_JOB_DIR, 'tmp') : join(process.cwd(), 'docs', 'tmp'), 'artifact-native-'))
+    prepareOwnedFixture(root)
     const scope = await coordinationArtifactScope(root, { coordinationId: 'coordination-team', memberTaskIds: ['task-a', 'task-b', 'task-c'] })
     let host
     const steps = new Map()
@@ -87,6 +146,7 @@ test('official artifact binding makes native FS and shell share one root and rej
       await host.service.recover()
       await host.service.whenIdle()
       assert.equal((await host.query('task.get', { taskId })).status, 'completed', JSON.stringify(host.service.listAlerts()))
+      assert.ok(host.toolResults.some(item => item.name === nativeShell && item.result.value?.exitCode === 0), JSON.stringify(host.toolResults.filter(item => item.name === nativeShell)))
       const role = taskId.at(-1)
       assert.equal(await readFile(join(scope.artifactRoot, role + '.txt'), 'utf8'), 'native-' + role)
       assert.equal(await readFile(join(scope.artifactRoot, role + '-fs.txt'), 'utf8'), 'native-fs-' + role)
@@ -99,6 +159,7 @@ test('official artifact binding makes native FS and shell share one root and rej
 for (const denyOutside of [false, true]) test(`one real ingress creates three naturally dependent Tasks whose Owner setup persists one formal artifact root: denyOutside=${denyOutside}`,
   { skip: !available ? reason : false, timeout: 60000 }, async t => {
     const root = await mkdtemp(join(process.env.CLAUDE_JOB_DIR ? join(process.env.CLAUDE_JOB_DIR, 'tmp') : join(process.cwd(), 'docs', 'tmp'), 'artifact-chain-'))
+    prepareOwnedFixture(root)
     let host
     const steps = new Map(), completed = []
     const policyEntry = process.env.DSH_ARTIFACT_POLICY_MODULE
@@ -178,6 +239,7 @@ test('two recurring slots keep original Owner and delegated executions inside th
   { skip: !available ? reason : false, timeout: 60000 }, async t => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
     const root = await mkdtemp(join(process.cwd(), 'docs', 'tmp', 'artifact-recurring-'))
+    prepareOwnedFixture(root)
     let host, originalSessionId, latestOwnerRound = 0
     const steps = new Map(), bindings = [], ownerRounds = []
     const call = (name, args) => ({ name, args })

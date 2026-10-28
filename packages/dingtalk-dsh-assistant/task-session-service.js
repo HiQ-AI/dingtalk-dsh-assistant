@@ -918,7 +918,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       try {
         const artifactScope = await resolveTaskArtifactScope({ root, task: await requireTask(binding.taskId), query })
         if (artifactScope && executionBackend(execution) !== 'dsh') fail('TASK_ARTIFACT_EXECUTION_BACKEND_UNSUPPORTED')
-        const result = await executionSessions.run({ binding, title: executionSessionTitle(execution), input: { ...execution.input, artifactScope, executionDocument: await refreshExecutionDocument(executionId) }, definition: { ...models(), ...execution.definition,
+        const permissionCorrection = await verifiedExecutionPermission(execution)
+        const result = await executionSessions.run({ binding, permissionCorrection, title: executionSessionTitle(execution), input: { ...execution.input, artifactScope, executionDocument: await refreshExecutionDocument(executionId) }, definition: { ...models(), ...execution.definition,
           prompt: execution.prompt + `\n本轮资源占用阶段：${execution.resourcePhase}。prepare不取得目录内publication资源；独立检出、改码和本地测试可在此阶段进行，其他已授权业务仍按原目标执行。需要占用发布资源时，先完成其前置条件，向统筹交接并在原执行及效果安全排空后续办publish阶段，联合获取全部所需资源。此字段只管理占用阶段，不增加业务授权或固定业务流程。` + '\n本轮执行文档入口是input.executionDocument.path，路径固定为outputs/<executionId>/round-<inputVersion>.md，由Host按持久记录生成；需要交接或核对进展时先读该文档，不自行写改它，不覆盖历史轮次。通过execution_report_progress维护本轮：首次报告提供简短plan，写明步骤、依赖、交付物和核验方法；summary、evidence、activity区分已发生事实、当前活动和阻塞。后续同轮省略plan会保留，计划确需变化再更新，新轮重新制定，不能沿用旧轮成果冒充当前完成。必要进展才报告，不为空转刷新文档重复汇报。日常协作先读相关成员的当前文档，文档缺证据、版本矛盾、技术失败或未知效果时再查原产物、日志或操作账；文档和同伴自述不构成授权或独立验收。' + (execution.resourceKeys?.length ? `\nHost 已在本执行开始前取得资源 ${JSON.stringify(execution.resourceKeys)}；会话及在途操作排空前保持。使用 execution_resources_read 无参数读取自身当前身份和资源状态，不需统筹另发持锁证明。queued/派发接收不等于其他执行已持锁；观察结果不替代后续写入门禁和真实目标版本核对。` : ''), allowedTools: execution.definition?.allowedTools ?? [], nativeTools: true, outputSchema: dynamicExecutionOutputSchema },
           onSessionBound: async () => {
             if (executionBackend(execution) === 'dsh') await attachWorkspace(binding.sessionId, await taskWorkspace(root, binding.taskId), (await requireTask(binding.taskId)).title)
@@ -1517,6 +1518,22 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       decidedAt: request.answeredAt, decision: request.status === 'answered' ? 'answered' : undefined,
       decisionSource: request.status === 'answered' ? request.replyChannel : undefined })))
   }
+  async function verifiedExecutionPermission(execution) {
+    const correction = execution.permissionCorrection
+    if (!correction) return undefined
+    const task = await requireTask(execution.taskId), source = await query('source.get', { sourceId: correction.sourceId })
+    const { sourceId, recordedAt, ...accepted } = correction
+    if (executionBackend(execution) !== 'dsh' || correction.executionId !== execution.executionId
+      || !Number.isSafeInteger(correction.expectedInputVersion) || correction.expectedInputVersion < 1 || correction.expectedInputVersion > execution.inputVersion
+      || correction.requirementRevision !== task.requirementRevision || correction.controlRevision !== task.controlRevision
+      || !['read-only', 'workspace-write', 'danger-full-access'].includes(correction.mode) || !recordedAt
+      || source?.channel !== 'web' || source.actorId !== config.webActorId || source.actorId !== task.ownerActorId
+      || correction.actorId !== source.actorId || source.groupId !== task.groupId || !task.sourceRefs.includes(sourceId)
+      || !task.humanRequests?.some(request => request.requestId === source.requestIdentity?.humanRequestId
+        && request.status === 'answered' && request.audience === 'operator' && request.sourceId === sourceId && request.actorId === correction.actorId)
+      || hash(source.requestIdentity?.executionPermissionCorrection ?? null) !== hash(accepted)) fail('TASK_EXECUTION_PERMISSION_CORRECTION_SOURCE_INVALID')
+    return structuredClone(correction)
+  }
   async function respondHumanRequest(args) {
     if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
     if (!args.requestId?.trim() || !args.reply?.trim()) fail('TASK_HUMAN_REPLY_REQUIRED')
@@ -1528,12 +1545,25 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (!request) fail('DYNAMIC_NOT_FOUND')
     if (!prior && (request.status !== 'waiting-reply' || args.expectedRequirementRevision !== task.requirementRevision
       || args.expectedControlRevision !== task.controlRevision)) fail('DYNAMIC_HUMAN_REQUEST_STALE')
-    if (prior && !args.checkOnly) {
+    if (prior) {
       const originalSource = await query('source.get', { sourceId })
       if (originalSource?.text !== args.reply || hash(originalSource.requestIdentity?.nativeFailureResolutions ?? []) !== hash(args.nativeFailureResolutions ?? [])
         || hash(originalSource.requestIdentity?.nativeRestartResolutions ?? []) !== hash(args.nativeRestartResolutions ?? [])
-        || hash(originalSource.requestIdentity?.artifactScopeCorrectionRequest ?? null) !== hash(args.artifactScopeCorrection ?? null)) fail('DYNAMIC_COMMAND_ID_CONFLICT')
-      return taskDTO(prior.result.task)
+        || hash(originalSource.requestIdentity?.artifactScopeCorrectionRequest ?? null) !== hash(args.artifactScopeCorrection ?? null)
+        || hash(originalSource.requestIdentity?.executionPermissionCorrectionRequest ?? null) !== hash(args.executionPermissionCorrection ?? null)) fail('DYNAMIC_COMMAND_ID_CONFLICT')
+      if (!args.checkOnly) return taskDTO(prior.result.task)
+    }
+    let executionPermissionCorrection
+    if (args.executionPermissionCorrection) {
+      const correction = args.executionPermissionCorrection
+      const execution = await query('execution.get', { executionId: correction.executionId })
+      if (request.audience !== 'operator' || config.webActorId !== task.ownerActorId
+        || execution?.taskId !== task.taskId || execution.inputVersion !== correction.expectedInputVersion
+        || !execution.drained || execution.recovering || !['succeeded', 'failed', 'cancelled', 'stale'].includes(execution.status)
+        || executionBackend(execution) !== 'dsh' || !['read-only', 'workspace-write', 'danger-full-access'].includes(correction.mode)
+        || !correction.reason?.trim() || (await query('operation.list', { taskId: task.taskId })).some(operation => operation.executionId === execution.executionId && !['succeeded', 'failed', 'cancelled'].includes(operation.state))) fail('TASK_EXECUTION_PERMISSION_CORRECTION_SCOPE')
+      executionPermissionCorrection = { ...correction, reason: correction.reason.trim(), actorId: config.webActorId,
+        requirementRevision: task.requirementRevision, controlRevision: task.controlRevision }
     }
     let artifactScopeCorrection
     if (args.artifactScopeCorrection) {
@@ -1598,6 +1628,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       proofs.push({ operationId: operation.operationId, proof })
     }
     if (args.checkOnly) return { checkOnly: true, writes: 0, taskId: task.taskId, ready: requiredScopeProbes.length === 0, requiredScopeProbes,
+      ...(executionPermissionCorrection ? { executionPermissionCorrection } : {}),
       ...(artifactScopeCorrection ? { artifactScopeCorrection } : {}),
       resolutions: proofs.filter(({ proof }) => proof.kind !== 'native-host-restart-isolated').map(({ operationId, proof }) => ({ operationId, operationDigest: proof.operationDigest,
         resultSequence: proof.resultSequence, turnEndSequence: proof.turnEndSequence,
@@ -1608,15 +1639,18 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         unblocksRecovery: true, isolationReceiptId: proof.isolation.receiptId })) }
     const source = { sourceId, groupId: task.groupId, messageId: sourceId, actorId: config.webActorId,
       text: args.reply, timestamp: '', channel: 'web',
-      ...(allResolutions.length || artifactScopeCorrection ? { requestIdentity: { humanRequestId: args.humanRequestId,
+      ...(allResolutions.length || artifactScopeCorrection || executionPermissionCorrection ? { requestIdentity: { humanRequestId: args.humanRequestId,
+        ...(executionPermissionCorrection ? { executionPermissionCorrectionRequest: args.executionPermissionCorrection, executionPermissionCorrection } : {}),
         ...(resolutions.length ? { nativeFailureResolutions: resolutions } : {}),
         ...(restartResolutions.length ? { nativeRestartResolutions: restartResolutions } : {}),
         ...(artifactScopeCorrection ? { artifactScopeCorrectionRequest: args.artifactScopeCorrection, artifactScopeCorrection } : {}) } } : {}) }
     const response = { taskId: task.taskId, requestId: args.humanRequestId, sourceId,
+      ...(executionPermissionCorrection ? { executionPermissionCorrection } : {}),
       expectedRequirementRevision: args.expectedRequirementRevision, expectedControlRevision: args.expectedControlRevision,
       ...(artifactScopeCorrection ? { artifactScopeCorrection } : {}) }
     let result
     if (allResolutions.length) result = await command('task.human.resolve-failures', { ...response, source, resolutions: proofs }, receiptId)
+    else if (executionPermissionCorrection) result = await command('task.human.respond', { ...response, source }, receiptId)
     else {
       await command('source.record', source, `source:${sourceId}`)
       result = await command('task.human.respond', response, receiptId)

@@ -207,9 +207,9 @@ Provider历史失败保留原貌；DSH默认5次请求重试不包含PI_AI_ERROR
 
 单 Task 团队沿用 `tasks/<taskId>/outputs`。跨 Task 协调团队的唯一业务产物容器为 Host 根据稳定 coordinationId 计算的 `tasks/<coordinationId>/outputs`，不是新增总 Task；原 Task 材料、内部日志、会话 header.cwd 与 Host 阅读投影保持原址。插件从唯一有效协调成员关系解析该目录，不接受模型提供的任意根；多协调归属、重复 Task 成员及周期实例目前拒绝自动绑定，不能猜测第一项或最近安排。
 
-部署此功能前，先使用 `scripts/sandbox-artifact-policy.mjs` 为精确原生 `dsh-sandbox-policy` 制作并核验支持 `bindArtifactRoot(session,{ownerId,artifactRoot})` 的补丁包，按其 Check/Apply/Verify 流程固定 tgz 摘要与 profile override，再按本页正常排空部署插件。仅安装 Assistant 不会补齐原生 API；缺少 API 时插件明确拒绝进入绑定任务，不退回宽权限。不得直接改 node_modules、全局替换 policy.resolve、修改旧 session.header 或切换 danger-full-access。
+部署此功能前，先使用 `scripts/sandbox-artifact-policy.mjs` 为精确原生 `dsh-sandbox-policy` 制作并核验支持 `bindArtifactRoot(session,{ownerId,artifactRoot})` 的补丁包，按其 Check/Apply/Verify 流程固定 tgz 摘要与 profile override，再按本页正常排空部署插件。仅安装 Assistant 不会补齐原生 API；缺少 API 时插件明确拒绝进入绑定任务，不退回宽权限。不得直接改 node_modules、全局替换 policy.resolve 或修改旧 session.header。产物归档绑定不代替原生权限设置；具体执行需要更广权限时，只沿本页受信 operator 技术答复纠正原执行，不改全局配置。
 
-原生绑定把 `sandbox/mode` 携带完整产物绑定的 事件持久化于各原会话；相同绑定幂等、不同绑定拒绝，每次解析重验目录链。Owner 与 DSH 执行通过同一 API 绑定共同产物根，shell 与 native FS 使用同一策略并拒绝根外业务写；平台临时区域维持原生语义，不作为业务产物目录。绑定会话拒绝模型请求 full-access 绕过。历史 danger-full-access 会话由受信 Host 的原会话恢复流程在 scope、目录及既有绑定全部校验通过后，通过原生 setSandboxMode 追加 workspace-write 事件；read-only 与审批策略保持，不修改旧事件、不重建会话。普通 Remote 命令不能绕过 TASK_SESSION_HOST_WRITER_REQUIRED；部署后等待原 pending wakes 接续，并独立回读新模式事件、同一会话及唤醒消费。外部执行后端不能据此自动视为已受原生策略约束，须独立支持或拒绝，不能静默放行。
+原生绑定把 `sandbox/mode` 携带完整产物绑定的 事件持久化于各原会话；相同绑定幂等、不同绑定拒绝，每次解析重验目录链。Owner 与 DSH 执行通过同一 API 绑定共同产物根，默认 workspace-write/只读下 shell 与 native FS 使用同一策略并拒绝根外写；平台临时区域维持原生语义，不作为业务产物目录。原生显式模式和真正批准的单次权限不再被产物绑定覆盖，模型字段本身不能提供权限。受信Host仅从正式operator技术纠正来源恢复指定原执行模式；read-only、审批与既有原生显式模式保持，不修改旧事件、不重建会话。普通 Remote 命令不能绕过 TASK_SESSION_HOST_WRITER_REQUIRED；部署后等待原 pending wakes 接续，并独立回读新模式事件、同一会话及唤醒消费。外部执行后端不能据此自动视为已受原生策略约束，须独立支持或拒绝，不能静默放行。
 
 核验需同时实跑根内 native write 与 shell 写入、另一个团队及原 cwd 的根外拒绝、跨 Task 原生 read、持久重启后同绑定、旧 header.cwd 不变；再验证原协调链的正式完成事件自然释放后继。原路径要求发生冲突时通过正式技术恢复说明明确纠正，不能仅口头通知而假称冻结需求已经重写，不能手改 Task 或完成账。原生能力证据不等于真实群业务验收通过。
 
@@ -291,7 +291,7 @@ node --input-type=module -e 'import {readFile} from "node:fs/promises"; import {
 
 同一协调团队的正式业务产物根为 <Agent工作区>/tasks/<coordinationId>/outputs，Owner和DSH执行成员共用，所有业务产物只写此处。原Task的cwd/header/session/log/Host执行阅读文档保持原址；不要通过改旧session.cwd、junction、分散fixture、额外docs目录或关闭沙箱恢复。当前外部CLI执行后端不承载该新scope，明确拒绝而非自动放宽。
 
-所需原生 policy 扩展为本地精确包 `@deepseek-ai/dsh-sandbox-policy@0.2.1-rc.2.artifact.2`，再生成配方 `node scripts/sandbox-artifact-policy.mjs build <原生 rc.2 包绝对目录> <新空目标目录>`，只接受已审阅原入口 SHA。补丁通过持久 `sandbox/mode` 携带完整产物绑定的 原生投影保留 root 绑定，不改共享 service 方法；FS 与 shell 读取同一 resolve 结果，绑定会话禁止 danger 模式，根内写成功、根外拒绝必须实跑。
+所需原生 policy 扩展为本地精确包 `@deepseek-ai/dsh-sandbox-policy@0.2.1-rc.2.artifact.3`，再生成配方 `node scripts/sandbox-artifact-policy.mjs build <原生 rc.2 包绝对目录> <新空目标目录>`，只接受已审阅原入口 SHA。补丁通过持久 `sandbox/mode` 携带完整产物绑定的 原生投影保留 root 绑定，不改共享 service 方法；FS 与 shell 读取同一 resolve 结果，默认 workspace-write/只读继续使用固定产物根；原生已批准的单次权限及受信 Host 显式设置的模式保持生效，不能把归档约束误作已授权源码/Git操作的全面禁止。默认根内写成功、根外拒绝以及明确恢复原生完整权限的正例分别实跑。
 
 沿本页原生双包部署脚本增加 -ArtifactPolicyProposal <绝对JSON路径>，与PTY补丁模式互斥。提案只含schemaVersion1、固定name/version、当前profile package.json的expectedManifestSha256、持久packagePath/packageSha256/entrySha256。先 -Check 零写/零信号，正式执行仅在原PID/子进程/账本原生排空后CAS增加这一个原生包的直接file依赖与pnpm.overrides；保留其他依赖/overrides/profile patch，使用官方plugin add安装，不直接编辑node_modules。启动前verify从真实dsh-base消费者解析policy并核版本/入口字节；任一步失败保留阶段，不启动部分安装或重发历史消息。
 
@@ -327,3 +327,11 @@ Windows 原生受限 shell 为任务目录配置写入授权时，需要宿主�
 若需准备，使用刚读到的摘要执行 `pwsh -NoProfile -File scripts/prepare-task-directories.ps1 -WorkspaceRoot D:/baibu-agent -ExpectedAclSha256 <Check返回摘要> -EvidenceDirectory <绝对且不存在的证据目录>`。证据目录的父目录须已存在且没有 reparse。脚本仅给当前 SID 添加可继承的 FullControl allow（ObjectInherit、ContainerInherit、无传播限制），保留 owner/group/SACL、其他 SID、deny 和继承保护标志；不递归替换子 ACL。原 ACL 摘要不匹配会拒绝；写前 `before.json` 保存原 DACL SDDL/owner/group/保护状态与摘要，写后 `after.json` 保存独立读回及有效权限。验证失败自动恢复原 DACL 并核对摘要；证据应保留以供必要时按精确目标恢复，不能把其他目录的 SDDL套入。重复执行已具备规则时不写入，也不创建新证据目录。
 
 根规则通过系统继承覆盖未保护的既有后代与以后 mkdir 的目录。受保护子目录、显式 deny 或跨 reparse 目标不因此被改写；遇到具体目录失败应回读该目录的有效权限，不声称整棵历史树必然已修复。根准备完成后再分别验证既有产物目录和新建探针的继承及原生受限 shell 成功/越界拒绝；宿主权限准备不改变会话 workspace 边界。
+
+### 原发布执行权限纠正
+
+统一outputs是业务产物归档位置，不表示已授权代码检出与真实Git元数据都只能只读。Git worktree的.git文件常指向其他检出下的common-dir，权限核对必须读取真实git-dir/common-dir。Windows MSYS认证辅助进程命名对象拒绝与文件夹拒绝分别诊断，不能把它误报为凭据失效，也不能通过复制检出或更换认证方式绕过。
+
+当前原生后端仅有read-only/workspace-write/danger-full-access模式；多目录文件授权不能单独解决MSYS命名对象。在用户已明确要求修复原发布权限时，复用`POST /tasks/:taskId/human-requests/:requestId/reply/check`及相同无`/check`答复入口，附`executionPermissionCorrection:{executionId,expectedInputVersion,mode,reason}`。先Check零写，真实应用必须同Task owner/operator、任务版本、目标原执行/输入版本、排空与无未决效果全部匹配；不允许模型输入自行携带此授权。纠正保留在正式source及原execution，Host核验后只对该execution的原会话设置原生mode，不提升Owner/同伴、不修改profile、不改变产物根/原会话cwd，不新增业务授权或重放操作。
+
+选择danger-full-access意味着该发布会话以当前Windows用户权限运行原生工具，适用于受限token确实无法完成已授权Git等运行需求的恢复；业务范围仍限已明确授权的检出、Git元数据及环境。恢复后应核对原execution实际新输入、原生mode与Git真实结果，不能只凭答复接收或execution succeeded判定UAT已发布。复用已有有效测试/构建，按原作者原执行仅完成剩余交付。

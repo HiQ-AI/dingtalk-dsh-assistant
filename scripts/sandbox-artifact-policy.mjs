@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import { Script } from 'node:vm'
 
 const name = '@deepseek-ai/dsh-sandbox-policy'
-const version = '0.2.1-rc.2.artifact.2'
+const version = '0.2.1-rc.2.artifact.3'
 const baseHash = '772ca58f0f786d6cb4d839deb621634c31097c13228d81b14e3f3153d0524924'
 const hash = value => createHash('sha256').update(value).digest('hex')
 const fail = code => { throw new Error(`ARTIFACT_POLICY_${code}`) }
@@ -53,8 +53,6 @@ var SandboxPolicyService = class extends Service {`)
     if (binding) {
       checkedArtifactBinding(binding);
       if (session.header.cwd !== binding.sessionCwd) throw new Error("ARTIFACT_POLICY_SESSION_CHANGED");
-      const effectiveMode = request.mode ?? this.overrideOf(session) ?? this.defaultMode;
-      if (!["read-only", "workspace-write"].includes(effectiveMode)) throw new Error("ARTIFACT_POLICY_MODE_REQUIRED");
     }
 \t\treturn {`)
   code = replace(code, 'workspaceRoot: resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot),',

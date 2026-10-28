@@ -36,10 +36,11 @@
 | SG8 | 同类目录前置保障 | tasks根一次性权限准备并继承，新建目录不再逐项审批 | 已完成 | round-7.md；现场根及新目录原生验证 |
 | SG9 | 能力判断与等待依据 | 不把未尝试能力说成不可用，保留实际失败工具/路径 | 源码完成待安装 | round-7.md；既有原生恢复1/1通过 |
 | SG10 | 系统回归与交付 | 各目录/恢复/续办场景正反例及现场恢复 | 部分完成 | round-7.md；额外资源组超时、提示待安装 |
+| SG11 | 原发布执行权限恢复 | 原c5受信权限纠正、Git与辅助进程成功并续办剩余交付 | 进行中 | publish-execution-native-permissions.md；input8真实拒绝证据 |
 
 ## 当前检查点
-- 当前子目标：SG10
-- 唯一下一步：提交目录根准备与能力事实提示修订；提示包待原任务自然排空后安装，不为此中断执行。
+- 当前子目标：SG11
+- 唯一下一步：修复原发布执行的原生权限纠正入口，部署后正式恢复原c5，仅续办剩余交付。
 - 未闭环项：原UAT2业务交付由原任务继续；历史wakes尚未全部ack，全局recover耗时阶段未收敛。
 
 ## 进展
@@ -68,3 +69,5 @@
 - 最终现场：PID44064在线，错误观察原工作卡已正式退役；原v4会话workspace-write事件seq7446及新轮次seq7449实际工具回包。需求/控制13不变。原wakes尚未ack，UAT2业务未完成；全局恢复历史登记慢的确切阶段未收敛。见report.md。
 
 - 用户追加：不能只修本次，要杜绝同类。原生官方诊断证实原outputs有效WRITE_DAC=true/WRITE_OWNER=false；授权后仅该根补当前用户FullControl，verification verified，未改文件/所有者。Owner所谓入口不存在已被tool schema及无delegate尝试反证。
+
+- SG11（进行中）：原发布c5/input8已真实接续，但Git common-dir写入与MSYS命名对象分别被受限环境拒绝。新增受信operator对精确原execution的权限纠正，复用原生mode，保留原检出/凭据/验证；不再把统一产物归档误作业务写根。方案docs/spec/publish-execution-native-permissions.md。
