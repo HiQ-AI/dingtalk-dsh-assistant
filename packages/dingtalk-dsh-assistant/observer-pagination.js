@@ -75,7 +75,7 @@ export function installObserverPagination(db, { migrate = false } = {}) {
  } catch (cause) {db.exec('ROLLBACK TO observer_pagination_migration; RELEASE observer_pagination_migration');throw cause}
 }
 
-export function observerPage(db, q, instance) {
+export function observerPage(db, q, instance, hydrate) {
  const { offset = 0, limit = 20, revision } = q
  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw error('OBSERVER_PAGE_INVALID')
  if (!installObserverPagination(db)) throw error('OBSERVER_PAGINATION_MIGRATION_REQUIRED')
@@ -110,15 +110,28 @@ export function observerPage(db, q, instance) {
  const pageFrom = indexed ? from.replace(countFrom,'page_ids i') : from
  const suffix = indexed ? `ORDER BY ${order}` : `${where} ORDER BY ${order} LIMIT ? OFFSET ?`
  const rows = db.prepare(`${prefix}SELECT ${body} AS body${q.collection === 'tasks' ? ",i.state AS board_state,(SELECT count(*) FROM dynamic_executions e WHERE json_extract(e.body,'$.taskId')=i.id) AS execution_count,(SELECT count(*) FROM dynamic_executions e WHERE json_extract(e.body,'$.taskId')=i.id AND json_extract(e.body,'$.status') IN ('succeeded','completed')) AS completed_count" : ''} FROM ${pageFrom} ${suffix}`).all(...args,limit,offset)
- return { items: rows.map(row => ({...JSON.parse(row.body), ...(q.summary ? {drained:!!JSON.parse(row.body).drained,recovering:!!JSON.parse(row.body).recovering} : row.board_state ? {state:row.board_state,executionCount:row.execution_count,completedExecutionCount:row.completed_count} : {})})), total,offset,limit,revision:currentRevision,nextOffset:offset+rows.length<total?offset+rows.length:null }
+ const pageValue = row => {
+  const value = JSON.parse(row.body)
+  if (!hydrate || q.summary) return value
+  if (q.collection === 'tasks') { const {dialogue, ...task} = hydrate('dynamic_tasks', value.taskId); return task }
+  if (q.collection === 'executions') return hydrate('dynamic_executions', value.executionId)
+  if (q.collection === 'coordination-sources') return hydrate('dynamic_coordination_sources', value.id)
+  if (q.collection === 'authorizations') {
+   const task = hydrate('dynamic_tasks', value.taskId), requestId = value.humanRequests[0]?.requestId
+   return {...value, objective: task.objective, humanRequests: task.humanRequests.filter(request => request.requestId === requestId),
+    observerNotice: value.observerNotice ? hydrate('dynamic_notifications', value.observerNotice.id ?? value.observerNotice.notificationId) : null}
+  }
+  return value
+ }
+ return { items: rows.map(row => ({...pageValue(row), ...(q.summary ? {drained:!!JSON.parse(row.body).drained,recovering:!!JSON.parse(row.body).recovering} : row.board_state ? {state:row.board_state,executionCount:row.execution_count,completedExecutionCount:row.completed_count} : {})})), total,offset,limit,revision:currentRevision,nextOffset:offset+rows.length<total?offset+rows.length:null }
 }
 
-export function observerGroupQuery(db,q) {
+export function observerGroupQuery(db,q,decode) {
  if(!installObserverPagination(db))throw error('OBSERVER_PAGINATION_MIGRATION_REQUIRED')
  if(typeof q.groupId!=='string'||!q.groupId)throw error('OBSERVER_PAGE_INVALID')
  if(q.kind==='observer.group-version')return String(db.prepare('SELECT revision FROM observer_group_versions WHERE group_id=?').get(q.groupId)?.revision??0)
  const fields=(names)=>`json_object(${names.map(name=>`'${name}',json_extract(body,'$.${name}')`).join(',')}) AS body`
- const read=(table,select,where,args)=>db.prepare(`SELECT ${select} FROM ${table} WHERE ${where}`).all(...args).map(row=>JSON.parse(row.body))
+ const read=(table,select,where,args)=>db.prepare(`SELECT ${select} FROM ${table} WHERE ${where}`).all(...args).map(row=>select==='body'&&decode?decode(row.body,table):JSON.parse(row.body))
  if(q.kind==='observer.group-metadata')return {
   sources:read('dynamic_sources',fields(['sourceId','groupId','messageId','version','routed','processingCompleted']),"json_extract(body,'$.groupId')=?",[q.groupId]).map(source=>({...source,routed:source.routed===1||source.routed===true})),
   coordinationSources:read('dynamic_coordination_sources',fields(['id','groupId','sourceMessageId','sourceRefs','dispatchOwner','unitId','revision','reservationId','reservationGeneration','state','resolvedBy','pendingClarifications','attemptCount','nextRetryAt','frozen']),"json_extract(body,'$.groupId')=?",[q.groupId])

@@ -110,3 +110,17 @@ test('work SQL read model excludes historical bodies while retaining the exact r
  assert.equal(error.knownNotSent,true);assert.equal(error.retryable,true);assert.equal(error.stdout,'');assert.deepEqual(JSON.parse(error.stderr),{error:proof})
  assert(sql.filter(query=>query.includes(' AS body')||query.includes('}) body')).every(query=>!/^SELECT body FROM/.test(query)))
 })
+
+
+test('page hydration reads selected IDs only and summary execution pages read no detail',t=>{
+ const {db,put}=fixture(t),reads=[]
+ for(let n=0;n<25;n++)put('tasks',`t${n}`,{taskId:`t${n}`,status:'active',drained:true,updatedAt:'same'})
+ const hydrate=(table,id)=>{reads.push([table,id]);return {taskId:id,request:'full',dialogue:['private']}}
+ const result=observerPage(db,{collection:'tasks',offset:10,limit:3},'test',hydrate)
+ assert.equal(reads.length,3)
+ assert.deepEqual(reads.map(x=>x[1]),result.items.map(x=>x.taskId))
+ assert(result.items.every(item=>item.request==='full'&&item.dialogue===undefined))
+ put('executions','e',{executionId:'e',taskId:'t',status:'succeeded',sequence:1,drained:true})
+ observerPage(db,{collection:'executions',taskId:'t',summary:true,limit:1},'test',hydrate)
+ assert.equal(reads.length,3)
+})

@@ -193,3 +193,23 @@ test('missing legacy drain metadata remains a recovery obligation rather than pr
   assert.equal((await f.store.query({kind:'task.get',taskId:'task'})).recovering,true)
   assert.equal((await f.store.query({kind:'recovery.pending'})).tasks[0].taskId,'task')
 })
+
+
+test('observer task page restores only selected externalized records without decoding a stripped projection', async t => {
+ const f = await fixture(t)
+ const request = 'complete task detail '.repeat(200)
+ for(let n=0;n<5;n++) await f.store.command({id:`create-page-${n}`,kind:'task.create',args:{taskId:`page-${n}`,request:request+n}})
+ const page = await f.store.query({kind:'observer.page',collection:'tasks',limit:2})
+ assert.equal(page.total,5)
+ assert.equal(page.items.length,2)
+ for(const item of page.items){
+  const full = await f.store.query({kind:'task.get',taskId:item.taskId})
+  assert.equal(item.request,full.request)
+  assert.equal(item.request.length,request.length+1)
+  assert.equal(item.dialogue,undefined)
+  assert.equal(item._hostDetail,undefined)
+ }
+ const summary = await f.store.query({kind:'task.index',limit:2})
+ assert.equal(summary.items.length,2)
+ assert.equal(summary.items[0].detailStorage,'external')
+})

@@ -2029,8 +2029,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       let value
       if(q.kind==='observer.work-metadata')return observerWorkMetadata(db,q)
       if(q.kind==='observer.revision')return `${incarnation}:${db.prepare('SELECT total_changes() n').get().n}`
-      if(['observer.group-version','observer.group-metadata','observer.message-contexts'].includes(q.kind))return observerGroupQuery(db,q)
-      if (q.kind === 'observer.page') return observerPage(db, q, incarnation)
+      if(['observer.group-version','observer.group-metadata','observer.message-contexts'].includes(q.kind))return observerGroupQuery(db,q,decode)
+      if (q.kind === 'observer.page') return observerPage(db, q, incarnation, (table,id) => get(table,id))
       if (['task.index','execution.index','coordination.index'].includes(q.kind)) {
         const table = { 'task.index': 'dynamic_tasks', 'execution.index': 'dynamic_executions', 'coordination.index': 'dynamic_coordination' }[q.kind]
         const conditions = [], params = []
