@@ -5,6 +5,16 @@ import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/wor
 import { runInNewContext } from 'node:vm'
 import { taskNotificationOutbound } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 
+test('the complete board renders its initial loading state before any collection exists',async()=>{
+ const original=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const source=original.replace("module.exports = { name: 'dingtalk-dsh-observer-client'","module.exports = { ObserverContent, name: 'dingtalk-dsh-observer-client'")
+ let client
+ const react={Fragment:'fragment',useState:value=>[typeof value==='function'?value():value,()=>{}],useRef:value=>({current:value}),useCallback:fn=>fn,useEffect(){},createElement:(type,props,...children)=>({type,props,children})}
+ const window={sessionStorage:{getItem:()=>null},__ModuleLoader__:{load:({factory})=>{client=factory(name=>name==='react'?react:new Proxy({},{get:(_,key)=>key}))}}}
+ runInNewContext(source,{window,Map,Set,Date,JSON,URLSearchParams,console})
+ assert.doesNotThrow(()=>client.ObserverContent({openSession:async()=>{}}))
+})
+
 test('成果时间记录仅混排真实巡查决定，保留无动作wait、按身份去重和时间排序', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   const code = source.slice(source.indexOf('    const taskOutcomeRecords ='), source.indexOf('    function TaskOutcomeRecords('))
@@ -314,10 +324,12 @@ test('任务通知发件行仅展示状态、脱敏诊断和重试时间，不�
 test('界面只保留发送状态筛选，关系与撤回不影响主状态筛选', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   const classify = runInNewContext(`(${source.slice(source.indexOf('const outboxDelivery = ') + 'const outboxDelivery = '.length, source.indexOf('    const ui ='))})`)
-  const fragment = source.slice(source.indexOf('      const filteredOutbox ='), source.indexOf('      const outboxPageSize ='))
   const selectedOutbox = [{ status: 'sent', notificationState: 'delivered', supersededByOutboundId: 'new', recallStatus: 'recalled' }, { status: 'sent' }, { notificationState: 'unknown' },
     { notificationState: 'superseded', notificationKnownNotSent: true, supersededByOutboundId: 'new' }, { notificationState: 'failed', notificationKnownNotSent: true }]
-  const filter = outboxStatusFilter => runInNewContext(`${fragment}; filteredOutbox.length`, { selectedOutbox, outboxStatusFilter, outboxDelivery: classify })
+  const {observerOutboxState}=await import('../packages/dingtalk-dsh-assistant/observer-outbox-state.js')
+  const filter = state => selectedOutbox.filter(message=>state==='all'||observerOutboxState(message)===state).length
+  for(const message of selectedOutbox)assert.equal(observerOutboxState(message),classify(message).id)
+  assert.match(source,/filter=\$\{encodeURIComponent\(filter\)\}/)
   assert.equal(filter('confirmed'), 1)
   assert.equal(filter('confirmation'), 2)
   assert.equal(filter('all'), 5)
@@ -617,10 +629,10 @@ test('自动与手动刷新共用一个请求，失败后可重新读取',async(
  const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8');
  const fragment=source.slice(source.indexOf('      const pendingRefresh = '),source.indexOf('      const manualRefresh = '));
  let calls=0,resolve,reject;const updates=[],errors=[];const operation=()=>{calls++;return new Promise((yes,no)=>{resolve=yes;reject=no})};
- const refresh=runInNewContext(`(()=>{${fragment};return refresh})()`,{useRef:value=>({current:value}),useCallback:fn=>fn,load:operation,setData:v=>updates.push(v),setUpdatedAt:()=>{},setError:e=>errors.push(e),Date,Error});
- const first=refresh();assert.equal(refresh(),first);assert.equal(calls,1);resolve({groups:[]});await first;assert.equal(updates.length,1);
+ const refresh=runInNewContext(`(()=>{${fragment};return refresh})()`,{useRef:value=>({current:value}),useCallback:fn=>fn,load:operation,setData:v=>updates.push(v),setUpdatedAt:()=>{},setError:e=>errors.push(e),taskPages:{},historyPage:1,taskBuckets:[],selectedGroupId:'',messagePage:1,outboxPage:1,messageDeliveryFilter:'all',outboxStatusFilter:'all',authorizationPage:1,authorizationFilter:'all',alertType:'all',alertView:'active',resolvedAlertPage:1,setAuthorizationPage(){},setResolvedAlertPage(){},setMessagePage(){},setOutboxPage(){},archivedTasksRef:{current:new Map()},setTaskPages(){},setHistoryPage(){},Date,Error,Map,JSON});
+ const first=refresh();assert.equal(refresh(),first);assert.equal(calls,1);resolve({groups:[],tasks:[],taskCollections:{},archiveCollection:{total:0}});await first;assert.equal(updates.length,1);
  const failed=refresh();reject(new Error('读取失败'));await failed;assert.equal(errors.at(-1),'读取失败');
- const recovered=refresh();resolve({groups:[1]});await recovered;assert.equal(calls,3);assert.equal(updates.length,2);
+ const recovered=refresh();resolve({groups:[1],tasks:[],taskCollections:{},archiveCollection:{total:0}});await recovered;assert.equal(calls,3);assert.equal(updates.length,2);
 });
 
 test('详情慢查询跨刷新复用，切换任务不接受旧响应', async () => {
@@ -644,7 +656,7 @@ test('已选话题新版本刷新详情并重置旧分页，同版本及其他�
   const changes = []
   const selection = { topicId: 'selected', groupId: 'g', revision: 2, summaryRevision: 3, updatedAt: 'old' }
   const env = { selection, listing: { topics: [{ ...selection }] } }
-  for (const name of ['setSelection', 'setMessageOffset', 'setContextCursor', 'setContextCursorHistory', 'setIntentCursor', 'setIntentCursorHistory', 'setSelectedIntentRun', 'setContextRevision', 'setContext', 'setTopicContext']) env[name] = value => changes.push([name, value])
+  for (const name of ['setSelection', 'setMessageOffset', 'setContextCursor', 'setContextCursorHistory', 'setIntentCursor', 'setIntentCursorHistory', 'setSelectedIntentRun', 'setContextRevision', 'setMessagePageRevision', 'setContext', 'setTopicContext']) env[name] = value => changes.push([name, value])
   runInNewContext(code, env)
   assert.equal(changes.length, 0)
   env.listing.topics = [{ ...selection, topicId: 'other', revision: 4 }]
@@ -685,4 +697,23 @@ test('执行完成结论与同文阶段成果分开标识，跨执行跨轮次�
   assert.equal(records[0].source, '核查 · 第 1 轮')
   assert.equal(records[0].artifacts[0], 'report.md')
   assert.equal(records[3].at, null)
+})
+
+
+test('trace coordinator continuation requests its independent cursor and preserves page revision',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const start=source.indexOf('    function TraceDetail('),end=source.indexOf('    function TopicBrowser(',start)
+ const page={runId:'r',offset:0,pageRevision:'rev',items:[],coordinatorUnits:{cursor:0,total:101,returned:100,nextCursor:123}}
+ const state=['r',page,'',[],'',[],0,'',false,0],effects=[],requests=[]
+ let index=0
+ const React={createElement:(type,props,...children)=>({type,props:props??{},children})}
+ const env={React,URLSearchParams,encodeURIComponent,Date,Button:'button',card:{},colors:{},ui:{},traceStatus:value=>value,traceReason:value=>value,emptyState:()=>null,
+  useState:initial=>{const key=index++;return [state[key],value=>{state[key]=typeof value==='function'?value(state[key]):value}]},useEffect:fn=>effects.push(fn),get:path=>{requests.push(path);return new Promise(()=>{})}}
+ const render=()=>{index=0;effects.length=0;return runInNewContext(`(()=>{${source.slice(start,end)};return TraceDetail({runId:'r',onBack(){}})})()`,env)}
+ const find=(node,label)=>node&&typeof node==='object'&&(node.children?.includes(label)?node:node.children?.flat(Infinity).map(child=>find(child,label)).find(Boolean))
+ const tree=render(),next=find(tree,'下一批协调单元')
+ assert(next);next.props.onClick();assert.equal(state[4],'123');assert.equal(state[5].length,1)
+ render();effects.at(-1)()
+ assert.match(requests[0],/unitCursor=123/);assert.match(requests[0],/pageRevision=rev/)
+ assert.equal(new URL('http://local'+requests[0]).searchParams.has('cursor'),false)
 })

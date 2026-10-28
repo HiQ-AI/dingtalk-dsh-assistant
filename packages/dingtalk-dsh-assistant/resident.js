@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { createStartupMetrics } from './startup-metrics.js'
 import { applyResidentCorsHeaders, handleRequest, residentErrorStatus } from './http.js'
 import { openResidentStore } from './store.js'
 import { openTaskResidentRuntime } from './task-resident-runtime.js'
@@ -61,6 +62,8 @@ function taskSessionConfiguration(config) {
 }
 
 export async function apply(ctx, config = {}) {
+  const startup = createStartupMetrics(sample => ctx.logger.info(`startup ${JSON.stringify(sample)}`))
+  const activationStarted = performance.now()
   if ((config.taskProvenanceMigrations?.length ?? 0) > 0 || (config.taskContinuationMigrations?.length ?? 0) > 0) throw new Error('legacy_task_migrations_removed:use_offline_topic_storage_migration')
   const taskConfig = taskSessionConfiguration(config)
   if (config.humanBlockerReplyMigrations?.length) throw new Error('legacy_authorization_migration_requires_offline_review')
@@ -68,7 +71,7 @@ export async function apply(ctx, config = {}) {
   const port = config.port ?? 18998
   if (config.fakeModel === true) installFakeLlm(ctx)
   // This store retains group configuration and transport history only; task state is owned by taskSessions.
-  const store = await openResidentStore(ctx.storageDomain)
+  const store = await startup.measure('resident.transport-store', () => openResidentStore(ctx.storageDomain))
   const configuredProxyUrl = store.getProxyUrl?.() ?? config.proxyUrl ?? process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? ''
   if (store.getProxyUrl?.() === undefined && configuredProxyUrl) await store.setProxyUrl(configuredProxyUrl)
   applyProxyEnvironment(configuredProxyUrl)
@@ -101,7 +104,7 @@ export async function apply(ctx, config = {}) {
     profile: dwsConfig.profile,
     runner: dwsRunner,
   })
-  const initialEnvironment = await inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile })
+  const initialEnvironment = await startup.measure('resident.environment', () => inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile }))
   const readGroupMessage = async (groupId, messageId) => {
     const message = await dwsAdapter.readMessage(groupId, messageId)
     return { ...normalizeHistoryMessage(message, groupId), resourceRefs: message.resourceRefs ?? [] }
@@ -113,6 +116,7 @@ export async function apply(ctx, config = {}) {
     return { imageRefs }
   }
   const tasks = await openTaskSessionService({ ctx, config: { ...taskConfig, operatorUserId: initialEnvironment.dws.userId }, legacy: runtime, residentStore: store,
+    startupObserver: sample => ctx.logger.info(`startup ${JSON.stringify(sample)}`),
     readMessage: readGroupMessage,
     readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
     notifications: {
@@ -129,6 +133,7 @@ export async function apply(ctx, config = {}) {
     },
   })
   const transportIssues = runtime.listRecoveryIssues
+  runtime.listAlertPage=tasks.listAlertPage
   runtime.listAlerts = tasks.listAlerts
   runtime.listActivities = tasks.listActivities
   runtime.listTaskTimings = tasks.listTaskTimings
@@ -137,6 +142,9 @@ export async function apply(ctx, config = {}) {
   runtime.listRecoveryIssues = () => [...transportIssues(), ...tasks.listAlerts().map(alert => ({ kind: 'task-session', ...alert, error: alert.detail }))]
   runtime.ingest = tasks.ingest
   runtime.isOwnNotification = tasks.isOwnNotification
+  runtime.listObserverGroups = tasks.listObserverGroups
+  runtime.observerGroupPage = tasks.observerGroupPage
+  runtime.getTopicTasksPage=options=>tasks.boardTasks({...options,archived:'all'})
   runtime.listTaskView = tasks.boardTasks
   runtime.messageProcessingSources = tasks.messageProcessingSources
   runtime.messageProcessingRequests = tasks.messageProcessingRequests
@@ -176,11 +184,17 @@ export async function apply(ctx, config = {}) {
       ])
     } catch (error) { ctx.logger.error(error); throw error }
   })
-  void recoverTasks()
+  const recoveryStarted = performance.now()
+  void tasks.recover().then(() => startup.record('resident.first-recovery', recoveryStarted), error => {
+    startup.record('resident.first-recovery', recoveryStarted, 'failed')
+    ctx.logger.warn(error.message)
+  })
   runtime.setGroupMessageReader(readGroupMessage)
   runtime.setGroupResourceReader(readGroupResource)
   await runtime.recoverInterruptedDecisions()
   let dwsBridgeHealth = dwsConfig.enabled === true ? { healthy: false, groups: [] } : undefined
+  const bridgeStarted = performance.now()
+  let bridgeReady = false
   stopDws = dwsConfig.enabled === true
     ? startDwsBridge({
       runtime,
@@ -189,7 +203,10 @@ export async function apply(ctx, config = {}) {
       humanUserId: dwsConfig.humanUserId,
       currentDwsUserName: initialEnvironment.dws.user,
       humanPollIntervalMs: dwsConfig.humanPollIntervalMs ?? 30_000,
-      onHealthChange: (health) => { dwsBridgeHealth = health },
+      onHealthChange: (health) => {
+        dwsBridgeHealth = health
+        if (health.healthy && !bridgeReady) { bridgeReady = true; startup.record('resident.bridge-ready', bridgeStarted) }
+      },
     })
     : async () => undefined
   runtime.getDwsBridgeHealth = () => dwsBridgeHealth ?? { healthy: false, groups: [] }
@@ -237,6 +254,7 @@ export async function apply(ctx, config = {}) {
       resolve()
     })
   })
+  startup.record('resident.listening', activationStarted)
   runtime.recoverInterruptedDecisions().catch((error) => ctx.logger.warn(error instanceof Error ? error.stack : String(error)))
 
 

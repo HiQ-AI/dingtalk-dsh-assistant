@@ -305,12 +305,13 @@ for (const variant of ['missing', 'reversed', 'partial', 'unique', 'expression']
   if (variant === 'partial') raw.exec('CREATE INDEX execution_events_kind_seq ON execution_events(kind,seq) WHERE seq>0')
   if (variant === 'unique') raw.exec('CREATE UNIQUE INDEX execution_events_kind_seq ON execution_events(kind,seq)')
   if (variant === 'expression') raw.exec('CREATE INDEX execution_events_kind_seq ON execution_events(kind,seq+0)')
+  const expectedIndexes=raw.prepare("PRAGMA index_list('execution_events')").all()
   raw.close()
   await rejects(f.open(), 'STORE_SCHEMA_MISMATCH')
   const readback = new DatabaseSync(f.dbPath, { readOnly: true })
   assert.equal(readback.prepare('PRAGMA user_version').get().user_version, 9)
   const indexes = readback.prepare("PRAGMA index_list('execution_events')").all()
-  assert.equal(indexes.length, variant === 'missing' ? 0 : 1, '启动拒绝后不能偷偷修复索引')
+  assert.deepEqual(indexes,expectedIndexes, '启动拒绝后不能偷偷修复索引')
   readback.close()
 })
 
@@ -808,6 +809,11 @@ test('v6到v7移除领取截止，检查零写并完整保留来源和执行数�
   const current=db.prepare("SELECT sql FROM sqlite_master WHERE name='execution_runs'").get().sql
   const cols=db.prepare('PRAGMA table_info(execution_runs)').all().map(x=>'"'+x.name+'"').join(',')
   const prior=current.replace('CREATE TABLE execution_runs','CREATE TABLE prior_runs').replace('claim_count INTEGER','max_claims INTEGER NOT NULL DEFAULT 3 CHECK(max_claims>0),claim_count INTEGER').replace('CHECK(claim_count>=0)','CHECK(claim_count>=0 AND claim_count<=max_claims)')
+  // This fixture deliberately reconstructs schema v6, which predates the optional
+  // observer metadata tables. Remove only that supplement before replacing runs;
+  // keep all business rows and all migration assertions below unchanged.
+  for(const {name} of db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'observer_legacy_%'").all())db.exec(`DROP TRIGGER "${name}"`)
+  db.exec('DROP TABLE observer_legacy_tasks;DROP TABLE observer_legacy_archived_runs')
   db.exec('PRAGMA foreign_keys=OFF;BEGIN IMMEDIATE;DROP INDEX execution_events_kind_seq');db.exec(prior)
   db.exec(`INSERT INTO prior_runs(${cols}) SELECT ${cols} FROM execution_runs;DROP TABLE execution_runs;ALTER TABLE prior_runs RENAME TO execution_runs;CREATE UNIQUE INDEX execution_one_active_task ON execution_runs(task_id) WHERE status NOT IN ('succeeded','failed','cancelled');PRAGMA user_version=6;UPDATE execution_meta SET schema_version=6;COMMIT;PRAGMA foreign_keys=ON`)
   const check=migrateContinuousExecution(db,{mode:'check'});assert.equal(check.writes,0)

@@ -1,4 +1,8 @@
+import {observerWorkMetadata} from './observer-work-index.js'
+import { installObserverPagination, observerPage, observerGroupQuery } from './observer-pagination.js'
 import { executionSessionTitle } from './session-workspaces.js'
+import { checkTaskStoreIntegrity } from './task-store-integrity.js'
+import { createStartupMetrics } from './startup-metrics.js'
 import { operationBlocksRecovery, hasRestartIsolation, isolationBinding, validIsolationReceipt } from './native-restart-isolation.js'
 import { quotedSendRejectionProof } from './group-message.js'
 import { taskNotificationRecovery } from './notification-delivery.js'
@@ -99,7 +103,8 @@ function durableMarker(path, value, initial = false) {
 
 /** New-instance initialization is explicit. An ingress epoch can only be bound to a new ledger.
  * legacyDbPath is an offline, read-only inspection API, not a production compatibility path. */
-export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, migrate = false, migrationExpectedDigest, legacyDbPath, ingressEpoch, webActorId, resourceCatalog: configuredResourceCatalog } = {}) {
+export async function openDynamicTaskStore({ dbPath, instanceId, initialize = false, migrate = false, migrationExpectedDigest, paginationMigrate = false, legacyDbPath, ingressEpoch, webActorId, resourceCatalog: configuredResourceCatalog, startupObserver } = {}) {
+  const startup = createStartupMetrics(startupObserver)
   if (migrationExpectedDigest !== undefined && !/^[a-f0-9]{64}$/.test(migrationExpectedDigest)) fail('DYNAMIC_ARGUMENT_INVALID', 'migrationExpectedDigest')
   if (!isAbsolute(dbPath ?? '') || !text(instanceId, 'instanceId') || typeof initialize !== 'boolean'
     || legacyDbPath !== undefined && !isAbsolute(legacyDbPath)) fail('DYNAMIC_STORE_OPTIONS_INVALID')
@@ -366,7 +371,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     if (configuredIngressEpoch && !boundIngressEpoch) fail('DYNAMIC_INGRESS_EPOCH_UNBOUND', 'This ledger was initialized without an ingress epoch; use a new database path for clean ingress.')
     if (boundIngressEpoch !== configuredIngressEpoch) fail('DYNAMIC_INGRESS_EPOCH_MISMATCH', 'The configured ingress epoch must match the epoch bound to this ledger.')
     if ((marker?.ingressEpoch ?? null) !== boundIngressEpoch) fail('DYNAMIC_INGRESS_EPOCH_MARKER_MISMATCH', 'The database and its initialization marker must bind the same ingress epoch.')
-    if (db.prepare('PRAGMA quick_check').get().quick_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').all().length) fail('DYNAMIC_STORE_CORRUPT')
+    await startup.measure('task-store.integrity', () => checkTaskStoreIntegrity(dbPath))
+    const recoveryStarted = performance.now()
     db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE;')
     try {
       const previous = db.prepare('SELECT value FROM dynamic_meta WHERE key=\'owner\'').get()?.value
@@ -401,9 +407,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         ON dynamic_sources(json_extract(body,'$.groupId'),json_extract(body,'$.actorId'))
         WHERE coalesce(json_extract(body,'$.routed'),0)=0 AND json_type(body,'$.processingCompleted') IS NULL`)
       // Recovery never authorizes a second send. Tool/process state must first be drained or reconciled.
-      for (const operation of ops()) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
+      const startupOperations = ops(), startupExecutions = all('dynamic_executions')
+      for (const operation of startupOperations) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
+      const blockingExecutions = new Set(startupOperations.filter(operationBlocksRecovery).map(operation => JSON.stringify([operation.taskId, operation.executionId])))
       for (const notification of all('dynamic_notifications')) if (notification.state === 'starting') { notification.state = 'unknown'; put('dynamic_notifications', notification) }
-      for (const execution of all('dynamic_executions')) if (!execution.drained) {
+      for (const execution of startupExecutions) if (!execution.drained) {
         execution.recovering = true
         const segment = execution.timeline?.segments.at(-1)
         if (segment?.state === 'running') { segment.state = 'unknown'; execution.timeline.complete = false }
@@ -412,7 +420,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       // Records written before instruction attribution existed remain an explicit
       // existing input; neither restart nor a later arrangement grants coverage.
-      for (const execution of all('dynamic_executions')) if (!execution.instructionScope) {
+      for (const execution of startupExecutions) if (!execution.instructionScope) {
         execution.instructionScope = { kind: 'existing', taskId: execution.taskId, inputVersion: execution.inputVersion,
           requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision,
           runSequence: get('dynamic_tasks', execution.taskId).runSequence, contextRevision: null, instructionIds: [], boundAt: now() }
@@ -422,25 +430,27 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       for (const group of all('dynamic_groups')) if (!group.drained) { group.recovering = true; put('dynamic_groups', group) }
       importLegacy()
       // 旧版活动执行未取得资源锁，不能在升级恢复时伪造此前已串行的保证。
-      for (const execution of all('dynamic_executions')) {
+      for (const execution of startupExecutions) {
         const keys = resourceKeys(execution.resourceKeys), held = heldKeys(executionHolder(execution))
         if (execution.resourceLease) {
           if (digest(held) !== digest(keys)) fail('DYNAMIC_RESOURCE_INVARIANT')
-        } else if (held.length || keys.length && (!execution.drained || ops(execution.taskId).some(operation => operation.executionId === execution.executionId && operationBlocksRecovery(operation)))) {
+        } else if (held.length || keys.length && (!execution.drained || blockingExecutions.has(JSON.stringify([execution.taskId, execution.executionId])))) {
           fail('DYNAMIC_EXECUTION_RESOURCE_UNGUARDED')
         }
       }
-      for (const operation of ops()) if (['starting','unknown'].includes(operation.state) && operationBlocksRecovery(operation)) {
+      for (const operation of startupOperations) if (['starting','unknown'].includes(operation.state) && operationBlocksRecovery(operation)) {
         const held = heldKeys(operation.resourceHolder ?? operation.operationId)
         const keys = resourceKeys(operation.resourceKeys)
         if (operation.resourceHolder ? keys.some(key => !held.includes(key)) : digest(held) !== digest(keys)) fail('DYNAMIC_RESOURCE_INVARIANT')
       }
+      installObserverPagination(db, { migrate: !existed || paginationMigrate })
       db.exec('COMMIT')
       if (!marker) { marker = { version: 1, instanceId, phase: 'initialized', initToken: initToken ?? randomUUID(), ingressEpoch: boundIngressEpoch };
         if (!initToken) db.prepare("INSERT INTO dynamic_meta(key,value) VALUES ('initToken',?)").run(marker.initToken)
         durableMarker(markerPath, marker, true)
       } else if (marker.phase !== 'initialized') { marker.phase = 'initialized'; durableMarker(markerPath, marker) }
-    } catch (error) { if (db.isTransaction) db.exec('ROLLBACK'); throw error }
+      startup.record('task-store.recovery', recoveryStarted, 'ok', { operations: startupOperations.length, executions: startupExecutions.length })
+    } catch (error) { startup.record('task-store.recovery', recoveryStarted, 'failed'); if (db.isTransaction) db.exec('ROLLBACK'); throw error }
   } catch (error) {
     try { if (db?.isTransaction) db.exec('ROLLBACK'); db?.prepare("DELETE FROM dynamic_meta WHERE key='owner' AND value=?").run(incarnation) } catch {}
     db?.close(); livePaths.delete(pathKey); throw error
@@ -1977,6 +1987,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (closed) fail('DYNAMIC_STORE_CLOSED')
       record(q)
       let value
+      if(q.kind==='observer.work-metadata')return observerWorkMetadata(db,q)
+      if(q.kind==='observer.revision')return `${incarnation}:${db.prepare('SELECT total_changes() n').get().n}`
+      if(['observer.group-version','observer.group-metadata','observer.message-contexts'].includes(q.kind))return observerGroupQuery(db,q)
+      if (q.kind === 'observer.page') return observerPage(db, q, incarnation)
       if (q.kind === 'ingress.policy') value = { instanceId, ingressEpoch: boundIngressEpoch }
       else if (q.kind === 'coordination.runtime') value = JSON.parse(db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value ?? '{"mode":"active"}')
       else if (q.kind === 'coordination.assessments') value = all('dynamic_coordination_members').filter(m => m.taskId === q.taskId

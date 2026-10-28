@@ -37,7 +37,7 @@ test('a list request started before archive cannot resurrect its task or overwri
   // The production callback reads this mutable map only after the read resolves.
   const env = { current: new Map() }
   const run = runInNewContext(`(()=>{${fragment};return refresh})()`, { useRef: value => ({ current: value }), useCallback: fn => fn,
-    load: () => new Promise(yes => { resolve = yes }), archivedTasksRef: env, setData: value => { data = value }, setUpdatedAt() {}, setError() {}, Date })
-  const pending = run(); env.current.set('a', { archivedAt: 'committed' }); resolve({ tasks: [{ taskId: 'a', executionCount: 9 }] }); await pending
+    load: () => new Promise(yes => { resolve = yes }), archivedTasksRef: env, setData: value => { data = value }, setUpdatedAt() {}, setError() {}, taskPages:{},historyPage:1,taskBuckets:[],selectedGroupId:'',messagePage:1,outboxPage:1,messageDeliveryFilter:'all',outboxStatusFilter:'all',authorizationPage:1,authorizationFilter:'all',alertType:'all',alertView:'active',resolvedAlertPage:1,setAuthorizationPage(){},setResolvedAlertPage(){},setMessagePage(){},setOutboxPage(){},setTaskPages(){},setHistoryPage(){},Date,JSON,Error })
+  const pending = run(); env.current.set('a', { archivedAt: 'committed' }); resolve({ tasks: [{ taskId: 'a', executionCount: 9 }],taskCollections:{},archiveCollection:{total:0} }); await pending
   assert.equal(data.tasks[0].archivedAt, 'committed'); assert.equal(data.tasks[0].executionCount, 9)
 })

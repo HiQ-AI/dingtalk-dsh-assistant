@@ -1,3 +1,4 @@
+import { ObserverMemoryPages } from './observer-memory-pages.js'
 import { stableTaskResourceIdentity, mergeTaskResources } from './task-message-projections.js'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -5,7 +6,7 @@ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { taskPlanSchema } from './task-plan.js'
 import { storedTaskCheckpointBaseSchema, storedTaskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan } from './topic-model.js'
+import { topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan } from './topic-model.js'
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 import { PERFORMANCE_EVENT_TYPES, performanceProjectionSchema, performanceChunkKey, hasPerformanceFirstStream, projectPerformanceEvent, listPerformance, workflowPerformance, coordinationCosts } from './performance.js'
 
@@ -383,6 +384,7 @@ function taskTiming(task, activities, now = Date.now()) {
 export async function openResidentStore(storageDomain) {
   const domain = await storageDomain.open(residentDomainSpec)
   const groups = domain.table('groups')
+  const topicPages = new ObserverMemoryPages(),topicPageScopes=new Map()
   const scheduler = domain.table('scheduler')
   const tasks = domain.table('tasks')
   let taskSessionReader
@@ -683,6 +685,17 @@ export async function openResidentStore(storageDomain) {
       await scheduler.update('runtime', (current) => ({ ...current, groupConfigurationInitialized: true }))
     },
     setTaskSessionReader: reader => { taskSessionReader = reader },
+    getTopicTasksPage: async options => {
+      if(taskSessionReader?.listTaskPage)return taskSessionReader.listTaskPage(options)
+      if(taskSessionReader)throw Object.assign(new Error('topic_task_pagination_provider_required'),{code:'OBSERVER_PAGE_PROVIDER_REQUIRED'})
+      // This retired in-memory task table has no body decoding at iteration. Select
+      // narrow IDs before returning the requested task objects; native readers must
+      // provide a storage-level page method above.
+      const rows=[...tasks.entries()].map(([id,task])=>({id,taskId:task.taskId,groupId:task.groupId,refs:task.topicRefs,sort:task.updatedAt??task.createdAt??''})).filter(item=>item.groupId===options.groupId&&item.refs?.some(ref=>ref.topicId===options.topicId))
+      const key=JSON.stringify(['topic-tasks',options.groupId,options.topicId])
+      topicPages.replace(key,JSON.stringify(rows),rows)
+      return topicPages.page(key,options,id=>tasks.get(id))
+    },
     getTask: currentTask,
     listTasks: currentTasks,
     listTaskTimings: () => {
@@ -769,22 +782,34 @@ export async function openResidentStore(storageDomain) {
       return { duplicate, enriched, sequence, group }
     }),
     listTopics: (groupId) => [...groups.entries()].flatMap(([, group]) => groupId === undefined || group.groupId === groupId ? group.topics : []),
+    listTopicsPage: async ({groupId,offset=0,limit=50,includeMerged=false,revision}={}) => {
+      const key=groupId??'*',entries=[...groups.entries()].map(([,value])=>value).filter(group=>!groupId||group.groupId===groupId)
+      let cache=topicPageScopes.get(key)
+      if(!cache||entries.length!==cache.sources.length||entries.some((group,i)=>group.topics!==cache.sources[i])){
+        const lookup=new Map(),rows=[]
+        for(const group of entries)for(const topic of group.topics){const id=JSON.stringify([group.groupId,topic.topicId]);lookup.set(id,topic);rows.push({id,sort:topic.updatedAt??topic.createdAt,filters:[topic.mergedInto?'merged':'visible']})}
+        const signature=JSON.stringify(entries.flatMap(group=>group.topics.map(topic=>[group.groupId,topic.topicId,topic.updatedAt,topic.revision,topic.processedRevision,topic.summaryRevision,topic.mergedInto])))
+        topicPages.replace(key,signature,rows)
+        cache={sources:entries.map(group=>group.topics),lookup};topicPageScopes.set(key,cache)
+      }
+      return topicPages.page(key,{offset,limit,revision,filter:includeMerged?'all':'visible'},id=>cache.lookup.get(id))
+    },
     getTopic: (groupId, topicId) => findGroupEntry(groupId)?.[1].topics.find((topic) => topic.topicId === topicId),
-    getTopicContext: ({ groupId, topicId, revision, offset = 0, limit = 100 }) => {
+    getTopicContext: ({ groupId, topicId, revision, offset = 0, limit = 100, intentOffset, intentLimit, includeTaskRefs = true }) => {
       const group = findGroupEntry(groupId)?.[1]
       const topic = group?.topics.find((item) => item.topicId === topicId)
       if (!topic) throw new Error(`topic_not_found:${topicId}`)
       if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error('topic_page_invalid')
       const selectedRevision = revision ?? topic.revision
-      const messages = topicMessages(group, topic, selectedRevision)
-      const visibleDecisions = topic.decisions.filter((item) => item.revision <= selectedRevision)
-      const priorUpdate = [...visibleDecisions].reverse().find((item) => item.status === 'completed' && item.decision.topicUpdate)?.decision.topicUpdate
+      const messages = topicMessages(group, topic, selectedRevision,{offset,limit})
+      const visibleDecisions = selectedRevision===topic.revision?topic.decisions:topic.decisions.filter((item) => item.revision <= selectedRevision)
+      const priorUpdate = selectedRevision===topic.revision?undefined:[...visibleDecisions].reverse().find((item) => item.status === 'completed' && item.decision.topicUpdate)?.decision.topicUpdate
       const snapshot = { ...topic, revision: selectedRevision, processedRevision: Math.min(topic.processedRevision, selectedRevision),
         summary: topic.summaryRevision <= selectedRevision ? topic.summary : '', summaryRevision: topic.summaryRevision <= selectedRevision ? topic.summaryRevision : 0,
         status: selectedRevision === topic.revision ? topic.status : priorUpdate?.status ?? 'active', openQuestions: selectedRevision === topic.revision ? topic.openQuestions : priorUpdate?.openQuestions ?? [],
-        entries: topic.entries.filter((item) => item.revision <= selectedRevision), decisions: visibleDecisions }
-      return { groupId, topicId, revision: selectedRevision, topic: snapshot, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit,
-        taskRefs: currentTasks().filter((task) => task.groupId === groupId && task.topicRefs.some((ref) => ref.topicId === topicId)).map((task) => ({ taskId: task.taskId, inputVersion: task.inputVersion, topicRefs: task.topicRefs })) }
+        entries: selectedRevision===topic.revision?topic.entries:topic.entries.filter((item) => item.revision <= selectedRevision), decisions: intentOffset === undefined ? visibleDecisions : visibleDecisions.slice(intentOffset,intentOffset+intentLimit) }
+      return { groupId, topicId, revision: selectedRevision, topic: snapshot, messages, total: topicMessageCount(group,topic,selectedRevision), intentTotal: visibleDecisions.length, offset, limit,
+        taskRefs: !includeTaskRefs ? [] : currentTasks().filter((task) => task.groupId === groupId && task.topicRefs.some((ref) => ref.topicId === topicId)).map((task) => ({ taskId: task.taskId, inputVersion: task.inputVersion, topicRefs: task.topicRefs })) }
     },
     routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)

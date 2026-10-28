@@ -1,3 +1,6 @@
+import {ObserverMemoryPages} from './observer-memory-pages.js'
+const mixedTopicPages=new WeakMap()
+import { messageProcessingProjection } from './observer-message-projection.js'
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
 import { isPendingDecision, topicDecisionRecovery } from './topic-model.js'
@@ -77,119 +80,6 @@ function workflowTopicSummary(topic) {
     createdAt: topic.createdAt, updatedAt: topic.updatedAt, engine: 'workflow-v2' }
 }
 
-const instant = value => typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' && value.trim() ? Date.parse(value) : NaN
-const timing = (start, end) => {
-  const duration = instant(end) - instant(start)
-  return { quality: !Number.isFinite(duration) ? 'missing' : duration < 0 ? 'negative' : 'valid', durationMs: Number.isFinite(duration) && duration >= 0 ? duration : null }
-}
-
-// 状态在拥有 Topic/来源账的后端判定，通知及业务 Task 完成不作语义完成门禁。
-function messageProcessingProjection(message, topics, source, requests) {
-  const currentUnit = ref => !Array.isArray(message.activeUnitRefs) || message.activeUnitRefs.some(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
-  const related = topics.flatMap(topic => {
-    const latest = new Map()
-    for (const entry of topic.entries ?? []) if (entry.messageId === message.messageId) latest.set(entry.unitId ?? 'legacy', entry)
-    return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === message.messageVersion && currentUnit(entry)).map(entry => ({ topic, entry }))
-  })
-  const records = related.map(({ topic, entry }) => [...(topic.decisions ?? [])]
-    .filter(record => record.status === 'completed' && record.revision >= entry.revision)
-    .sort((a, b) => a.revision - b.revision)[0])
-  const topicPending = related.some(({ topic, entry }, i) => !(topic.processedRevision >= entry.revision) || !records[i])
-  const reasons = [...new Set((message.ignoredRanges ?? []).map(range => range.reason).filter(reason => typeof reason === 'string' && reason.trim()))]
-  const refsKey = refs => refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision])).sort()
-  const sourceDone = !!source?.processingCompleted && (!Array.isArray(message.activeUnitRefs)
-    || Array.isArray(source.processingCompleted.activeUnitRefs)
-      && JSON.stringify(refsKey(message.activeUnitRefs)) === JSON.stringify(refsKey(source.processingCompleted.activeUnitRefs)))
-  const ignored = !related.length && reasons.length > 0 && message.agentDeliveryStatus === 'delivered'
-  const coordination = (source?.coordination ?? []).filter(item => currentUnit(item)
-    && message.units?.some(unit => unit.unitId === item.unitId && unit.unitRevision === item.unitRevision && unit.dispatchOwner === 'coordination'))
-  const needsClarification = coordination.some(item => item.semanticState === 'needs_clarification')
-  const unitsPending = message.activeUnitRefs?.some(ref => {
-    const unit = message.units?.find(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
-    return !unit || unit.dispatchOwner === 'coordination' && !sourceDone
-      && !coordination.some(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision && item.semanticState === 'needs_clarification')
-  })
-  const issues = [], recovery = []
-  for (const item of coordination) if (item.contextRecoveryToken)
-    recovery.push({ requestId: item.reservationId, token: item.contextRecoveryToken, phase: 'coordination-context' })
-  const issue = (phase, code, status, requestId, attempt, retryAt) => {
-    if (!issues.some(item => item.phase === phase && item.requestId === requestId)) issues.push({ phase, code, status, requestId, attempt: attempt ?? 0, retryAt: retryAt ?? null })
-  }
-  // Only current, unfinished owners can fail a message; group delivery errors are not ownership evidence.
-  for (const request of requests) {
-    if (!['pending', 'exhausted'].includes(request.status) || !request.messages.some(item => item.messageId === message.messageId
-      && item.messageVersion === message.messageVersion && (!request.topicId || currentUnit(item)))) continue
-    if (request.topicId ? !related.some(({ topic, entry }, i) => topic.topicId === request.topicId && topic.revision === request.revision
-      && (topic.processedRevision < entry.revision || !records[i])) : message.routingStatus === 'routed') continue
-    const startup = request.failurePhase === 'startup'
-    if (request.status === 'exhausted' && request.retryToken) recovery.push({ requestId: request.requestId, token: request.retryToken, phase: request.topicId ? 'decision' : 'routing' })
-    if (request.status === 'exhausted' || request.nextRetryAt) issue(request.topicId ? 'decision' : 'routing',
-      startup ? 'startup-recovery' : request.status === 'exhausted' ? request.failurePhase === 'dispatch' ? 'dispatch-failed' : 'protocol-exhausted' : 'protocol-retry',
-      startup || request.status === 'pending' ? 'retrying' : 'failed', request.requestId, request.attempt, request.nextRetryAt)
-  }
-  for (const { topic, entry } of related) {
-    if (topic.processedRevision >= entry.revision) continue
-    const record = topic.decisions?.findLast(isPendingDecision)
-    if (!record || record.revision < entry.revision || record.revision > topic.revision
-      || record.decision?.basisUnitRefs?.length && !record.decision.basisUnitRefs.some(ref => ref.unitId === entry.unitId && ref.unitRevision === entry.unitRevision)) continue
-    const hostRecovery = topicDecisionRecovery(record)
-    if (hostRecovery && record.revision === topic.revision) recovery.push({ requestId: record.decisionId, token: hostRecovery.token, phase: 'host' })
-    if (record.status === 'blocked' || record.status === 'failed') issue('host', record.status === 'blocked' ? 'decision-blocked' : 'decision-retry',
-      record.status === 'blocked' ? 'failed' : 'retrying', record.decisionId, record.attempt, record.nextRetryAt)
-  }
-  if (!sourceDone) for (const item of source?.coordination ?? []) {
-    if (!currentUnit(item) || !message.units?.some(unit => unit.unitId === item.unitId && unit.unitRevision === item.unitRevision && unit.dispatchOwner === 'coordination')
-      || item.state !== 'reserved' || item.resolved || item.frozen || !(item.attempt > 0)) continue
-    const exhausted = item.attempt >= 3 && !item.nextRetryAt
-    if (exhausted && item.retryToken) recovery.push({ requestId: item.reservationId, token: item.retryToken, phase: 'coordination' })
-    issue('coordination', exhausted ? 'coordination-exhausted' : 'coordination-retry', exhausted ? 'failed' : 'retrying', item.reservationId, item.attempt, item.nextRetryAt)
-  }
-  if (message.routingStatus === 'failed' && !issues.some(item => item.phase === 'routing')) issue('routing', 'routing-failed', 'failed', null, 0, null)
-  let state = 'unknown', basis = 'unknown', completedAt = null, conclusion = null
-  const semanticCompletionTime = () => {
-    const decisionTimes = records.map(record => instant(record?.completedAt))
-    if (sourceDone) {
-      const at = instant(source.processingCompleted.at)
-      // 来源戳在所有当前事项判断后落一次；若早于明确决策终态则证据矛盾，不拼出数字。
-      return Number.isFinite(at) && !decisionTimes.some(time => Number.isFinite(time) && time > at) ? new Date(at).toISOString() : null
-    }
-    // 当前来源尚未落精确终态时不能先报旧Topic时钟，再因迟到的来源戳改变历时。
-    if (source) return null
-    return records.length ? decisionTimes.every(Number.isFinite) ? new Date(Math.max(...decisionTimes)).toISOString() : null : message.agentDeliveryAt ?? null
-  }
-  if (issues.some(item => item.status === 'failed')) state = 'failed'
-  else if (message.routingStatus !== 'routed') state = 'routing'
-  else if (topicPending || unitsPending) state = 'processing'
-  else if (needsClarification) state = 'needs_clarification'
-  else if (sourceDone || related.length || ignored) {
-    state = 'processed'
-    basis = sourceDone ? 'source-semantic' : related.length ? 'topic-decision' : 'ignored-delivered'
-    completedAt = semanticCompletionTime()
-  } else if (source && source.routed !== true || related.length || reasons.length) state = 'processing'
-  if (state === 'needs_clarification' && sourceDone) {
-    basis = 'source-semantic'
-    completedAt = semanticCompletionTime()
-  }
-  conclusion = [...new Set([...(topicPending ? [] : records.map(record => record?.decision?.reason ?? record?.decision?.reply)),
-    ...coordination.map(item => item.conclusion), ...(['processed', 'needs_clarification'].includes(state) ? reasons : [])]
-    .filter(text => typeof text === 'string' && text.trim()))].join('；') || null
-  const notices = source?.notifications ?? []
-  const noticeTimes = notices.map(notice => notice.deliveredAt)
-  const deliveredAt = notices.length && notices.every(notice => notice.versionMatched === true && notice.state === 'delivered') && noticeTimes.every(time => Number.isFinite(instant(time)))
-    ? new Date(Math.max(...noticeTimes.map(instant))).toISOString() : null
-  return { processingState: state, processingBasis: basis, processingConclusion: conclusion,
-    processingSentAt: message.occurredAt ?? null, processingCompletedAt: completedAt,
-    processingFacts: {
-      sourceId: source?.sourceId ?? null, messageVersion: message.messageVersion ?? null,
-      sourceState: !source ? 'unknown' : source.routed === true ? 'settled' : 'unsettled', sourceSettledAt: source?.routedAt ?? null,
-      receivedAt: source?.receivedAt ?? message.receivedAt ?? null,
-      notificationState: !notices.length ? 'unknown' : deliveredAt ? 'delivered' : 'unconfirmed', notifications: notices,
-      semantic: timing(message.occurredAt, completedAt),
-      notificationE2e: timing(source?.receivedAt ?? message.receivedAt, deliveredAt),
-      stages: source?.stages ?? [], issues, recovery,
-    } }
-}
-
 async function groupSummary(group, runtime, workflowMailboxes, workflowTopics = []) {
   if (!group) return null
   const { topics: _topics, routeHistory: _routeHistory, taskReservations: _taskReservations, ...summary } = group
@@ -248,6 +138,8 @@ const reopenTaskInputSchema = z.strictObject({ requestId: requiredText.max(200),
   expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() })
 
 export function residentErrorStatus(error) {
+  if(['OBSERVER_PAGE_PROVIDER_REQUIRED','OBSERVER_PAGINATION_MIGRATION_REQUIRED','OBSERVER_TEXT_MIGRATION_REQUIRED'].includes(error?.code))return 503
+  if(error?.code==='OBSERVER_PAGE_STALE')return 409
   const message = error instanceof Error ? error.message : String(error)
   if (/^(?:MESSAGE_RETRY_|TASK_NOTIFICATION_RECOVERY_|DYNAMIC_NOTIFICATION_RECOVERY_)/.test(message)) return 409
   if (/^(?:DYNAMIC|TASK_SESSION)_.+(?:FORBIDDEN|AUTHENTICATED_SOURCE_REQUIRED|WEB_ACTOR_REQUIRED)$/.test(message)) return 403
@@ -328,9 +220,21 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   }
   if (request.method === 'GET' && url.pathname === '/state/recovery-issues') return send(response, 200, store.listRecoveryIssues())
   if (request.method === 'GET' && url.pathname === '/state/activity-audit') return send(response, 200, store.getActivityAuditStatus?.() ?? { total: 0, pending: 0, audited: 0, unavailable: [] })
+  const observerGroup = request.method==='GET' && /^\/state\/groups\/([^/]+)\/(messages|outbox)$/u.exec(url.pathname)
+  if(observerGroup){
+    try{
+      if(!store.observerGroupPage)return send(response,503,{error:'observer_unavailable'})
+      const collection=observerGroup[2],filter=url.searchParams.get('filter')||'all'
+      const allowed=collection==='messages'?['all','routing','processing','needs_clarification','processed','failed','unknown']:['all','queued','sending','confirmation','confirmed','cancelled','failed']
+      if(!allowed.includes(filter))throw new Error('OBSERVER_PAGE_INVALID')
+      const page=await store.observerGroupPage(decodeURIComponent(observerGroup[1]),{collection,filter,offset:pageNumber(url,'offset',0),limit:pageNumber(url,'limit',10,100),revision:url.searchParams.get('pageRevision')||undefined})
+      return send(response,page?200:404,page??{error:'group_not_found'})
+    }catch(error){return send(response,error.code==='OBSERVER_PAGE_STALE'?409:error.code==='OBSERVER_PAGINATION_MIGRATION_REQUIRED'?503:400,{error:error.message})}
+  }
   if (request.method === 'GET' && url.pathname === '/state/groups') {
     try {
       const groupId = url.searchParams.get('groupId')
+      if(url.searchParams.get('summary')==='true'&&store.listObserverGroups)return send(response,200,store.listObserverGroups())
       const workflowMailboxes = await store.getWorkflowMailboxes?.()
       const workflowTopics = await store.listWorkflowTopics?.(groupId ?? undefined) ?? []
       return send(response, 200, groupId ? await groupSummary(store.getGroup(groupId), store, workflowMailboxes, workflowTopics)
@@ -341,10 +245,18 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     try {
       const offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
       const groupId=url.searchParams.get('groupId')??undefined
-      const topics = [...store.listTopics(groupId).filter(topic => !topic.mergedInto || url.searchParams.get('includeMerged') === 'true').map(topicSummary), ...((await store.listWorkflowTopics?.(groupId))??[]).map(workflowTopicSummary)]
-      topics.sort((a,b)=>String(b.updatedAt??b.createdAt).localeCompare(String(a.updatedAt??a.createdAt)))
-      return send(response, 200, { topics: topics.slice(offset, offset + limit), total: topics.length, offset, limit })
-    } catch (error) { return send(response, 400, { error: error.message }) }
+      if(store.listTopicsPage && !store.listWorkflowTopics) { const page=await store.listTopicsPage({groupId,offset,limit,includeMerged:url.searchParams.get('includeMerged')==='true',revision:url.searchParams.get('pageRevision')||undefined});return send(response,200,{...page,items:undefined,topics:page.items.map(topicSummary)}) }
+      if(store.listWorkflowTopics && (!store.listWorkflowTopicIndex||!store.getWorkflowTopicById))return send(response,503,{error:'workflow_topic_pagination_provider_required'})
+      const local=store.listTopics(groupId).filter(topic=>!topic.mergedInto||url.searchParams.get('includeMerged')==='true')
+      const workflow=await store.listWorkflowTopicIndex?.(groupId)??[]
+      const descriptors=[...local.map(topic=>({id:`local:${topic.topicId}`,sort:topic.updatedAt??topic.createdAt,revision:topic.revision,summaryRevision:topic.summaryRevision})),...workflow.map(topic=>({...topic,id:`workflow:${topic.topicId}`}))]
+      let pages=mixedTopicPages.get(store);if(!pages){pages=new ObserverMemoryPages();mixedTopicPages.set(store,pages)}
+      const key=JSON.stringify([groupId??null,url.searchParams.get('includeMerged')==='true'])
+      pages.replace(key,JSON.stringify(descriptors),descriptors.map((item,index)=>({...item,order:String(index).padStart(12,'0')})))
+      const byId=new Map(local.map(topic=>[`local:${topic.topicId}`,topic]))
+      const page=await pages.page(key,{offset,limit,revision:url.searchParams.get('pageRevision')||undefined},async id=>id.startsWith('local:')?topicSummary(byId.get(id)):workflowTopicSummary(await store.getWorkflowTopicById(id.slice(9))))
+      return send(response,200,{...page,items:undefined,topics:page.items})
+    } catch (error) { return send(response,error.code==='OBSERVER_PAGE_STALE'?409:400, { error: error.message }) }
   }
   if (request.method === 'GET' && /^\/state\/topics\/[^/]+$/u.test(url.pathname)) {
     try {
@@ -353,27 +265,27 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const topicId = decodeURIComponent(url.pathname.slice('/state/topics/'.length))
       const revision = pageNumber(url, 'revision', undefined), offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
       if (!store.getTopic?.(groupId, topicId)) {
-        const workflowContext=await store.getWorkflowTopicContext?.({groupId,topicId,offset,limit})
+        const workflowContext=await store.getWorkflowTopicContext?.({groupId,topicId,offset,limit,...(url.searchParams.has('pageRevision')?{pageRevision:url.searchParams.get('pageRevision')}:{})})
         if(!workflowContext)return send(response,404,{error:'topic_not_found'})
         return send(response,200,{...workflowContext,topic:{...workflowTopicSummary(workflowContext.topic),openQuestions:[]}})
       }
-      const context = await store.getTopicContext({ groupId, topicId, ...(revision === undefined ? {} : { revision }), offset, limit })
+      const context = await store.getTopicContext({ groupId, topicId, ...(revision === undefined ? {} : { revision }), offset, limit, includeTaskRefs:false })
       return send(response, 200, { ...context, topic: { ...topicSummary(context.topic), summary: context.topic.summary, openQuestions: context.topic.openQuestions } })
-    } catch (error) { return send(response, 400, { error: error.message }) }
+    } catch (error) { return send(response,error.code==='OBSERVER_PAGE_STALE'?409:error.code==='OBSERVER_PAGINATION_MIGRATION_REQUIRED'?503:400,{ error: error.message }) }
   }
   if (request.method === 'GET' && url.pathname === '/state/coordination-sources') {
     if (!store.coordinationSources) return send(response, 503, { error: 'coordination_observer_unavailable' })
     let options
     try {
-      if ([...url.searchParams.keys()].some(key => !['groupId', 'offset', 'limit'].includes(key))
+      if ([...url.searchParams.keys()].some(key => !['groupId', 'offset', 'limit','pageRevision'].includes(key))
         || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1))
         return send(response, 400, { error: 'coordination_query_invalid' })
       const groupId = url.searchParams.get('groupId') ?? undefined
       if (groupId !== undefined && !groupId.trim()) return send(response, 400, { error: 'coordination_query_invalid' })
-      options = { groupId, offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100) }
+      options = { groupId, offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100),...(url.searchParams.has('pageRevision')?{revision:url.searchParams.get('pageRevision')}:{}) }
     } catch { return send(response, 400, { error: 'coordination_query_invalid' }) }
     try { return send(response, 200, await store.coordinationSources(options)) }
-    catch { return send(response, 503, { error: 'coordination_observer_unavailable' }) }
+    catch(error) { return send(response,error.code==='OBSERVER_PAGE_STALE'?409:503,{error:error.code==='OBSERVER_PAGE_STALE'?error.message:'coordination_observer_unavailable'}) }
   }
   const coordinationSource = request.method === 'GET' && /^\/state\/coordination-sources\/([^/]+)$/u.exec(url.pathname)
   if (coordinationSource) {
@@ -388,15 +300,15 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     if (!store.coordinationWork) return send(response, 503, { error: 'coordination_observer_unavailable' })
     let options
     try {
-      if ([...url.searchParams.keys()].some(key => !['groupId', 'offset', 'limit'].includes(key))
+      if ([...url.searchParams.keys()].some(key => !['groupId', 'offset', 'limit','pageRevision'].includes(key))
         || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1))
         return send(response, 400, { error: 'coordination_query_invalid' })
       const groupId = url.searchParams.get('groupId') ?? undefined
       if (groupId !== undefined && !groupId.trim()) return send(response, 400, { error: 'coordination_query_invalid' })
-      options = { groupId, offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100) }
+      options = { groupId, offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100),...(url.searchParams.has('pageRevision')?{revision:url.searchParams.get('pageRevision')}:{}) }
     } catch { return send(response, 400, { error: 'coordination_query_invalid' }) }
     try { return send(response, 200, await store.coordinationWork(options)) }
-    catch { return send(response, 503, { error: 'coordination_observer_unavailable' }) }
+    catch(error) { return send(response,error.code==='OBSERVER_PAGE_STALE'?409:503,{error:error.code==='OBSERVER_PAGE_STALE'?error.message:'coordination_observer_unavailable'}) }
   }
   const coordinationWork = request.method === 'GET' && /^\/state\/coordination-work\/([^/]+)$/u.exec(url.pathname)
   if (coordinationWork) {
@@ -407,7 +319,17 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, value ? 200 : 404, value ?? { error: 'coordination_work_not_found' })
     } catch (error) { return send(response, error instanceof URIError || error.message === 'coordination_query_invalid' ? 400 : 503, { error: error instanceof URIError || error.message === 'coordination_query_invalid' ? 'coordination_query_invalid' : 'coordination_observer_unavailable' }) }
   }
-  if (request.method === 'GET' && url.pathname === '/state/tasks') return send(response, 200, await (store.listTaskView?.() ?? store.listTasks()))
+  if (request.method === 'GET' && url.pathname === '/state/tasks') {
+    try {
+      const paged = url.searchParams.has('limit') || url.searchParams.has('offset')
+      if (paged && ([...url.searchParams.keys()].some(key => !['offset','limit','state','archived','groupId','topicId','revision'].includes(key)) || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1) || url.searchParams.has('archived') && !['true','false','all'].includes(url.searchParams.get('archived')))) throw new Error('OBSERVER_PAGE_INVALID')
+      const options = paged ? { offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100),
+        state: url.searchParams.get('state') || undefined, archived: url.searchParams.get('archived')==='all'?'all':url.searchParams.get('archived') === 'true',
+        groupId: url.searchParams.get('groupId') || undefined,topicId:url.searchParams.get('topicId')||undefined, revision: url.searchParams.get('revision') || undefined } : undefined
+      if (options?.state && !['queued','running','waiting','completed'].includes(options.state)) throw new Error('OBSERVER_PAGE_INVALID')
+      return send(response, 200, await (store.listTaskView?.(options) ?? store.listTasks()))
+    } catch(error) { return send(response, error.code === 'OBSERVER_PAGE_STALE' ? 409 : error.code === 'OBSERVER_PAGINATION_MIGRATION_REQUIRED' ? 503 : 400, {error:error.message}) }
+  }
   const topicState = request.method === 'GET' && /^\/state\/topics\/([^/]+)\/context$/u.exec(url.pathname)
   if (topicState) {
     try {
@@ -418,21 +340,22 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const revision = pageNumber(url, 'revision', topic.revision), offset = pageNumber(url, 'cursor', 0)
       const limit = pageNumber(url, 'limit', 50, 100), intentCursor = pageNumber(url, 'intentCursor', 0)
       if (revision !== topic.revision) return send(response, 409, { error: 'topic_context_stale' })
-      const context = await store.getTopicContext({ groupId, topicId, revision, offset, limit })
+      const context = await store.getTopicContext({ groupId, topicId, revision, offset, limit, intentOffset:intentCursor,intentLimit:limit,includeTaskRefs:false })
+      if(context.intentTotal===undefined||!store.getTopicTasksPage)return send(response,503,{error:'topic_context_pagination_provider_required'})
       const decisions = context.topic.decisions ?? []
-      const tasks = await (store.listTaskView?.() ?? store.listTasks())
+      const taskPage=await store.getTopicTasksPage({groupId,topicId,offset:pageNumber(url,'taskCursor',0),limit})
+      const tasks=taskPage.items
       if (store.getTopic(groupId, topicId)?.revision !== revision) return send(response, 409, { error: 'topic_context_stale' })
-      const taskRefs = tasks.filter(task => task.groupId === groupId && task.topicRefs?.some(ref => ref.topicId === topicId))
-        .map(task => ({ taskId: task.taskId, title: task.title, state: task.state ?? task.status, inputVersion: task.inputVersion ?? task.requirementRevision }))
+      const taskRefs = tasks.map(task => ({ taskId: task.taskId, title: task.title, state: task.state ?? task.status, inputVersion: task.inputVersion ?? task.requirementRevision }))
       return send(response, 200, { groupId, topicId, revision, current: { topicTitle: context.topic.title,
         summary: context.topic.summary, status: context.topic.status, openQuestions: context.topic.openQuestions,
-        sourceCount: context.total, hasMoreFacts: offset + context.messages.length < context.total, tasks: taskRefs },
+        sourceCount: context.total,taskTotal:taskPage?.total??taskRefs.length,taskNextCursor:taskPage?.nextOffset??null, hasMoreFacts: offset + context.messages.length < context.total, tasks: taskRefs },
         facts: context.messages.map(message => ({ factId: message.messageId, kind: '来源消息', text: message.text,
           sourceRefs: [{ groupId, messageId: message.messageId, messageVersion: message.messageVersion }] })),
-        intentRuns: decisions.slice(intentCursor, intentCursor + limit).map(item => ({ intentRunId: item.decisionId,
+        intentRuns: decisions.map(item => ({ intentRunId: item.decisionId,
           createdAt: item.createdAt, status: item.status, sourceRunIds: item.decision?.basisMessageIds ?? [],
           reason: item.decision?.reason ?? item.error ?? null, decision: item.decision, operations: item.operations })),
-        intentNextCursor: intentCursor + limit < decisions.length ? intentCursor + limit : null,
+        intentNextCursor: intentCursor + limit < context.intentTotal ? intentCursor + limit : null,
         nextCursor: offset + context.messages.length < context.total ? offset + context.messages.length : null, total: context.total })
     } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
@@ -440,8 +363,8 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (workflowTrace) {
     if (!store.getWorkflowMessageTrace) return send(response, 404, { error: 'workflow_disabled' })
     try { const value = await store.getWorkflowMessageTrace(decodeURIComponent(workflowTrace[1]),
-      { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 50, 100) }); return send(response, value ? 200 : 404, value ?? { error: 'message_not_found' }) }
-    catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
+      { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 50, 100),...(url.searchParams.has('pageRevision')?{revision:url.searchParams.get('pageRevision')}:{}),...(url.searchParams.has('unitCursor')?{unitCursor:pageNumber(url,'unitCursor',0)}:{}) }); return send(response, value ? 200 : 404, value ?? { error: 'message_not_found' }) }
+    catch (error) { return send(response,error.code==='OBSERVER_PAGE_STALE'?409:residentErrorStatus(error), { error: error.message }) }
   }
   const workflowEvidence = request.method === 'GET' && /^\/state\/workflows\/([^/]+)\/evidence\/([^/]+)$/u.exec(url.pathname)
   if (workflowEvidence) {
@@ -480,30 +403,43 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       }))
     } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
+  const legacyHistoryPage=request.method==='GET'&&/^\/state\/tasks\/([^/]+)\/legacy-history$/u.exec(url.pathname)
+  if(legacyHistoryPage){
+    if(!store.getLegacyTaskHistoryPage)return send(response,503,{error:'legacy_history_pagination_provider_required'})
+    try{const page=await store.getLegacyTaskHistoryPage(decodeURIComponent(legacyHistoryPage[1]),{offset:pageNumber(url,'offset',0),limit:pageNumber(url,'limit',20,100),...(url.searchParams.has('revision')?{revision:url.searchParams.get('revision')}:{})});if(page&&(!Array.isArray(page.items)||page.items.length>pageNumber(url,'limit',20,100)))throw new Error('legacy_history_pagination_provider_invalid');return send(response,page?200:404,page??{error:'task_not_found'})}
+    catch(error){return send(response,error.code==='OBSERVER_PAGE_STALE'?409:error.code==='OBSERVER_PAGINATION_MIGRATION_REQUIRED'?503:residentErrorStatus(error),{error:error.message})}
+  }
   const taskHistory = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/(detail|executions)$/u.exec(url.pathname)
   if (taskHistory) {
     const detail = taskHistory[2] === 'detail'
     const method = detail ? 'getTaskSessionDetail' : 'getTaskSessionExecutions'
     const legacyMethod = detail ? 'getWorkflowTaskDetail' : 'getWorkflowTaskExecutions'
     try {
-      const options = detail ? undefined : { offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100) }
+      const options = detail ? undefined : { offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100), ...(url.searchParams.has('revision') ? { revision: url.searchParams.get('revision') } : {}), ...(url.searchParams.has('summary') ? { summary: url.searchParams.get('summary') === 'true' } : {}) }
       const taskId = decodeURIComponent(taskHistory[1])
       const current = await store[method]?.(taskId, options)
       const legacy = current == null ? await store[legacyMethod]?.(taskId, options) : undefined
       const value = current ?? (legacy ? { ...legacy, legacyReadonly: true } : undefined)
       return send(response, value ? 200 : 404, value ?? { error: 'task_not_found' })
-    } catch (error) { return send(response, error.code === 'TASK_DETAIL_STALE' ? 409 : residentErrorStatus(error), { error: error.message }) }
+    } catch (error) { return send(response, ['TASK_DETAIL_STALE','OBSERVER_PAGE_STALE'].includes(error.code) ? 409 : error.code === 'OBSERVER_PAGINATION_MIGRATION_REQUIRED' ? 503 : residentErrorStatus(error), { error: error.message }) }
   }
   const workflowTaskRuns = request.method === 'GET' && /^\/state\/tasks\/([^/]+)\/runs$/u.exec(url.pathname)
   if (workflowTaskRuns) {
     if (!store.getWorkflowTaskRuns) return send(response, 404, { error: 'workflow_disabled' })
     try { const value = await store.getWorkflowTaskRuns(decodeURIComponent(workflowTaskRuns[1]),
-      { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 20, 100) }); return send(response, value ? 200 : 404, value ?? { error: 'task_not_found' }) }
+      { offset: pageNumber(url, 'cursor', 0), limit: pageNumber(url, 'limit', 20, 100),...(url.searchParams.has('revision')?{revision:url.searchParams.get('revision')}:{}) }); return send(response, value ? 200 : 404, value ?? { error: 'task_not_found' }) }
     catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
   if (request.method === 'GET' && url.pathname === '/state/task-timings') return send(response, 200, store.listTaskTimings())
   if (request.method === 'GET' && url.pathname === '/state/performance') return send(response, 200, store.listPerformance(Object.fromEntries(['day', 'sessionId', 'groupId', 'taskId', 'requestId', 'submissionId'].filter(key => url.searchParams.has(key)).map(key => [key, url.searchParams.get(key)]))))
-  if (request.method === 'GET' && url.pathname === '/state/authorizations') return send(response, 200, await store.listAuthorizationRequests())
+  const authorizationDetail=request.method==='GET'&&/^\/state\/authorizations\/([^/]+)$/u.exec(url.pathname)
+  if(authorizationDetail){try{const taskId=url.searchParams.get('taskId');if(!taskId)throw new Error('OBSERVER_PAGE_INVALID');const page=await store.listAuthorizationRequests({offset:0,limit:1,taskId,requestId:decodeURIComponent(authorizationDetail[1])});return send(response,page.items.length?200:404,page.items[0]??{error:'authorization_not_found'})}catch(error){return send(response,error.code==='OBSERVER_PAGINATION_MIGRATION_REQUIRED'?503:400,{error:error.message})}}
+  if (request.method === 'GET' && url.pathname === '/state/authorizations') {
+    try{const paged=url.searchParams.has('limit')||url.searchParams.has('offset'),filter=url.searchParams.get('filter')||'all'
+      if(!['all','pending','answered','superseded','approved','rejected'].includes(filter))throw new Error('OBSERVER_PAGE_INVALID')
+      return send(response,200,await store.listAuthorizationRequests(paged?{offset:pageNumber(url,'offset',0),limit:pageNumber(url,'limit',10,100),filter,revision:url.searchParams.get('pageRevision')||undefined}:undefined))
+    }catch(error){return send(response,error.code==='OBSERVER_PAGE_STALE'?409:error.code==='OBSERVER_PAGINATION_MIGRATION_REQUIRED'?503:400,{error:error.message})}
+  }
   const reconcileTopics = request.method === 'POST' && /^\/runtime\/task-topics\/reconcile(\/check)?$/u.exec(url.pathname)
   if (reconcileTopics) {
     if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
@@ -548,7 +484,14 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
   }
   if (request.method === 'GET' && url.pathname === '/state/activities') return send(response, 200, store.listActivities(url.searchParams.get('taskId') ?? undefined))
-  if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') return send(response, 200, store.listAlerts())
+  if (request.method === 'GET' && url.pathname === '/state/supervisor/alerts') {
+    try{if(!url.searchParams.has('limit'))return send(response,200,store.listAlerts())
+      const view=url.searchParams.get('view')||'active',type=url.searchParams.get('type')||'all'
+      if(!['active','resolved'].includes(view)||!['all','runtime','message-channel','leaf-session','goal'].includes(type))throw new Error('OBSERVER_PAGE_INVALID')
+      if(!store.listAlertPage)return send(response,503,{error:'observer_unavailable'})
+      return send(response,200,await store.listAlertPage({view,type,offset:pageNumber(url,'offset',0),limit:pageNumber(url,'limit',10,100),revision:url.searchParams.get('pageRevision')||undefined}))
+    }catch(error){return send(response,error.code==='OBSERVER_PAGE_STALE'?409:400,{error:error.message})}
+  }
   if (request.method === 'GET' && url.pathname === '/state/dws-bridge') return send(response, 200, store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] })
   if (request.method === 'GET' && url.pathname === '/state/environment') return send(response, 200, await store.inspectEnvironment())
   if (request.method === 'GET' && url.pathname === '/state/task-model-options') return send(response, 200, await store.getTaskModelOptions({ provider: url.searchParams.get('provider'), model: url.searchParams.get('model') }))

@@ -35,8 +35,8 @@ test('执行行仅使用最新轮次投影，运行时更新、结束固定，�
 })
 function card(task) {
  const actions = []
- const render = runInNewContext(`(()=>{${durationComponent}\n${source.slice(source.indexOf('      const renderTaskCard ='), source.indexOf('      const alertCategories ='))};return renderTaskCard})()`, {
-  expandedTaskId:'card-copy',setExpandedTaskId(){},Button:'button',archivingIds:[],archiveTask:task=>actions.push(['archive',task.taskId]),copyButton:(id,label)=>({type:'button',props:{onClick:()=>actions.push(['copy',id])},children:[`复制${label}`]}),React: {createElement:(type, props,...children)=>({type,props:props||{},children:children.flat()})}, groupsById:new Map([['g',{name:'运维群'}]]),topicsById:new Map([['g:topic',{title:'服务上线'}]]), taskSession:task=>task.session||{},hoveredTaskId:'',setHoveredTaskId(){},colors:{border:'gray',cardSurface:'white',muted:'gray',accent:'blue',warning:'orange'},pill:()=>({}),taskDisplayTitle:task=>task.title,short:value=>value.slice(0,14),taskStateTone:()=> 'ongoing',taskStateLabel:state=>state,StateDot:'dot',fmt:value=>value,
+ const render = runInNewContext(`(()=>{${durationComponent}\n${source.slice(source.indexOf('    function CardExecutionPage('),source.indexOf('    function ObserverContent('))}\n${source.slice(source.indexOf('      const renderTaskCard ='), source.indexOf('      const alertCategories ='))};return renderTaskCard})()`, {
+  expandedTaskId:task.taskId,setExpandedTaskId(){},updatedAt:0,useEffect(){},useState:initial=>[initial===undefined?{executions:(task.executionSessions||[]).slice(0,10),total:task.executionCount??task.executionSessions?.length??0,nextOffset:(task.executionSessions?.length||0)>10?10:null}:initial, value=>actions.push(['page',value])],Button:'button',archivingIds:[],archiveTask:task=>actions.push(['archive',task.taskId]),copyButton:(id,label)=>({type:'button',props:{onClick:()=>actions.push(['copy',id])},children:[`复制${label}`]}),React: {createElement:(type, props,...children)=>typeof type==='function'&&type.name==='CardExecutionPage'?type(props||{}):({type,props:props||{},children:children.flat()})}, groupsById:new Map([['g',{name:'运维群'}]]),topicsById:new Map([['g:topic',{title:'服务上线'}]]), taskSession:task=>task.session||{},hoveredTaskId:'',setHoveredTaskId(){},colors:{border:'gray',cardSurface:'white',muted:'gray',accent:'blue',warning:'orange'},pill:()=>({}),taskDisplayTitle:task=>task.title,short:value=>value.slice(0,14),taskStateTone:()=> 'ongoing',taskStateLabel:state=>state,StateDot:'dot',fmt:value=>value,
   navigatingSessionId:'',navigate:(id,parent)=>actions.push(['session',id,parent]), statusTag:(label)=>({type:'span',props:{},children:[label]}),openTask:task=>actions.push(['task',task.taskId]),setTopicTarget:value=>actions.push(['topic',value.topicId]),setActivePage:value=>actions.push(['page',value])
  }); return {tree:render(task),actions}
 }
@@ -71,11 +71,11 @@ test('历史卡片保留只读状态，不恢复旧归档或工作流写入口',
 })
 test('原四列局部滚动保留，空列和大量任务分页有界，窄屏仅改变列数',()=>{
  const render = data => runInNewContext(`(()=>{${source.slice(source.indexOf('      const bucketColumns ='),source.indexOf('      const menu ='))};return bucketColumns})()`,{
-  React:{createElement:(type,props,...children)=>({type,props:props||{},children:children.flat()})},data,taskBuckets:[{state:'running',label:'执行中',tone:'blue',background:'white'}],taskPages:{running:99},renderTaskCard:task=>({type:'article',props:{taskId:task.taskId},children:[]}),colors:{border:'gray',muted:'gray',cardSurface:'white'},Button:'button',setTaskPages(){}
+  React:{createElement:(type,props,...children)=>({type,props:props||{},children:children.flat()})},data,error:undefined,taskBuckets:[{state:'running',label:'执行中',tone:'blue',background:'white'}],taskPages:{running:99},renderTaskCard:task=>({type:'article',props:{taskId:task.taskId},children:[]}),colors:{border:'gray',muted:'gray',cardSurface:'white'},Button:'button',setTaskPages(){}
  })
- const empty=render({tasks:[]})[0];assert.equal(empty.props.style.borderRadius,14);assert.equal(empty.props.style.flexDirection,'column');assert.equal(empty.props.style.overflow,'hidden')
+ const empty=render({tasks:[],taskCollections:{running:{total:0,offset:0}}})[0];assert.equal(empty.props.style.borderRadius,14);assert.equal(empty.props.style.flexDirection,'column');assert.equal(empty.props.style.overflow,'hidden')
  assert.ok(flatten(empty).some(x=>x.children.includes('暂无任务')))
- const column=render({tasks:Array.from({length:27},(_,i)=>({taskId:`t${i}`,state:'running',updatedAt:String(i)}))})[0]
+ const column=render({tasks:Array.from({length:7},(_,i)=>({taskId:`t${i+20}`,state:'running',updatedAt:String(i)})),taskCollections:{running:{total:27,offset:20}}})[0]
  assert.equal(flatten(column).filter(x=>x.type==='article').length,7)
  const scroll=flatten(column).find(x=>x.props.style?.overflowY==='auto');assert.equal(scroll.props.style.flex,1);assert.equal(scroll.props.style.minHeight,0)
  const buttons=flatten(column).filter(x=>x.type==='button');assert.equal(buttons.at(-1).props.disabled,true)
@@ -97,8 +97,8 @@ test('真实任务卡片展示全部会话名称及状态；点击原生入口�
  const {tree,actions}=card({taskId:'t',title:'完整列表',state:'running',executionSessions})
  const list=flatten(tree).find(x=>x.props['aria-label']==='全部执行会话')
  const buttons=flatten(list).filter(x=>x.type==='button')
- assert.equal(buttons.length,43);assert.match(JSON.stringify(list),/核对服务42/);assert.match(JSON.stringify(list),/succeeded/)
- buttons[42].props.onClick();assert.deepEqual(actions,[['session','s42',undefined]])
+ assert.equal(buttons.length,12);assert.doesNotMatch(JSON.stringify(list),/s42/);assert.match(JSON.stringify(list),/succeeded/)
+ buttons[9].props.onClick();assert.deepEqual(actions,[['session','s9',undefined]]);buttons.at(-1).props.onClick();assert.deepEqual(actions.at(-1),['page',10])
 })
 
 test('混合后端卡片保留CLI名称状态耗时，仅DSH会话可导航', () => {

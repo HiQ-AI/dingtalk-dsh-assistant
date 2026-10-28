@@ -117,7 +117,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
     },
     hasGroupConfiguration: store.hasGroupConfiguration,
     initializeGroupConfiguration: store.initializeGroupConfiguration,
-    getGroup: id => groupView(store.getGroup(id)), listGroups: () => store.listGroups().map(groupView),
+    listTopicsPage: options => store.listTopicsPage(options), getGroup: id => groupView(store.getGroup(id)), listGroups: () => store.listGroups().map(groupView),
     updateGroup: async input => groupView(await store.updateGroup(input)),
     async subscribe(input) {
       if (closed) throw new Error('resident_runtime_closed')

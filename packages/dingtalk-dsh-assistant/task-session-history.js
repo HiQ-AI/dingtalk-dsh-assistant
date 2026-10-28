@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { createHash } from 'node:crypto'
+import { createHash,randomUUID } from 'node:crypto'
 import { lstat, readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseArtifactReference } from './execution-artifacts.js'
@@ -24,9 +24,19 @@ async function readHistoricalArtifact(ref, { artifactDirectory, taskWorkspaceRoo
   return JSON.parse(bytes.toString('utf8'))
 }
 
+/** Page only immutable run/node metadata. Artifact bodies remain on-demand. */
+export function historicalExecutionPage(db,tables,taskId,{offset=0,limit=20}={}){
+  if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>100)throw error('TASK_EXECUTION_CURSOR_INVALID')
+  if(!tables.has('execution_runs'))return {items:[],total:0,offset,limit,nextOffset:null}
+  const total=db.prepare('SELECT count(*) n FROM execution_runs WHERE task_id=?').get(taskId).n
+  const runs=db.prepare('SELECT run_id,status,created_at,updated_at FROM execution_runs WHERE task_id=? ORDER BY rowid LIMIT ? OFFSET ?').all(taskId,limit,offset)
+  const nodes=tables.has('execution_nodes')?db.prepare('SELECT node_run_id,session_id,status,drained,output_ref FROM execution_nodes WHERE run_id=? ORDER BY rowid'):null
+  return {items:runs.map(run=>({execution:{executionId:run.run_id,legacyRunId:run.run_id,status:run.status,createdAt:run.created_at,updatedAt:run.updated_at,legacyReadonly:true,sessions:nodes?nodes.all(run.run_id).map(node=>({nodeRunId:node.node_run_id,runId:run.run_id,sessionId:node.session_id,status:node.status,drained:node.drained===1,outputRef:node.output_ref})):[]}})),total,offset,limit,nextOffset:offset+runs.length<total?offset+runs.length:null}
+}
+
 /** Read-only compatibility boundary. It never opens the old worker or installs/reconciles its schema. */
 export function openTaskSessionHistory(dbPath, options = {}) {
-  if (!dbPath) return { list: () => [], get: () => null, read: async () => null, close() {} }
+  if (!dbPath) return { list: () => [], get: () => null, read: async () => null, executionPage:async()=>null,close() {} }
   const db = new DatabaseSync(dbPath, { readOnly: true })
   let tables
   try { tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name)) }
@@ -96,5 +106,15 @@ export function openTaskSessionHistory(dbPath, options = {}) {
         result: execution.sessions.toReversed().map(session => byRef.get(session.outputRef)).find(artifact => artifact?.status === 'read')?.value ?? null,
       })) }
   }
-  return { list, get, read, close: () => db.close() }
+  const incarnation=randomUUID()
+  const executionPage=(taskId,{revision,...page}={})=>{
+    const known=['business_tasks','task_owners','execution_runs'].filter(table=>tables.has(table)).map(table=>`SELECT task_id FROM ${table} WHERE task_id=?`).join(' UNION ')
+    if(!known||!db.prepare(known+' LIMIT 1').get(...['business_tasks','task_owners','execution_runs'].filter(table=>tables.has(table)).map(()=>taskId)))return null
+    const current=`${incarnation}:${db.prepare('PRAGMA data_version').get().data_version}`
+    if(revision&&revision!==current)throw error('OBSERVER_PAGE_STALE')
+    const result=historicalExecutionPage(db,tables,taskId,page)
+    if(current!==`${incarnation}:${db.prepare('PRAGMA data_version').get().data_version}`)throw error('OBSERVER_PAGE_STALE')
+    return {...result,revision:current}
+  }
+  return { list, get, read, executionPage, close: () => db.close() }
 }

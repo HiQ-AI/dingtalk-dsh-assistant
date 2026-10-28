@@ -1,3 +1,5 @@
+import {createObserverAlertPages} from './observer-alert-pages.js'
+import {createObserverGroupPages} from './observer-group-pages.js'
 import { deliverTaskNotification, recallTaskOperatorNotification, retryTaskNotification, taskNotificationRecovery } from './notification-delivery.js'
 import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
 import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
@@ -13,6 +15,7 @@ import { readExecutionResourceCatalog, createExecutionResourceCatalog } from './
 import { createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
 import { taskModelConfig, taskModelSelection } from './task-model-config.js'
 import { inspectSession } from './session-persistence.js'
+import { createStartupMetrics } from './startup-metrics.js'
 import { createExecutionSessions } from './execution-session.js'
 import { createClaudeExecutionSessions, claudeExecutionLogPath } from './claude-execution-session.js'
 import { createTaskSessionObservability } from './task-session-observability.js'
@@ -51,7 +54,8 @@ export const dynamicExecutionOutputSchema = { type: 'object', properties: {
 /** All model decisions pass through this Host boundary. No workflow catalog or staged plan exists here. */
 export async function openTaskSessionService({ ctx, config, legacy, residentStore, notifications, readMessage, readResource,
   taskSessions: suppliedTaskSessions, executionSessions: suppliedExecutionSessions, claudeExecutionSessions: suppliedClaudeExecutionSessions,
-  store: suppliedStore, persistence: suppliedPersistence } = {}) {
+  store: suppliedStore, persistence: suppliedPersistence, startupObserver } = {}) {
+  const startup = createStartupMetrics(startupObserver)
   if (!config?.dbPath || !config?.instanceId) fail('TASK_SESSION_CONFIGURATION_REQUIRED')
   taskSessionModelSelection({}, config.model, config.provider)
   coordinationModelSelection(config.coordination)
@@ -64,7 +68,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   await mkdir(dirname(config.dbPath), { recursive: true })
   const store = suppliedStore ?? await openDynamicTaskStore({ dbPath: config.dbPath, instanceId: config.instanceId,
     initialize: config.initialize === true, migrate: config.migrate === true, ingressEpoch: config.ingressEpoch, webActorId: config.webActorId,
-    resourceCatalog: await readExecutionResourceCatalog(root) })
+    resourceCatalog: await readExecutionResourceCatalog(root), startupObserver })
   let persistence, resourceCatalog
   try {
     resourceCatalog = createExecutionResourceCatalog(await store.query({ kind: 'resource.catalog' }))
@@ -154,10 +158,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     })
     return receipt
   }
-  await refreshTasks()
-  for (const item of await query('operation.list')) operationCache.set(item.id ?? item.operationId, item)
-  for (const item of await query('notification.list')) notificationCache.set(item.id, item)
-  for (const item of await query('execution.list')) executionCache.set(item.executionId, item)
+  await startup.measure('task-service.cache', async () => {
+    await refreshTasks()
+    for (const item of await query('operation.list')) operationCache.set(item.id ?? item.operationId, item)
+    for (const item of await query('notification.list')) notificationCache.set(item.id, item)
+    for (const item of await query('execution.list')) executionCache.set(item.executionId, item)
+  })
   // 仅为启动时已停住的技术等待补一次唤醒；同一实现重启不能反复驱动模型。
   const runtimeRevision = hash(await Promise.all(['task-session-service.js', 'task-session.js', 'execution-session.js', 'claude-execution-session.js', 'dynamic-native-job.js', 'dynamic-operation-readback.js']
     .map(file => readFile(new URL(file, import.meta.url), 'utf8'))))
@@ -395,15 +401,15 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       blockers: await query('task.blockers', { taskId }), notifications: await query('notification.list', { taskId }),
       coordination: await coordinationObserver.taskCoordination(taskId, task.groupId) }
   }
-  async function taskExecutions(taskId, { offset = 0, limit = 50 } = {}) {
-    const all = await query('execution.list', { taskId })
-    const executions = await Promise.all(all.slice(offset, offset + limit).map(async execution => ({ ...execution, title: executionSessionTitle(execution), objective: execution.prompt,
+  async function taskExecutions(taskId, { offset = 0, limit = 50, revision, summary = false } = {}) {
+    const page = await query('observer.page', { collection: 'executions', taskId, offset, limit, revision, summary })
+    const executions = await Promise.all(page.items.map(async execution => ({ ...execution, title: executionSessionTitle(execution), objective: execution.prompt,
       executionBackend: executionBackend(execution),
       document: { path: taskFilePath(root, taskId, 'outputs', execution.executionId, `round-${execution.inputVersion}.md`), inputVersion: execution.inputVersion },
-      workspaceDir: await taskWorkspace(root, taskId), workingDirectory: await taskExecutionWorkspace(root, taskId, execution.sessionId),
-      logPath: executionBackend(execution) === 'claude-code' ? claudeExecutionLogPath(await taskExecutionWorkspace(root, taskId, execution.sessionId), execution.executionId) : taskSessionLogRoot(root, taskId),
+      workspaceDir: dirname(taskFilePath(root, taskId, 'work')), workingDirectory: dirname(taskFilePath(root, taskId, 'work')),
+      logPath: executionBackend(execution) === 'claude-code' ? claudeExecutionLogPath(dirname(taskFilePath(root, taskId, 'work')), execution.executionId) : taskSessionLogRoot(root, taskId),
       result: execution.result?.payload?.output ?? execution.result?.payload?.error ?? null })))
-    return { executions, total: all.length, offset, limit }
+    return { ...page, items: undefined, executions }
   }
   async function materializeSource(taskId, source) {
     const directories = await taskDirectories(root, taskId, { create: true })
@@ -1507,15 +1513,17 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     await command('source.routed', { sourceId, receipt: [{ topicId: accepted.topicId, revision: current.revision }] }, `topic-routed:${sourceId}`)
     return requireTask(current.operations[0].taskId)
   }
-  async function listHumanRequests() {
-    const notices = await query('notification.list')
-    return (await query('task.list')).flatMap(task => (task.humanRequests ?? []).map(request => ({ ...request, audience: request.audience ?? 'operator',
+  async function listHumanRequests(options) {
+    const page=options?await query('observer.page',{collection:'authorizations',...options}):null
+    const notices=page?page.items.map(task=>task.observerNotice).filter(Boolean):await query('notification.list')
+    const result=(page?page.items:await query('task.list')).flatMap(task => (task.humanRequests ?? []).map(request => ({ ...request, audience: request.audience ?? 'operator',
       taskSessionRequest: true, taskId: task.taskId, groupId: task.groupId, objective: task.objective,
       notification: (() => { const notice = notices.find(item => item.taskId === task.taskId && item.payload.humanRequestId === request.requestId && item.payload.audience === 'operator')
         return notice ? { notificationId: notice.id, state: notice.state, recall: notice.recall ?? null, delivery: notice.state === 'delivered' ? notice.receipt : null } : undefined })(),
       waitingReason: request.question, evidence: request.evidence ?? [], attemptedActions: request.attemptedActions ?? [],
       decidedAt: request.answeredAt, decision: request.status === 'answered' ? 'answered' : undefined,
       decisionSource: request.status === 'answered' ? request.replyChannel : undefined })))
+    return page?{...page,items:result}:result
   }
   async function respondHumanRequest(args) {
     if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
@@ -1649,6 +1657,15 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (!prior) void kickTask(task.taskId)
     return taskDTO(result.result.task)
   }
+  const observerGroupPage=createObserverGroupPages({
+    readGroup:groupId=>residentStore.getGroup(groupId),readVersion:groupId=>query('observer.group-version',{groupId}),
+    readMetadata:groupId=>query('observer.group-metadata',{groupId}),readRequests:groupId=>topicCoordinator.messageProcessingRequests(groupId),
+    ownerships:groupId=>residentStore.listSourceDispatchOwnership(groupId),isOwnNotification,
+    readSources:async(groupId,messages)=>{const context=await query('observer.message-contexts',{groupId,messages,messageIds:messages.map(item=>item.messageId)});return messageProcessingSources(context.sources,context.notifications,groupId,context.coordinationSources,residentStore.listSourceDispatchOwnership(groupId),context.arrangements)}
+  })
+
+  const observerAlerts=createObserverAlertPages({failures,tasks:taskCache,operations:operationCache,notifications:notificationCache,groups:()=>residentStore.listGroups()})
+
   return {
     async retryNotification({ groupId, notificationId, expectedToken }) {
       const notification = typeof notificationId === 'string' && notificationId
@@ -1672,6 +1689,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       continueNotificationDelivery(settled, new Set([notificationId]))
       return settled
     },
+    observerGroupPage,
+    listObserverGroups:()=>residentStore.listGroups().map(({groupId,name,responsibility,residentSessionId})=>({groupId,name,responsibility,residentSessionId})),
     listAuthorizationRequests: listHumanRequests, respondHumanRequest, respondPrivateHumanReply,
     store, ingest, recover, taskDetail, taskExecutions, isOwnNotification,
     messageProcessingRequests: groupId => topicCoordinator.messageProcessingRequests(groupId),
@@ -1725,18 +1744,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     coordinationSources: coordinationObserver.coordinationSources, coordinationSourceDetail: coordinationObserver.coordinationSourceDetail,
     coordinationWork: coordinationObserver.coordinationWork, coordinationWorkDetail: coordinationObserver.coordinationWorkDetail,
     listActivities: observation.listActivities, listTaskTimings: observation.listTaskTimings, listPerformance: observation.listPerformance, getActivityAuditStatus: observation.getActivityAuditStatus,
-    listAlerts: () => [
-      ...residentStore.listGroups().flatMap(group => {
-        const failed = group.messages.filter(message => ['failed', 'decision-failed', 'decision-commit-failed'].includes(message.agentDeliveryStatus))
-        return failed.length ? [{ alertId: `coordination:${group.groupId}`, fingerprint: `coordination:${group.groupId}`,
-          detail: failed[0].agentDeliveryError ?? '群消息归类或协调失败，原消息尚未处理。', status: 'active',
-          lastSeenAt: failed[0].agentDeliveryAt ?? new Date().toISOString() }] : []
-      }),
-      ...[...failures.values()].map(item => ({ alertId: `failure:${item.id}`, taskId: taskCache.has(item.id) ? item.id : undefined, fingerprint: `task-session:${item.id}`, detail: item.code, status: 'active', lastSeenAt: item.at ?? new Date().toISOString() })),
-      ...[...operationCache.values()].filter(item => item.state === 'unknown').map(item => ({ alertId: `operation:${item.id ?? item.operationId}`, taskId: item.taskId, fingerprint: `unknown-operation:${item.id ?? item.operationId}`, detail: '执行效果未知，已阻止后续操作；须核实原始效果。', status: 'active', lastSeenAt: item.updatedAt ?? item.createdAt })),
-      ...[...notificationCache.values()].filter(item => item.state === 'unknown').map(item => ({ alertId: `notification:${item.id}`, taskId: item.taskId, fingerprint: `unknown-notification:${item.id}`, detail: '群通知发送结果尚未回读确认。', status: 'active', lastSeenAt: item.updatedAt })),
-      ...[...taskCache.values()].filter(item => item.status === 'active' && (item.lastDecision?.action === 'blocked' || item.lastDecision?.action === 'wait' && !!item.lastDecision?.question?.trim())).map(item => ({ alertId: `task-blocked:${item.taskId}`, taskId: item.taskId, fingerprint: `task-blocked:${item.taskId}`, detail: item.lastDecision.summary, status: 'active', lastSeenAt: item.updatedAt })),
-    ],
+    listAlerts:observerAlerts.all, listAlertPage:observerAlerts.page,
     listTopics: groupId => residentStore.listTopics(groupId), getTopic: (groupId, topicId) => residentStore.getTopic(groupId, topicId),
     getTopicContext: args => residentStore.getTopicContext(args),
     async retryMessage({ groupId, messageId }) {
@@ -1769,7 +1777,15 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const result = await command('task.archive', { taskId: task.taskId, actorId: config.webActorId })
       return taskDTO(result.result.task)
     },
-    async boardTasks() { return Promise.all((await query('task.list')).map(taskDTO)) },
+    async boardTasks(options) {
+      if (!options) return Promise.all((await query('task.list')).map(taskDTO))
+      const page = await query('observer.page', { collection: 'tasks', ...options })
+      return { ...page, items: page.items.map(task => ({ ...task, inputVersion: task.requirementRevision,
+        controlState: task.control, waitingReason: task.state === 'waiting' ? task.lastDecision?.summary ?? '' : '',
+        result: task.completion?.result ?? task.lastDecision ?? null, legacyReadonly: false,
+        session: { sessionId: task.sessionId, sessionBound: task.sessionBound, status: task.drained ? 'idle' : 'running',
+          workspaceDir: dirname(taskFilePath(root, task.taskId, 'work')), logPath: taskSessionLogRoot(root, task.taskId) } })) }
+    },
     async taskDecisions(taskId, options = {}) { await requireTask(taskId); return query('task.decisions', { ...options, taskId }) },
     async reconcileWebTaskTopics(args) {
       if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
