@@ -232,7 +232,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     const terminalJobObservation = operation => operation.state === 'unknown'
       && ['pwsh','bash'].includes(operation.definition?.toolName)
       && ['completed','failed','killed'].includes(operation.job?.status) && Number.isFinite(operation.job.finishedAt)
-      && operation.result?.jobReceipt?.jobId === operation.job.jobId
+      // Cancellation can persist operation.job before collection throws without returning a result receipt.
+      && (operation.result?.jobReceipt == null || operation.result.jobReceipt.jobId === operation.job.jobId)
       && executions.some(execution => execution.executionId === operation.executionId && execution.sessionBound
         && execution.drained && terminalExecutions.has(execution.status) && operation.job.owner === execution.sessionId
         && operation.dispatchBinding?.taskId === task.taskId && operation.dispatchBinding.executionId === execution.executionId

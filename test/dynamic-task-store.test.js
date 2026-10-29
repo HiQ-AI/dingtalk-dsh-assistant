@@ -2184,18 +2184,20 @@ test('maintenance reopen with a terminal native identity failure stays readonly 
  assert.deepEqual(await f.query({kind:'operation.get',operationId}),original)
 })
 
-test('maintenance reopen reconciles finished cancelled job receipts without inventing success or replay',async t=>{
+for(const embeddedReceipt of [true,false]) test('maintenance reopen reconciles finished cancelled jobs without replay; result receipt: '+embeddedReceipt,async t=>{
  const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding),operationId='finished-cancelled-job'
  await f.command('execution.sessionBound',{binding})
  await f.command('operation.prepare',{binding,operationId,key:'original',definition:{toolName:'pwsh',argumentsDigest:'args'},resourceKeys:[]})
  await f.command('operation.start',{binding,operationId})
- const job={jobId:'original-job',owner:binding.sessionId,startedAt:1,finishedAt:2,status:'completed',cancelled:true,detail:'exit code: 1'}
+ const job={jobId:'original-job',owner:binding.sessionId,startedAt:1,finishedAt:2,status:embeddedReceipt?'completed':'killed',cancelled:true,detail:embeddedReceipt?'exit code: 1':'execution cancelled'}
  await f.command('operation.job',{binding,operationId,job})
- await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'call',toolName:'pwsh',isError:false,jobReceipt:job,cancelled:true}})
+ await f.command('operation.settle',{binding,operationId,state:'unknown',result:{callId:'call',toolName:'pwsh',isError:!embeddedReceipt,...(embeddedReceipt?{jobReceipt:job}:{errorCode:'execution_tool_failed',resultDigest:'cancelled-tool-result'}),cancelled:true}})
  await f.command('execution.result',{binding,output:{blocked:true}});await f.command('execution.drained',{binding})
  await f.command('task.wait',{binding:owner.binding,action:'wait',summary:'Keep receipt facts'});await f.command('task.drained',{binding:owner.binding})
  await f.command('task.control',{taskId:'task',control:'cancelled',expectedControlRevision:1})
+ await f.reopen()
  const original=await f.query({kind:'operation.get',operationId})
+ const originalExecution=await f.query({kind:'execution.get',executionId:binding.executionId})
  assert.equal((await f.query({kind:'task.get',taskId:'task'})).restartRecoveryEligible,true)
  await f.command('task.reopen',{taskId:'task',request:'Reconcile existing receipts only',expectedRequirementRevision:1,expectedControlRevision:2})
  const current=(await f.command('task.claim',{taskId:'task'})).result
@@ -2205,7 +2207,27 @@ test('maintenance reopen reconciles finished cancelled job receipts without inve
  assert.equal(reconciled.state,'cancelled');assert.equal(reconciled.result.partialEffectsPossible,true)
  assert.deepEqual(reconciled.result.jobReceipt,job);assert.deepEqual(reconciled.result.previousObservation,original.result)
  assert.equal((await f.query({kind:'execution.list'})).length,1)
+ assert.deepEqual(await f.query({kind:'execution.get',executionId:binding.executionId}),originalExecution)
  assert.equal((await f.command('execution.dispatch',{binding:current.binding,key:'new-business',prompt:'new authorized step'})).result.execution.status,'queued')
+})
+
+for(const invalid of ['running-job','missing-finish','conflicting-result-job','undrained-execution']) test('maintenance reopen refuses incomplete terminal job evidence: '+invalid,async t=>{
+ const f=await fixture(t),owner=await f.task(),binding=await f.execution(owner.binding),operationId='cancelled-native-job'
+ await f.command('execution.sessionBound',{binding})
+ await f.command('operation.prepare',{binding,operationId,key:'original',definition:{toolName:'pwsh'},resourceKeys:[]})
+ await f.command('operation.start',{binding,operationId})
+ const job={jobId:'original-job',owner:binding.sessionId,startedAt:1,status:invalid==='running-job'?'running':'killed',cancelled:true,
+  ...(invalid==='missing-finish'?{}:{finishedAt:2})}
+ await f.command('operation.job',{binding,operationId,job})
+ await f.command('operation.settle',{binding,operationId,state:'unknown',result:{isError:true,cancelled:true,
+  ...(invalid==='conflicting-result-job'?{jobReceipt:{...job,jobId:'another-job'}}:{})}})
+ if(invalid!=='undrained-execution'){await f.command('execution.result',{binding,output:{blocked:true}});await f.command('execution.drained',{binding})}
+ await f.command('task.wait',{binding:owner.binding,action:'wait',summary:'Retain native cancellation evidence'});await f.command('task.drained',{binding:owner.binding})
+ await f.command('task.control',{taskId:'task',control:'cancelled',expectedControlRevision:1})
+ const before=await f.query({kind:'operation.get',operationId})
+ assert.notEqual((await f.query({kind:'task.get',taskId:'task'})).restartRecoveryEligible,true)
+ await assert.rejects(f.command('task.reopen',{taskId:'task',request:'Resume only with sufficient evidence',expectedRequirementRevision:1,expectedControlRevision:2}),{code:'DYNAMIC_TASK_NOT_QUIESCENT'})
+ assert.deepEqual(await f.query({kind:'operation.get',operationId}),before)
 })
 
 for(const failure of ['running-writer','unknown-error','missing-digest','foreign-session','foreign-task']) test('maintenance reopen rejects insufficient recovery evidence: '+failure,async t=>{
