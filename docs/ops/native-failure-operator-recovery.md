@@ -51,6 +51,8 @@ execution_restart_scope_probe({
 
 因 Host 重启中断作业而在维护中取消的原任务，可通过原 Web reopen 入口重新打开：仅当全部阻塞均为精确绑定的 Host 重启原生未知作业、已请求取消且无其他未排空执行时具备资格。恢复后账本仍保留原 unknown，限定为针对这些操作的 DSH 只读调查，拒绝业务派发、跨操作调查及 Owner 原生写入；正式 operator 隔离审计生效后才恢复业务准入。普通 cancelled 任务不适用此例外。
 
+原 job 已有受信持久终态的取消任务沿同一 reopen 入口处理：原执行必须已终态且排空，`operation.job` 的 owner/执行绑定、终态及 `finishedAt` 必须有效。取消收集器会先持久化 job 再抛错，因此工具错误正文没有重复的 `result.jobReceipt` 不会单独阻止重开；若正文携带另一 job 身份仍拒绝。重开本身保留 unknown 与旧执行，只允许原操作对账。Owner 使用既有 `task_operation_reconcile`，Host 再核无活跃原会话/运行中作业后按原 job 终态结算，原 unknown 正文保存在 `previousObservation`，取消或失败保留 `partialEffectsPossible=true`。不补写 drained、不推断业务完成，也不重放原命令；证据不足继续拒绝。
+
 ### 取消已记录但进程排空失败的维护换包
 
 原生 `execution_process_drain_failed` / `execution_session_drain_failed` 使取消接口失败，而账本已记录 `cancelRequested=true, drained=false` 时，可使用独立的 `-DrainFailureMaintenanceProposal`。它不冒用 `host_restart` 作业隔离，不改变原执行、unknown、原结果或日志，也不表示原工具已成功排空。该模式只允许 DSH 原生执行；全部 Owner/Group 必须已排空，没有 starting 操作/通知，所有未排空 Execution 必须逐一列出且原会话最后输入已有 turn/end。其他在途工作先沿正式控制入口暂停。
