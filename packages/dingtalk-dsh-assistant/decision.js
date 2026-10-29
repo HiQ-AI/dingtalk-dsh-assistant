@@ -316,7 +316,7 @@ export function blockTaskDecisionForUnavailableMedia(decision, mediaUnavailable)
 }
 
 // 仅查询固定输入与当前事实，聚合可独立判定的问题；任何 issue 都阻止提交。
-export function collectDecisionIssues(request, decision, { store, delta, ownership, unitKey, unitDirection }) {
+export function collectDecisionIssues(request, decision, { store, delta, ownership, unitKey, unitDirection, archivedTasks = new Map() }) {
   const issues = []
   let field = 'decision'
   const addIssue = (field, code) => issues.push({ field, code, message: code })
@@ -345,11 +345,12 @@ export function collectDecisionIssues(request, decision, { store, delta, ownersh
       if (!current || current.revision !== ref.revision) issues.push({ field, code: 'task_topic_version_invalid', message: 'task_topic_version_invalid', submitted: ref, current: current ? { topicId: current.topicId, revision: current.revision } : null })
     }
     if (action.taskId) {
-      const task = store.getTask(action.taskId)
-      if (!task || task.groupId !== request.groupId) addIssue(field, 'task_topic_wrong_group')
-      if (task?.archivedAt) addIssue(field, 'task_archived')
-      if (action.kind === 'task-reopen' && task?.state !== 'completed' && !(task?.state === 'cancelled' && task.restartRecoveryEligible === true)) addIssue(field, 'task_not_completed')
-      if (['task-context', 'task-cancel'].includes(action.kind) && task?.state === 'completed') addIssue(field, 'task_not_active')
+      const task = store.getTask(action.taskId) ?? archivedTasks.get(action.taskId)
+      if (!task) addIssue(field, 'task_not_found')
+      else if (task.groupId !== request.groupId) addIssue(field, 'task_topic_wrong_group')
+      else if (task.archivedAt) addIssue(field, 'task_archived')
+      else if (action.kind === 'task-reopen' && task.state !== 'completed' && !(task.state === 'cancelled' && task.restartRecoveryEligible === true)) addIssue(field, 'task_not_completed')
+      else if (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed') addIssue(field, 'task_not_active')
     }
     if (decision.actions.length) {
       const directedAway = actionMessages.filter((message) => unitDirection(message, request.messages.filter((item) => item.messageId === message.messageId), store.getAgentNames()) === 'other')

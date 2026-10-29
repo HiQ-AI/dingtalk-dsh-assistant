@@ -1,6 +1,6 @@
 # 任务报告事实，Topic 负责对话
 
-2026-10-29：云端实现、针对性回归和独立只读审查完成。基线为 `9dd585f0a5c6567f78313c4662c516f9c40c2964`，分支 `feat/topic-fact-dialogue-cloud`。仅在云端本地提交；没有推送、合并、部署或触发 CI，没有实现 A→B，也没有启用独立协调服务。
+2026-10-29：云端实现、针对性回归和独立只读审查完成，初始提交 `4da1abbc0157a74146a4ae5021ded742662c4e56`。原基线为 `9dd585f0a5c6567f78313c4662c516f9c40c2964`，分支 `feat/topic-fact-dialogue-cloud`。用户随后授权提交 PR、合并及百部本地部署；本线程整合最新 main 并交付 PR，部署由百部原部署线程执行。没有实现 A→B，也没有启用独立协调服务。
 
 ## 实现
 
@@ -39,9 +39,18 @@
 
 ## 兼容性与未验证边界
 
-交付前只读核对 origin/main 仍为上述基线。[PR #291](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/291) 仍 open、未合并，head `0ce9b754ee9d072d73427b868f81515aabe56154`。已读取相关文件补丁，未整合它：
+发布前重新核对，[PR #291](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/291) 已合并，最新 main 为 `392a2d1c25e476f314cf0c782d6f77b9c18895b1`。已将该 main 整合到本分支，三处文件的文本冲突均保留双方合同：
 
-- `task-session-service.js` 的任务动作接纳区域同时涉及本次来源/replyBindings 和 #291 的 admission hold/旧 Owner 排空，后续整合须保留两边。
-- `topic-runtime.js`、`task-topic-coordinator.js`、`decision.js` 的参数和归档合同有相邻改动；本次归档状态摘要不替代其明确 ID 的冷归档读取/参数校验。
-- `dynamic-task-store.js` 与 `topic-model.js` 两边都有修改，内容分别是事实账/归属与 Host phase/覆盖诊断；共享测试文件可能产生文本冲突。
-- #291 作者回执未计入本次验证；合并后的组合行为、真实模型、真实钉钉通知及现场 #411 均未验证。
+- `task-session-service.js` 的来源/replyBindings 与 admission hold、旧 Owner 排空、Host phase 计时同时保留。
+- `topic-runtime.js`、`task-topic-coordinator.js` 同时传递事实处理和冷归档读取；归档/参数校验继续生效，跨 Topic 同源仍只允许指定 replyTopic 确认。
+- 旧 Web 请求键序恢复、原文 UTF-16 覆盖诊断和共享测试断言保留，不整合其他仍 open 的 PR。
+
+本次整合实跑 399/399、0 fail/cancelled/skip：`merge-regression.log` 371/371（动态账、Topic、事实、原生路由、归档、资源和计时）；`merge-native.log` 14/14（原生取消排空、更新 fence、容量、创建失败、unknown 回查和来源）；`release-smoke-direct.log` 14/14（发布流程/包、实际打包后模块与隔离 resident 健康）。后者执行 package.json 中 `test:release-smoke` 的完整 `node --test` 命令；直接 `pnpm test:release-smoke` 的包装器因云端默认缓存目录 ENOENT 失败，原日志保留，不算通过。没有修改依赖或跳过测试。327 文件映射和改动 JS 语法检查通过。以上与前轮 494 项有重叠，不累加；前轮三项基线失败仍按原结果披露，未伪装全量通过。
+
+独立 reviewer 对此次整合仅做只读复核，确认接纳锁/旧轮排空与事实异步唤醒相容、两组参数传递完整、归档校验未被免重复确认逻辑绕过；未发现新增阻断。reviewer 没有运行测试。
+
+普通 PR 无自动 CI，仓库指引也不允许因提交/合并/部署请求手动触发 CI；GitHub 读回 main `protected=false`、required status checks 为空、rulesets 为空。合并时仍回读实际 PR 检查，不绕过失败检查，不提交 approve review。正式版本 Tag 发行的全量 Release CI 不在本次本地部署范围。
+
+本次新增的 `dynamic_topic_facts` 表和索引由 Task store 启动事务幂等创建；不重建或清空原数据库，不 Bootstrap、不回放历史任务/消息。按 [已初始化实例更新核验](../../ops/task-session-clean-start.md#已初始化实例更新核验) 从合并后的准确 SHA 构建并核对双包（Observer 同样显式固定），先 Check、排空再切换，独立核对包摘要、安装、新 PID 和健康。回退保留事实账和通知账；旧代码不消费待处理事实，不能靠清表、重放或重发解决。
+
+#291 作者回执未计入本次验证。真实模型、真实钉钉通知、现场 #411 及百部实际部署仍未在云端验证；新消息验收分别核对 Task 完成、Topic 事实处理及通知送达，unknown 只回查原发送。

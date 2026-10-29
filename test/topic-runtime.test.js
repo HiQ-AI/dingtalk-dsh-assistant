@@ -2479,7 +2479,8 @@ test('决策一次报告独立动作的版本和归属问题，不写Task或Outb
   assert.equal(result.status, 'invalid-arguments')
   for (const index of [0, 1]) {
     assert.ok(result.issues.some(issue => issue.field === 'decision.actions.' + index && issue.code === 'task_topic_version_invalid'))
-    assert.ok(result.issues.some(issue => issue.field === 'decision.actions.' + index && issue.code === 'task_topic_wrong_group'))
+    assert.ok(result.issues.some(issue => issue.field === 'decision.actions.' + index && issue.code === 'task_not_found'))
+    assert.ok(!result.issues.some(issue => issue.field === 'decision.actions.' + index && issue.code === 'task_topic_wrong_group'))
   }
   assert.deepEqual(h.store.getGroup('g'), before)
   assert.equal(h.store.listTasks().length, 0)
@@ -2666,6 +2667,25 @@ test('纯闲聊完整归类收口但不新建话题或触发业务决策', async
   assert.equal(h.store.getGroup('g').topics.length, 0)
   assert.deepEqual(result.pendingDecisions, [])
   assert.equal(h.store.getGroup('g').messages[0].agentDeliveryStatus, 'delivered')
+})
+
+test('遗漏范围按 UTF-16 保留 emoji 和多个独立事项的原文', async t => {
+  const h = await setup(t)
+  const text = '你好😀 第一事项 第二事项'
+  await ingest(h, 'uncovered-emoji', { text })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const result = await h.rawCall('group_topic_route_submit', { requestId: request.requestId, routes: [{
+    messageId: 'uncovered-emoji', messageVersion: 1, units: [], ignoredRefs: [{ quote: '你好', reason: '问候' }],
+  }] })
+  assert.equal(result.status, 'invalid-arguments')
+  const issue = result.issues.find(item => item.code === 'topic_route_uncovered_text')
+  assert.deepEqual(issue?.uncoveredRanges, [
+    { start: 2, end: 4, quote: '😀' },
+    { start: 5, end: 9, quote: '第一事项' },
+    { start: 10, end: 14, quote: '第二事项' },
+  ])
+  assert.equal(h.store.getGroup('g').topics.length, 0)
 })
 
 test('混合消息只为具体事项建话题，闲聊片段保留在忽略范围', async t => {

@@ -76,6 +76,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     throw error
   }
   const inflightTasks = new Map(), inflightExecutions = new Map(), inflightGroups = new Map(), inflightNotifications = new Map()
+  const admissions = new Map(), admissionHolds = new Set()
   const sourceProjections = new Set(), notificationSends = new Set(), notificationReadbacks = new Set()
   const failures = new Map(), taskSlots = new Set(), messageRecoveryFlights = new Set()
   const pendingDialogue = task => task.dialogue?.some(item => !item.reply)
@@ -315,6 +316,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         scheduleRequested = false
         for (const execution of await query('execution.list')) {
           if (closed) return
+          if (admissionHolds.has(execution.taskId)) continue
           const review = execution.status === 'failed' && execution.providerRecovery?.nextReviewAt
           if (!(review || execution.status === 'queued' && execution.providerRecovery?.nextAttemptAt) || !execution.drained || execution.recovering
             || Date.parse(review || execution.providerRecovery.nextAttemptAt) > Date.now()) continue
@@ -351,7 +353,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         }
         for (const execution of await query('execution.list')) {
           if (closed || inflightExecutions.size >= executionLimit()) break
-          if (execution.providerRecovery?.nextAttemptAt || !retryReady(execution.executionId) || inflightExecutions.has(execution.executionId) || !execution.drained || execution.recovering || execution.status !== 'queued' || execution.cancelRequested || execution.resources?.state === 'waiting') continue
+          if (admissionHolds.has(execution.taskId) || execution.providerRecovery?.nextAttemptAt || !retryReady(execution.executionId) || inflightExecutions.has(execution.executionId) || !execution.drained || execution.recovering || execution.status !== 'queued' || execution.cancelRequested || execution.resources?.state === 'waiting') continue
           if (!taskSlots.has(execution.taskId) && taskSlots.size >= taskLimit()) continue
           void kickExecution(execution.executionId)
         }
@@ -525,10 +527,25 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     await publish(target, Buffer.from(JSON.stringify(material)))
     return readSnapshot()
   }
-  async function cancelLiveTask(taskId) {
+  async function cancelLiveTask(taskId, oldTask, oldExecutions) {
     const list = await query('execution.list', { taskId })
     await Promise.all([taskSessions.cancel(taskId), ...list.filter(item => !item.drained).map(item => executionSessions.cancel(item.executionId))])
-    await Promise.allSettled([inflightTasks.get(taskId), ...list.map(item => inflightExecutions.get(item.executionId))].filter(Boolean))
+    await Promise.allSettled([oldTask, ...list.map(item => oldExecutions.get(item.executionId))].filter(Boolean))
+  }
+  function admitTask(taskId, action) {
+    const previous = admissions.get(taskId) ?? Promise.resolve()
+    const pending = previous.catch(() => {}).then(async () => {
+      admissionHolds.add(taskId)
+      const oldTask = inflightTasks.get(taskId), oldExecutions = new Map(inflightExecutions)
+      try { return await action(oldTask, oldExecutions) }
+      finally {
+        admissionHolds.delete(taskId)
+        if (!closed) void schedulePending()
+      }
+    })
+    admissions.set(taskId, pending)
+    pending.finally(() => { if (admissions.get(taskId) === pending) admissions.delete(taskId) }).catch(() => {})
+    return pending
   }
   async function recordMessageStage(request, stage) {
     try {
@@ -598,10 +615,16 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const stage = { spanId: `host:${operation.operationId}:${randomUUID()}`, stage: 'host', requestId: record.decisionId,
       attempt: operation.attempt ?? 0, startedAt: new Date().toISOString(), completedAt: null }
     await recordMessageStage(request, stage)
-    try { return await applyTopicActionBody(groupId, action, operation, record) }
+    const measure = async (phase, work) => {
+      const span = { ...stage, spanId: `host:${operation.operationId}:${phase}:${randomUUID()}`, phase, startedAt: new Date().toISOString(), completedAt: null }
+      await recordMessageStage(request, span)
+      try { return await work() }
+      finally { await recordMessageStage(request, { ...span, completedAt: new Date().toISOString() }) }
+    }
+    try { return await applyTopicActionBody(groupId, action, operation, record, measure) }
     finally { await recordMessageStage(request, { ...stage, completedAt: new Date().toISOString() }) }
   }
-  async function applyTopicActionBody(groupId, action, operation, record) {
+  async function applyTopicActionBody(groupId, action, operation, record, measure) {
     if (action.kind === 'task-proposal') return
     // Also guard durable actions accepted by older schemas before any cancellation.
     if (action.kind === 'task-context') assertTaskContextSemantics(action)
@@ -640,12 +663,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const replyBindings = bindingsForSources(basis)
     const id = `topic-operation:${operation.operationId}`
     if (await query('receipt.get', { id })) return
+    return admitTask(operation.taskId, async (oldTask, oldExecutions) => {
     let task
     if (action.kind === 'new-task') {
-      const receipt = await command('task.create', { taskId: operation.taskId, groupId, ownerActorId: source.actorId,
+      const receipt = await measure('task-commit', () => command('task.create', { taskId: operation.taskId, groupId, ownerActorId: source.actorId,
         sourceRefs: sources.map(item => item.sourceId), topicRefs: refs, replyBindings, operationId: operation.operationId,
         title: action.title, objective: action.objective, request: sources.map(item => item.text).join('\n\n'),
-        requirements: action.acceptanceCriteria ?? [], metadata: { channel: source.channel ?? 'im', authorizationSourceId: source.sourceId } }, id)
+        requirements: action.acceptanceCriteria ?? [], metadata: { channel: source.channel ?? 'im', authorizationSourceId: source.sourceId } }, id))
       task = receipt.result.task
     } else {
       task = await requireTask(operation.taskId)
@@ -657,24 +681,24 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         || action.objective !== undefined || action.acceptanceCriteria !== undefined || action.stageTasks !== undefined
       const supplement = action.kind === 'task-context' && action.progressImpact === 'preserve' && action.authorizationChange !== 'changed'
         && !changesRequirements && (action.title === undefined || action.title === task.title)
-      const receipt = action.kind === 'task-cancel'
-        ? await command('task.control', { ...args, control: 'cancelled', reason: action.reason }, id)
+      const receipt = await measure('task-commit', () => action.kind === 'task-cancel'
+        ? command('task.control', { ...args, control: 'cancelled', reason: action.reason }, id)
         : supplement
-        ? await command('task.supplement', { ...args, messageId: id, text: action.context ?? source.text,
+        ? command('task.supplement', { ...args, messageId: id, text: action.context ?? source.text,
           request: `${task.request}\n\n[话题补充]\n${action.context ?? source.text}`,
           sourceRefs: [...new Set([...task.sourceRefs, ...sources.map(item => item.sourceId)])] }, id)
-        : await command(action.kind === 'task-reopen' ? 'task.reopen' : 'task.revise', { ...args,
+        : command(action.kind === 'task-reopen' ? 'task.reopen' : 'task.revise', { ...args,
           request: `${task.request}\n\n[话题补充]\n${action.context ?? source.text}`,
           sourceRefs: [...new Set([...task.sourceRefs, ...sources.map(item => item.sourceId)])],
           ...(action.title ? { title: action.title } : {}), ...(action.objective ? { objective: action.objective } : {}),
-          ...(action.acceptanceCriteria ? { requirements: action.acceptanceCriteria } : {}) }, id)
+          ...(action.acceptanceCriteria ? { requirements: action.acceptanceCriteria } : {}) }, id))
       task = receipt.result.task
-      if (!supplement) await cancelLiveTask(task.taskId)
+      if (!supplement) await measure('old-drain', () => cancelLiveTask(task.taskId, oldTask, oldExecutions))
       if (supplement && !task.humanRequests?.some(request => request.status === 'waiting-reply'))
         for (const execution of await query('execution.list', { taskId: task.taskId })) await executionSessions.feedback(execution.executionId)
     }
-    for (const item of sources) await materializeSource(task.taskId, item)
-    if (action.kind !== 'task-cancel') void kickTask(task.taskId)
+    await measure('materialize', async () => { for (const item of sources) await materializeSource(task.taskId, item) })
+    })
   }
   async function topicReplyInternalIds(args) {
     const group = residentStore.getGroup(args.groupId)
@@ -702,6 +726,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction, taskFacts: topicFacts,
     // 独立协调会话整体暂停；普通 Topic 路由继续，但不再接纳协调来源。
     coordinationEnabled: false, onStage: recordMessageStage, readMentioned,
+    readArchivedTask: async taskId => {
+      const task = await query('task.get', { taskId })
+      return task?.archivedAt ? topicTaskView(task) : undefined
+    },
     readPlatformTasks: async groupId => {
       const tasks = await query('task.list', { groupId, archived: 'all' })
       const executions = await query('execution.list')
@@ -894,12 +922,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return { operationId }
   }
   function kickExecution(executionId) {
-    if (closed || !retryReady(executionId) || !inflightExecutions.has(executionId) && inflightExecutions.size >= executionLimit()) return Promise.resolve()
+    if (closed || admissionHolds.has(executionCache.get(executionId)?.taskId) || !retryReady(executionId) || !inflightExecutions.has(executionId) && inflightExecutions.size >= executionLimit()) return Promise.resolve()
     return track(inflightExecutions, executionId, async () => {
       const candidate = await query('execution.get', { executionId })
       if (!candidate || candidate.status !== 'queued' || candidate.providerRecovery?.nextAttemptAt || !candidate.drained || candidate.cancelRequested || candidate.resources?.state === 'waiting' || !reserveTask(candidate.taskId)) return
       if ((await requireTask(candidate.taskId)).archivedAt) return
       await verifyTaskRestartIsolations(candidate.taskId)
+      if (admissionHolds.has(candidate.taskId)) return
       let claimed
       try { claimed = await command('execution.claim', { executionId }) }
       catch (error) {
@@ -985,7 +1014,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     })
   }
   function kickTask(taskId) {
-    if (closed || !retryReady(taskId) || !reserveTask(taskId)) return Promise.resolve()
+    if (closed || admissionHolds.has(taskId) || !retryReady(taskId) || !reserveTask(taskId)) return Promise.resolve()
     return track(inflightTasks, taskId, async () => {
       let task = await requireTask(taskId)
       if (task.archivedAt || task.status !== 'active' || task.control !== 'active') { taskSlots.delete(taskId); return }
@@ -993,7 +1022,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const pending = await query('wake.list', { taskId })
       const reviewPending = pendingTaskHumanReview(task, pending)
       if (!pendingDialogue(task) && !reviewPending && task.humanRequests?.some(request => request.status === 'waiting-reply')) { taskSlots.delete(taskId); return }
-      if (!pending.some(item => item.state !== 'acked')) return
+      if (!pending.some(item => item.state !== 'acked') || admissionHolds.has(taskId)) return
       const claimed = await command('task.claim', { taskId, ...(pendingDialogue(task) ? { dialogue: true } : reviewPending ? { humanReview: true } : {}) })
       const { binding, wakeIds, wakes, humanReview } = claimed.result
       task = claimed.result.task
@@ -1477,7 +1506,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         ...(kind === 'task-cancel' ? { reason: text } : { context: text }) } : { title: args.title || (args.objective ?? text).slice(0, 80), objective: args.objective ?? text, acceptanceCriteria: args.acceptanceCriteria ?? [text] }) }
     await command('source.record', { sourceId, groupId, messageId, actorId: config.webActorId, text, timestamp: '', channel: 'web',
       requestIdentity: { request: identity, action } }, `source:${sourceId}`)
-    const accepted = await residentStore.submitWebTaskInput({ groupId, requestId: args.requestId, text, action, topicRefs: action.topicRefs })
+    const persistedAction = (await query('source.get', { sourceId })).requestIdentity.action
+    const accepted = previous && previousRecord
+      ? { status: 'duplicate', topicId: previousTopic.topicId, record: previousRecord }
+      : await residentStore.submitWebTaskInput({ groupId, requestId: args.requestId, text, action: persistedAction, topicRefs: persistedAction.topicRefs })
     if (!['accepted','duplicate'].includes(accepted.status)) fail(`TASK_TOPIC_WEB_${accepted.status}`)
     await topicCoordinator.applyAccepted(groupId, accepted.topicId, accepted.record.decisionId)
     const current = residentStore.getTopic(groupId, accepted.topicId).decisions.find(item => item.decisionId === accepted.record.decisionId)

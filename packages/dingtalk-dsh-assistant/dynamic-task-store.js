@@ -1910,7 +1910,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         ...(value.sessionId ? { sessionId: text(value.sessionId, 'sessionId') } : {}),
         ...(value.phase !== undefined ? { phase: value.phase } : {}),
         ...(value.loopDelayMs !== undefined ? { loopDelayMs: value.loopDelayMs } : {}) }
-      if (stage.phase !== undefined && (stage.stage !== 'ingress' || !['source-read', 'resource-read', 'image-save', 'resident-store', 'source-record'].includes(stage.phase))
+      if (stage.phase !== undefined && !(stage.stage === 'ingress' && ['source-read', 'resource-read', 'image-save', 'resident-store', 'source-record'].includes(stage.phase)
+        || stage.stage === 'host' && ['task-commit', 'old-drain', 'materialize'].includes(stage.phase))
         || stage.loopDelayMs !== undefined && (stage.stage !== 'ingress' || stage.phase !== undefined || typeof stage.loopDelayMs !== 'number' || !Number.isFinite(stage.loopDelayMs) || stage.loopDelayMs < 0)) fail('DYNAMIC_SOURCE_STAGE_INVALID')
       if (!['ingress', 'queue', 'turn', 'host', 'send', 'readback'].includes(stage.stage)
         || !ingressTimestamp(stage.startedAt) || stage.completedAt !== null && !ingressTimestamp(stage.completedAt)) fail('DYNAMIC_SOURCE_STAGE_INVALID')

@@ -234,16 +234,25 @@ export function resolveRouteBatch(latest, { groupId, routeId, routes }) {
       if ([...activeExistingIds].some((unitId) => !retained.has(unitId) && !replaced.has(unitId))) throw new Error('topic_unit_revision_mapping_required')
       const covered = new Uint8Array(message.text.length)
       for (const range of [...resolvedUnits.flatMap((unit) => [...unit.sourceRanges, ...unit.contextRanges]), ...ignoredRanges]) for (let index = range.start; index < range.end; index++) covered[index] = 1
-      let offset = 0, uncovered = false
+      let offset = 0
+      const uncoveredRanges = []
       for (const character of message.text) {
-        if (!/\s/u.test(character) && covered[offset] !== 1) { uncovered = true; break }
+        if (!/\s/u.test(character) && covered[offset] !== 1) {
+          const previous = uncoveredRanges.at(-1)
+          if (previous?.end === offset) previous.end += character.length
+          else uncoveredRanges.push({ start: offset, end: offset + character.length })
+        }
         offset += character.length
       }
-      if (uncovered) throw new Error('topic_route_uncovered_text')
+      if (uncoveredRanges.length) {
+        const error = new Error('topic_route_uncovered_text')
+        error.uncoveredRanges = uncoveredRanges.map(range => ({ ...range, quote: message.text.slice(range.start, range.end) }))
+        throw error
+      }
     }
     unitsByMessage.set(route.messageId, resolvedUnits)
     ignoredByMessage.set(route.messageId, ignoredRanges)
-    } catch (error) { issues.push({ field: `routes.${routeIndex}`, code: error.message.split(":")[0], message: error.message, ...(error.candidates ? { candidates: error.candidates } : {}) }) }
+    } catch (error) { issues.push({ field: `routes.${routeIndex}`, code: error.message.split(":")[0], message: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.uncoveredRanges ? { uncoveredRanges: error.uncoveredRanges } : {}) }) }
   }
 
   if (issues.length) { const error = new Error(issues[0].message); error.issues = issues; throw error }

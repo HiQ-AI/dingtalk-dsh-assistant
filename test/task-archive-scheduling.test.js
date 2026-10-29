@@ -34,6 +34,9 @@ test('background recovery and pending wakes never run archived tasks, normal con
     await command('task.complete', { binding, summary: 'Done' }); await command('task.drained', { binding })
   }
   await service.archiveTask({ taskId: 'archived' })
+  const archivedRecord = await service.store.query({ kind: 'task.get', taskId: 'archived' })
+  assert.ok(archivedRecord.archivedAt, '明确 ID 的默认查询必须回查归档表')
+  assert.deepEqual((await service.store.query({ kind: 'task.list' })).map(task => task.taskId), ['normal'])
   await command('wake.enqueue', { taskId: 'archived', kind: 'late-new-message' })
   await assert.rejects(command('task.reopen', { taskId: 'archived', request: 'late source' }), { code: 'DYNAMIC_TASK_ARCHIVED_CONFLICT' })
   await command('task.reopen', { taskId: 'normal', request: 'normal follow-up' })

@@ -6,7 +6,7 @@
 
 命令回执保留中心主键、digest、原序号和必要决策头；独占该任务的历史正文进入归档表，共享协调回执不搬迁。重放、嵌套协调读取、历史事件和决策页均读取完整历史。归档后的缺失回执正文按损坏报错，不重新执行操作。
 
-活动任务列表默认不扫描归档正文。历史页先从薄索引筛选并选择本页 ID，再按主键读取活动/归档正文；执行控制计数使用现有索引的 state/drained 元数据。
+活动任务列表默认不扫描归档正文。底层 `task.get` 按明确 ID 可回查归档表；`task.list` 默认仅返回活动任务。Topic 群任务目录 `group_task_list` 默认不列归档，按字节预算分页提供摘要；`group_task_context_get` 按明确 taskId 读取同群关联上下文，归档任务仅给出 taskId、groupId、title、state、archivedAt 与 `allowedActions: []`，不恢复或执行。跨群读取拒绝；无效 taskIds 返回结构化 `invalid-arguments` 问题。历史页先从薄索引筛选并选择本页 ID，再按主键读取活动/归档正文；执行控制计数使用现有索引的 state/drained 元数据。
 
 既有已标记归档的数据可使用 `scripts/migrate-observer-pagination.mjs` 的显式离线迁移入口：停用该合成/维护目标、保留一致性备份，并提供匹配 SHA256；默认只读检查，`--apply` 才写。迁移按最多 100 个任务 ID 取批，再在事务中搬迁；不将普通 completed 自动归档。本次未操作真实库。
 
