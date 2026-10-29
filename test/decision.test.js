@@ -222,8 +222,10 @@ test('任务所需附件读取失败时硬拦截任务动作并反馈缺失信�
     { actions: [{ kind: 'task-context', taskId: 'task-1', context: '附件补充', topicRefs }], reply: '继续处理' },
     { actions: [{ kind: 'task-reopen', taskId: 'task-1', context: '附件要求返工', topicRefs }], reply: '重新处理' },
   ]) {
-    const blocked = blockTaskDecisionForUnavailableMedia(decision, failures)
+    const blocked = blockTaskDecisionForUnavailableMedia({ ...decision, replyToMessageId: 'source-a', atOpenDingTalkIds: ['user-a', 'user-b'] }, failures)
     assert.deepEqual(blocked.actions, [])
+    assert.equal(blocked.replyToMessageId, 'source-a')
+    assert.deepEqual(blocked.atOpenDingTalkIds, ['user-a', 'user-b'])
     assert.match(blocked.reply, /图片 media-1 下载失败；文档 spec\.docx 无法解析/u)
     assert.match(blocked.reply, /信息补齐后我再开始处理/u)
   }

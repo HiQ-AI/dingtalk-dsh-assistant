@@ -734,6 +734,27 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await projectTaskNotification({ residentStore, notification })
       if (!closed) void deliverNotifications()
     } })
+  const sameRefs = (left, right) => hash((left ?? []).map(({ topicId, revision }) => [topicId, revision]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))) === hash((right ?? []).map(({ topicId, revision }) => [topicId, revision]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
+  const sameIds = (left, right) => hash([...(left ?? [])].sort()) === hash([...(right ?? [])].sort())
+  const frozenReply = async ({ groupId, topicRefs, decisionId, outboundId, taskIds, resultFingerprint, taskInputVersion, taskRunSequence }) => {
+    const outbound = residentStore.getGroup(groupId)?.outbox.find(item => item.outboundId === outboundId)
+    const notification = (await query('notification.list')).find(item => item.id === outboundId)
+    const payload = notification?.payload
+    if (notification && (notification.kind !== 'topic-reply' || payload?.conversationId !== groupId || !sameRefs(payload?.topicRefs, topicRefs)
+      || taskIds !== undefined && !sameIds(payload?.taskIds, taskIds)
+      || Object.hasOwn(payload, 'replyToMessageId') && payload.replyToMessageId !== payload.sourceMessageId
+      || Object.hasOwn(payload, 'replyToSenderOpenDingTalkId') && payload.replyToSenderOpenDingTalkId !== payload.actorId)) fail('group_reply_frozen_identity_conflict')
+    if (outbound && (!sameRefs(outbound.topicRefs, topicRefs)
+      || decisionId && outbound.decisionId !== decisionId && !(notification && !outbound.decisionId && outbound.sourceMessageId === `task-notification:${outboundId}`)
+      || !decisionId && outbound.decisionId
+      || taskIds !== undefined && !sameIds(outbound.taskIds, taskIds)
+      || resultFingerprint !== undefined && outbound.resultFingerprint !== undefined && outbound.resultFingerprint !== resultFingerprint
+      || taskInputVersion !== undefined && outbound.taskInputVersion !== undefined && outbound.taskInputVersion !== taskInputVersion
+      || taskRunSequence !== undefined && outbound.taskRunSequence !== undefined && outbound.taskRunSequence !== taskRunSequence)) fail('group_reply_frozen_identity_conflict')
+    const frozen = payload && { text: payload.text, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId, atOpenDingTalkIds: payload.atOpenDingTalkIds ?? [] }
+    if (outbound && frozen && (outbound.text !== frozen.text || outbound.replyToMessageId !== frozen.replyToMessageId || outbound.replyToSenderOpenDingTalkId !== frozen.replyToSenderOpenDingTalkId || hash(outbound.atOpenDingTalkIds ?? []) !== hash(frozen.atOpenDingTalkIds))) fail('group_reply_frozen_identity_conflict')
+    return { outbound, notification, frozen: outbound ?? frozen }
+  }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction, taskFacts: topicFacts,
     // 独立协调已移除；保留普通 Topic 路由和事实回复。
     onStage: recordMessageStage, readMentioned,
@@ -769,24 +790,25 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     quotedReminderContext: async () => null,
     // 在接纳业务决定前拒绝泄漏正文，让原模型修改后重提，不能先创建任务再卡在外发。
     validateReply: async args => assertGroupReply(args.decision.reply, await topicReplyInternalIds(args)),
+    readFrozenReply: async args => (await frozenReply(args)).frozen,
     appendOutbox: async args => {
-      const prepared = (await query('notification.list')).find(item => item.id === args.outboundId)
+      const { outbound: previous, notification: prepared, frozen } = await frozenReply(args)
       if (prepared) {
-        // Recovery must reuse the frozen payload even if Agent configuration changed.
-        const group = await residentStore.appendOutbox({ ...args, text: prepared.payload.text })
+        const group = previous ? residentStore.getGroup(args.groupId) : await residentStore.appendOutbox({ ...args, ...frozen })
         void deliverNotifications()
         return group
       }
       const replySource = residentStore.getGroup(args.groupId)?.messages.find(message => message.messageId === args.replyToMessageId)
       const sourceText = replySource?.text
-      const previous = residentStore.getGroup(args.groupId)?.outbox.find(item => item.outboundId === args.outboundId)
+      if (previous?.status === 'sent' || previous?.status === 'superseded') return residentStore.getGroup(args.groupId)
       // The resident outbox can survive a crash before notification.prepare.
-      const reply = previous ? { text: previous.text } : formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature, includeSignature: args.replyKind === 'substantive', internalIds: await topicReplyInternalIds(args) })
-      args = { ...args, ...reply }
+      const reply = previous ? { text: previous.text, replyToMessageId: previous.replyToMessageId, replyToSenderOpenDingTalkId: previous.replyToSenderOpenDingTalkId } : formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature, includeSignature: args.replyKind === 'substantive', internalIds: await topicReplyInternalIds(args), allowUnrouted: true })
+      args = { ...args, ...reply, atOpenDingTalkIds: previous ? previous.atOpenDingTalkIds ?? [] : args.atOpenDingTalkIds ?? [] }
       const group = await residentStore.appendOutbox(args)
       const notificationId = args.outboundId
+      const frozenSource = residentStore.getGroup(args.groupId)?.messages.find(message => message.messageId === args.replyToMessageId)
       await command('notification.prepare', { notificationId, taskId: args.taskIds?.[0] ?? null, requirementRevision: 1, kind: 'topic-reply',
-        payload: { text: args.text, topicRefs: args.topicRefs, replyTopicId: args.topicRefs?.[0]?.topicId, taskIds: args.taskIds, replyKind: args.replyKind, conversationId: args.groupId, sourceMessageId: args.replyToMessageId, ...(replySource ? { sourceVersion: replySource.messageVersion } : {}), actorId: args.replyToSenderOpenDingTalkId,
+        payload: { text: args.text, topicRefs: args.topicRefs, replyTopicId: args.topicRefs?.[0]?.topicId, taskIds: args.taskIds, replyKind: args.replyKind, conversationId: args.groupId, sourceMessageId: args.replyToMessageId, ...(frozenSource ? { sourceVersion: frozenSource.messageVersion } : {}), actorId: args.replyToSenderOpenDingTalkId,
           replyToMessageId: args.replyToMessageId, replyToSenderOpenDingTalkId: args.replyToSenderOpenDingTalkId, atOpenDingTalkIds: args.atOpenDingTalkIds ?? [], fact: { topicRefs: args.topicRefs }, kind: 'topic-reply' } }, `prepare-notification:${notificationId}`)
       void deliverNotifications()
       return group
@@ -1311,6 +1333,21 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       messages: [{ messageId: current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined
   async function notificationDeliveryGate(notification) {
     if (notification.kind === 'coordination' || notification.state === 'superseded') return false
+    if (notification.state === 'prepared' || notification.state === 'failed' && notification.deliveryError?.knownNotSent === true && notification.deliveryError?.retryable === true) {
+      const owners = residentStore.listGroups().flatMap(group => group.topics.flatMap(topic => topic.decisions.filter(record => record.outboundId === notification.id).map(record => ({ group, topic, record }))))
+      if (owners.length) {
+        try {
+          if (owners.length !== 1 || notification.payload.conversationId !== owners[0].group.groupId) fail('group_reply_frozen_identity_conflict')
+          const { group, topic, record } = owners[0]
+          await frozenReply({ groupId: group.groupId, topicRefs: [{ topicId: topic.topicId, revision: record.revision }], decisionId: record.decisionId, outboundId: notification.id, taskIds: record.operations.map(operation => operation.taskId).filter(Boolean) })
+          if (failures.get(notification.id)?.code === 'group_reply_frozen_identity_conflict') failures.delete(notification.id)
+        } catch (error) {
+          if (error.code !== 'group_reply_frozen_identity_conflict') throw error
+          failures.set(notification.id, { id: notification.id, code: error.code })
+          return false
+        }
+      }
+    }
     const previousOutbound = residentStore?.getGroup(notification.payload.conversationId)?.outbox.find(item => item.outboundId === notification.id)
     if (notification.state === 'failed' && notification.deliveryError?.knownNotSent === true && notification.deliveryError?.retryable === true) {
       let reason, taskIds = previousOutbound?.taskIds ?? []

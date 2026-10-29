@@ -206,7 +206,7 @@ export function projectTopicContext(context) {
 }
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
-export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, quotedReminderContext, taskFacts, readArchivedTask, workflowPromptsEnabled = true, fixedTopicsEnabled = false, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
+export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, readFrozenReply, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, quotedReminderContext, taskFacts, readArchivedTask, workflowPromptsEnabled = true, fixedTopicsEnabled = false, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
   const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const collections = [routes, decisions, replies, reviews, titleMigrations, summaryMigrations]
   const isCurrentRequest = request => collections.some(collection => collection.get(request.requestId) === request)
@@ -803,13 +803,17 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
           const owner = replyTopicForMessage(store.getGroup(groupId), message)
           return !owner || owner === topicId
         })
-        const target = messages.findLast((message) => decision.basisMessageIds.includes(message.messageId) && message.senderOpenDingTalkId && message.sourceKind !== 'internal' && message.sourceKind !== 'web')
+        const frozen = await readFrozenReply?.({ groupId, topicRefs: [{ topicId, revision: record.revision }], decisionId, outboundId: record.outboundId })
+          ?? store.getGroup(groupId)?.outbox.find(item => item.outboundId === record.outboundId)
+        if (!frozen && !Object.hasOwn(decision, 'atOpenDingTalkIds')) throw new Error('group_reply_routing_reconciliation_required')
+        const route = frozen ? { replyToMessageId: frozen.replyToMessageId, replyToSenderOpenDingTalkId: frozen.replyToSenderOpenDingTalkId, atOpenDingTalkIds: frozen.atOpenDingTalkIds ?? [] }
+          : (() => { const { target, recipients } = replyRouting(messages, decision.replyToMessageId, decision.atOpenDingTalkIds); return { ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients } })()
         const persisted = await appendOutbox({ groupId, sourceMessageId: `topic-decision:${decisionId}`, outboundId: record.outboundId, decisionId,
           topicRefs: [{ topicId, revision: record.revision }], text: decision.reply, replyKind: decision.replyReview?.kind,
           matterSourceMessageIds: [...new Set(messages.filter((message) => decision.basisUnitRefs.some((ref) => unitKey(ref) === unitKey(message))).map((message) => message.messageId))],
           matterUnitRefs: decision.basisUnitRefs.filter(ref => messages.some(message => unitKey(ref) === unitKey(message))),
           taskIds: record.operations.map((operation) => operation.taskId).filter(Boolean), replacesOutboundIds: decision.replyReview?.replaceOutboundIds,
-          ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: [target.senderOpenDingTalkId] } : {}) })
+          ...route })
         if (persisted?.status) throw new Error(`topic_outbox_${persisted.status}`)
       }
       await store.completeTopicDecision({ groupId, topicId, decisionId, ...decision.topicUpdate })
@@ -1027,6 +1031,17 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       })
       if (decision.actions.length && !decision.reply?.trim() && !foreignReply) return { status: 'reply-required' }
       if (decision.reply?.trim()) {
+        if (foreignReply) {
+          decisions.delete(args.requestId)
+          await schedule(groupId)
+          return { status: 'reply-owned-by-other-topic', decisionId: args.requestId }
+        }
+        try {
+          const messages = request.messages.filter(message => { const owner = replyTopicForMessage(store.getGroup(groupId), message); return !owner || owner === args.topicId })
+          const { target, recipients } = replyRouting(messages, decision.replyToMessageId, decision.atOpenDingTalkIds)
+          decision = { ...decision, ...(target ? { replyToMessageId: target.messageId } : {}), atOpenDingTalkIds: recipients }
+        }
+        catch (error) { return { status: 'invalid-arguments', issues: [{ field: 'decision.replyToMessageId', code: error.message, message: error.message }], nextAction: 'correct-arguments' } }
         if (!decision.replyReview) return { status: 'review-required', error: 'reply_kind_required' }
         if (refreshReview(request)) return reviewRequired(request)
         if (request.candidates.length && !request.readReview) return reviewRequired(request)

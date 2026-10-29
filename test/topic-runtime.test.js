@@ -38,7 +38,7 @@ async function setup(t, options = {}) {
       if (candidates.length && (!review || candidates.some((item) => !review.reviewedOutboundIds?.includes(item.outboundId)))) throw new Error('incomplete_review')
       return review
     },
-    appendOutbox: async (outbound) => { await options.beforeAppend?.(); return store.appendOutbox(outbound) }, cancelTask() {}, onError(_groupId, error) { errors.push(error); options.onError?.(error) },
+    appendOutbox: async (outbound) => { await options.beforeAppend?.(); return store.appendOutbox(outbound) }, cancelTask: options.cancelTask ?? (() => {}), onError(_groupId, error) { errors.push(error); options.onError?.(error) },
     async applyAction(groupId, action, operation) {
       applications.push(operation.operationId)
       await options.beforeAction?.(operation)
@@ -409,7 +409,81 @@ async function route(h, choices = {}) {
   }
   return h.call('group_topic_route_submit', { requestId: request.requestId, routes: request.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [typeof choices[message.messageId] === 'string' ? { topicId: choices[message.messageId] } : choices[message.messageId] ?? { newTopicKey: message.messageId, title: message.messageId }] })) })
 }
-const submission = (request, patch = {}) => ({ requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: { basisMessageIds: [request.messages.at(-1)?.messageId ?? request.removedMessageIds?.[0]], ...(patch.reply ? { replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } : {}), actions: [], ...(patch.reply === undefined ? { reason: '无需回复' } : {}), ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) } })
+const submission = (request, patch = {}) => ({ requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: { basisMessageIds: [request.messages.at(-1)?.messageId ?? request.removedMessageIds?.[0]], ...(patch.reply ? { replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }, ...(!Object.hasOwn(patch, 'replyToMessageId') ? { replyToMessageId: request.messages.at(-1)?.messageId } : {}) } : {}), actions: [], ...(patch.reply === undefined ? { reason: '无需回复' } : {}), ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) } })
+
+test('多依据普通回复应指向语义接收人而非最后解释者', async t => {
+  const h = await setup(t)
+  await ingest(h, 'request-a', { text: '@助理 请核对这个事项。', senderOpenDingTalkId: 'user-a', senderName: '请求人A' })
+  await ingest(h, 'explanation-b', { text: '补充说明：材料已准备。', senderOpenDingTalkId: 'user-b', senderName: '解释人B' })
+  const routed = await route(h, { 'request-a': { newTopicKey: 'same', title: '材料核对' }, 'explanation-b': { newTopicKey: 'same', title: '材料核对' } })
+  const request = routed.pendingDecisions[0]
+  const result = await h.call('group_decision_submit', submission(request, { basisMessageIds: ['request-a', 'explanation-b'],
+    reply: '已收到，将核对材料。', replyToMessageId: 'request-a', atOpenDingTalkIds: ['user-a'],
+    replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }))
+  assert.equal(result.status, 'accepted')
+  await h.coordinator.drain('g')
+  const replies = h.store.getGroup('g').outbox
+  assert.equal(replies.length, 1)
+  assert.equal(replies[0].replyToMessageId, 'request-a')
+  assert.deepEqual(replies[0].atOpenDingTalkIds, ['user-a'])
+})
+
+test('普通回复只接受固定Topic真人来源及唯一参与者收件人', async t => {
+  for (const [label, routing, error] of [
+    ['缺少目标', { replyToMessageId: undefined }, /group_reply_routing_required/],
+    ['目标不在话题', { replyToMessageId: 'other-group-message' }, /group_reply_routing_required|group_reply_target_not_in_topic/],
+    ['收件人不在话题', { replyToMessageId: 'source-a', atOpenDingTalkIds: ['other-group-user'] }, /group_reply_recipient_not_in_topic/],
+    ['重复收件人', { replyToMessageId: 'source-a', atOpenDingTalkIds: ['user-a', 'user-a'] }, /group_reply_recipient_not_in_topic/],
+  ]) {
+    await t.test(label, async t => {
+      const h = await setup(t)
+      await ingest(h, 'source-a', { senderOpenDingTalkId: 'user-a' })
+      const request = (await route(h)).pendingDecisions[0]
+      await assertDecisionIssue(h.call('group_decision_submit', submission(request, { reply: '收到。', ...routing })), error)
+      await h.coordinator.drain('g')
+      assert.equal(h.store.getGroup('g').outbox.length, 0)
+      assert.equal(h.applications.length, 0)
+    })
+  }
+})
+
+test('普通回复省略或明确空收件人时默认提及目标作者', async t => {
+  for (const [label, recipients] of [['省略', undefined], ['空数组', []]]) {
+    await t.test(label, async t => {
+      const h = await setup(t)
+      await ingest(h, 'source-a', { senderOpenDingTalkId: 'user-a' })
+      await ingest(h, 'source-b', { senderOpenDingTalkId: 'user-b' })
+      const choices = { 'source-a': { newTopicKey: 'same', title: '核对' }, 'source-b': { newTopicKey: 'same', title: '核对' } }
+      const request = (await route(h, choices)).pendingDecisions[0]
+      const result = await h.call('group_decision_submit', submission(request, { basisMessageIds: ['source-a', 'source-b'], reply: '收到。', replyToMessageId: 'source-a', atOpenDingTalkIds: recipients }))
+      assert.equal(result.status, 'accepted')
+      await h.coordinator.drain('g')
+      assert.equal(h.store.getGroup('g').outbox[0].replyToMessageId, 'source-a')
+      assert.deepEqual(h.store.getGroup('g').outbox[0].atOpenDingTalkIds, ['user-a'])
+    })
+  }
+})
+
+test('引用其他人消息或外群助手消息不取得本群回复归属', async t => {
+  const h = await setup(t)
+  await h.store.subscribe({ groupId: 'other' })
+  await h.store.appendOutbox({ groupId: 'other', sourceMessageId: 'other-source', outboundId: 'other-outbound', text: '外群通知' })
+  await h.store.acknowledge({ groupId: 'other', outboundId: 'other-outbound', deliveredMessageId: 'other-delivered' })
+  await ingest(h, 'human-quote', { senderOpenDingTalkId: 'user-a', senderName: '同名成员', quotedMessage: { messageId: 'human-message', content: '其他人消息' } })
+  await ingest(h, 'cross-group-quote', { senderOpenDingTalkId: 'user-b', senderName: '同名成员', quotedMessage: { messageId: 'other-delivered', content: '外群通知' } })
+  await h.coordinator.schedule('g')
+  const routeRequest = h.envelope('[GROUP_TOPIC_ROUTE]')
+  for (const item of routeRequest.messages) assert.equal(item.quotedReply, undefined)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  const untouched = structuredClone(h.store.getGroup('other').outbox)
+  const routed = await h.call('group_topic_route_submit', { requestId: routeRequest.requestId, routes: routeRequest.messages.map(item => ({
+    messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'same', title: '引用核对' }],
+  })) })
+  const request = routed.pendingDecisions[0]
+  await assertDecisionIssue(h.call('group_decision_submit', submission(request, { reply: '回复', replyToMessageId: 'human-quote', atOpenDingTalkIds: ['other-user'] })), /group_reply_recipient_not_in_topic/)
+  assert.deepEqual(h.store.getGroup('other').outbox, untouched)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+})
 
 test('同批混合来源并发推进，跨Topic同源只确认一次，各自来源仍能回复', async t => {
   const h = await setup(t)
@@ -430,7 +504,7 @@ test('同批混合来源并发推进，跨Topic同源只确认一次，各自来
       topicRefs: [{ topicId: request.topicId, revision: request.revision }], basisUnitRefs: refs,
       dispatchAssessment: { businessObject: '核对事项', agentDeliverable: '核对结果', externalFollowup: [], sourceUnitRefs: refs, workflowRefs: [], workflowReason: '无专用流程' } }
     return h.call('group_decision_submit', submission(request, { basisMessageIds: [...new Set(request.messages.map(message => message.messageId))],
-      basisUnitRefs: refs, actions: [action], reply: '已承接本条要求。', replyReview: { kind: 'confirmation' } }))
+      basisUnitRefs: refs, actions: [action], reply: '已承接本条要求。', replyToMessageId: request.messages.some(message => message.messageId === 'own') ? 'own' : 'shared', replyReview: { kind: 'confirmation' } }))
   }))
   assert.ok(results.every(result => result.status === 'accepted'), JSON.stringify(results))
   await h.coordinator.drain('g')
@@ -586,7 +660,7 @@ test('压缩移除已见决策正文后需重新取得必要增量', async (t) =
   const body = h.sent.findLast((item) => item.startsWith('[GROUP_TOPIC_DECISION]'))
   visible = [{ role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text: body }] }]
   const args = { requestId: request.requestId, topicId: request.topicId, revision: request.revision,
-    decision: { basisMessageIds: ['surface'], actions: [], reply: '正在核对' } }
+    decision: { basisMessageIds: ['surface'], actions: [], reply: '正在核对', replyToMessageId: 'surface' } }
   assert.equal((await h.call('group_decision_submit', args)).status, 'review-required')
   visible = []
   await assert.rejects(h.call('group_decision_submit', args), /topic_decision_delta_unread/)
@@ -660,6 +734,32 @@ async function taskFixture(h, message = {}) {
   const { task } = await h.store.createTask({ groupId: 'g', topicRefs: [{ topicId: request.topicId, revision: request.revision }], title: '核验 A', objective: '核验 A', acceptanceCriteria: ['结果有证据'] })
   return { task, request }
 }
+
+test('引用已送达助手回复的对象纠正可以沟通而不变更任务', async t => {
+  const h = await setup(t)
+  const { task, request: initial } = await taskFixture(h, { senderOpenDingTalkId: 'user-a', senderName: '参与者A' })
+  await ingest(h, 'explanation-b', { senderOpenDingTalkId: 'user-b', text: '材料已准备。' })
+  await complete(h, (await route(h, { 'explanation-b': initial.topicId })).pendingDecisions[0])
+  await h.store.appendOutbox({ groupId: 'g', sourceMessageId: 'previous-reply', outboundId: 'previous-outbound', topicId: initial.topicId,
+    text: '已收到。', replyToMessageId: 'explanation-b', atOpenDingTalkIds: ['user-b'] })
+  await h.store.acknowledge({ groupId: 'g', outboundId: 'previous-outbound', deliveredMessageId: 'delivered-previous' })
+  const before = structuredClone(h.store.getTask(task.taskId))
+  await ingest(h, 'correction-c', { senderOpenDingTalkId: 'user-c', text: '回复对象应为参与者A。',
+    quotedMessage: { messageId: 'delivered-previous', content: '已收到。' } })
+  const request = (await route(h, { 'correction-c': initial.topicId })).pendingDecisions[0]
+  const args = submission(request, { reply: '已更正，后续与参与者A沟通。', replyToMessageId: 'a1', atOpenDingTalkIds: ['user-a'] })
+  assert.equal((await h.call('group_decision_submit', args)).status, 'accepted')
+  await h.coordinator.drain('g')
+  const replies = h.store.getGroup('g').outbox
+  assert.equal(replies.length, 2)
+  assert.equal(replies[1].replyToMessageId, 'a1')
+  assert.deepEqual(replies[1].atOpenDingTalkIds, ['user-a'])
+  assert.deepEqual(h.store.getTask(task.taskId), before)
+  assert.equal(h.store.listTasks().length, 1)
+  assert.deepEqual(h.applications, [])
+  await h.coordinator.recover(); await h.coordinator.drain('g')
+  assert.equal(h.store.getGroup('g').outbox.length, 2)
+})
 
 test('连续话题版本刷新关联Task状态摘要，保留未答来源并拒绝旧决策', async t => {
   const h = await setup(t)
@@ -1111,6 +1211,34 @@ test('已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox', asyn
   assert.equal(reopened.store.getTopic('g', request.topicId).processedRevision, 1)
   assert.equal(reopened.store.getTopic('g', request.topicId).decisions[0].operations[0].status, 'applied')
   assert.deepEqual(reopened.applications, [])
+})
+
+test('旧决定已应用取消动作后恢复不重复取消且缺路由时不发回复', async t => {
+  const cancelled = []
+  const h = await setup(t, { cancelTask: taskId => cancelled.push(taskId), beforeAppend() { throw new Error('temporary-outbox-failure') } })
+  const { task, request: initial } = await taskFixture(h)
+  await ingest(h, 'cancel-current', { text: '@助理 停止该任务。' })
+  const request = (await route(h, { 'cancel-current': initial.topicId })).pendingDecisions[0]
+  const action = { kind: 'task-cancel', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
+    reason: '明确停止', topicRefs: [{ topicId: request.topicId, revision: request.revision }] }
+  assert.equal((await h.call('group_decision_submit', submission(request, { actions: [action], reply: '已停止。', replyToMessageId: 'cancel-current' }))).status, 'accepted')
+  await h.coordinator.drain('g')
+  const record = h.store.getTopic('g', request.topicId).decisions.find(item => item.decisionId === request.requestId)
+  assert.equal(record.operations[0].status, 'applied')
+  assert.deepEqual(cancelled, [task.taskId])
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  await h.coordinator.close(); await h.store.close()
+  const persisted = h.snapshot.tables.groups.g.topics.find(topic => topic.topicId === request.topicId).decisions.find(item => item.decisionId === request.requestId)
+  delete persisted.decision.replyToMessageId
+  delete persisted.decision.atOpenDingTalkIds
+  persisted.nextRetryAt = new Date(0).toISOString()
+  const replayed = []
+  const reopened = await setup(t, { snapshot: h.snapshot, cancelTask: taskId => replayed.push(taskId) })
+  await reopened.coordinator.recover(); await reopened.coordinator.drain('g')
+  assert.deepEqual(replayed, [])
+  assert.deepEqual(reopened.applications, [])
+  assert.equal(reopened.store.getGroup('g').outbox.length, 0)
+  assert.notEqual(reopened.store.getTopic('g', request.topicId).decisions.find(item => item.decisionId === request.requestId).status, 'completed')
 })
 
 test('任务动作拒绝时零回复；动作全部落账后才发送承接回复', async t => {

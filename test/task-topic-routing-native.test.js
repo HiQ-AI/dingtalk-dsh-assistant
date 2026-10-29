@@ -11,6 +11,7 @@ import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-
 import { groupReplyScopeInstructions } from '../packages/dingtalk-dsh-assistant/group-message.js'
 import { taskIndexPage } from '../packages/dingtalk-dsh-assistant/task-topic-coordinator.js'
 import { fingerprint } from '../packages/dingtalk-dsh-assistant/topic-model.js'
+import { projectTaskNotification } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { available, reason, nativeTaskHost, latestInput, waitUntil, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
 
 const call = (name, args) => ({ name, args: name === 'group_decision_submit' ? { ...args, decision: { ...args.decision, topicUpdate: { summary: '围绕原始事项持续核对，当前结论以任务真实进展为准。' } } } : args })
@@ -34,6 +35,18 @@ function jsonValues(value) {
 const message = (messageId, text) => ({ groupId: 'native-group', messageId, senderOpenDingTalkId: 'native-user', senderName: '真实用户', sourceKind: 'dingtalk', text,
   occurredAt: '2026-10-13T10:00:00Z', timestamp: '2026-10-13T10:00:00Z' })
 
+testRunner('脚本化普通回复目标只选固定输入真人来源', () => {
+  const human = { messageId: 'human', unitId: 'unit-human', unitRevision: 1, text: '核对', senderOpenDingTalkId: 'user-a', sourceKind: 'dingtalk' }
+  const web = { messageId: 'web', unitId: 'unit-web', unitRevision: 1, text: '补充', senderOpenDingTalkId: 'web-actor', sourceKind: 'web' }
+  const internal = { ...web, messageId: 'internal', sourceKind: 'internal' }
+  for (const [messages, expected] of [[[human], 'human'], [[human, web], 'human'], [[human, internal], 'human'], [[web], undefined]]) {
+    const input = { requestId: 'request', topicId: 'topic', revision: 1, messages }
+    const request = { tools: [{ name: 'group_decision_submit' }], messages: [{ role: 'user', content: [{ type: 'text', text: `Topic 请求：${JSON.stringify(input)}` }] }] }
+    const decision = topicTaskCalls(request)[0].args.decision
+    assert.equal(decision.replyToMessageId, expected)
+  }
+})
+
 testRunner('来源语义戳在首次Topic完成后落账，不等待同群其他判断',
   { skip: !available ? reason : false, timeout: 20000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'source-clock-immediate-'))
@@ -53,6 +66,7 @@ testRunner('来源语义戳在首次Topic完成后落账，不等待同群其他
           item.args.decision.actions = []; item.args.decision.reason = '只记录独立反馈，不开展业务动作'
           item.args.decision.topicUpdate = { summary: '记录独立反馈，未开展业务动作。' }
           delete item.args.decision.reply
+          delete item.args.decision.replyToMessageId
           delete item.args.decision.replyReview
         }
       }
@@ -291,7 +305,7 @@ testRunner('native batch followup reopens each original completed task and sessi
             return { kind: 'task-reopen', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
               context: `仅跟进 ${task.title} 的原 PR；核查新评论，适用时修订、验证并提测原 UAT，无新评论则不重复修改或部署。`, topicRefs: refs }
           }),
-          reply: '已分别交回两个原任务核查新增审查评论。',
+          reply: '已分别交回两个原任务核查新增审查评论。', replyToMessageId: input.messages.at(-1).messageId,
           replyReview: { kind: 'confirmation', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
         } })]
     }
@@ -333,6 +347,92 @@ testRunner('native batch followup reopens each original completed task and sessi
   assert.deepEqual((await h.query('task.list')).map(task => [task.taskId, task.requirementRevision, task.runSequence]), after.map(task => [task.taskId, task.requirementRevision, task.runSequence]))
 })
 
+testRunner('普通回复显式多收件人贯穿原生通知格式化', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+  const h = await extraHost(t, 'topic-recipients-', async request => {
+    const names = request.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit')) {
+      const input = envelope(request, '[GROUP_TOPIC_ROUTE]')
+      const topic = h.residentStore.listTopics('native-group')[0]
+      return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
+        messageId: item.messageId, messageVersion: item.messageVersion,
+        topics: [topic ? { topicId: topic.topicId } : { newTopicKey: 'same', title: '资料核对' }],
+      })) })]
+    }
+    if (names.includes('group_decision_submit')) {
+      const input = envelope(request, '[GROUP_TOPIC_DECISION]')
+      const current = input.messages.at(-1)
+      const decision = current.messageId === 'recipient-a'
+        ? { basisMessageIds: ['recipient-a'], actions: [], reason: '等待补充' }
+        : { basisMessageIds: ['recipient-a', 'recipient-b'], actions: [], reply: '已收到资料。', replyToMessageId: 'recipient-a',
+          atOpenDingTalkIds: ['user-a', 'user-b'], replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }
+      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision })]
+    }
+    return []
+  })
+  await h.service.ingest({ ...message('recipient-a', '@助手 请核对资料。'), senderOpenDingTalkId: 'user-a' })
+  await h.service.whenIdle()
+  await h.service.ingest({ ...message('recipient-b', '资料已准备。'), senderOpenDingTalkId: 'user-b' })
+  await h.service.whenIdle()
+  assert.equal(h.sent.length, 1)
+  assert.equal(h.sent[0].payload.replyToMessageId, 'recipient-a')
+  assert.deepEqual(h.sent[0].payload.atOpenDingTalkIds, ['user-a', 'user-b'])
+  assert.equal(h.residentStore.getGroup('native-group').outbox[0].replyToMessageId, 'recipient-a')
+  await h.service.recover(); await h.service.whenIdle()
+  assert.equal(h.sent.length, 1)
+})
+
+for (const mode of ['prepared', 'projected', 'revision-conflict', 'taskIds-conflict']) testRunner(`旧回复冻结恢复 ${mode}`, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'topic-frozen-recovery-'))
+  let h, stage = 'initial host'
+  t.after(async () => { t.diagnostic(`恢复测试结束阶段：${stage}`); await h?.close(); await rm(root, { recursive: true, force: true }) })
+  h = await nativeTaskHost(root, () => [])
+  stage = 'seed'
+  await h.residentStore.ingest(message('frozen-a', '@助手 请核对资料。'))
+  const routed = await h.residentStore.routeMessages({ groupId: 'native-group', routeId: 'frozen-route', routingRevision: 0,
+    routes: [{ messageId: 'frozen-a', messageVersion: 1, topics: [{ newTopicKey: 'frozen', title: '资料核对' }] }] })
+  const topicId = routed.topicIdsByKey.frozen
+  const basisUnitRefs = resolveTopicMessages(h.residentStore.getGroup('native-group'), topicId, 1).map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
+  const accepted = await h.residentStore.acceptTopicDecision({ groupId: 'native-group', topicId, revision: 1, decisionId: 'old-decision',
+    decision: { basisMessageIds: ['frozen-a'], basisUnitRefs, actions: [], reply: '旧决定文本' } })
+  const outboundId = accepted.record.outboundId
+  const refs = [{ topicId, revision: mode === 'revision-conflict' ? 2 : 1 }]
+  const row = (await h.service.store.command({ id: 'prepare-frozen', kind: 'notification.prepare', args: { notificationId: outboundId, kind: 'topic-reply', requirementRevision: 1,
+    payload: { conversationId: 'native-group', topicRefs: refs, taskIds: mode === 'taskIds-conflict' ? ['unrelated-fixture-task'] : [], text: '冻结文本', sourceMessageId: 'frozen-a', actorId: 'native-user',
+      replyToMessageId: 'frozen-a', replyToSenderOpenDingTalkId: 'native-user', atOpenDingTalkIds: ['native-user'], fact: { topicRefs: refs } } } })).result.notification
+  if (mode === 'projected') {
+    await projectTaskNotification({ residentStore: h.residentStore, notification: row })
+    const projected = h.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === outboundId)
+    assert.equal(projected.sourceMessageId, `task-notification:${outboundId}`)
+    assert.equal(projected.decisionId, undefined)
+  }
+  stage = 'close first host'
+  await h.close()
+  stage = 'reopen host'
+  h = await nativeTaskHost(root, () => [], { initialize: false })
+  stage = 'recover and service idle'
+  await h.service.recover(); await h.service.whenIdle()
+  stage = 'wait decision terminal'
+  await waitUntil(() => ['blocked', 'completed'].includes(h.residentStore.getTopic('native-group', topicId).decisions.find(item => item.decisionId === 'old-decision').status), '旧决定恢复到终态', 5000)
+  stage = 'assert recovery'
+  const record = h.residentStore.getTopic('native-group', topicId).decisions.find(item => item.decisionId === 'old-decision')
+  if (mode === 'revision-conflict' || mode === 'taskIds-conflict') {
+    assert.notEqual(record.status, 'completed')
+    assert.match(JSON.stringify(record), /group_reply_frozen_identity_conflict/)
+    assert.equal(h.sent.length, 0)
+  } else {
+    assert.equal(record.status, 'completed', JSON.stringify(record))
+    const outbox = h.residentStore.getGroup('native-group').outbox.filter(item => item.outboundId === outboundId)
+    assert.equal(outbox.length, 1)
+    assert.equal(outbox[0].text, '冻结文本')
+    assert.equal(outbox[0].replyToMessageId, 'frozen-a')
+    assert.equal(outbox[0].replyToSenderOpenDingTalkId, 'native-user')
+    assert.deepEqual(outbox[0].atOpenDingTalkIds, ['native-user'])
+    assert.ok(h.sent.length <= 1)
+    await h.service.recover(); await h.service.whenIdle()
+    assert.ok(h.sent.length <= 1)
+  }
+})
+
 testRunner('native task service preserves Topic routing, task association, ignored input and recovery idempotency', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-topic-native-'))
   let h, residentStore
@@ -371,7 +471,7 @@ testRunner('native task service preserves Topic routing, task association, ignor
         context: current.text, progressImpact: 'preserve', topicRefs: refs }
         : { kind: 'new-task', title: '原生文件检查', objective: '检查指定文件并等待补充', acceptanceCriteria: ['保留原始交办及后续补充'], topicRefs: refs }
       return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: [current.messageId], actions: [action], reply: task ? '已收到补充。' : '已承接文件检查。',
+        decision: { basisMessageIds: [current.messageId], actions: [action], reply: task ? '已收到补充。' : '已承接文件检查。', replyToMessageId: current.messageId,
           replyReview: { kind: 'confirmation', reviewedOutboundIds: candidateIds, sameMatterOutboundIds: candidateIds, replaceOutboundIds: candidateIds } } })]
     }
     const input = latestInput(request)
@@ -525,7 +625,7 @@ testRunner('native Topic handoff keeps the explicit requester as task and comple
       const ids = review.candidates.map(value => value.outboundId)
       return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
         decision: { basisMessageIds: [current.messageId], actions: [{ kind: 'new-task', title: '文件检查交接', objective: '确认文件检查已完成', acceptanceCriteria: ['向明确交办人报告检查结论'],
-          topicRefs: [{ topicId: input.topicId, revision: input.revision }] }], reply: '已承接检查。',
+          topicRefs: [{ topicId: input.topicId, revision: input.revision }] }], reply: '已承接检查。', replyToMessageId: current.messageId,
           replyReview: { kind: 'confirmation', reviewedOutboundIds: ids, sameMatterOutboundIds: ids, replaceOutboundIds: ids } } })]
     }
     assert.ok(names.includes('task_session_submit'))
@@ -955,7 +1055,7 @@ testRunner('native proposal prompt preserves original authorization and asks wit
     assert.ok(prompt.includes('仍保留对应业务 Topic 的完整上下文'))
     assert.ok(!prompt.includes('未指向 Agent 时必须忽略'))
     checked = true
-    return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [{ kind: 'task-proposal', title: '描述框位置调整', objective: '按原图将描述框放在文字右侧并顶部对齐', topicRefs: [{ topicId: input.topicId, revision: input.revision }] }], reply: '这个事项是否需要我处理？', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
+    return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [{ kind: 'task-proposal', title: '描述框位置调整', objective: '按原图将描述框放在文字右侧并顶部对齐', topicRefs: [{ topicId: input.topicId, revision: input.revision }] }], reply: '这个事项是否需要我处理？', replyToMessageId: input.messages.at(-1).messageId, replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
   })
   await h.service.ingest(message('proposal-only', '合并后描述输入框放在该项文字右侧，和文字顶部对齐。'))
   await h.service.whenIdle()

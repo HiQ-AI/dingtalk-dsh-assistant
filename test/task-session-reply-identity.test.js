@@ -112,7 +112,7 @@ async function serviceFixture(t, replySignature, action = 'complete', legacyFoot
         const current = input.messages.at(-1)
         return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
           decision: { basisMessageIds: [current.messageId], basisUnitRefs: [{ unitId: current.unitId, unitRevision: current.unitRevision }],
-            actions: [], reply: task.completion.summary, topicUpdate: { summary: '材料核对任务已完成。' },
+            actions: [], reply: task.completion.summary, replyToMessageId: current.messageId, topicUpdate: { summary: '材料核对任务已完成。' },
             replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map(candidate => candidate.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } }]
       }
       assert.ok(names.includes('task_session_submit'), 'Completion and questions must use the real native task owner')
