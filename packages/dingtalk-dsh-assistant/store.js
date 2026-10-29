@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { activeFixedUnits, ensureFixedTopics, FIXED_TOPICS, fixedTopicIds, manuallySettled } from './fixed-topics.js'
 import { createFixedTopicPages } from './observer-fixed-topic-pages.js'
 import { correctOutOfScope } from './fixed-topic-correction.js'
+import { personAliasesSchema } from './group-person-aliases.js'
 import { taskPlanSchema } from './task-plan.js'
 import { storedTaskCheckpointBaseSchema, storedTaskResultSchema } from './task-result.js'
 import { topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan, replyTopicForMessage } from './topic-model.js'
@@ -73,7 +74,7 @@ const messageFactFields = {
   messageVersion: z.number().int().positive(), imageRefs: z.array(z.record(z.string(), z.unknown())).optional(), mediaUnavailable: z.array(z.string()).optional(),
   sourceKind: z.enum(['dingtalk', 'web', 'internal', 'migration']).optional(), migrationSource: z.string().optional(),
   ignoredRanges: z.array(sourceRangeSchema.extend({ reason: z.string().min(1) })).optional(),
-  units: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive(), unitKey: z.string().min(1), fixedTopic: z.enum(fixedTopicIds).optional(), fixedTopicHandledAt: z.string().optional(), manualCorrection: z.object({ requestId: z.string().min(1), reason: z.string().min(1) }).optional(), dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(), summary: z.string().min(1), sourceRanges: z.array(sourceRangeSchema), sourceAttachments: z.array(z.object({ imageRefId: z.string().min(1) }).strict()).default([]), contextRanges: z.array(sourceRangeSchema.extend({ purpose: z.string().min(1) })).default([]), predecessorUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().min(1).optional() }).refine((unit) => unit.sourceRanges.length + unit.sourceAttachments.length > 0, 'topic_unit_source_required')).optional(),
+  units: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive(), unitKey: z.string().min(1), fixedTopic: z.enum(fixedTopicIds).optional(), outOfScopeHelp: z.boolean().optional(), fixedTopicHandledAt: z.string().optional(), manualCorrection: z.object({ requestId: z.string().min(1), reason: z.string().min(1) }).optional(), dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(), summary: z.string().min(1), sourceRanges: z.array(sourceRangeSchema), sourceAttachments: z.array(z.object({ imageRefId: z.string().min(1) }).strict()).default([]), contextRanges: z.array(sourceRangeSchema.extend({ purpose: z.string().min(1) })).default([]), predecessorUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().min(1).optional() }).refine((unit) => unit.sourceRanges.length + unit.sourceAttachments.length > 0, 'topic_unit_source_required')).optional(),
   activeUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(),
 }
 const inboundSchema = z.object({
@@ -142,6 +143,7 @@ const sourceDispatchSchema = z.object({
   createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })
 const groupSchema = z.object({
+  personAliases: personAliasesSchema.optional(),
   fixedTopics: z.array(z.object({ topicId: z.enum(fixedTopicIds), title: z.string().min(1), fixed: z.literal(true), createdAt: z.string().min(1) })).optional(),
   sourceDispatchOwnership: z.array(sourceDispatchSchema).default([]),
   coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed', 'superseded']), messageId: z.string().optional(), lastError: z.string().optional(), failurePhase: z.enum(['startup', 'dispatch']).optional(), failureCode: z.string().optional(), startupAttempt: z.number().int().nonnegative().optional(), supersededBy: z.string().optional(), supersedeReason: z.string().optional() })).default({}),
@@ -734,17 +736,19 @@ export async function openResidentStore(storageDomain) {
       .filter((activity) => taskId === undefined || activity.taskId === taskId)
       .sort(compareActivity)
       .slice(-ACTIVITY_PROJECTION_LIMIT_PER_TASK),
-    subscribe: ({ groupId, name, responsibility = '', timezone, residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
+    subscribe: ({ groupId, name, responsibility = '', timezone, personAliases, residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
       if (timezone !== undefined) new Intl.DateTimeFormat('en', { timeZone: timezone }).format()
+      if (personAliases !== undefined) personAliases = personAliasesSchema.parse(personAliases)
       const existing = findGroupEntry(groupId)?.[1]
       if (existing !== undefined) return { created: false, group: existing }
-      const group = ensureFixedTopics({ groupId, ...(timezone ? { timezone } : {}), ...(name ? { name } : {}), responsibility, residentSessionId: residentSessionId ?? `session-${randomUUID()}`, ...(residentAgentPreset ? { residentAgentPreset } : {}), nextSequence: 1, messages: [], outbox: [], topics: [], routingRevision: 0, routeHistory: [], taskReservations: [] })
+      const group = ensureFixedTopics({ groupId, ...(timezone ? { timezone } : {}), ...(name ? { name } : {}), ...(personAliases !== undefined ? { personAliases } : {}), responsibility, residentSessionId: residentSessionId ?? `session-${randomUUID()}`, ...(residentAgentPreset ? { residentAgentPreset } : {}), nextSequence: 1, messages: [], outbox: [], topics: [], routingRevision: 0, routeHistory: [], taskReservations: [] })
       await groups.put(groupId, group)
       return { created: true, group }
     }),
-    updateGroup: ({ groupId, name, responsibility, timezone, residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
-      if (name === undefined && responsibility === undefined && timezone === undefined && residentSessionId === undefined && residentAgentPreset === undefined) throw new Error('group_update_empty')
+    updateGroup: ({ groupId, name, responsibility, timezone, personAliases, residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
+      if (name === undefined && responsibility === undefined && timezone === undefined && personAliases === undefined && residentSessionId === undefined && residentAgentPreset === undefined) throw new Error('group_update_empty')
       if (timezone !== undefined) new Intl.DateTimeFormat('en', { timeZone: timezone }).format()
+      if (personAliases !== undefined) personAliases = personAliasesSchema.parse(personAliases)
       if (name !== undefined && typeof name !== 'string') throw new Error('group_name_invalid')
       if (responsibility !== undefined && typeof responsibility !== 'string') throw new Error('group_responsibility_invalid')
       if (residentSessionId !== undefined && typeof residentSessionId !== 'string') throw new Error('group_resident_session_invalid')
@@ -756,6 +760,7 @@ export async function openResidentStore(storageDomain) {
         ...(name !== undefined ? { name } : {}),
         ...(responsibility !== undefined ? { responsibility } : {}),
         ...(timezone !== undefined ? { timezone } : {}),
+        ...(personAliases !== undefined ? { personAliases, routingRevision: group.routingRevision + (isDeepStrictEqual(group.personAliases ?? [], personAliases) ? 0 : 1) } : {}),
         ...(residentSessionId !== undefined ? { residentSessionId } : {}),
         ...(residentAgentPreset !== undefined ? { residentAgentPreset } : {}),
       }))

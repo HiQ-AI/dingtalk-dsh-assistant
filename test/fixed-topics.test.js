@@ -48,11 +48,53 @@ async function fixture(t, { tasks = [], decide = async () => {}, timezone = 'Asi
   } }
 }
 const unit = (key, quote, fixedTopic) => ({ unitKey: key, summary: key, sourceRefs: [{ quote }], topics: [], fixedTopic, reason: '语义分类' })
+const outsideHelp = (key, quote) => ({ ...unit(key, quote, 'out-of-scope'), outOfScopeHelp: true })
+
+test('non-intervention notices, other owners and quoted names settle silently even when @ metadata is true or unavailable', async t => {
+  const f = await fixture(t, { readMentioned: async () => { throw new Error('must not scan mentions for non-intervention') } })
+  const texts = ['你们的cortex还能用吗', '我用Claude，还能用', '客户端似乎噶了', '间隔一会儿重试几次', '又复活了，神奇',
+    '小甲那套好像有个优先使用号池里上次对话的账号，你前面用的账号用量满了', '没你的事，不是找你',
+    '@测试成员乙 @测试成员丙 已修复样例数据页信息缺失并发布测试环境', '@测试成员丁 任务已创建，开始处理。任务codex:example — 另一测试助手',
+    '看小甲发的应该是这样吧', '这个修复由测试成员乙负责']
+  for (const [i, text] of texts.entries()) await f.store.ingest({ groupId: 'g', messageId: `m${416 + i}`, text, occurredAt: '2026-10-29T05:09:00Z',
+    ...(i % 2 ? { mentionedAgent: true } : {}), ...(i === 6 ? { quotedMessage: { messageId: 'old-reply', content: '请确认重试对象' } } : {}) })
+  const routed = await f.store.routeMessages({ groupId: 'g', routeId: 'non-intervention', routingRevision: 0,
+    routes: texts.map((text, i) => ({ messageId: `m${416 + i}`, messageVersion: 1, units: [unit('discussion', text, 'out-of-scope')] })) })
+  assert.equal(routed.status, 'routed')
+  f.handler.schedule('g'); await f.handler.whenIdle(); f.handler.schedule('g'); await f.handler.whenIdle()
+  assert.deepEqual(f.errors, []); assert.deepEqual(f.replies, []); assert.deepEqual(f.created, [])
+  assert.equal(f.store.listTopics().length, 0); assert.equal(f.store.listTasks().length, 0)
+  const page = await f.store.listFixedTopicMessagesPage({ groupId: 'g', topicId: 'out-of-scope' })
+  assert.equal(page.total, texts.length)
+  assert.ok(page.items.every(item => item.state === 'silent'))
+})
+
+test('confirmed group person aliases persist, stay group scoped, and invalidate old route snapshots only on a change', async t => {
+  const snapshot = { tables: {}, global: null }, f = await fixture(t, { snapshot })
+  const personAliases = [{ alias: '小甲', name: '测试成员甲' }]
+  await f.store.updateGroup({ groupId: 'g', personAliases })
+  assert.equal(f.store.getGroup('g').routingRevision, 1)
+  await f.store.updateGroup({ groupId: 'g', personAliases })
+  assert.equal(f.store.getGroup('g').routingRevision, 1)
+  await assert.rejects(f.store.updateGroup({ groupId: 'g', personAliases: [...personAliases, { alias: '小甲', name: '测试成员乙' }] }))
+  await assert.rejects(f.store.updateGroup({ groupId: 'g', personAliases: Array.from({ length: 33 }, (_, i) => ({ alias: `a${i}`, name: '成员' })) }))
+  await assert.rejects(f.store.updateGroup({ groupId: 'g', personAliases: Array.from({ length: 10 }, (_, i) => ({ alias: `称呼${i}`, name: '姓'.repeat(80) })) }), /group_person_alias_context_too_large/)
+  await f.store.subscribe({ groupId: 'other' })
+  assert.equal(f.store.getGroup('other').personAliases, undefined)
+  await f.store.close()
+  const restored = await fixture(t, { snapshot })
+  assert.deepEqual(restored.store.getGroup('g').personAliases, personAliases)
+  await restored.store.updateGroup({ groupId: 'g', name: '新名称' })
+  assert.deepEqual(restored.store.getGroup('g').personAliases, personAliases)
+  await restored.store.updateGroup({ groupId: 'g', personAliases: [] })
+  assert.equal(restored.store.getGroup('g').routingRevision, 2)
+  assert.deepEqual(restored.store.getGroup('g').personAliases, [])
+})
 
 test('manual correction assigns all 416–422 to out-of-scope silently, preserving audit, sent replies and existing tasks across restart', async t => {
   const snapshot = { tables: {}, global: null }, f = await fixture(t, { snapshot, readMentioned: async () => { throw new Error('must not read mentions') } })
   const texts = ['你们的cortex还能用吗', '我用Claude，还能用', '客户端似乎噶了', '间隔一会儿重试几次', '又复活了，神奇',
-    '鹏哥那套好像有个优先使用号池里上次对话的账号，你前面用的账号用量满了', '没你的事，不是找你']
+    '小甲那套好像有个优先使用号池里上次对话的账号，你前面用的账号用量满了', '没你的事，不是找你']
   for (const [i, text] of texts.entries()) await f.store.ingest({ groupId: 'g', messageId: `m${416 + i}`, text, occurredAt: '2026-10-29T05:09:00Z',
     ...(i === 6 ? { quotedMessage: { messageId: 'old-reply', content: '你需要重试什么？' } } : {}) })
   const routed = await f.store.routeMessages({ groupId: 'g', routeId: 'old-route', routingRevision: 0,
@@ -136,7 +178,7 @@ test('manual fixed correction rejects stale/busy batches atomically and preserve
 
 test('fixed reply queued behind a manual correction cannot prepare an outbox entry', async t => {
   const f = await fixture(t, { readMentioned: async () => true })
-  await f.route('天气', [unit('weather', '天气', 'out-of-scope')])
+  await f.route('天气', [outsideHelp('weather', '天气')])
   const append = f.store.appendOutbox
   f.store.appendOutbox = async args => {
     await f.store.correctFixedTopicClassification({ groupId: 'g', requestId: 'during-send', reason: '人工确认保持沉默', routingRevision: 1,
@@ -161,6 +203,7 @@ test('plugin ensures durable fixed topics for existing/new groups, idempotently 
   const preserved = structuredClone(snapshot.tables.groups.new.fixedTopics)
   await first.store.close()
   delete snapshot.tables.groups.g.fixedTopics // upgrade an already subscribed group
+  snapshot.tables.groups.new.fixedTopics[0].title = '职责外话题' // rename without changing stable identity or creation time
   const upgraded = await fixture(t, { snapshot })
   assert.equal(snapshot.tables.groups.g.fixedTopics.length, 2)
   assert.deepEqual(upgraded.store.listFixedTopics('new'), preserved)
@@ -174,7 +217,7 @@ test('plugin ensures durable fixed topics for existing/new groups, idempotently 
 test('fixed topic pages survive restart, expose pending/failure/silence/reply independently, and never create business topics', async t => {
   const snapshot = { tables: {}, global: null }, f = await fixture(t, { snapshot })
   for (const { topicId } of FIXED_TOPICS) assert.equal((await f.store.listFixedTopicMessagesPage({ topicId })).total, 0)
-  await f.route('天气', [unit('outside', '天气', 'out-of-scope')], { mentionedAgent: true })
+  await f.route('天气', [outsideHelp('outside', '天气')], { mentionedAgent: true })
   const page = () => f.store.listFixedTopicMessagesPage({ topicId: 'out-of-scope', groupId: 'g' })
   const first = await page(); assert.equal(first.items[0].state, 'pending')
   await f.store.markMessageAgentDelivery({ groupId: 'g', messageId: 'm', status: 'decision-failed', error: 'dws_mentions_read_incomplete' })
@@ -219,7 +262,7 @@ test('fixed topic reads select stable metadata pages without scanning messages o
 
 for (const mentionedAgent of [true, false, undefined]) test('out-of-scope fixed route respects native mention and duplicate identity: ' + mentionedAgent, async t => {
   const f = await fixture(t, { readMentioned: async () => false })
-  await f.route('@助理帮我买咖啡', [unit('outside', '@助理帮我买咖啡', 'out-of-scope')], { mentionedAgent })
+  await f.route('@助理帮我买咖啡', [outsideHelp('outside', '@助理帮我买咖啡')], { mentionedAgent })
   f.handler.schedule('g'); f.handler.schedule('g'); await f.handler.whenIdle()
   f.handler.schedule('g'); await f.handler.whenIdle()
   assert.equal(f.created.length, 0)
@@ -233,7 +276,7 @@ for (const mentionedAgent of [true, false, undefined]) test('out-of-scope fixed 
 test('native mention lookup used when event metadata is absent', async t => {
   let lookups = 0
   const f = await fixture(t, { readMentioned: async (groupId, message) => { lookups++; assert.equal(groupId, 'g'); assert.equal(message.messageId, 'm'); return true } })
-  await f.route('请看天气', [unit('outside', '请看天气', 'out-of-scope')])
+  await f.route('请看天气', [outsideHelp('outside', '请看天气')])
   f.handler.schedule('g'); await f.handler.whenIdle()
   assert.equal(lookups, 1); assert.equal(f.replies.length, 1)
 })
@@ -311,8 +354,9 @@ test('local yesterday crosses UTC midnight and DST safely', () => {
 })
 
 test('fixed route values are stable and cannot also claim business effects', () => {
-  assert.deepEqual(FIXED_TOPICS.map(topic => topic.title), ['职责外话题', '职责内Agent平台相关'])
+  assert.deepEqual(FIXED_TOPICS.map(topic => topic.title), ['无需本助手介入', '职责内Agent平台相关'])
   assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'r', routes: [{ messageId: 'm', messageVersion: 1, units: [{ ...unit('bad', 'x', 'agent-platform'), topics: [{ newTopicKey: 'bad', title: 'bad' }] }] }] }))
+  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'r', routes: [{ messageId: 'm', messageVersion: 1, units: [{ ...unit('bad', 'x', 'agent-platform'), outOfScopeHelp: true }] }] }))
 })
 
 for (const scenario of ['found', 'absent', 'cursor-stalled']) test('native mention lookup matches exact group/message and paginates: ' + scenario, async () => {
@@ -353,11 +397,23 @@ test('documented empty terminal mention page settles a fixed unit silently, with
       decryptedCount: 0, decryptFailedCount: 0, result: { hasMore: false, nextCursor: 'terminal-cursor' } }) }
   } } })
   const f = await fixture(t, { readMentioned: (groupId, message) => adapter.isMessageMentioned(groupId, message.messageId, message.occurredAt) })
-  await f.route('天气', [unit('outside', '天气', 'out-of-scope')])
+  await f.route('天气', [outsideHelp('outside', '天气')])
   f.handler.schedule('g'); await f.handler.whenIdle()
   f.handler.schedule('g'); await f.handler.whenIdle()
   assert.equal(calls, 1); assert.equal(f.errors.length, 0); assert.equal(f.replies.length, 0); assert.equal(f.created.length, 0)
   assert.equal((await f.store.listFixedTopicMessagesPage({ topicId: 'out-of-scope', groupId: 'g' })).items[0].state, 'silent')
+})
+
+test('explicit outside help retains its intent across restart and does not swallow unknown mention lookup failures', async t => {
+  const snapshot = { tables: {}, global: null }, first = await fixture(t, { snapshot })
+  await first.route('助理帮我买咖啡', [outsideHelp('coffee', '助理帮我买咖啡')])
+  await first.store.close()
+  const restored = await fixture(t, { snapshot, readMentioned: async () => { throw new Error('dws_mentions_read_incomplete') } })
+  assert.equal(restored.store.getGroup('g').messages[0].units[0].outOfScopeHelp, true)
+  restored.handler.schedule('g'); await restored.handler.whenIdle()
+  assert.equal(restored.errors.length, 1); assert.match(restored.errors[0].message, /dws_mentions_read_incomplete/)
+  assert.equal(restored.replies.length, 0)
+  assert.equal(restored.store.getGroup('g').messages[0].units[0].fixedTopicHandledAt, undefined)
 })
 
 test('mention lookup rejects failed, malformed, undecrypted and incomplete pages instead of treating them as empty', async () => {

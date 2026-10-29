@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { coordinationRole, coordinationTools } from './coordination-sessions.js'
 import { z } from 'zod'
 import { FIXED_TOPICS, fixedTopicInstructions } from './fixed-topics.js'
+import { personAliasInstructions, referencedPersonAliases } from './group-person-aliases.js'
 import { toToolJsonSchema } from './tool-schema.js'
 import { resolveTopicMessages, sourceDispatchOwnershipFor } from './store.js'
 import { fingerprint, isPendingDecision, replyTopicForMessage } from './topic-model.js'
@@ -449,10 +450,16 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     }
     wait().catch(fail)
   }
+  const personAliasesCurrent = request => fingerprint(request.personAliases ?? []) === fingerprint(referencedPersonAliases(store.getGroup(request.groupId), request.personAliasMessages ?? []))
   async function createDecisionRequest(groupId, topic) {
     const promptCatalog = (store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map(({ id, name, description, revision }) => ({ id, name, description, revision }))
     const rejected = topic.decisions.filter(record => record.status === 'rejected' && record.revision > topic.processedRevision)
+    const messages = topicMessages(groupId, topic.topicId, topic.revision)
+    const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= topic.revision).map(unitKey))
+    const deltaMessages = messages.filter((message) => deltaIds.has(unitKey(message)))
+    const personAliases = referencedPersonAliases(store.getGroup(groupId), deltaMessages)
     const requestId = requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision, promptCatalog,
+      ...(personAliases.length ? { personAliases } : {}),
       ...(rejected.length ? { rejectedDecisionIds: rejected.map(record => record.decisionId) } : {}) })
     for (const [id, request] of decisions) {
       if (request.groupId !== groupId || request.topicId !== topic.topicId) continue
@@ -460,14 +467,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       supersedeRequest(request, requestId, 'topic-revision-replaced')
       decisions.delete(id)
     }
-    const messages = topicMessages(groupId, topic.topicId, topic.revision)
     const removedUnitRefs = topic.entries.filter((entry) => entry.action === 'remove' && entry.revision > topic.processedRevision && entry.revision <= topic.revision).map(({ unitId, unitRevision, messageId }) => ({ unitId, unitRevision, messageId }))
     const removedMessageIds = [...new Set(topic.entries.filter((entry) => entry.action === 'remove' && entry.revision > topic.processedRevision && entry.revision <= topic.revision).map((entry) => entry.messageId))]
-    const request = { requestId, groupId, topicId: topic.topicId, revision: topic.revision, messages, removedUnitRefs, removedMessageIds, promptCatalog, readPromptRefs: new Map(), readPromptVersions: new Map(),
+    const request = { requestId, groupId, topicId: topic.topicId, revision: topic.revision, messages, personAliasMessages: deltaMessages, personAliases, removedUnitRefs, removedMessageIds, promptCatalog, readPromptRefs: new Map(), readPromptVersions: new Map(),
       topicRefs: [{ topicId: topic.topicId, revision: topic.revision }], candidates: scopedCandidates(groupId, messages, [{ topicId: topic.topicId, revision: topic.revision }]), readReview: false }
     decisions.set(request.requestId, request)
-    const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= topic.revision).map(unitKey))
-    const deltaMessages = messages.filter((message) => deltaIds.has(unitKey(message)))
     const ownership = effectOwnership(groupId, topic.topicId, topic.revision, deltaMessages)
     const quoted = new Map(), sources = new Map()
     const projected = deltaMessages.map((message) => {
@@ -515,6 +519,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.readUnitRefs = new Set()
     const pointer = (section) => ({ section, totalChars: request.sections[section].length, contentFingerprint: fingerprint(request.sections[section]), nextOffset: 0, hasMore: true })
     const envelope = { requestId, topicId: topic.topicId, revision: topic.revision, processedRevision: topic.processedRevision,
+      ...(request.personAliases.length ? { personAliases: request.personAliases, personAliasGuide: personAliasInstructions } : {}),
       replyOwnership: [...new Map(deltaMessages.map(message => [message.messageId, { messageId: message.messageId,
         replyTopicId: replyTopicForMessage(store.getGroup(groupId), message) }])).values()],
       readCalls: { topic: { name: 'group_topic_context_get', arguments: { topicId: topic.topicId, revision: topic.revision } },
@@ -530,13 +535,15 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     // Optional Task snapshots must not displace the new source/authorization facts.
     if (serializedBytes(envelope) > DECISION_OUTPUT_MAX_BYTES - 1500) linkedTasks.snapshots = []
     if (serializedBytes(envelope) > DECISION_OUTPUT_MAX_BYTES - 1500) delete envelope.linkedTasks
+    const externalizedSections = new Set()
     while (serializedBytes(envelope) > DECISION_OUTPUT_MAX_BYTES - 1500) {
-      const section = Object.entries(sectionFields).filter(([, fields]) => fields.some((field) => Object.hasOwn(envelope, field)))
+      const section = Object.entries(sectionFields).filter(([name, fields]) => !externalizedSections.has(name) && fields.some((field) => Object.hasOwn(envelope, field)))
         .map(([name, fields]) => ({ name, size: serializedBytes(fields.map((field) => envelope[field])) }))
         .sort((left, right) => right.size - left.size)[0]?.name
       if (!section) throw new Error('decision_context_metadata_too_large')
       for (const field of sectionFields[section]) delete envelope[field]
       envelope[section === 'summary' ? 'summaryContext' : section] = pointer(section)
+      externalizedSections.add(section)
       if (section !== 'messages' && section !== 'summary') request.requiredSections.add(section)
     }
     if (serializedBytes(envelope) > DECISION_OUTPUT_MAX_BYTES - 1500) throw new Error('decision_context_metadata_too_large')
@@ -617,9 +624,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const quotedReminderOnly = messages.length > 0 && quotedReminders.size === messages.length && allRelatedTopics.length === 0
     const topics = quotedReminderOnly ? [] : boundedItems(topicIndex(allTopics).map(({ processedRevision: _processed, ...item }) => item), 5_000, 100)
     const visibleMessages = []
+    const personAliases = referencedPersonAliases(group, messages)
+    const peopleContext = personAliases.length ? { personAliases, personAliasGuide: personAliasInstructions } : {}
     for (const message of messages) {
       const base = { ...message, ...(quotedReminders.has(message.messageId) ? { quotedReminder: quotedReminders.get(message.messageId) } : {}), text: '' }
-      const remaining = ROUTE_CONTEXT_MAX_CHARS - JSON.stringify({ requestId: request.requestId, messages: [...visibleMessages, base], topics, relatedTopics }).length
+      const remaining = ROUTE_CONTEXT_MAX_CHARS - JSON.stringify({ requestId: request.requestId, ...peopleContext, messages: [...visibleMessages, base], topics, relatedTopics }).length
       const size = Math.max(0, Math.min(message.text.length, remaining - 256))
       if (size === 0 && message.text.length) {
         visibleMessages.push({ messageId: message.messageId, messageVersion: message.messageVersion, text: '', textOffset: 0, textTotal: message.text.length, textHasMore: true })
@@ -631,9 +640,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       request.readOffsets.set(message.messageId, size)
       if (!complete) continue
     }
-    const envelope = { ...(fixedTopicsEnabled ? { fixedTopics: FIXED_TOPICS } : {}), requestId: request.requestId, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length || visibleMessages.some((message) => message.textHasMore), topics, relatedTopics, totalRelatedTopics: allRelatedTopics.length, hasMoreRelatedTopics: relatedTopics.length < allRelatedTopics.length, nextRelatedTopicOffset: relatedTopics.length, totalTopics: allTopics.length, hasMoreTopics: topics.length < allTopics.length, nextTopicOffset: topics.length, ...(reason ? { reason } : {}) }
+    const envelope = { ...peopleContext, ...(fixedTopicsEnabled ? { fixedTopics: FIXED_TOPICS } : {}), requestId: request.requestId, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length || visibleMessages.some((message) => message.textHasMore), topics, relatedTopics, totalRelatedTopics: allRelatedTopics.length, hasMoreRelatedTopics: relatedTopics.length < allRelatedTopics.length, nextRelatedTopicOffset: relatedTopics.length, totalTopics: allTopics.length, hasMoreTopics: topics.length < allTopics.length, nextTopicOffset: topics.length, ...(reason ? { reason } : {}) }
     if (quotedReminders.size) envelope.quotedReminderGuide = 'quotedReminder 是 Host 按原生引用和已送达回执核验的原提醒，仅为关联背景，不代表本条消息必然订正。只改变原提醒的事项可交 coordination；新增或混合事项仍逐项判断，必要时用 group_topic_list 省略 requestId 查询完整话题目录。首屏省略目录不表示没有旧话题，不得自动把同人新要求归入旧提醒。'
-    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\n${fixedTopicsEnabled ? fixedTopicInstructions + '\n' : ''}Topic 请求：${JSON.stringify(envelope)}\n目录按 group_topic_list 相同顺序分页，nextTopicOffset 是下一页 offset；relatedTopics 是引用命中事项的首包；hasMoreRelatedTopics 时必须用 group_topic_list 携带本 requestId 和 nextRelatedTopicOffset 继续读取全部关系。无法判断旧事项归属时先检索或分页读取目录，不能因首包无候选直接新建。先判断当前消息是否涉及具体事项或任务。日常寒暄、随口聊天、没有具体事项对象的情绪表达或泛泛感谢，不新建 Topic，也不为了归档闲聊强行关联已有 Topic；将这些原文放入 ignoredRefs 并说明“日常闲聊，无具体事项”，纯闲聊提交 units=[]。消息混有闲聊和具体事项时，仅将事项拆为 units，闲聊部分放入 ignoredRefs，完整覆盖原文。明确涉及具体问题、需求、调查、执行、结果、验收或后续跟进时，才将可独立补充、取消、验收或反馈的事项归入已有 Topic 或新 Topic；优先复用确属同一事项的已有 Topic，只有独立新事项才新建。不要用是否出现“任务”等关键词或是否要求助手执行判断事项：群成员讨论具体问题也可形成话题；“谢谢，那个问题修好了”、引用任务后的“收到”“继续”等需结合引用和上下文归入原事项，不能当作闲聊丢掉。四个验收项可属于同一回归事项，两个独立需求必须分别建事项；共同业务领域不是合并理由。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；不执行任务、不回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
+    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\n${fixedTopicsEnabled ? fixedTopicInstructions + '\n' : ''}Topic 请求：${JSON.stringify(envelope)}\n目录按 group_topic_list 相同顺序分页，nextTopicOffset 是下一页 offset；relatedTopics 是引用命中事项的首包；hasMoreRelatedTopics 时必须用 group_topic_list 携带本 requestId 和 nextRelatedTopicOffset 继续读取全部关系。无法判断旧事项归属时先检索或分页读取目录，不能因首包无候选直接新建。先判断当前消息是否涉及具体事项或任务。日常寒暄、随口聊天、没有具体事项对象的情绪表达或泛泛感谢，不新建 Topic，也不为了归档闲聊强行关联已有 Topic；将这些原文放入 ignoredRefs 并说明“日常闲聊，无具体事项”，纯闲聊提交 units=[]。消息混有闲聊和具体事项时，仅将事项拆为 units，闲聊部分放入 ignoredRefs，完整覆盖原文。明确涉及具体问题、需求、调查、执行、结果、验收或后续跟进时，才将可独立补充、取消、验收或反馈的事项归入已有 Topic 或新 Topic；优先复用确属同一事项的已有 Topic，只有独立新事项才新建。${fixedTopicsEnabled ? '具体事项存在不等于需要本助手介入；先按固定类别规则识别同事间讨论、明确他人负责或仅他人通知。涉及本助手已有事项的新信息仍归原业务 Topic，不把状态通知当成新授权，不因 @ 别人就丢弃同时交给本助手的诉求。' : '不要用是否出现“任务”等关键词或是否要求助手执行判断事项：群成员讨论具体问题也可形成话题；“谢谢，那个问题修好了”、引用任务后的“收到”“继续”等需结合引用和上下文归入原事项，不能当作闲聊丢掉。'}四个验收项可属于同一回归事项，两个独立需求必须分别建事项；共同业务领域不是合并理由。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；不执行任务、不回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
     monitor(agent, request, routes)
     return envelope
   }
@@ -933,11 +942,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       try {
         result = await store.routeMessages({ groupId, routeId: request.requestId, routingRevision: request.routingRevision, routes: args.routes.map((route) => request.reason ? { ...route, reason: `${request.reason}${route.reason ? `；${route.reason}` : ''}` } : route) })
       } catch (error) {
-        if (error.message !== 'topic_message_version_stale') throw error
+        if (!['topic_message_version_stale', 'topic_routing_stale'].includes(error.message)) throw error
         routes.delete(args.requestId)
         await schedule(groupId)
         const current = [...routes.values()].find((item) => item.groupId === groupId)
-        return { status: 'stale', reason: 'message-version-changed', ...(current ? { currentRequest: { requestId: current.requestId, routingRevision: current.routingRevision } } : {}), nextAction: 'use-current-request' }
+        return { status: 'stale', reason: error.message === 'topic_routing_stale' ? 'routing-context-changed' : 'message-version-changed', ...(current ? { currentRequest: { requestId: current.requestId, routingRevision: current.routingRevision } } : {}), nextAction: 'use-current-request' }
       }
       if (result.status !== 'routed' && result.status !== 'duplicate') { routes.delete(args.requestId); await schedule(groupId); return result }
       routes.delete(args.requestId)
@@ -992,6 +1001,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const args = groupDecisionSubmissionSchema.parse(input)
       const request = decisions.get(args.requestId)
       if (!request || request.groupId !== groupId || request.topicId !== args.topicId || request.revision !== args.revision) { await schedule(groupId); return { status: 'topic-stale', nextAction: 'use-current-request' } }
+      if (!personAliasesCurrent(request)) { await schedule(groupId); return { status: 'topic-stale', reason: 'person-aliases-changed', nextAction: 'use-current-request' } }
       const basis = new Set(args.decision.basisMessageIds)
       const inferred = args.decision.basisMessageIds.flatMap((messageId) => {
         const matches = [...request.messages, ...request.removedUnitRefs].filter((message) => message.messageId === messageId)
@@ -1029,6 +1039,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         return store.acceptTopicDecision({ groupId, topicId: args.topicId, revision: args.revision, decisionId: args.requestId, decision,
         expectedTaskVersions: decision.actions.filter((action) => action.taskId).map((action) => ({ taskId: action.taskId, inputVersion: action.inputVersion, runSequence: action.runSequence })),
         preflight: () => {
+          if (!personAliasesCurrent(request)) return { status: 'topic-stale', reason: 'person-aliases-changed' }
           if (validateSnapshot && validateSnapshot() !== true) return { status: 'task-stale' }
           validateBasis(request, decision, archivedTasks)
           return decision.reply?.trim() && refreshReview(request) ? reviewRequired(request) : undefined
@@ -1485,7 +1496,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       return structuredClone({ requestId, groupId, topicId: request.topicId, revision: request.revision, messages: request.visibleMessages,
         deltaUnitRefs: request.messages.filter((message) => deltaIds.has(unitKey(message))).map(({ unitId, unitRevision }) => ({ unitId, unitRevision })),
         deltaMessageIds: [...new Set(request.messages.filter((message) => deltaIds.has(unitKey(message))).map((message) => message.messageId))],
-        policyContext: { responsibility: store.getGroup(groupId).responsibility, agentNames: store.getAgentNames() },
+        policyContext: { responsibility: store.getGroup(groupId).responsibility, agentNames: store.getAgentNames(), ...(request.personAliases?.length ? { personAliases: request.personAliases, personAliasGuide: personAliasInstructions } : {}) },
         hasOmittedMessages: request.hasSourceContext || request.requiredSections.size > 0 || !request.inlineDelta && request.messages.some((message) => deltaIds.has(unitKey(message)) && !request.readUnitRefs.has(unitKey(message))),
         summary: topic.summary, candidates: request.candidates, candidateFingerprint: fingerprint(request.candidates) })
     },

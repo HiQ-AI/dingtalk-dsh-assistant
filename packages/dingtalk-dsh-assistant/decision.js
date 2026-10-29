@@ -79,11 +79,13 @@ export const topicRouteSubmissionSchema = z.strictObject({
       sourceRefs: z.array(unitSourceRefSchema).min(1),
       contextRefs: z.array(z.strictObject({ quote: z.string().min(1), purpose: z.string().min(1) })).default([]),
       fixedTopic: z.enum(fixedTopicIds).optional(),
+      outOfScopeHelp: z.boolean().optional().describe('仅超出职责且明确向本助手求助时为true；其他负责人、通知或讨论省略此字段并保持沉默。'),
       topics: z.array(topicRouteTargetSchema), effectOwner: topicRouteOwnerSchema.optional(),
       dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(),
       reason: z.string().trim().min(1).optional(),
     }).superRefine((unit, ctx) => {
       if (unit.fixedTopic && (unit.topics.length || unit.effectOwner || unit.dispatchOwner)) ctx.addIssue({ code: 'custom', message: '固定路由类别不关联业务 Topic 或其他派发方', path: ['fixedTopic'] })
+      if (unit.outOfScopeHelp !== undefined && unit.fixedTopic !== 'out-of-scope') ctx.addIssue({ code: 'custom', message: '职责外求助仅用于 out-of-scope 固定类别', path: ['outOfScopeHelp'] })
       if (unit.topics.length === 0 && !unit.reason) ctx.addIssue({ code: 'custom', message: '无 Topic 归属的事项必须说明原因', path: ['reason'] })
       if (unit.replacesUnitIds.length && (!unit.effectInheritance || !unit.revisionReason)) ctx.addIssue({ code: 'custom', message: '事项拆分或合并必须声明效果继承方式和修订原因', path: ['replacesUnitIds'] })
       if (unit.topics.length > 1) {

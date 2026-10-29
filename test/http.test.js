@@ -502,6 +502,10 @@ test('生产HTTP开放只读状态与明确的本机群配置接口，测试控�
   assert.equal((await fetch(`${baseUrl}/config/agent`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceDir: 'D:\\baibu-agent' }) })).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/agent`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ proxyUrl: 'http://127.0.0.1:10808' }) })).status, 200)
   assert.equal((await fetch(`${baseUrl}/config/groups`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ groupId: 'g', responsibility: 'r' }) })).status, 200)
+  const personAliases = [{ alias: '小甲', name: '测试成员甲' }]
+  const aliases = await fetch(`${baseUrl}/config/groups/g`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ personAliases }) })
+  assert.equal(aliases.status, 200)
+  assert.deepEqual(await aliases.json(), { groupId: 'g', personAliases })
   const archived = await fetch(`${baseUrl}/tasks/task-1/archive`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
   assert.equal(archived.status, 410)
   const cancelled = await fetch(`${baseUrl}/tasks/task-2/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'cancel-1', reason: '误建任务', expectedControlRevision: 1 }) })

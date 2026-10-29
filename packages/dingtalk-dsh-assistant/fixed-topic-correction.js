@@ -61,7 +61,7 @@ export function correctOutOfScope(group, input, tasks) {
   const messages = group.messages.map(message => {
     if (!selected.has(message.messageId)) return message
     const unit = { unitId: stableId('manual-fixed-unit', JSON.stringify([group.groupId, requestId, message.messageId])), unitRevision: 1,
-      unitKey: 'manual-out-of-scope', summary: '职责外话题（人工归类纠正）', fixedTopic: 'out-of-scope', fixedTopicHandledAt: at,
+      unitKey: 'manual-out-of-scope', summary: '无需本助手介入（人工归类纠正）', fixedTopic: 'out-of-scope', fixedTopicHandledAt: at,
       manualCorrection: { requestId, reason }, sourceRanges: message.text ? [{ start: 0, end: message.text.length, quote: message.text }] : [],
       sourceAttachments: (message.imageRefs ?? []).map(ref => ({ imageRefId: attachmentRefId(ref) })), contextRanges: [],
       predecessorUnitRefs: message.activeUnitRefs ?? [] }
