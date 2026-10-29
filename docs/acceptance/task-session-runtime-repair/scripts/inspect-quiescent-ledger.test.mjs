@@ -5,7 +5,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile, copyFile, link, symlink, renam
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { inspectLedger } from './inspect-quiescent-ledger.mjs'
+import { inspectLedger, inspectCurrentControl } from './inspect-quiescent-ledger.mjs'
 import { openDynamicTaskStore } from '../../../../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 
 test('offline deployment refuses a live owner and unfinished rounds, accepts retained dead-owner metadata without changing unknown facts', async t => {
@@ -284,7 +284,7 @@ $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('${script.replaceAll("'","''")}',[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'PARSE_FAILED'}
 $block=$ast.Find({param($a) $a -is [Management.Automation.Language.IfStatementAst] -and $a.Extent.Text.StartsWith('if($ResumeNativeDispose){') -and $a.Extent.Text.Contains('$savedControl=')},$true).Extent.Text
-$ResumeNativeDispose=$true;$ExpectedPid=123;$ExpectedPackageSha256='package';$ExpectedProfileSha256='profile';$EvidenceDirectory='D:/evidence'
+$ResumeNativeDispose=$true;$ExpectedPid=123;$ExpectedPackageSha256='package';$ExpectedProfileSha256='profile';$EvidenceDirectory='${root.replaceAll("'","''")}'
 $control=@{pid=123;packageSha256='package';profileSha256='profile';creationDate='2026-10-28T08:00:00'}
 $signal=@{targetPid=123;signalSent='CTRL_C_EVENT'}
 $failure=@{phase='native-dispose';error='DEPLOY_NATIVE_NOT_QUIESCENT'}
@@ -303,4 +303,106 @@ try { . ([scriptblock]::Create($block));throw 'OWNER_ACCEPTED' } catch { if($_.E
  const result=spawnSync('pwsh',['-NoProfile','-File',fixture],{encoding:'utf8',windowsHide:true})
  assert.equal(result.status,0,result.stdout+result.stderr)
  assert.match(result.stdout,/RESUME_GATES_PASS/)
+})
+
+async function drainMaintenanceFixture(t) {
+ const f=await unstartedFixture(t)
+ for(const table of ['tasks','executions','operations'])f.db.exec(`DELETE FROM dynamic_${table}`)
+ const execution={taskId:'task-a',executionId:'exec-a',sessionId:'owner-a',requirementRevision:1,controlRevision:1,
+  inputVersion:1,inputDigest:'original-input',leaseEpoch:3,sessionBound:true,cancelRequested:true,status:'running',drained:false}
+ f.db.prepare('INSERT INTO dynamic_tasks VALUES (?)').run(JSON.stringify({taskId:'task-a',control:'active',drained:true}))
+ f.db.prepare('INSERT INTO dynamic_executions VALUES (?)').run(JSON.stringify(execution))
+ f.db.prepare('INSERT INTO dynamic_operations VALUES (?)').run(JSON.stringify({operationId:'effect-a',state:'unknown',executionId:'exec-a'}))
+ f.db.exec('CREATE TABLE dynamic_receipts(id TEXT,body TEXT)')
+ f.db.prepare("UPDATE dynamic_meta SET value=? WHERE key='owner'").run(`${process.pid}:current`)
+ f.events.splice(0,f.events.length,{type:'session',id:execution.sessionId},
+  {type:'plugin:dingtalk/execution-session',seq:0,data:{version:2,identity:execution}},
+  {type:'user/message',seq:1,data:{source:{executionSession:execution}}},
+  {type:'turn/start',seq:2},{type:'turn/end',seq:3,data:{status:'blocked'}})
+ await f.save()
+ const intent={schema:'native-drain-maintenance-v1',expectedHost:{pid:process.pid,creationDate:'2026-10-29T00:00:00Z',commandLineSha256:'a'.repeat(64)},
+  operatorApproval:{kind:'explicit-stop-deploy-resume',authorizedAt:'2026-10-29T01:00:00Z',sourceRef:'operator-message'},
+  executions:[{executionId:'exec-a',cancelResponse:{statusCode:400,observedAt:'2026-10-29T01:05:00Z',body:{error:'execution_process_drain_failed'}}}]}
+ const freeze=()=>inspectCurrentControl(f.path,'online',process.pid,{workspace:f.root,proposal:intent,freeze:true}).maintenance.proposal
+ const proposal=freeze(),options={workspace:f.root,proposal}
+ return {...f,execution,intent,proposal,options,freeze}
+}
+
+test('drain maintenance freezes a terminal cancelled execution and preserves unknown, rows and logs through offline proof',async t=>{
+ const f=await drainMaintenanceFixture(t),before=f.db.prepare('SELECT body FROM dynamic_executions').all(),log=await readFile(f.log)
+ assert.throws(()=>inspectCurrentControl(f.path,'online',process.pid),/DEPLOY_NOT_DRAINED/)
+ const proof=inspectCurrentControl(f.path,'online',process.pid,f.options)
+ assert.equal(proof.drained,false);assert.equal(proof.quiescent,false);assert.equal(proof.maintenanceReady,true);assert.equal(proof.maintenance.writes,0)
+ assert.equal(proof.unknownOperations,1);assert.equal(proof.maintenance.retained[0].binding.leaseEpoch,3)
+ assert.deepEqual(inspectCurrentControl(f.path,'online',process.pid,f.options),proof)
+ assert.throws(()=>inspectCurrentControl(f.path,'offline',process.pid,f.options),/OWNER_NOT_RELEASED/)
+ // The OS gate still requires the exact approved owner to exit. Use an already exited child for offline proof.
+ f.db.prepare("UPDATE dynamic_meta SET value=? WHERE key='owner'").run(`${f.pid}:current`)
+ const offlineOptions={...f.options,proposal:{...f.proposal,expectedHost:{...f.proposal.expectedHost,pid:f.pid}}}
+ const offline=inspectCurrentControl(f.path,'offline',f.pid,offlineOptions)
+ assert.equal(offline.drained,false);assert.equal(offline.quiescent,true);assert.equal(offline.maintenance.ledgerDigest,proof.maintenance.ledgerDigest)
+ assert.throws(()=>inspectCurrentControl(f.path,'offline',f.pid,{...offlineOptions,freeze:true}),/FREEZE_REQUIRES_LIVE_OWNER/)
+ assert.deepEqual(f.db.prepare('SELECT body FROM dynamic_executions').all(),before);assert.deepEqual(await readFile(f.log),log)
+ assert.equal(JSON.parse(f.db.prepare('SELECT body FROM dynamic_operations').get().body).state,'unknown')
+})
+
+test('drain maintenance rejects changed controls, new commands and changed native input or terminal evidence',async t=>{
+ const f=await drainMaintenanceFixture(t)
+ f.db.prepare('INSERT INTO dynamic_receipts VALUES (?,?)').run('new-command','{}')
+ assert.throws(()=>inspectCurrentControl(f.path,'online',process.pid,f.options),/CONTROL_CHANGED/)
+ f.db.exec('DELETE FROM dynamic_receipts')
+ f.db.prepare('UPDATE dynamic_executions SET body=?').run(JSON.stringify({...f.execution,leaseEpoch:4}))
+ assert.throws(()=>inspectCurrentControl(f.path,'online',process.pid,f.options),/CONTROL_CHANGED/)
+ assert.throws(f.freeze,/INPUT_IDENTITY/)
+ f.db.prepare('UPDATE dynamic_executions SET body=?').run(JSON.stringify(f.execution))
+ f.events.push({type:'turn/start',seq:4});await f.save()
+ assert.throws(f.freeze,/TERMINAL_MISSING/)
+ f.events.pop();f.events.at(-1).data.status='aborted';await f.save()
+ assert.throws(()=>inspectCurrentControl(f.path,'online',process.pid,f.options),/EVIDENCE_CHANGED/)
+})
+
+test('drain maintenance refuses missing cancellation proof, other active work or a different session',async t=>{
+ const f=await drainMaintenanceFixture(t)
+ f.intent.executions[0].cancelResponse.statusCode=200;assert.throws(f.freeze,/CANCEL_RECEIPT/)
+ f.intent.executions[0].cancelResponse.statusCode=400
+ f.db.prepare('UPDATE dynamic_executions SET body=?').run(JSON.stringify({...f.execution,cancelRequested:false}))
+ assert.throws(f.freeze,/EXECUTION_IDENTITY/)
+ f.db.prepare('UPDATE dynamic_executions SET body=?').run(JSON.stringify(f.execution))
+ f.db.prepare('INSERT INTO dynamic_groups VALUES (?)').run('{"drained":false}');assert.throws(f.freeze,/ACTIVE_WORK/)
+ f.db.exec('DELETE FROM dynamic_groups')
+ f.events[1].data.identity={...f.execution,sessionId:'another-session'};await f.save();assert.throws(f.freeze,/SESSION_IDENTITY/)
+})
+
+test('drain cutover gates execute in PowerShell and reject changed Host, proposal, children, ports and autostart',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'drain-cutover-ps-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const script=new URL('./deploy-task-session-native.ps1',import.meta.url).pathname.replace(/^\/([A-Z]:)/,'$1'),fixture=join(root,'check.ps1')
+ await writeFile(fixture,`
+$ErrorActionPreference='Stop';$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('${script.replaceAll("'","''")}',[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'PARSE_FAILED'}
+foreach($name in @('TextHash','AssertDrainMaintenanceIdentity','AssertDrainMaintenanceProcessesExited','PortOwners')){. ([scriptblock]::Create($ast.Find({param($a) $a -is [Management.Automation.Language.FunctionDefinitionAst] -and $a.Name-eq$name},$true).Extent.Text))}
+function Get-NetTCPConnection { throw 'PORT_PROBE_DENIED' }
+try{PortOwners 3080;throw 'PORT_FAILURE_IGNORED'}catch{if($_.Exception.Message-ne'PORT_PROBE_DENIED'){throw}}
+$ExpectedPid=123;$original=[pscustomobject]@{CreationDate=[datetime]'2026-10-29T00:00:00Z';CommandLine='target-host'}
+$DrainFailureMaintenanceProposal='proposal';$drainMaintenanceHash='fixed';$actualHash='fixed'
+$drainMaintenance=@{expectedHost=@{pid=123;creationDate='2026-10-29T00:00:00Z';commandLineSha256=(TextHash 'target-host')}}
+function Hash { $actualHash };function Get-CimInstance { if($childAlive){[pscustomobject]@{CreationDate=$original.CreationDate}} }
+function Get-Process { if($hostAlive){[pscustomobject]@{Id=123}} };function PortOwners { if($portAlive){@(123)}else{@()} }
+function Descendants { if($orphanAlive){[pscustomobject]@{ProcessId=789}} }
+function Get-ScheduledTask { [pscustomobject]@{Settings=@{Enabled=$autostart}} };function RunNode { $script:verified=$true;'{}' }
+$originalDescendants=@([pscustomobject]@{ProcessId=456;CreationDate=$original.CreationDate})
+$gate=$ast.Find({param($a) $a -is [Management.Automation.Language.IfStatementAst] -and $a.Extent.Text.StartsWith('if($DrainFailureMaintenanceProposal){') -and $a.Extent.Text.Contains('AssertDrainMaintenanceProcessesExited') -and $a.Extent.Text.Contains('$offlineProof=RunNode')},$true).Extent.Text
+. ([scriptblock]::Create($gate));if(-not$verified){throw 'OFFLINE_GATE_MISSING'}
+foreach($case in @('childAlive','hostAlive','portAlive','autostart','orphanAlive')){
+ Set-Variable $case $true
+ try{. ([scriptblock]::Create($gate));throw 'PROCESS_ACCEPTED'}catch{if($_.Exception.Message-notin@('DEPLOY_CHILD_PROCESS_REMAINS','DEPLOY_MAINTENANCE_PROCESS_REMAINS')){throw}}
+ Set-Variable $case $false
+}
+$actualHash='changed';try{AssertDrainMaintenanceIdentity;throw 'CHANGED_PROPOSAL_ACCEPTED'}catch{if($_.Exception.Message-ne'DEPLOY_MAINTENANCE_PROPOSAL_CHANGED'){throw}}
+$actualHash='fixed';$original.CommandLine='another-host'
+try{AssertDrainMaintenanceIdentity;throw 'CHANGED_HOST_ACCEPTED'}catch{if($_.Exception.Message-ne'DEPLOY_MAINTENANCE_HOST_CHANGED'){throw}}
+'DRAIN_CUTOVER_GATES_PASS'
+`)
+ const result=spawnSync('pwsh',['-NoProfile','-File',fixture],{encoding:'utf8',windowsHide:true})
+ assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/DRAIN_CUTOVER_GATES_PASS/)
 })

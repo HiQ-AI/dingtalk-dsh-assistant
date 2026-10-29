@@ -10,7 +10,8 @@ param(
  [Parameter(Mandatory)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedObserverPackageSha256,
  [string]$PtyUpgradeProposal,
  [string]$ArtifactPolicyProposal,
- [string]$RestartMaintenanceProposal
+ [string]$RestartMaintenanceProposal,
+ [string]$DrainFailureMaintenanceProposal
 )
 $ErrorActionPreference='Stop'
 $workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../..'))
@@ -39,9 +40,16 @@ $phase='check'
 $ptyHelper=Join-Path $workspace 'scripts/pty-package-upgrade.mjs'
 $artifactPolicyHelper=Join-Path $workspace 'scripts/sandbox-artifact-policy.mjs'
 if($PtyUpgradeProposal -and $ArtifactPolicyProposal){throw 'DEPLOY_PATCH_MODES_CONFLICT'}
+if($DrainFailureMaintenanceProposal-and($RestartMaintenanceProposal-or$PtyUpgradeProposal-or$ArtifactPolicyProposal-or$ResumeNativeDispose)){throw 'DEPLOY_MAINTENANCE_MODES_CONFLICT'}
 if($ArtifactPolicyProposal){$ArtifactPolicyProposal=[IO.Path]::GetFullPath($ArtifactPolicyProposal)}
 if($PtyUpgradeProposal){$PtyUpgradeProposal=[IO.Path]::GetFullPath($PtyUpgradeProposal)}
 function Hash([string]$file){(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()}
+function TextHash([string]$value){[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($value))).ToLowerInvariant()}
+function AssertDrainMaintenanceIdentity {
+ if((Hash $DrainFailureMaintenanceProposal)-ne$drainMaintenanceHash){throw 'DEPLOY_MAINTENANCE_PROPOSAL_CHANGED'}
+ $bound=$drainMaintenance.expectedHost
+ if($bound.pid-ne$ExpectedPid-or([datetime]$bound.creationDate).ToUniversalTime()-ne$original.CreationDate.ToUniversalTime()-or$bound.commandLineSha256-cne(TextHash $original.CommandLine)){throw 'DEPLOY_MAINTENANCE_HOST_CHANGED'}
+}
 $packageCacheRoot='D:/dsh_home/packages/by-sha256'
 function AssertPackagePath([string]$path){
  for($cursor=[IO.Path]::GetFullPath($path);$cursor;$cursor=[IO.Path]::GetDirectoryName($cursor)){
@@ -61,8 +69,13 @@ function ImmutablePackage([string]$path,[string]$expectedSha256){
  return $destination
 }
 function RunNode([string[]]$Arguments){
- $output=& $node @Arguments 2>$null
- if($LASTEXITCODE){throw "DEPLOY_NODE_CHECK_FAILED:$($Arguments[0]):$($Arguments[1])"}
+ $output=& $node @Arguments 2>&1
+ if($LASTEXITCODE){
+  $code=@($output|ForEach-Object {[string]$_}|Where-Object {$_-cmatch'^DEPLOY_[A-Z0-9_]+$'}|Select-Object -First 1)
+  if($code.Count){throw $code[0]}
+  throw "DEPLOY_NODE_CHECK_FAILED:$($Arguments[0]):$($Arguments[1])"
+ }
+ $output=@($output|Where-Object {$_ -is [string]})
  return ($output -join "`n")
 }
 function Record([string]$Name,$Value){$Value|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $EvidenceDirectory "$Name.json") -Encoding utf8}
@@ -88,10 +101,20 @@ function ProcessIdentity {
  $current=Get-CimInstance Win32_Process -Filter "ProcessId=$ExpectedPid"
  if(-not$current-or$current.CreationDate-ne$original.CreationDate-or$current.CommandLine-ne$original.CommandLine){throw 'DEPLOY_PROCESS_IDENTITY_CHANGED'}
 }
-function PortOwners([int]$port){@(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue|Select-Object -ExpandProperty OwningProcess -Unique)}
+function PortOwners([int]$port){@(Get-NetTCPConnection -ErrorAction Stop|Where-Object {$_.State-eq'Listen'-and$_.LocalPort-eq$port}|Select-Object -ExpandProperty OwningProcess -Unique)}
 function Descendants([int]$parent){
  $direct=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parent")
  foreach($child in $direct){$child;Descendants $child.ProcessId}
+}
+function AssertDrainMaintenanceProcessesExited {
+ if((Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue)-or(PortOwners 3080).Count-or(PortOwners 18998).Count-or(Get-ScheduledTask -TaskName $taskName).Settings.Enabled){throw 'DEPLOY_MAINTENANCE_PROCESS_REMAINS'}
+ foreach($child in $originalDescendants){
+  $remaining=Get-CimInstance Win32_Process -Filter "ProcessId=$($child.ProcessId)"
+  if($remaining-and$remaining.CreationDate-eq$child.CreationDate){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
+  # A captured parent can exit before its children; retain its PID as an ancestry root.
+  if(@(Descendants $child.ProcessId).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
+ }
+ if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
 }
 function WaitFor([scriptblock]$Condition,[string]$Failure,[int]$TimeoutSeconds=120){
  $deadline=[DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -136,7 +159,13 @@ if($RestartMaintenanceProposal){
  $maintenanceProposalHash=Hash $RestartMaintenanceProposal
  $maintenanceArgs=@('online',[string]$ExpectedPid,$RestartMaintenanceProposal)
 }
-$ledgerProof=if($RestartMaintenanceProposal){RunNode (@($ledger,$db,$agentWorkspace)+$maintenanceArgs)}else{$controlMode=if($ResumeNativeDispose){'offline'}else{'online'};RunNode @($ledger,'current-control',$db,$controlMode,[string]$ExpectedPid)}
+if($DrainFailureMaintenanceProposal){
+ $DrainFailureMaintenanceProposal=[IO.Path]::GetFullPath($DrainFailureMaintenanceProposal)
+ $drainMaintenanceHash=Hash $DrainFailureMaintenanceProposal
+ $drainMaintenance=Get-Content -LiteralPath $DrainFailureMaintenanceProposal -Raw|ConvertFrom-Json
+ AssertDrainMaintenanceIdentity
+}
+$ledgerProof=if($RestartMaintenanceProposal){RunNode (@($ledger,$db,$agentWorkspace)+$maintenanceArgs)}elseif($DrainFailureMaintenanceProposal){RunNode @($ledger,'current-control',$db,'online',[string]$ExpectedPid,$agentWorkspace,$DrainFailureMaintenanceProposal)}else{$controlMode=if($ResumeNativeDispose){'offline'}else{'online'};RunNode @($ledger,'current-control',$db,$controlMode,[string]$ExpectedPid)}
 if($PtyUpgradeProposal){$ptyProposalSha256=Hash $PtyUpgradeProposal;$ptyCheck=RunNode @($ptyHelper,'check',$profile,$PtyUpgradeProposal);if((Hash $PtyUpgradeProposal)-ne$ptyProposalSha256){throw 'DEPLOY_PTY_PROPOSAL_CHANGED'}}
 $artifactPolicyCheck=$null
 if($ArtifactPolicyProposal){
@@ -171,7 +200,15 @@ try{
   if((Hash $RestartMaintenanceProposal)-ne$maintenanceProposalHash){throw 'DEPLOY_MAINTENANCE_PROPOSAL_CHANGED'}
    Record 'restart-maintenance-preflight' ($ledgerProof|ConvertFrom-Json)
  }
+ if($DrainFailureMaintenanceProposal){
+  AssertDrainMaintenanceIdentity
+  # Re-read the frozen controls immediately before signalling; never refresh the manifest in place.
+  $ledgerProof=RunNode @($ledger,'current-control',$db,'online',[string]$ExpectedPid,$agentWorkspace,$DrainFailureMaintenanceProposal)
+  Copy-Item -LiteralPath $DrainFailureMaintenanceProposal -Destination (Join-Path $EvidenceDirectory 'drain-maintenance-proposal.json')
+  Record 'drain-maintenance-preflight' ($ledgerProof|ConvertFrom-Json)
+ }
  $phase='native-dispose'
+ ProcessIdentity
  $originalDescendants=@(Descendants $ExpectedPid)
  Record 'captured-descendants' @($originalDescendants|Select-Object ProcessId,ParentProcessId,Name,CreationDate)
  $signalOut=Join-Path $EvidenceDirectory 'signal.json';$signalErr=Join-Path $EvidenceDirectory 'signal.stderr.log'
@@ -185,7 +222,7 @@ try{
    if($remaining -and $remaining.CreationDate -eq $child.CreationDate){return $false}
   }
   if((PortOwners 3080).Count-or(PortOwners 18998).Count){return $false}
-  try{$offlineArgs=if($RestartMaintenanceProposal){@($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid,$RestartMaintenanceProposal)}else{@($ledger,'current-control',$db,'offline',[string]$ExpectedPid)};$script:offlineProof=RunNode $offlineArgs;return $true}catch{return $false}
+  try{$offlineArgs=if($RestartMaintenanceProposal){@($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid,$RestartMaintenanceProposal)}elseif($DrainFailureMaintenanceProposal){@($ledger,'current-control',$db,'offline',[string]$ExpectedPid,$agentWorkspace,$DrainFailureMaintenanceProposal)}else{@($ledger,'current-control',$db,'offline',[string]$ExpectedPid)};$script:offlineProof=RunNode $offlineArgs;return $true}catch{if($DrainFailureMaintenanceProposal){throw};return $false}
  } 'DEPLOY_NATIVE_NOT_QUIESCENT'
  if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
  }else{
@@ -193,7 +230,15 @@ try{
   $offlineProof=RunNode @($ledger,'current-control',$db,'offline',[string]$ExpectedPid)
   Record 'resume-native-dispose' @{observedAt=[DateTime]::UtcNow.ToString('o');priorFailure=$savedFailure;signals=0}
  }
+ if($DrainFailureMaintenanceProposal){AssertDrainMaintenanceProcessesExited}
  Record 'quiescent' @{ledger=($offlineProof|ConvertFrom-Json);pid=$ExpectedPid;creationDate=$original.CreationDate;remainingDescendants=0;runtimePortClosed=$true;observedAt=[DateTime]::UtcNow.ToString('o');shutdown='SIGINT'}
+ if($DrainFailureMaintenanceProposal){
+  AssertDrainMaintenanceIdentity
+  $beforeMaintenance=($ledgerProof|ConvertFrom-Json).maintenance
+  $afterMaintenance=($offlineProof|ConvertFrom-Json).maintenance
+  if(-not$beforeMaintenance-or-not$afterMaintenance-or$beforeMaintenance.ledgerDigest-ne$afterMaintenance.ledgerDigest-or$beforeMaintenance.proposalDigest-ne$afterMaintenance.proposalDigest){throw 'DEPLOY_RETAINED_LEDGER_CHANGED'}
+  Record 'drain-maintenance-cutover' @{maintenance=$afterMaintenance;drained=$false;processesExited=$true;recoveryRequired=$true;replayAllowed=$false}
+ }
  if($RestartMaintenanceProposal){
   if((Hash $RestartMaintenanceProposal)-ne$maintenanceProposalHash){throw 'DEPLOY_MAINTENANCE_PROPOSAL_CHANGED'}
   $beforeMaintenance=($ledgerProof|ConvertFrom-Json).maintenance
@@ -208,6 +253,11 @@ try{
   Record 'backup' ($backupProof|ConvertFrom-Json)
  }
  $phase='install'
+ if($DrainFailureMaintenanceProposal){
+  AssertDrainMaintenanceIdentity
+  AssertDrainMaintenanceProcessesExited
+  $offlineProof=RunNode @($ledger,'current-control',$db,'offline',[string]$ExpectedPid,$agentWorkspace,$DrainFailureMaintenanceProposal)
+ }
  $assistantInstallPackage=ImmutablePackage $Package $ExpectedPackageSha256
  $observerInstallPackage=ImmutablePackage $ObserverPackage $ExpectedObserverPackageSha256
  $installationPolicyProposal=$ArtifactPolicyProposal
