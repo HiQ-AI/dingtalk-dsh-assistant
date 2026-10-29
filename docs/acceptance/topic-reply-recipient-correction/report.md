@@ -61,7 +61,8 @@ README 的公开回复合同和 `docs/ops/task-session-clean-start.md` 的冻结
 - 修复提交：`aaa7d823b908f1ca2528cb39632b29f7a6cb9ea9`；推送后独立 `git ls-remote` 回读一致。
 - 新 PR：[#297](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/297)，`fix(topic): 保留语义回复对象并修正收件人纠正沟通`。
 - 2026-10-29T18:08:11+08:00 独立 `gh pr view` 回读：OPEN，`main ← worktree-topic-reply-recipient-correction`，正文、标题及修复 SHA 符合预期，`mergedAt=null`。
-- 随后独立回查发现 PR 为 CONFLICTING，交付重开。最新 main `fd631460` 已以普通 merge 整合到隔离工作树，正确解法暂存、无 UU；稳定版 20 个定向用例与最终只读审查通过。远端解除冲突及最终 SHA 仍待提交/push 后独立回读，不能由本地测试推导远端已可合并。
+- 随后独立回查发现 PR 为 CONFLICTING，交付重开。最新 main `fd631460` 以普通 merge 整合到隔离分支；稳定版 20 个定向用例与最终只读审查通过。整合提交 `1f3e034c063af7546b6cae92f1b9b63acf95997e` 已独立核双亲 `9675c13a` / `fd631460` 并正常 push。
+- 2026-10-29T18:37:06+08:00 独立 `gh pr view` 完整回读：#297 OPEN、MERGEABLE、`mergedAt=null`、`statusCheckRollup=[]`；标题、base/head 和已过门禁正文一致，`headRefOid=1f3e034c063af7546b6cae92f1b9b63acf95997e`，独立 `git ls-remote` 同 SHA。远端冲突解除，不以仅 OPEN 或本地测试代替此结论。本段随最后文档收口提交交付，不改变已验证源码。
 - 没有合并 PR、部署、手动 CI 或真实消息副作用；原六窗口保留。
 
 ## 未验及禁区

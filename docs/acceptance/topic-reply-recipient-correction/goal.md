@@ -1,8 +1,8 @@
 # Topic 回复对象与收件人纠正修复
 
-> 状态：ACTIVE
+> 状态：COMPLETED
 > Goal ID：topic-reply-recipient-correction
-> 最近维护：2026-10-29T18:34:37+08:00
+> 最近维护：2026-10-29T18:37:06+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-reply-recipient-correction/docs/acceptance/topic-reply-recipient-correction/goal.md
 
 ## 总目标
@@ -29,9 +29,9 @@ Topic 语义决定回复内容和对象，Host 验证并执行，不能用 basis
 ## 当前检查点
 
 - 当前子目标：SG6
-- 当前状态：ACTIVE，最终文档已由docs交接Lead并补齐。main fd631460已整合；正确冲突解法已暂存、无UU，测试后packages/test无未暂存漂移。最终稳定版12+2+5及Lead亲跑inbox1均PASS，round-17已记录四组命令/耗时与最终独立审查；matrix实核57条历史/30 cases，最新26 PASS/4 OUT_OF_SCOPE、无重复或未决。远端PR297尚在旧头9675c13a、最后已读CONFLICTING，需正常push后再核。
-- 唯一下一步：Lead核最终差异及文档门禁、提交merge、正常push，用同一已过门禁正文更新PR并独立核MERGEABLE/远端SHA。无新测试/审查待执行，不重跑；旧错误解法通过只留历史。不force/main/PR merge/部署/CI。
-- 未闭环项：提交merge、正常push/更新正文及PR无冲突回查。真实LLM/现场/crash、旧prepared超时根因未证等边界不变。
+- 当前状态：COMPLETED。普通merge提交1f3e034c已独立核双亲9675c13a/fd631460并正常push；同一已过门禁正文更新PR297后，18:37独立gh回读OPEN/MERGEABLE、mergedAt=null、statusCheckRollup=[]，headRefOid与独立ls-remote均为1f3e034c063af7546b6cae92f1b9b63acf95997e。最终稳定版12+2+5及Lead亲跑inbox1均PASS，round-17含四组命令/耗时与最终独立审查；矩阵57条历史/30 cases，最新26 PASS/4 OUT_OF_SCOPE、无重复或未决。
+- 唯一下一步：交付后等待PR评审；无新实现、测试或审查待执行，不自动合并/部署/CI。该检查点随文档收口提交交付，不改变已验证源码；六原窗口保留。
+- 未闭环项：本任务范围内无工程阻断；真实LLM/现场/crash未验、旧prepared超时根因未证等边界保留，不视为已验证。
 - 工作目录：D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-reply-recipient-correction
 - 分支：worktree-topic-reply-recipient-correction；base main。
 
@@ -44,7 +44,7 @@ Topic 语义决定回复内容和对象，Host 验证并执行，不能用 basis
 | SG3 | tests：独立测试与回归，独占test/ | 复现和纠正、歧义/跨群/非助手引用拒绝、幂等恢复及通知回归 | 受控代表测试完成，真实模型同名消歧及现场验收未做 | 定向13、关联177、冲突2、prepared1、手写6、材料1、通知恢复6均PASS；保留历史失败 |
 | SG4 | review：独立审查，只读实现/测试 | 无已证阻断，盲点明确 | 完成，已审源码及测试暂无剩余已证阻断 | 原错taskIds外发FAIL保留；修后send0通过；三处仅补route，单真人默认不证明多参与者语义；未验边界保留 |
 | SG5 | docs：合同及验收文档，独占README/相关ops/matrix/round/report，不写goal/spec | 历史失败保留、证据可追溯、全绿后报告 | 完成，已交接Lead单写收口 | round-16/17与ops已核；report.md及矩阵最新26 PASS/4 OUT_OF_SCOPE |
-| SG6 | Lead：整合交付，独占goal/spec/commit/PR | 独立核验、本地实跑、新PR状态回查 | 重开，PR与最新main冲突 | 原修复aaa7d823/文档9675c13a；PR #297 OPEN但CONFLICTING；main已到fd631460，待整合验证 |
+| SG6 | Lead：整合交付，独占goal/spec/commit/PR | 独立核验、本地实跑、新PR状态回查 | 完成，PR297 OPEN/MERGEABLE；未合并/部署 | 整合1f3e034c；正常push后独立gh及ls-remote同SHA，round-17稳定20 PASS与最终审查 |
 
 ## 进展
 
@@ -69,6 +69,7 @@ Topic 语义决定回复内容和对象，Host 验证并执行，不能用 basis
 - 17:20接回round-9及最小修复：Lead已独立核service:1341含record.operations派生taskIds、native:384后保留同refs错taskIds及send0断言，diff --check通过；但round-9已有新终态2PASS/2FAIL/1CANCEL，不继续等待旧结果。Lead只读调用链排查：service.whenIdle:1877-1885仅等service的inflight集合；runtime.recover:1596只await schedule，wake:692调用resume未await，因此立即读取accepted可能观测过早。已请tests有界等真实terminal后保持原断言；prepared取消另找堆栈，不借此假设一并解释，不盲改生产模型。
 - 17:34代表组及手写fixture反证：Lead已直接读tasks/bf23i9l28.output，两个原生用例PASS，精确summary/exit已发docs。另对native测试内手写decision做窄搜索并读原文，发现service-native:179真人context/cancel、web-topic-reuse:18真人原图proposal缺replyTo；background-retry:21-23直接accept后期望原Host pre-effect重试completed/outbox1，缺normalized route。已交tests最小迁移和定向验证，第三构造当前正常接纳后的replyTo+at，不把它改成专门legacy负例；coordination-latency故意非法reply+reason和旧冻结恢复负例不机械补。不是全量测试扩张，是新合同必要受影响调用方。review独立复核。
 - 冲突重开：PR初次及文档回填后独立回查均OPEN；最终回查显示CONFLICTING。Lead于18:11 fetch确认main=fd631460，隔离分支执行 `git merge --no-commit --no-ff origin/main`，真实唯一UU为 `packages/dingtalk-dsh-assistant/task-topic-coordinator.js`；service、README、ops自动合并仍须语义审查。implement负责冲突文件，tests待稳定后定向实跑，review独立核，docs记录新基线round；不把旧结果当新基线通过。
+- 整合闭环：拒绝恢复旧协调prompt的中间解法后，最终coordinator以main为底仅保留readFrozenReply参数/透传与语义收件人提示。稳定版runtime12、退役2、native5及Lead inbox1均PASS；最终独立审查已审路径无剩余已证阻断。round-17/矩阵/报告已补齐，保留历史失败及边界。18:36普通merge提交1f3e034c，正常push并更新PR正文；18:37独立回读PR297 OPEN/MERGEABLE、mergedAt=null、checks空，远端与PR头一致，交付阻断解除。
 
 ## 重大决策
 
@@ -87,6 +88,6 @@ Topic 语义决定回复内容和对象，Host 验证并执行，不能用 basis
 ## 交付
 
 - 修复提交：aaa7d823b908f1ca2528cb39632b29f7a6cb9ea9；push后独立ls-remote一致。
-- 新PR：[297](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/297)，标题 `fix(topic): 保留语义回复对象并修正收件人纠正沟通`；独立gh回读state=OPEN、base=main、head=worktree-topic-reply-recipient-correction、mergedAt=null，但mergeable=CONFLICTING，已重开整合，不能以创建成功宣称完整交付。
+- 新PR：[297](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/297)，标题 `fix(topic): 保留语义回复对象并修正收件人纠正沟通`；最新独立gh回读state=OPEN、mergeable=MERGEABLE、base=main、head=worktree-topic-reply-recipient-correction、mergedAt=null、statusCheckRollup=[]。此前CONFLICTING历史保留；普通整合提交1f3e034c063af7546b6cae92f1b9b63acf95997e正常push后，headRefOid及独立ls-remote一致。正文已由同一过门禁文件更新并完整回读；后续只追加本轮交付状态文档，不改源码。
 - 验收：report.md；矩阵57条历史/30 cases，最新26 PASS/4 OUT_OF_SCOPE，无case×round重复。风险相关代表实跑和最终稳定合并版独立审查完成，不作全仓/现场结论。
 - 六原窗口保留，无重启/关窗；主检出用户改动未提交。没有部署、合并、手动CI或真实消息副作用。
