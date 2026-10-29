@@ -204,7 +204,7 @@ export function projectTopicContext(context) {
 }
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
-export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, quotedReminderContext, workflowPromptsEnabled = true, fixedTopicsEnabled = false, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
+export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, quotedReminderContext, readArchivedTask, workflowPromptsEnabled = true, fixedTopicsEnabled = false, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
   const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const collections = [routes, decisions, replies, reviews, titleMigrations, summaryMigrations]
   const isCurrentRequest = request => collections.some(collection => collection.get(request.requestId) === request)
@@ -787,7 +787,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     applying.set(decisionId, { groupId, promise })
     return promise
   }
-  function validateBasis(request, decision) {
+  function validateBasis(request, decision, archivedTasks) {
     const topic = store.getTopic(request.groupId, request.topicId)
     const delta = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= request.revision).map(unitKey))
     const agent = getAgent(request.groupId, request)
@@ -808,7 +808,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     if (unreadDelta.length) throw new Error('topic_decision_delta_unread')
     if ([...request.requiredSections].some((section) => (request.readSectionOffsets.get(section) ?? 0) < request.sections[section].length)) throw new Error('topic_decision_context_unread')
 
-    const issues = collectDecisionIssues(request, decision, { store, delta, ownership: effectOwnership(request.groupId, request.topicId, request.revision, request.messages), unitKey, unitDirection })
+    const issues = collectDecisionIssues(request, decision, { store, delta, ownership: effectOwnership(request.groupId, request.topicId, request.revision, request.messages), unitKey, unitDirection, archivedTasks })
     if (issues.length) { const error = new Error(issues[0].message); error.issues = issues; throw error }
   }
   function register(agentCtx, groupId, scope) {
@@ -949,7 +949,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const attachmentIds = new Set(basisMessages.flatMap((message) => message.sourceAttachments ?? []).map((ref) => ref.imageRefId))
       const unavailable = basisMessages.flatMap((message) => message.mediaUnavailable ?? []).filter((value) => attachmentIds.has(String(value).split(':', 1)[0]))
       decision = blockTaskDecisionForUnavailableMedia(decision, unavailable)
-      validateBasis(request, decision)
+      const archivedTasks = new Map()
+      if (readArchivedTask) for (const taskId of new Set(decision.actions.map(action => action.taskId).filter(Boolean))) {
+        if (store.getTask(taskId)) continue
+        const task = await readArchivedTask(taskId)
+        if (task) archivedTasks.set(taskId, task)
+      }
+      validateBasis(request, decision, archivedTasks)
       if (decision.actions.length && !decision.reply?.trim()) return { status: 'reply-required' }
       if (decision.reply?.trim()) {
         if (!decision.replyReview) return { status: 'review-required', error: 'reply_kind_required' }
@@ -965,7 +971,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         expectedTaskVersions: decision.actions.filter((action) => action.taskId).map((action) => ({ taskId: action.taskId, inputVersion: action.inputVersion, runSequence: action.runSequence })),
         preflight: () => {
           if (validateSnapshot && validateSnapshot() !== true) return { status: 'task-stale' }
-          validateBasis(request, decision)
+          validateBasis(request, decision, archivedTasks)
           return decision.reply?.trim() && refreshReview(request) ? reviewRequired(request) : undefined
         } })
       })
