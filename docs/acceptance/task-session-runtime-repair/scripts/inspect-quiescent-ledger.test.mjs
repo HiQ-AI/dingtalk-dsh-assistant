@@ -268,9 +268,10 @@ test('ordinary deployment selects current controls while maintenance retains his
  const source = await readFile(new URL('./deploy-task-session-native.ps1', import.meta.url), 'utf8')
  assert.match(source, /\$ledgerProof=if\(\$RestartMaintenanceProposal\).*\$agentWorkspace.*\$controlMode=if\(\$ResumeNativeDispose\)\{'offline'\}else\{'online'\};RunNode @\(\$ledger,'current-control',\$db,\$controlMode/)
  assert.match(source, /\$offlineArgs=if\(\$RestartMaintenanceProposal\).*\$agentWorkspace.*else\{@\(\$ledger,'current-control',\$db,'offline'/)
- assert.ok(source.indexOf('$originalDescendants=@(Descendants $ExpectedPid)') < source.indexOf('$signaler=Start-Process'))
+ assert.ok(source.indexOf('$originalDescendants=@(Descendants $original)') < source.indexOf('$signaler=Start-Process'))
  assert.match(source, /foreach\(\$child in \$originalDescendants\)/)
- assert.match(source, /\$remaining\.CreationDate -eq \$child\.CreationDate/)
+ assert.match(source, /TestCapturedProcess \$child \$remaining/)
+ assert.equal((source.match(/@\(Descendants /g)??[]).length,1,'no ParentPID rediscovery after stopping')
 })
 
 test('resume validates original stop evidence, rejects mismatched package and live captured children', async t => {
@@ -283,20 +284,21 @@ $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('${script.replaceAll("'","''")}',[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'PARSE_FAILED'}
+foreach($name in @('TextHash','TestCapturedProcess','AssertCapturedTree')){. ([scriptblock]::Create($ast.Find({param($a) $a -is [Management.Automation.Language.FunctionDefinitionAst] -and $a.Name-eq$name},$true).Extent.Text))}
 $block=$ast.Find({param($a) $a -is [Management.Automation.Language.IfStatementAst] -and $a.Extent.Text.StartsWith('if($ResumeNativeDispose){') -and $a.Extent.Text.Contains('$savedControl=')},$true).Extent.Text
 $ResumeNativeDispose=$true;$ExpectedPid=123;$ExpectedPackageSha256='package';$ExpectedProfileSha256='profile';$EvidenceDirectory='${root.replaceAll("'","''")}'
 $control=@{pid=123;packageSha256='package';profileSha256='profile';creationDate='2026-10-28T08:00:00'}
 $signal=@{targetPid=123;signalSent='CTRL_C_EVENT'}
 $failure=@{phase='native-dispose';error='DEPLOY_NATIVE_NOT_QUIESCENT'}
-function Get-Content($path){if($path.EndsWith('control.json')){$control|ConvertTo-Json}elseif($path.EndsWith('signal.json')){$signal|ConvertTo-Json}elseif($path.EndsWith('failure.json')){$failure|ConvertTo-Json}else{@{ProcessId=456;CreationDate='2026-10-28T08:00:00'}|ConvertTo-Json}}
+function Get-Content($path){if($path.EndsWith('control.json')){$control|ConvertTo-Json}elseif($path.EndsWith('signal.json')){$signal|ConvertTo-Json}elseif($path.EndsWith('failure.json')){$failure|ConvertTo-Json}else{@{ProcessId=456;ParentProcessId=123;Name='worker';CreationDate='2026-10-28T08:00:00'}|ConvertTo-Json}}
 function PortOwners{ @() };function Descendants{ @() };function Test-Path { $capturedPresent }
-function Get-CimInstance { if($childAlive){[pscustomobject]@{CreationDate=[datetime]'2026-10-28T08:00:00'}} }
+function Get-CimInstance { if($childAlive){[pscustomobject]@{ProcessId=456;Name='worker';CreationDate=[datetime]'2026-10-28T08:00:00'}} }
 . ([scriptblock]::Create($block));if(-not$original.CreationDate){throw 'VALID_RESUME_REJECTED'}
 $original=$null;$control.packageSha256='changed'
 try { . ([scriptblock]::Create($block));throw 'MISMATCH_ACCEPTED' } catch { if($_.Exception.Message-ne'DEPLOY_RESUME_EVIDENCE_MISMATCH'){throw} }
 $control.packageSha256='package';$capturedPresent=$true;$childAlive=$true
 try { . ([scriptblock]::Create($block));throw 'CHILD_ACCEPTED' } catch { if($_.Exception.Message-ne'DEPLOY_RESUME_CHILD_PROCESS_REMAINS'){throw} }
-$childAlive=$false;$original=[pscustomobject]@{ProcessId=123}
+$childAlive=$false;$original=[pscustomobject]@{ProcessId=123;CreationDate=[datetime]'2026-10-28T08:00:00'}
 try { . ([scriptblock]::Create($block));throw 'OWNER_ACCEPTED' } catch { if($_.Exception.Message-ne'DEPLOY_RESUME_PROCESS_REMAINS'){throw} }
 'RESUME_GATES_PASS'
 `)
@@ -348,6 +350,8 @@ test('drain maintenance freezes a terminal cancelled execution and preserves unk
 
 test('drain maintenance rejects changed controls, new commands and changed native input or terminal evidence',async t=>{
  const f=await drainMaintenanceFixture(t)
+ const oldProposal={...f.proposal};delete oldProposal.controlDigestFormat
+ assert.throws(()=>inspectCurrentControl(f.path,'online',process.pid,{...f.options,proposal:oldProposal}),/DIGEST_FORMAT/)
  f.db.prepare('INSERT INTO dynamic_receipts VALUES (?,?)').run('new-command','{}')
  assert.throws(()=>inspectCurrentControl(f.path,'online',process.pid,f.options),/CONTROL_CHANGED/)
  f.db.exec('DELETE FROM dynamic_receipts')
@@ -359,6 +363,72 @@ test('drain maintenance rejects changed controls, new commands and changed nativ
  assert.throws(f.freeze,/TERMINAL_MISSING/)
  f.events.pop();f.events.at(-1).data.status='aborted';await f.save()
  assert.throws(()=>inspectCurrentControl(f.path,'online',process.pid,f.options),/EVIDENCE_CHANGED/)
+})
+
+test('large maintenance ledger freezes under a 96 MiB heap and keeps complete control and unknown digests',async t=>{
+ const f=await drainMaintenanceFixture(t)
+ const payload=JSON.stringify({state:'unknown',data:'x'.repeat(256*1024)})
+ const operation=f.db.prepare('INSERT INTO dynamic_operations VALUES (?)'),receipt=f.db.prepare('INSERT INTO dynamic_receipts VALUES (?,?)')
+ f.db.exec('BEGIN')
+ for(let i=0;i<1024;i++){operation.run(payload);receipt.run(`receipt-${i}`,payload)}
+ f.db.exec('COMMIT')
+ const intentPath=join(f.root,'intent.json');await writeFile(intentPath,JSON.stringify(f.intent))
+ const started=Date.now(),script=`
+import { readFileSync, statSync } from 'node:fs';
+import { inspectCurrentControl } from ${JSON.stringify(new URL('./inspect-quiescent-ledger.mjs',import.meta.url).href)};
+const [db,workspace,owner,intentFile]=process.argv.slice(1);
+const proposal=JSON.parse(readFileSync(intentFile,'utf8'));
+const frozen=inspectCurrentControl(db,'online',Number(owner),{workspace,proposal,freeze:true}).maintenance.proposal;
+const proof=inspectCurrentControl(db,'online',Number(owner),{workspace,proposal:frozen});
+console.log(JSON.stringify({bytes:statSync(db).size,maxRssKiB:process.resourceUsage().maxRSS,format:frozen.controlDigestFormat,
+ operations:proof.maintenance.tables.operations,receipts:proof.maintenance.tables.dynamic_receipts,unknown:proof.maintenance.unknownOperations,
+ compactBytes:JSON.stringify(proof).length,drained:proof.drained}));
+`
+ const result=spawnSync(process.execPath,['--max-old-space-size=96','--input-type=module','-e',script,f.path,f.root,String(process.pid),intentPath],{encoding:'utf8',timeout:90000,maxBuffer:1024*1024})
+ assert.equal(result.status,0,result.stderr)
+ const proof=JSON.parse(result.stdout)
+ assert.ok(proof.bytes>512*1024*1024);assert.equal(proof.operations.count,1025);assert.equal(proof.receipts.count,1024)
+ assert.equal(proof.unknown.count,1025);assert.equal(proof.drained,false);assert.equal(proof.format,'sqlite-row-stream-v1')
+ assert.ok(proof.compactBytes<10000,'proof contains bounded aggregate digests rather than every unknown row')
+ t.diagnostic(JSON.stringify({...proof,elapsedMs:Date.now()-started,heapLimitMiB:96}))
+})
+
+test('captured process tree excludes reused ParentPIDs and validates saved ancestry and exact live identities',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'process-identity-ps-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const script=new URL('./deploy-task-session-native.ps1',import.meta.url).pathname.replace(/^\/([A-Z]:)/,'$1'),fixture=join(root,'check.ps1')
+ await writeFile(fixture,`
+$ErrorActionPreference='Stop';$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('${script.replaceAll("'","''")}',[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'PARSE_FAILED'}
+foreach($name in @('TextHash','TestCapturedProcess','AssertCapturedTree','Descendants')){. ([scriptblock]::Create($ast.Find({param($a) $a -is [Management.Automation.Language.FunctionDefinitionAst] -and $a.Name-eq$name},$true).Extent.Text))}
+function Process($id,$parent,$hour,$name){[pscustomobject]@{ProcessId=$id;ParentProcessId=$parent;CreationDate=([datetime]'2026-01-01T00:00:00Z').AddHours($hour);Name=$name;CommandLine=$name+' command';ExecutablePath='/example/'+$name}}
+$original=Process 100 1 10 'host';$child=Process 200 100 11 'worker';$grandchild=Process 300 200 12 'leaf'
+$unrelated=Process 400 100 3 'unrelated';$unrelatedChild=Process 401 400 13 'unrelated-child'
+$inventory=@($original,$child,$grandchild,$unrelated,$unrelatedChild)
+function Get-CimInstance { $inventory }
+$captured=@(Descendants $original)
+if(($captured.ProcessId-join',')-ne'200,300'){throw 'PID_REUSE_INCLUDED'}
+if(-not(TestCapturedProcess $captured[0] $child)){throw 'SAME_PROCESS_MISSED'}
+$reused=Process 200 999 14 'new-owner'
+if(TestCapturedProcess $captured[0] $reused){throw 'REUSED_PID_IS_ORIGINAL'}
+foreach($field in @('Name','ExecutablePath','CommandLine')){
+ $changed=$child.PSObject.Copy();$changed.$field='different'
+ try{TestCapturedProcess $captured[0] $changed;throw 'IDENTITY_DRIFT_ACCEPTED'}catch{if($_.Exception.Message-ne'DEPLOY_PROCESS_IDENTITY_CHANGED'){throw}}
+}
+foreach($case in @('missing-parent','duplicate','cycle','older-child')){
+ $invalid=@($captured|ForEach-Object {$_.PSObject.Copy()})
+ if($case-eq'missing-parent'){$invalid[1].ParentProcessId=999}
+ if($case-eq'duplicate'){$invalid+= $invalid[0].PSObject.Copy()}
+ if($case-eq'cycle'){$invalid[0].ParentProcessId=300}
+ if($case-eq'older-child'){$invalid[1].CreationDate=$original.CreationDate}
+ try{AssertCapturedTree $original $invalid;throw 'BAD_CHAIN_ACCEPTED'}catch{if($_.Exception.Message-ne'DEPLOY_PROCESS_TREE_INVALID'){throw}}
+}
+$inventory=@($original,$child,$child)
+try{Descendants $original;throw 'DUPLICATE_CAPTURE_ACCEPTED'}catch{if($_.Exception.Message-ne'DEPLOY_PROCESS_TREE_INVALID'){throw}}
+'PROCESS_IDENTITY_PASS'
+`)
+ const result=spawnSync('pwsh',['-NoProfile','-File',fixture],{encoding:'utf8',windowsHide:true})
+ assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/PROCESS_IDENTITY_PASS/)
 })
 
 test('drain maintenance refuses missing cancellation proof, other active work or a different session',async t=>{
@@ -380,20 +450,20 @@ test('drain cutover gates execute in PowerShell and reject changed Host, proposa
 $ErrorActionPreference='Stop';$tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('${script.replaceAll("'","''")}',[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'PARSE_FAILED'}
-foreach($name in @('TextHash','AssertDrainMaintenanceIdentity','AssertDrainMaintenanceProcessesExited','PortOwners')){. ([scriptblock]::Create($ast.Find({param($a) $a -is [Management.Automation.Language.FunctionDefinitionAst] -and $a.Name-eq$name},$true).Extent.Text))}
+foreach($name in @('TextHash','TestCapturedProcess','AssertCapturedTree','AssertDrainMaintenanceIdentity','AssertDrainMaintenanceProcessesExited','PortOwners')){. ([scriptblock]::Create($ast.Find({param($a) $a -is [Management.Automation.Language.FunctionDefinitionAst] -and $a.Name-eq$name},$true).Extent.Text))}
 function Get-NetTCPConnection { throw 'PORT_PROBE_DENIED' }
 try{PortOwners 3080;throw 'PORT_FAILURE_IGNORED'}catch{if($_.Exception.Message-ne'PORT_PROBE_DENIED'){throw}}
-$ExpectedPid=123;$original=[pscustomobject]@{CreationDate=[datetime]'2026-10-29T00:00:00Z';CommandLine='target-host'}
+$ExpectedPid=123;$original=[pscustomobject]@{ProcessId=123;CreationDate=[datetime]'2026-10-29T00:00:00Z';CommandLine='target-host'}
 $DrainFailureMaintenanceProposal='proposal';$drainMaintenanceHash='fixed';$actualHash='fixed'
 $drainMaintenance=@{expectedHost=@{pid=123;creationDate='2026-10-29T00:00:00Z';commandLineSha256=(TextHash 'target-host')}}
-function Hash { $actualHash };function Get-CimInstance { if($childAlive){[pscustomobject]@{CreationDate=$original.CreationDate}} }
+function Hash { $actualHash };function Get-CimInstance($class,[string]$Filter) { if($hostAlive-and$Filter-eq'ProcessId=123'){$original}elseif($childAlive-and$Filter-eq'ProcessId=456'){[pscustomobject]@{ProcessId=456;CreationDate=$original.CreationDate}} }
 function Get-Process { if($hostAlive){[pscustomobject]@{Id=123}} };function PortOwners { if($portAlive){@(123)}else{@()} }
-function Descendants { if($orphanAlive){[pscustomobject]@{ProcessId=789}} }
+function Descendants { throw 'POST_STOP_REDISCOVERY_FORBIDDEN' }
 function Get-ScheduledTask { [pscustomobject]@{Settings=@{Enabled=$autostart}} };function RunNode { $script:verified=$true;'{}' }
-$originalDescendants=@([pscustomobject]@{ProcessId=456;CreationDate=$original.CreationDate})
+$originalDescendants=@([pscustomobject]@{ProcessId=456;ParentProcessId=123;CreationDate=$original.CreationDate})
 $gate=$ast.Find({param($a) $a -is [Management.Automation.Language.IfStatementAst] -and $a.Extent.Text.StartsWith('if($DrainFailureMaintenanceProposal){') -and $a.Extent.Text.Contains('AssertDrainMaintenanceProcessesExited') -and $a.Extent.Text.Contains('$offlineProof=RunNode')},$true).Extent.Text
 . ([scriptblock]::Create($gate));if(-not$verified){throw 'OFFLINE_GATE_MISSING'}
-foreach($case in @('childAlive','hostAlive','portAlive','autostart','orphanAlive')){
+foreach($case in @('childAlive','hostAlive','portAlive','autostart')){
  Set-Variable $case $true
  try{. ([scriptblock]::Create($gate));throw 'PROCESS_ACCEPTED'}catch{if($_.Exception.Message-notin@('DEPLOY_CHILD_PROCESS_REMAINS','DEPLOY_MAINTENANCE_PROCESS_REMAINS')){throw}}
  Set-Variable $case $false

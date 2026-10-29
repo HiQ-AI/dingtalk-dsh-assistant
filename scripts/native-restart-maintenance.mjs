@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { zstdDecompressSync } from 'node:zlib'
 import { isolationDigest as hash, isolationBinding, hasRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 import { restartScopeProbePlan } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
@@ -109,6 +110,21 @@ export function inspectRetainedRestart({ tables, workspace, proposal, ownerPid, 
 
 // A stopped-process boundary is not a successful drain or an operation settlement.
 // Freeze only cancelled native executions whose last input has a terminal turn.
+const controlDigestFormat = 'sqlite-row-stream-v1'
+function streamControlTable(db, table, { where = '', unknown = false } = {}) {
+  const digest = createHash('sha256'), unknownDigest = createHash('sha256')
+  let count = 0, unknownCount = 0
+  const query = `SELECT *${unknown ? ", json_extract(body,'$.state') AS maintenance_state" : ''} FROM ${table} ${where} ORDER BY rowid`
+  for (const row of db.prepare(query).iterate()) {
+    const isUnknown = unknown && row.maintenance_state === 'unknown'
+    if (unknown) delete row.maintenance_state
+    // Only one SQLite row and its encoding are live; neither bodies nor per-row hashes accumulate.
+    const encoded = JSON.stringify(row)
+    digest.update(encoded); digest.update('\n'); count++
+    if (isUnknown) { unknownDigest.update(encoded); unknownDigest.update('\n'); unknownCount++ }
+  }
+  return { count, sha256: digest.digest('hex'), ...(unknown ? { unknown: { count: unknownCount, sha256: unknownDigest.digest('hex') } } : {}) }
+}
 export function inspectDrainFailureMaintenance({ db, workspace, proposal, ownerPid, freeze = false, history = readNativeHistory }) {
   const fail = reason => { throw Error('DEPLOY_DRAIN_MAINTENANCE_' + reason) }
   const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value))
@@ -118,25 +134,33 @@ export function inspectDrainFailureMaintenance({ db, workspace, proposal, ownerP
     || !validTime(proposal.operatorApproval.authorizedAt) || !proposal.operatorApproval.sourceRef
     || !Array.isArray(proposal.executions) || !proposal.executions.length || proposal.executions.length > 8
     || new Set(proposal.executions.map(row => row.executionId)).size !== proposal.executions.length) fail('PROPOSAL_INVALID')
-  const tables = Object.fromEntries(['tasks', 'executions', 'groups', 'operations', 'notifications']
-    .map(name => [name, db.prepare(`SELECT body FROM dynamic_${name}`).all().map(row => JSON.parse(row.body))]))
-  if (tables.tasks.some(row => row.drained !== true) || tables.groups.some(row => row.drained !== true)
-    || tables.operations.some(row => row.state === 'starting') || tables.notifications.some(row => row.state === 'starting')) fail('ACTIVE_WORK')
-  const retained = tables.executions.filter(row => row.drained === false)
-  if (retained.length !== proposal.executions.length) fail('EXECUTION_SET_CHANGED')
+  if (!freeze && proposal.controlDigestFormat !== controlDigestFormat) fail('DIGEST_FORMAT')
+  for (const name of ['tasks', 'groups']) {
+    if (db.prepare(`SELECT 1 FROM dynamic_${name} WHERE json_type(body,'$.drained') IS NOT 'true' LIMIT 1`).get()) fail('ACTIVE_WORK')
+  }
+  for (const name of ['operations', 'notifications']) {
+    if (db.prepare(`SELECT 1 FROM dynamic_${name} WHERE json_extract(body,'$.state')='starting' LIMIT 1`).get()) fail('ACTIVE_WORK')
+  }
+  if (db.prepare("SELECT count(*) AS count FROM dynamic_executions WHERE json_extract(body,'$.drained')=0").get().count !== proposal.executions.length) fail('EXECUTION_SET_CHANGED')
   // Include new inputs, command receipts and resource claims, not only execution rows.
-  const guards = {}
+  const tables = {}
+  for (const name of ['tasks', 'executions', 'groups', 'operations', 'notifications']) {
+    tables[name] = streamControlTable(db, 'dynamic_' + name, { unknown: ['operations', 'notifications'].includes(name) })
+  }
   for (const name of ['dynamic_sources', 'dynamic_wakes', 'dynamic_receipts', 'dynamic_resource_locks']) {
     if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) {
-      guards[name] = db.prepare(`SELECT * FROM ${name}`).all().map(hash).sort()
+      tables[name] = streamControlTable(db, name)
     }
   }
-  guards.meta = db.prepare("SELECT key,value FROM dynamic_meta WHERE key<>'owner' ORDER BY key").all()
-  const controlDigest = hash({ tables: Object.fromEntries(Object.entries(tables).map(([name, rows]) => [name, rows.map(hash).sort()])), guards })
+  tables.meta = streamControlTable(db, 'dynamic_meta', { where: "WHERE key<>'owner'" })
+  const controlDigest = hash({ controlDigestFormat, tables })
   if (!freeze && proposal.controlDigest !== controlDigest) fail('CONTROL_CHANGED')
-  const executions = retained.map(execution => {
+  const executions = []
+  for (const { body } of db.prepare("SELECT body FROM dynamic_executions WHERE json_extract(body,'$.drained')=0 ORDER BY rowid LIMIT 8").iterate()) {
+    const execution = JSON.parse(body)
     const item = proposal.executions.find(row => row.executionId === execution.executionId)
-    const task = tables.tasks.find(row => row.taskId === execution.taskId)
+    const taskRow = db.prepare("SELECT body FROM dynamic_tasks WHERE json_extract(body,'$.taskId')=? LIMIT 1").get(execution.taskId)
+    const task = taskRow && JSON.parse(taskRow.body)
     if (!item || !task || execution.cancelRequested !== true || execution.sessionBound !== true || !execution.sessionId
       || !/^[\w][\w.-]*$/u.test(execution.taskId) || !['dsh', undefined].includes(execution.definition?.executionBackend)
       || !['requirementRevision', 'controlRevision', 'inputVersion', 'leaseEpoch'].every(key => Number.isSafeInteger(execution[key]) && execution[key] > 0)
@@ -159,12 +183,11 @@ export function inspectDrainFailureMaintenance({ db, workspace, proposal, ownerP
     const current = { executionId: execution.executionId, binding, taskDigest: hash(task), executionDigest: hash(execution),
       nativeLogDigest: stored.digest, terminalSequence: end.seq, cancelResponse: response }
     if (!freeze && hash(current) !== hash(item)) fail('EVIDENCE_CHANGED')
-    return current
-  })
-  const frozen = { ...proposal, controlDigest, executions }
-  return { schema: proposal.schema, proposalDigest: hash(frozen), ledgerDigest: controlDigest, operatorApproval: proposal.operatorApproval,
+    executions.push(current)
+  }
+  const frozen = { ...proposal, controlDigestFormat, controlDigest, executions }
+  return { schema: proposal.schema, controlDigestFormat, proposalDigest: hash(frozen), ledgerDigest: controlDigest, tables, operatorApproval: proposal.operatorApproval,
     retained: executions.map(({ cancelResponse, ...row }) => ({ ...row, cancelResponseDigest: hash(cancelResponse), ledgerDrainedUnchanged: true })),
-    unknownOperations: tables.operations.filter(row => row.state === 'unknown').map(row => ({ operationId: row.operationId, digest: hash(row) })),
-    unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').map(row => ({ notificationId: row.notificationId, digest: hash(row) })),
+    unknownOperations: tables.operations.unknown, unknownNotifications: tables.notifications.unknown,
     writes: 0, ...(freeze ? { proposal: frozen } : {}) }
 }
