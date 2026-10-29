@@ -29,7 +29,7 @@ export function createFixedTopicHandler({ ctx, store, legacy, root, models, appe
     // Reconcile the same frozen reply after a crash between outbox/notification preparation and unit settlement.
     if (previous) { await reply(previous.text); return }
     if (unit.fixedTopic === 'out-of-scope') {
-      if (message.mentionedAgent === true || message.mentionedAgent === undefined && readMentioned && await readMentioned(groupId, message)) await reply('这个不是我负责哦')
+      if (unit.outOfScopeHelp === true && (message.mentionedAgent === true || message.mentionedAgent === undefined && readMentioned && await readMentioned(groupId, message))) await reply('这个不是我负责哦')
       else await finish()
       return
     }

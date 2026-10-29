@@ -107,7 +107,8 @@
     "web-client.js",
     "fixed-topics.js",
     "fixed-topic-correction.js",
-    "fixed-topic-handler.js"
+    "fixed-topic-handler.js",
+    "group-person-aliases.js"
   ],
   "exports": {
     ".": "./index.js",

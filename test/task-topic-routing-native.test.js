@@ -902,6 +902,8 @@ testRunner('native proposal prompt preserves original authorization and asks wit
     assert.ok(names.includes('group_decision_submit'))
     const prompt = JSON.stringify(request)
     for (const rule of ['才允许选择 new-task', '必须选择 task-proposal', '这个事项是否需要我处理？', '暂不创建任务', '不承诺', '消息明确 @其他同事', '测试助手', '不追加未经授权的业务验收']) assert.ok(prompt.includes(rule), rule)
+    for (const rule of ['不能只因 @ 别人就硬过滤', '已有任务的新事实仍归原业务 Topic', '仅提到人名不等于指定负责人']) assert.ok(prompt.includes(rule), rule)
+    assert.ok(!prompt.includes('未指向 Agent 时必须忽略'))
     checked = true
     return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [{ kind: 'task-proposal', title: '描述框位置调整', objective: '按原图将描述框放在文字右侧并顶部对齐', topicRefs: [{ topicId: input.topicId, revision: input.revision }] }], reply: '这个事项是否需要我处理？', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
   })
