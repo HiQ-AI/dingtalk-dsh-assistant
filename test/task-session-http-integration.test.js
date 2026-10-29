@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -34,7 +34,7 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
     taskSessions: { close: noop, cancel: noop, run: async ({ input, delegate, submit, onSessionBound }) => { taskTurns++; await onSessionBound(); if (!input.executions.length) for (let i = 0; i < 10; i++) await delegate({ key: `核对服务${String(i).padStart(2, '0')}`, objective: '检查实际服务状态', context: '只核对', resourceKeys: [] }); await submit({ action: 'wait', summary: '已委派核对，等待确认', evidence: ['fixture-only'], limitations: ['未调用真实模型'] }) } },
     executionSessions: { close: noop, cancel: noop, run: async ({ onSessionBound, onResult, onProgress }) => { await onSessionBound(); await onProgress({ summary: '已读取状态，开始验证', evidence: ['actual-evidence.txt'], activity: '验证状态', reportId: 'http-stage' }); await onResult({ status: 'completed', summary: '核对成功', evidence: ['actual-evidence.txt'], limitations: ['未部署'], artifacts: [] }); return { status: 'submitted' } } },
   })
-  const runtime = { ...legacy, coordinationSources: service.coordinationSources, coordinationSourceDetail: service.coordinationSourceDetail,
+  const runtime = { ...legacy,
     listTaskView: () => service.boardTasks(), getTaskSessionDetail: id => service.taskDetail(id), getTaskSessionExecutions: (...args) => service.taskExecutions(...args), getTaskSessionDecisions: (...args) => service.taskDecisions(...args),
     createTask: args => service.createTask(args), appendTaskContext: args => service.appendTaskContext(args), cancelTask: args => service.cancelTask(args),
     getTaskDialogue: id => service.taskDialogue(id), sendTaskDialogue: args => service.sendTaskDialogue(args) }
@@ -43,13 +43,11 @@ test('任务会话HTTP端到端：唯一会话、动态执行、需求修订、C
   const base = `http://127.0.0.1:${server.address().port}`
   const post = async (path, body) => { const response = await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() } }
   try {
-    const emptyCoordination = await (await fetch(base + '/state/coordination-sources')).json()
-    assert.equal(emptyCoordination.total, 0)
-    const source = (await service.store.command({ id: 'observer-reserve', kind: 'coordination.reserve',
-      args: { unitId: 'synthetic-observer-source', revision: 1, groupId: 'g', original: 'Synthetic reserved input' } })).result.source
-    const sourceDetail = await (await fetch(base + `/state/coordination-sources/${source.id}`)).json()
-    assert.equal(sourceDetail.source.original, 'Synthetic reserved input')
-    assert.equal(sourceDetail.coordination, null)
+    for (const path of ['/state/coordination-sources', '/state/coordination-sources/old', '/state/coordination-work'])
+      assert.equal((await fetch(base + path)).status, 410)
+    assert.equal((await post('/coordination/old/retire-observation', {})).status, 410)
+    await assert.rejects(service.store.command({ id: 'observer-reserve', kind: 'coordination.reserve',
+      args: { unitId: 'synthetic-observer-source', revision: 1, groupId: 'g', original: 'Synthetic reserved input' } }), { code: 'INDEPENDENT_COORDINATION_RETIRED' })
     const input = { requestId: 'create', groupId: 'g', title: '核对服务', objective: '核对服务并保留证据', acceptanceCriteria: ['状态可查'] }
     const created = await post('/tasks', input)
     assert.equal(created.status, 200, JSON.stringify(created.body))
@@ -201,6 +199,23 @@ const notificationGuardError = { phase: 'send', knownNotSent: true, retryable: t
   stderr: JSON.stringify({ error: { category: 'api', code: 1, origin: 'mcp_gateway', operation: 'chat/get_conversation_info',
     reason: 'topic_quote_guard_unavailable', retryable: true, message: '无法确认引用回复目标是否属于话题圈，已阻止发送' } }) }
 
+test('inbox projection startup failure releases the ledger and runtime listeners for retry',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'inbox-startup-')), dbPath=join(root,'tasks.sqlite'), closed=[]
+  const noop=async()=>{}, residentStore={listGroups:()=>[],getGroup:()=>null}
+  const args={ctx:{agents:{get(){}},sessions:{get(){}},on:()=>()=>closed.push('listener')},residentStore,
+    legacy:{getAgentConfig:()=>({workspaceDir:root})},config:{dbPath,workspaceDir:root,instanceId:'inbox-startup',initialize:true},
+    persistence:{register:noop,close:async()=>closed.push('persistence')},
+    taskSessions:{close:async()=>closed.push('owner'),cancel:noop},executionSessions:{close:async()=>closed.push('execution'),cancel:noop}}
+  try {
+    await writeFile(dbPath+'.observer-inbox.sqlite','invalid sqlite')
+    await assert.rejects(openTaskSessionService(args),/not a database/)
+    for(const resource of ['listener','owner','execution','persistence'])assert(closed.includes(resource),resource)
+    await unlink(dbPath+'.observer-inbox.sqlite')
+    const retry=await openTaskSessionService({...args,config:{...args.config,initialize:false}})
+    await retry.close()
+  }finally{await rm(root,{recursive:true,force:true})}
+})
+
 async function notificationServiceFixture(t, notifications) {
   const root = await mkdtemp(join(tmpdir(), 'notification-service-retry-')), snapshot = { tables: {}, global: null }
   const facility = new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
@@ -232,7 +247,7 @@ async function notificationServiceFixture(t, notifications) {
     return row
   }
   const retry = row => service.retryNotification({ groupId: 'g', notificationId: row.id, expectedToken: taskNotificationRecovery(row).expectedToken })
-  return { service, residentStore, command, read, prepare, failed, retry }
+  return { service, residentStore, command, read, prepare, failed, retry, dbPath: join(root, 'tasks.sqlite') }
 }
 
 test('notification service manual recovery uses the original identity, stages and private response whitelist', async t => {
@@ -240,6 +255,8 @@ test('notification service manual recovery uses the original identity, stages an
   const f = await notificationServiceFixture(t, { send: async row => { sends++; assert.equal(row.id, 'notice'); return { openTaskId: 'accepted' } },
     readback: async () => ({ messageId: 'verified', conversationId: 'g' }) })
   await f.command('source.record', { sourceId: 'stage-source', groupId: 'g', messageId: 'source', actorId: 'owner', text: '合成来源', version: 1 })
+  await f.residentStore.ingest({groupId:'g',messageId:'verified',text:'合成原回复',senderOpenDingTalkId:'unknown-at-ingress',occurredAt:'2026-10-29T00:00:00Z'})
+  assert.equal((await f.service.observerGroupPage('g')).items.some(message=>message.messageId==='verified'),true)
   const failed = await f.failed('notice')
   const result = await f.retry(failed)
   assert.deepEqual(result, { groupId: 'g', notificationId: 'notice', status: 'attempted', action: 'send' })
@@ -251,6 +268,7 @@ test('notification service manual recovery uses the original identity, stages an
   assert.deepEqual(source.stages.map(stage => stage.stage), ['send', 'readback'])
   assert.ok(source.stages.every(stage => stage.completedAt))
   assert.equal(f.residentStore.getGroup('g').outbox.find(row => row.outboundId === 'notice').notificationState, 'delivered')
+  assert.equal((await f.service.observerGroupPage('g')).items.some(message=>message.messageId==='verified'),false,'late delivery identity removes the earlier echo from the persistent inbox')
   await assert.rejects(f.retry(failed), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE' })
   await assert.rejects(f.retry(delivered), { code: 'TASK_NOTIFICATION_RECOVERY_FORBIDDEN' })
   assert.equal(f.service.listAlerts().some(row => row.alertId === 'failure:notice'), false, 'a forbidden click is not a delivery failure')
@@ -333,20 +351,15 @@ test('notification service manual refusal remains recoverable after credentials 
   assert.equal((await f.read('notice')).state, 'delivered'); assert.equal(sends, 2)
 })
 
-test('notification service manual recovery preserves pending-source send fences', async t => {
-  const f = await notificationServiceFixture(t, { send: async () => assert.fail('new source must block old send') })
-  await f.command('source.record', { sourceId: 'original', groupId: 'g', messageId: 'source', actorId: 'owner', text: 'original', timestamp: '2026-10-26T08:00:00Z' })
-  const source = (await f.command('coordination.reserve', { unitId: 'unit-original', revision: 1, groupId: 'g', original: 'original',
-    reservationId: 'reservation-original', reservationGeneration: 1, actorId: 'owner', sourceRefs: ['original'], sourceMessageId: 'source' })).result.source
-  await f.command('coordination.source.clarify', { sourceId: source.id, fence: 1, coordinationId: 'arrangement', question: '几点？' })
-  await f.command('source.record', { sourceId: 'newer', groupId: 'g', messageId: 'newer', actorId: 'owner', text: 'correction', timestamp: '2026-10-26T08:01:00Z' })
-  const prepared = (await f.command('notification.prepare', { notificationId: 'notice', requirementRevision: 1, kind: 'coordination',
-    payload: { conversationId: 'g', text: '几点？', sourceMessageId: 'source', actorId: 'owner', replyKind: 'substantive',
-      fact: { coordinationId: 'arrangement', eventId: 'clarification:original', sourceUnitId: source.unitId, sourceUnitRevision: 1 } } })).result.notification
-  const result = await f.retry(prepared)
-  assert.equal(result.sourcePending, true)
-  const saved = await f.read('notice')
-  assert.equal(saved.state, 'prepared'); assert.equal(saved.sendAttemptCount, undefined); assert.equal(saved.sendPermit, undefined)
+test('notification service refuses manual replay of historical coordination without touching its receipt', async t => {
+  const f = await notificationServiceFixture(t, { send: async () => assert.fail('retired notice must not send'), readback: async () => assert.fail('retired notice must not restart') })
+  const old = { id: 'old-notice', notificationId: 'old-notice', kind: 'coordination', state: 'unknown',
+    payload: { conversationId: 'g', text: 'Historical question' }, dispatchToken: 'prior-attempt' }
+  const db = new DatabaseSync(f.dbPath)
+  db.prepare('INSERT INTO dynamic_notifications(id,body) VALUES (?,?)').run(old.id, JSON.stringify(old)); db.close()
+  await assert.rejects(f.retry(old), { code: 'INDEPENDENT_COORDINATION_RETIRED' })
+  await f.service.whenIdle()
+  assert.deepEqual(await f.read(old.id), old)
 })
 
 test('manual recovery releases the serial slot and drains a notification prepared during its readback', { timeout: 5000 }, async t => {

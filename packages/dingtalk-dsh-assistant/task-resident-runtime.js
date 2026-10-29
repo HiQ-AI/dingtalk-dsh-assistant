@@ -11,7 +11,7 @@ const validateExecutionBackend = value => {
   return value
 }
 /** Group transport/configuration facade. It has no legacy task scheduler, stage engine or Owner. */
-export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, agentPreset = 'standard', agentReplySignature, maxConcurrentTasks = 5, taskSessionModel = {}, coordinationModel = {}, executionBackend = 'dsh' } = {}) {
+export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceDir, agentPreset = 'standard', agentReplySignature, maxConcurrentTasks = 5, taskSessionModel = {}, executionBackend = 'dsh' } = {}) {
   const initialExecutionBackend = validateExecutionBackend(store.getExecutionBackend?.() ?? executionBackend)
   const initialSignature = normalizeReplySignature(store.getReplySignature?.() ?? agentReplySignature)
   const resolveAgentWorkspace = async value => {
@@ -35,10 +35,8 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
   let closed = false, profile = '', groupReader, resourceReader
   const selection = () => ctx.agentDefaultModel.currentSelection()
   const taskSelection = () => taskModelConfig(store.getTaskSessionModelConfig?.() ?? taskSessionModel)
-  const coordinationSelection = () => taskModelConfig(store.getCoordinationModelConfig?.() ?? coordinationModel)
   const getAgentConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], agentPreset, workspaceDir: store.getAgentWorkspaceDir?.() ?? root, ...selection(),
     taskSessionModel: taskSelection(),
-    coordinationModel: coordinationSelection(),
     executionBackend: store.getExecutionBackend?.() ?? initialExecutionBackend,
     replySignature: store.getReplySignature?.() ?? initialSignature,
     proxyUrl: store.getProxyUrl?.() ?? '', maxConcurrentTasks: store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks })
@@ -62,12 +60,13 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
       if (configSaving) throw new Error('AGENT_CONFIG_SAVE_BUSY')
       configSaving = true
       try {
+        if (Object.hasOwn(input,'coordinationModel')) throw new Error('INDEPENDENT_COORDINATION_RETIRED')
         if (['taskPrompts','taskPromptsVersion','leafSessionPrompt','workflowVariables','workflowBindings'].some(key => Object.hasOwn(input,key))) retired()
         const patch = {}
         if (Object.hasOwn(input, 'executionBackend')) patch.executionBackend = validateExecutionBackend(input.executionBackend)
         if (input.workspaceDir !== undefined) {
           patch.agentWorkspaceDir = await resolveAgentWorkspace(input.workspaceDir)
-          // Agent cwd may change for future coordination plans. Existing task files,
+          // Agent cwd may change for future tasks. Existing task files,
           // leases and native logs remain rooted at their original durable location.
           patch.taskWorkspaceDir = store.getTaskWorkspaceDir?.() ?? root
         }
@@ -85,7 +84,6 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
           patch.proxyUrl = input.proxyUrl.trim()
         }
         if (input.taskSessionModel !== undefined) patch.taskSessionModel = taskModelConfig(input.taskSessionModel)
-        if (input.coordinationModel !== undefined) patch.coordinationModel = taskModelConfig(input.coordinationModel)
         const old = selection(), changesDefault = input.provider !== undefined || input.model !== undefined || input.reasoningEffort !== undefined
         if (input.model !== undefined && typeof input.model !== 'string') throw new Error('agent_model_required')
         if (input.reasoningEffort !== undefined && typeof input.reasoningEffort !== 'string') throw new Error('agent_reasoning_effort_invalid')
@@ -97,7 +95,6 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
         // Preflight the complete requested state before either independent store is written.
         if (changesDefault) await ctx.llm.resolveCallConfig(proposedSelection)
         if (patch.taskSessionModel || input.reasoningEffort !== undefined) await ctx.llm.resolveCallConfig(taskModelSelection(proposedSelection, patch.taskSessionModel ?? taskSelection()))
-        if (patch.coordinationModel || input.reasoningEffort !== undefined) await ctx.llm.resolveCallConfig(taskModelSelection(proposedSelection, patch.coordinationModel ?? coordinationSelection()))
         try {
           if (changesDefault) await ctx.agentDefaultModel.saveSelection(proposedSelection)
           if (Object.keys(patch).length) await store.setAgentSettings(patch)

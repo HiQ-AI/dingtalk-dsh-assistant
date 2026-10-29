@@ -293,67 +293,8 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 200, { ...context, topic: { ...topicSummary(context.topic), summary: context.topic.summary, openQuestions: context.topic.openQuestions } })
     } catch (error) { return send(response,error.code==='OBSERVER_PAGE_STALE'?409:error.code==='OBSERVER_PAGINATION_MIGRATION_REQUIRED'?503:400,{ error: error.message }) }
   }
-  if (request.method === 'GET' && url.pathname === '/state/coordination-sources') {
-    if (!store.coordinationSources) return send(response, 503, { error: 'coordination_observer_unavailable' })
-    let options
-    try {
-      if ([...url.searchParams.keys()].some(key => !['groupId', 'offset', 'limit','pageRevision'].includes(key))
-        || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1))
-        return send(response, 400, { error: 'coordination_query_invalid' })
-      const groupId = url.searchParams.get('groupId') ?? undefined
-      if (groupId !== undefined && !groupId.trim()) return send(response, 400, { error: 'coordination_query_invalid' })
-      options = { groupId, offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100),...(url.searchParams.has('pageRevision')?{revision:url.searchParams.get('pageRevision')}:{}) }
-    } catch { return send(response, 400, { error: 'coordination_query_invalid' }) }
-    try { return send(response, 200, await store.coordinationSources(options)) }
-    catch(error) { return send(response,error.code==='OBSERVER_PAGE_STALE'?409:503,{error:error.code==='OBSERVER_PAGE_STALE'?error.message:'coordination_observer_unavailable'}) }
-  }
-  const coordinationSource = request.method === 'GET' && /^\/state\/coordination-sources\/([^/]+)$/u.exec(url.pathname)
-  if (coordinationSource) {
-    if (!store.coordinationSourceDetail) return send(response, 503, { error: 'coordination_observer_unavailable' })
-    try {
-      if (url.searchParams.size) return send(response, 400, { error: 'coordination_query_invalid' })
-      const value = await store.coordinationSourceDetail(decodeURIComponent(coordinationSource[1]))
-      return send(response, value ? 200 : 404, value ?? { error: 'coordination_source_not_found' })
-    } catch (error) { return send(response, error instanceof URIError ? 400 : 503, { error: error instanceof URIError ? 'coordination_query_invalid' : 'coordination_observer_unavailable' }) }
-  }
-  if (request.method === 'GET' && url.pathname === '/state/coordination-work') {
-    if (!store.coordinationWork) return send(response, 503, { error: 'coordination_observer_unavailable' })
-    let options
-    try {
-      if ([...url.searchParams.keys()].some(key => !['groupId', 'offset', 'limit','pageRevision'].includes(key))
-        || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1))
-        return send(response, 400, { error: 'coordination_query_invalid' })
-      const groupId = url.searchParams.get('groupId') ?? undefined
-      if (groupId !== undefined && !groupId.trim()) return send(response, 400, { error: 'coordination_query_invalid' })
-      options = { groupId, offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100),...(url.searchParams.has('pageRevision')?{revision:url.searchParams.get('pageRevision')}:{}) }
-    } catch { return send(response, 400, { error: 'coordination_query_invalid' }) }
-    try { return send(response, 200, await store.coordinationWork(options)) }
-    catch(error) { return send(response,error.code==='OBSERVER_PAGE_STALE'?409:503,{error:error.code==='OBSERVER_PAGE_STALE'?error.message:'coordination_observer_unavailable'}) }
-  }
-  const coordinationWork = request.method === 'GET' && /^\/state\/coordination-work\/([^/]+)$/u.exec(url.pathname)
-  if (coordinationWork) {
-    if (!store.coordinationWorkDetail) return send(response, 503, { error: 'coordination_observer_unavailable' })
-    try {
-      if (url.searchParams.size) return send(response, 400, { error: 'coordination_query_invalid' })
-      const value = await store.coordinationWorkDetail(decodeURIComponent(coordinationWork[1]))
-      return send(response, value ? 200 : 404, value ?? { error: 'coordination_work_not_found' })
-    } catch (error) { return send(response, error instanceof URIError || error.message === 'coordination_query_invalid' ? 400 : 503, { error: error instanceof URIError || error.message === 'coordination_query_invalid' ? 'coordination_query_invalid' : 'coordination_observer_unavailable' }) }
-  }
-
-  const retireObservation = request.method === 'POST' && /^\/coordination\/([^/]+)\/retire-observation(\/check)?$/u.exec(url.pathname)
-  if (retireObservation) {
-    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
-    if (!store.retireCoordinationObservation) return send(response, 503, { error: 'coordination_retirement_unavailable' })
-    try {
-      if (url.searchParams.size) return send(response, 400, { error: 'coordination_retirement_invalid' })
-      const parsed = z.strictObject({ groupId: z.string().trim().min(1), sourceId: z.string().trim().min(1),
-        expectedRevision: z.number().int().positive(), reason: z.string().trim().min(1).max(2000) }).safeParse(await readJson(request))
-      if (!parsed.success) return send(response, 400, { error: 'coordination_retirement_invalid' })
-      return send(response, 200, await store.retireCoordinationObservation({ ...parsed.data,
-        coordinationId: decodeURIComponent(retireObservation[1]), checkOnly: Boolean(retireObservation[2]) }))
-    } catch (error) { return send(response, residentErrorStatus(error), { error: error.message }) }
-  }
-
+  if (/^\/(?:state\/coordination-(?:sources|work)(?:\/|$)|coordination\/)/u.test(url.pathname))
+    return send(response, 410, { error: 'INDEPENDENT_COORDINATION_RETIRED' })
   if (request.method === 'GET' && url.pathname === '/state/tasks') {
     try {
       const paged = url.searchParams.has('limit') || url.searchParams.has('offset')
@@ -594,7 +535,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const schema = messageRetry ? z.strictObject({ messageVersion: z.number().int().positive(),
         activeUnitRefs: z.array(z.strictObject({ unitId: requiredText, unitRevision: z.number().int().positive() }))
           .refine(refs => new Set(refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision]))).size === refs.length),
-        phase: z.enum(['routing', 'decision', 'coordination', 'coordination-context', 'host']), requestId: requiredText, token })
+        phase: z.enum(['routing', 'decision', 'host']), requestId: requiredText, token })
         : z.strictObject({ expectedToken: token })
       const parsed = schema.safeParse(await readJson(request))
       if (!parsed.success) return send(response, 400, { error: 'MESSAGE_RECOVERY_REQUEST_INVALID' })

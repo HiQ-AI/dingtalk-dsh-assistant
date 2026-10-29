@@ -16,17 +16,7 @@
   },
   "files": [
     "coordination-context.js",
-    "coordination-ledger.js",
-    "coordination-observer.js",
-    "coordination-schedules.js",
-    "coordination-time.js",
-    "coordination-task-commands.js",
-    "coordination-changes.js",
-    "coordination-triggers.js",
-    "coordination-summary.js",
     "coordination-migration-state.js",
-    "independent-coordination-planner.js",
-    "independent-coordination-service.js",
     "coordination-resources.js",
     "coordination-sessions.js",
     "cordis.patch.yml",
@@ -59,6 +49,7 @@
     "group-reply-format.js",
     "http.js",
     "observer-pagination.js",
+    "observer-work-index.js",
     "observer-legacy-execution-pages.js",
     "observer-artifact-pages.js",
     "observer-artifact-bindings.js",
@@ -70,7 +61,6 @@
     "observer-fixed-topic-pages.js",
     "observer-alert-pages.js",
     "observer-trace-pages.js",
-    "observer-work-index.js",
     "index.js",
     "notification-delivery.js",
     "performance.js",
@@ -108,7 +98,8 @@
     "fixed-topics.js",
     "fixed-topic-correction.js",
     "fixed-topic-handler.js",
-    "group-person-aliases.js"
+    "group-person-aliases.js",
+    "coordination-retirement.js"
   ],
   "exports": {
     ".": "./index.js",
