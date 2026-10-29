@@ -102,19 +102,56 @@ function ProcessIdentity {
  if(-not$current-or$current.CreationDate-ne$original.CreationDate-or$current.CommandLine-ne$original.CommandLine){throw 'DEPLOY_PROCESS_IDENTITY_CHANGED'}
 }
 function PortOwners([int]$port){@(Get-NetTCPConnection -ErrorAction Stop|Where-Object {$_.State-eq'Listen'-and$_.LocalPort-eq$port}|Select-Object -ExpandProperty OwningProcess -Unique)}
-function Descendants([int]$parent){
- $direct=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parent")
- foreach($child in $direct){$child;Descendants $child.ProcessId}
+function TestCapturedProcess($identity,$current){
+ if(-not$current-or([datetime]$current.CreationDate)-ne([datetime]$identity.CreationDate)){return $false}
+ if($current.ProcessId-ne$identity.ProcessId-or($identity.Name-and$current.Name-cne$identity.Name)-or($identity.ExecutablePath-and$current.ExecutablePath-cne$identity.ExecutablePath)-or($identity.CommandLineSha256-and(TextHash $current.CommandLine)-cne$identity.CommandLineSha256)-or($identity.CommandLine-and$current.CommandLine-cne$identity.CommandLine)){throw 'DEPLOY_PROCESS_IDENTITY_CHANGED'}
+ return $true
+}
+function AssertCapturedTree($root,$children){
+ $identities=@{};$identities[[string]$root.ProcessId]=$root
+ foreach($child in $children){
+  $key=[string]$child.ProcessId
+  if(-not$child.ProcessId-or-not$child.CreationDate-or$identities.ContainsKey($key)){throw 'DEPLOY_PROCESS_TREE_INVALID'}
+  $identities[$key]=$child
+ }
+ foreach($child in $children){
+  $seen=[Collections.Generic.HashSet[int]]::new();$cursor=$child
+  while($cursor.ProcessId-ne$root.ProcessId){
+   if(-not$seen.Add([int]$cursor.ProcessId)){throw 'DEPLOY_PROCESS_TREE_INVALID'}
+   $parent=$identities[[string]$cursor.ParentProcessId]
+   if(-not$parent-or([datetime]$cursor.CreationDate)-lt([datetime]$parent.CreationDate)){throw 'DEPLOY_PROCESS_TREE_INVALID'}
+   $cursor=$parent
+  }
+ }
+}
+function Descendants($root){
+ # Capture a single live inventory; ParentPID alone can refer to an earlier incarnation.
+ $processes=@(Get-CimInstance Win32_Process -ErrorAction Stop)
+ $current=@($processes|Where-Object {$_.ProcessId-eq$root.ProcessId})
+ if($current.Count-ne1-or-not(TestCapturedProcess $root $current[0])){throw 'DEPLOY_PROCESS_IDENTITY_CHANGED'}
+ $queue=[Collections.Generic.Queue[object]]::new();$queue.Enqueue($root)
+ $seen=[Collections.Generic.HashSet[int]]::new();[void]$seen.Add([int]$root.ProcessId)
+ $children=[Collections.Generic.List[object]]::new()
+ while($queue.Count){
+  $parent=$queue.Dequeue()
+  foreach($child in $processes|Where-Object {$_.ParentProcessId-eq$parent.ProcessId}){
+   if(-not$child.CreationDate){throw 'DEPLOY_PROCESS_TREE_INVALID'}
+   if(([datetime]$child.CreationDate)-lt([datetime]$parent.CreationDate)){continue}
+   if(-not$seen.Add([int]$child.ProcessId)){throw 'DEPLOY_PROCESS_TREE_INVALID'}
+   $identity=[pscustomobject]@{ProcessId=$child.ProcessId;ParentProcessId=$child.ParentProcessId;Name=$child.Name;CreationDate=$child.CreationDate;ExecutablePath=$child.ExecutablePath;CommandLineSha256=$(if($child.CommandLine){TextHash $child.CommandLine}else{$null})}
+   $children.Add($identity);$queue.Enqueue($identity)
+  }
+ }
+ AssertCapturedTree $root $children
+ return $children.ToArray()
 }
 function AssertDrainMaintenanceProcessesExited {
- if((Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue)-or(PortOwners 3080).Count-or(PortOwners 18998).Count-or(Get-ScheduledTask -TaskName $taskName).Settings.Enabled){throw 'DEPLOY_MAINTENANCE_PROCESS_REMAINS'}
+ if((TestCapturedProcess $original (Get-CimInstance Win32_Process -Filter "ProcessId=$ExpectedPid"))-or(PortOwners 3080).Count-or(PortOwners 18998).Count-or(Get-ScheduledTask -TaskName $taskName).Settings.Enabled){throw 'DEPLOY_MAINTENANCE_PROCESS_REMAINS'}
+ AssertCapturedTree $original $originalDescendants
  foreach($child in $originalDescendants){
   $remaining=Get-CimInstance Win32_Process -Filter "ProcessId=$($child.ProcessId)"
-  if($remaining-and$remaining.CreationDate-eq$child.CreationDate){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
-  # A captured parent can exit before its children; retain its PID as an ancestry root.
-  if(@(Descendants $child.ProcessId).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
+  if(TestCapturedProcess $child $remaining){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
  }
- if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
 }
 function WaitFor([scriptblock]$Condition,[string]$Failure,[int]$TimeoutSeconds=120){
  $deadline=[DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -132,15 +169,19 @@ if($ResumeNativeDispose){
  $savedSignal=Get-Content (Join-Path $EvidenceDirectory 'signal.json') -Raw|ConvertFrom-Json
  $savedFailure=Get-Content (Join-Path $EvidenceDirectory 'failure.json') -Raw|ConvertFrom-Json
  if($savedControl.pid-ne$ExpectedPid-or$savedControl.packageSha256-ne$ExpectedPackageSha256-or$savedControl.profileSha256-ne$ExpectedProfileSha256-or$savedFailure.phase-ne'native-dispose'-or$savedFailure.error-ne'DEPLOY_NATIVE_NOT_QUIESCENT'-or$savedSignal.targetPid-ne$ExpectedPid-or$savedSignal.signalSent-ne'CTRL_C_EVENT'){throw 'DEPLOY_RESUME_EVIDENCE_MISMATCH'}
- if($original-or(PortOwners 3080).Count-or(PortOwners 18998).Count-or@(Descendants $ExpectedPid).Count){throw 'DEPLOY_RESUME_PROCESS_REMAINS'}
+ $retainedRoot=[pscustomobject]@{ProcessId=$ExpectedPid;CreationDate=$savedControl.creationDate;Name=$savedControl.name;ExecutablePath=$savedControl.executablePath;CommandLineSha256=$savedControl.commandLineSha256}
+ if((TestCapturedProcess $retainedRoot $original)-or(PortOwners 3080).Count-or(PortOwners 18998).Count){throw 'DEPLOY_RESUME_PROCESS_REMAINS'}
+ $originalDescendants=@()
  $capturedPath=Join-Path $EvidenceDirectory 'captured-descendants.json'
  if(Test-Path -LiteralPath $capturedPath){
-  foreach($captured in @(Get-Content $capturedPath -Raw|ConvertFrom-Json)){
+  $originalDescendants=@(Get-Content $capturedPath -Raw|ConvertFrom-Json)
+  AssertCapturedTree $retainedRoot $originalDescendants
+  foreach($captured in $originalDescendants){
    $remaining=Get-CimInstance Win32_Process -Filter "ProcessId=$($captured.ProcessId)"
-   if($remaining-and$remaining.CreationDate-eq[datetime]$captured.CreationDate){throw 'DEPLOY_RESUME_CHILD_PROCESS_REMAINS'}
+   if(TestCapturedProcess $captured $remaining){throw 'DEPLOY_RESUME_CHILD_PROCESS_REMAINS'}
   }
  }
- $original=[pscustomobject]@{CreationDate=$savedControl.creationDate}
+ $original=$retainedRoot
 }else{
 if(-not$original-or$original.CommandLine-notlike "*--require D:\dsh_home\launchers\web-module-loader.cjs*"-or$original.CommandLine-notlike '*profiles\web\node_modules\@deepseek-ai\dsh\lib\bin.js web --no-open*'){throw 'DEPLOY_UNEXPECTED_PROCESS'}
 foreach($port in @(3080,18998)){$owners=PortOwners $port;if($owners.Count-ne1-or$owners[0]-ne$ExpectedPid){throw 'DEPLOY_PORT_IDENTITY_MISMATCH'}}
@@ -191,7 +232,7 @@ try{
  [IO.Directory]::CreateDirectory((Split-Path -Parent $lockPath))|Out-Null
  $deploymentLock=[IO.File]::Open($lockPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
  if(-not$ResumeNativeDispose){
- Record 'control' @{backupCreated=$false;pid=$ExpectedPid;creationDate=$original.CreationDate;packageSha256=Hash $Package;profileSha256=Hash $patch;taskEnabled=$wasEnabled;observerManifestSha256=$observerHash;package=($packageProof|ConvertFrom-Json)}
+ Record 'control' @{backupCreated=$false;pid=$ExpectedPid;creationDate=$original.CreationDate;name=$original.Name;executablePath=$original.ExecutablePath;commandLineSha256=(TextHash $original.CommandLine);packageSha256=Hash $Package;profileSha256=Hash $patch;taskEnabled=$wasEnabled;observerManifestSha256=$observerHash;package=($packageProof|ConvertFrom-Json)}
  ProcessIdentity
  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()){throw 'DEPLOY_PROFILE_CHANGED'}
  $phase='disable-autostart';Disable-ScheduledTask -TaskName $taskName|Out-Null
@@ -209,24 +250,24 @@ try{
  }
  $phase='native-dispose'
  ProcessIdentity
- $originalDescendants=@(Descendants $ExpectedPid)
- Record 'captured-descendants' @($originalDescendants|Select-Object ProcessId,ParentProcessId,Name,CreationDate)
+ $originalDescendants=@(Descendants $original)
+ Record 'captured-descendants' $originalDescendants
  $signalOut=Join-Path $EvidenceDirectory 'signal.json';$signalErr=Join-Path $EvidenceDirectory 'signal.stderr.log'
  $signalArgs=@('-NoProfile','-File',(Join-Path $PSScriptRoot 'stop-web-console.ps1'),'-ExpectedPid',[string]$ExpectedPid)
  $signaler=Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList $signalArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput $signalOut -RedirectStandardError $signalErr
  $signaler.WaitForExit();if($signaler.ExitCode){throw 'DEPLOY_NATIVE_SIGNAL_FAILED'}
  WaitFor {
-  if(Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue){return $false}
+  if(TestCapturedProcess $original (Get-CimInstance Win32_Process -Filter "ProcessId=$ExpectedPid")){return $false}
   foreach($child in $originalDescendants){
-   $remaining=Get-CimInstance Win32_Process -Filter "ProcessId=$($child.ProcessId)" -ErrorAction SilentlyContinue
-   if($remaining -and $remaining.CreationDate -eq $child.CreationDate){return $false}
+   $remaining=Get-CimInstance Win32_Process -Filter "ProcessId=$($child.ProcessId)"
+   if(TestCapturedProcess $child $remaining){return $false}
   }
   if((PortOwners 3080).Count-or(PortOwners 18998).Count){return $false}
   try{$offlineArgs=if($RestartMaintenanceProposal){@($ledger,$db,$agentWorkspace,'offline',[string]$ExpectedPid,$RestartMaintenanceProposal)}elseif($DrainFailureMaintenanceProposal){@($ledger,'current-control',$db,'offline',[string]$ExpectedPid,$agentWorkspace,$DrainFailureMaintenanceProposal)}else{@($ledger,'current-control',$db,'offline',[string]$ExpectedPid)};$script:offlineProof=RunNode $offlineArgs;return $true}catch{if($DrainFailureMaintenanceProposal){throw};return $false}
  } 'DEPLOY_NATIVE_NOT_QUIESCENT'
- if(@(Descendants $ExpectedPid).Count){throw 'DEPLOY_CHILD_PROCESS_REMAINS'}
+ AssertCapturedTree $original $originalDescendants
  }else{
-  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()-or(Get-ScheduledTask -TaskName $taskName).Settings.Enabled-or(Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue)-or(PortOwners 3080).Count-or(PortOwners 18998).Count){throw 'DEPLOY_RESUME_STATE_CHANGED'}
+  if((Hash $patch)-ne$ExpectedProfileSha256.ToLowerInvariant()-or(Get-ScheduledTask -TaskName $taskName).Settings.Enabled-or(TestCapturedProcess $original (Get-CimInstance Win32_Process -Filter "ProcessId=$ExpectedPid"))-or(PortOwners 3080).Count-or(PortOwners 18998).Count){throw 'DEPLOY_RESUME_STATE_CHANGED'}
   $offlineProof=RunNode @($ledger,'current-control',$db,'offline',[string]$ExpectedPid)
   Record 'resume-native-dispose' @{observedAt=[DateTime]::UtcNow.ToString('o');priorFailure=$savedFailure;signals=0}
  }
