@@ -1,8 +1,8 @@
 # Topic 回复对象与收件人纠正修复
 
-> 状态：ACTIVE
+> 状态：COMPLETED
 > Goal ID：topic-reply-recipient-correction
-> 最近维护：2026-10-29T18:04:14+08:00
+> 最近维护：2026-10-29T18:08:11+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-reply-recipient-correction/docs/acceptance/topic-reply-recipient-correction/goal.md
 
 ## 总目标
@@ -29,9 +29,9 @@ Topic 语义决定回复内容和对象，Host 验证并执行，不能用 basis
 ## 当前检查点
 
 - 当前子目标：SG6
-- 当前状态：ACTIVE，进入提交/新PR交付。review最终只读审查暂无剩余已证阻断；Lead已回读round-16和ops diff，接管文档单写并写最终report。矩阵程序核验53条历史、22个范围内case最新PASS、4个OUT_OF_SCOPE、case×round唯一；保留历史失败/取消。prepared旧超时根因未证、真实模型/送达/crash未验及fixed空refs基线疑点明确保留。
-- 唯一下一步：核最终正文、diff及goal门禁，提交新隔离分支，push前回查PR state，创建新PR并独立读取number/body/base/head/state及远端SHA。此前后台均已终态，不再重跑；README/ops/report已齐，无需再等成员。
-- 未闭环项：提交、push、新PR和真实状态回查；不得部署、合并、手动CI或真实外发。
+- 当前状态：COMPLETED。本次约定的本地修复、按影响验证、独立审查、README/ops/验收文档及新PR交付均已完成。修复提交aaa7d823b908f1ca2528cb39632b29f7a6cb9ea9，远端ls-remote已核同SHA；PR #297已独立gh回读OPEN、base=main、head=worktree-topic-reply-recipient-correction、标题/正文相符、mergedAt=null。
+- 唯一下一步：无本任务自动后续动作，PR保持OPEN供评审。不合并、不部署、不触发CI，不重跑已绿测试；六个原窗口保留。
+- 未闭环项：本任务约定范围内无。边界仍为真实LLM同名/任意表达消歧、真实钉钉/正式DB、突然crash、全部replyReview/通知组合未验；prepared旧一次超时根因未证，fixed空refs为不扩修基线疑点，均不冒充已修或现场验收。
 - 工作目录：D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-reply-recipient-correction
 - 分支：worktree-topic-reply-recipient-correction；base main。
 
@@ -44,7 +44,7 @@ Topic 语义决定回复内容和对象，Host 验证并执行，不能用 basis
 | SG3 | tests：独立测试与回归，独占test/ | 复现和纠正、歧义/跨群/非助手引用拒绝、幂等恢复及通知回归 | 受控代表测试完成，真实模型同名消歧及现场验收未做 | 定向13、关联177、冲突2、prepared1、手写6、材料1、通知恢复6均PASS；保留历史失败 |
 | SG4 | review：独立审查，只读实现/测试 | 无已证阻断，盲点明确 | 完成，已审源码及测试暂无剩余已证阻断 | 原错taskIds外发FAIL保留；修后send0通过；三处仅补route，单真人默认不证明多参与者语义；未验边界保留 |
 | SG5 | docs：合同及验收文档，独占README/相关ops/matrix/round/report，不写goal/spec | 历史失败保留、证据可追溯、全绿后报告 | 完成，已交接Lead单写收口 | round-16与ops已独立核；report.md及矩阵最新22 PASS/4 OUT_OF_SCOPE |
-| SG6 | Lead：整合交付，独占goal/spec/commit/PR | 独立核验、本地实跑、新PR状态回查 | 进行中，提交和新PR | 已核关键diff、原始测试与最终报告；正文门禁PASS，新分支无PR，旧291已MERGED |
+| SG6 | Lead：整合交付，独占goal/spec/commit/PR | 独立核验、本地实跑、新PR状态回查 | 完成，新PR OPEN，未合并/部署/CI | 修复提交aaa7d823；PR #297真实回读；report及矩阵最新22 PASS/4 OUT_OF_SCOPE |
 
 ## 进展
 
@@ -85,4 +85,7 @@ Topic 语义决定回复内容和对象，Host 验证并执行，不能用 basis
 
 ## 交付
 
-完成后回报提交SHA、新PR URL/number/state、测试与未验边界；不关闭窗口。状态必须由产物及实际验证支撑，不以idle/消息送达代替完成。
+- 修复提交：aaa7d823b908f1ca2528cb39632b29f7a6cb9ea9；push后独立ls-remote一致。
+- 新PR：[297](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/297)，标题 `fix(topic): 保留语义回复对象并修正收件人纠正沟通`；独立gh回读state=OPEN、base=main、head=worktree-topic-reply-recipient-correction、mergedAt=null，正文与已检文件一致。
+- 验收：report.md；矩阵53条历史，最新22 PASS/4 OUT_OF_SCOPE，无case×round重复。风险相关代表实跑和独立审查完成，不作全仓/现场结论。
+- 六原窗口保留，无重启/关窗；主检出用户改动未提交。没有部署、合并、手动CI或真实消息副作用。

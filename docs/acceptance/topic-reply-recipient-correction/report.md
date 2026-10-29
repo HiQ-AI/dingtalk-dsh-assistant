@@ -54,6 +54,13 @@ README 的公开回复合同和 `docs/ops/task-session-clean-start.md` 的冻结
 - prepared 曾有一次 30 秒取消且无调用栈；后续单次通过不能证明旧超时根因已修，根因仍未证。
 - 历史 notification 未保存的任务版本字段不能声称完整核验；fixed-topic 空 refs 是本次未扩修的基线疑点。
 
+## 交付回查
+
+- 修复提交：`aaa7d823b908f1ca2528cb39632b29f7a6cb9ea9`；推送后独立 `git ls-remote` 回读一致。
+- 新 PR：[#297](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/297)，`fix(topic): 保留语义回复对象并修正收件人纠正沟通`。
+- 2026-10-29T18:08:11+08:00 独立 `gh pr view` 回读：OPEN，`main ← worktree-topic-reply-recipient-correction`，正文、标题及修复 SHA 符合预期，`mergedAt=null`。
+- 本报告及目标状态回填仅为后续文档提交，不改变已验证源码。没有合并、部署、手动 CI 或真实消息副作用；原六窗口保留。
+
 ## 未验及禁区
 
 未执行真实 LLM 同名/任意自然语言纠正消歧、真实钉钉送达、正式数据库或突然进程 crash；未覆盖全部 replyReview 替换与通知冲突组合。优雅关闭重开不等于突然崩溃验收。
