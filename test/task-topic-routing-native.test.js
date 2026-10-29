@@ -194,8 +194,10 @@ testRunner('native revised Topic supplies current linked Task reads without resc
     await h.service.whenIdle()
     const task = await h.query('task.get', { taskId: created.taskId })
     taskId = task.taskId; topicId = task.topicRefs[0].topicId
-    for (const id of ['linked-follow-317', 'linked-follow-318']) {
-      await h.service.ingest(message(id, '补充原事项讨论，只核对上下文，不执行新动作。'))
+    const ownerRuns = h.toolResults.filter(item => item.name === 'task_session_submit').length
+    for (const [id, text] of [['linked-follow-317', '补充原事项讨论，只核对上下文，不执行新动作。'],
+      ['linked-follow-318', '测试成员乙已处理原事项，后续由测试成员丙验收，未请求本助手推进。']]) {
+      await h.service.ingest(message(id, text))
       await h.service.whenIdle()
     }
     assert.equal(decisions, 2)
@@ -203,6 +205,8 @@ testRunner('native revised Topic supplies current linked Task reads without resc
     assert.equal(h.toolResults.filter(item => item.name === 'group_task_list').length, 0)
     assert.equal((await h.query('task.list')).length, 1)
     assert.equal((await h.query('task.get', { taskId })).requirementRevision, task.requirementRevision)
+    assert.deepEqual(await h.query('task.get', { taskId }), task, '他人进展只保留业务上下文，不改任务状态或完成证据')
+    assert.equal(h.toolResults.filter(item => item.name === 'task_session_submit').length, ownerRuns, '只记上下文不能唤醒已有任务')
     assert.equal(h.sent.length, 0)
     assert.equal(h.residentStore.listTopics('native-group').find(topic => topic.topicId === topicId).processedRevision, 3)
   })
@@ -894,6 +898,51 @@ testRunner('native Web Topic edits reject stale requirement and control revision
   assert.equal((await h.query('task.list')).length, 1)
 })
 
+testRunner('business notices 423–424 and named owners remain in the original Topic without assistant tasks or replies', { timeout: 15000, ...(!available ? { skip: reason } : {}) }, async t => {
+  let topicId
+  const h = await extraHost(t, 'business-topic-context-', async request => {
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    const prompt = JSON.stringify(request)
+    assert.ok(prompt.includes('话题归属与助手动作分开判断'))
+    assert.ok(prompt.includes('不唤醒已有任务'))
+    assert.ok(prompt.includes('不能自动作为本助手任务完成证据'))
+    if (names.includes('group_topic_route_submit')) {
+      assert.ok(prompt.includes('不能把“未交给本助手”当成“职责外”'))
+      return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
+        units: [{ unitKey: 'lci', summary: 'LCI 单位修复的讨论和处理记录', sourceRefs: [{ wholeMessage: true }], topics: [topicId ? { topicId } : { newTopicKey: 'lci', title: 'LCI 单位修复' }] }] })) })]
+    }
+    assert.ok(names.includes('group_decision_submit'))
+    return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+      decision: { basisMessageIds: [...new Set(input.messages.map(item => item.messageId))], actions: [], reason: '同一业务事项由同事负责，保留完整上下文，不承接、不追问、不回复',
+        topicUpdate: { summary: [input.summary, ...input.messages.map(item => item.text)].filter(Boolean).join('；') } } } }]
+  })
+  await h.residentStore.updateGroup({ groupId: 'native-group', personAliases: [{ alias: '小甲', name: '测试成员甲' }] })
+  const texts = [
+    ['lci-start', 'LCI 单位缺失问题正在讨论'],
+    ['notice-423', '@测试成员乙 @测试成员丙 已修复 LCI 单位缺失并发布测试环境'],
+    ['notice-424', '@测试成员丁 LCI 任务已创建，开始处理。任务codex:example — 另一测试助手'],
+    ['named-owner', '后续 LCI 验收交给测试成员乙处理'],
+    ['named-reference', '看小甲发的应该是这样吧'],
+  ]
+  for (const [messageId, text] of texts) {
+    await h.service.ingest({ ...message(messageId, text), ...(topicId ? { quotedMessage: { messageId: 'lci-start', content: texts[0][1] } } : {}) })
+    await h.service.whenIdle()
+    topicId ??= h.residentStore.listTopics('native-group')[0].topicId
+  }
+  const topics = h.residentStore.listTopics('native-group')
+  assert.equal(topics.length, 1)
+  assert.deepEqual(resolveTopicMessages(h.residentStore.getGroup('native-group'), topicId, topics[0].revision).map(item => [item.messageId, item.text]), texts)
+  assert.ok(topics[0].summary.includes(texts.at(-1)[1]))
+  assert.ok(topics[0].decisions.every(record => record.status === 'completed' && record.decision.actions.length === 0 && !record.decision.reply))
+  assert.equal(topics[0].revision, topics[0].processedRevision)
+  assert.equal((await h.residentStore.listFixedTopicMessagesPage({ groupId: 'native-group', topicId: 'out-of-scope' })).total, 0)
+  assert.equal((await h.query('task.list')).length, 0); assert.equal(h.sent.length, 0)
+  const before = JSON.stringify(topics)
+  await h.service.recover(); await h.service.whenIdle()
+  assert.equal(JSON.stringify(h.residentStore.listTopics('native-group')), before)
+  assert.equal(h.sent.length, 0)
+})
+
 testRunner('native proposal prompt preserves original authorization and asks without claiming task execution', { timeout: 15000, ...(!available ? { skip: reason } : {}) }, async t => {
   let checked = false
   const h = await extraHost(t, 'task-topic-proposal-', async request => {
@@ -903,6 +952,7 @@ testRunner('native proposal prompt preserves original authorization and asks wit
     const prompt = JSON.stringify(request)
     for (const rule of ['才允许选择 new-task', '必须选择 task-proposal', '这个事项是否需要我处理？', '暂不创建任务', '不承诺', '消息明确 @其他同事', '测试助手', '不追加未经授权的业务验收']) assert.ok(prompt.includes(rule), rule)
     for (const rule of ['不能只因 @ 别人就硬过滤', '已有任务的新事实仍归原业务 Topic', '仅提到人名不等于指定负责人']) assert.ok(prompt.includes(rule), rule)
+    assert.ok(prompt.includes('仍保留对应业务 Topic 的完整上下文'))
     assert.ok(!prompt.includes('未指向 Agent 时必须忽略'))
     checked = true
     return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [{ kind: 'task-proposal', title: '描述框位置调整', objective: '按原图将描述框放在文字右侧并顶部对齐', topicRefs: [{ topicId: input.topicId, revision: input.revision }] }], reply: '这个事项是否需要我处理？', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]

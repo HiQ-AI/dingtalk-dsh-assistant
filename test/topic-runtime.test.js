@@ -2749,7 +2749,7 @@ test('fixed route categories are offered by active mode and bypass business deci
   await ingest(h, 'fixed-source', { text: '查平台；买咖啡；修复UPR' })
   await h.coordinator.schedule('g')
   const request = h.envelope('[GROUP_TOPIC_ROUTE]')
-  assert.deepEqual(request.fixedTopics.map(topic => topic.title), ['无需本助手介入', '职责内Agent平台相关'])
+  assert.deepEqual(request.fixedTopics.map(topic => topic.title), ['职责外话题', '职责内Agent平台相关'])
   const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'fixed-source', messageVersion: 1, units: [
     { unitKey: 'platform', summary: '平台查询', sourceRefs: [{ quote: '查平台；' }], fixedTopic: 'agent-platform', topics: [], reason: '平台整体查询' },
     { unitKey: 'outside', summary: '买咖啡', sourceRefs: [{ quote: '买咖啡；' }], fixedTopic: 'out-of-scope', topics: [], reason: '职责外' },
@@ -2772,7 +2772,7 @@ test('Route and Topic receive only referenced group person identities without fi
   const personAliases = [{ alias: '小甲', name: '测试成员甲' }]
   await h.store.updateGroup({ groupId: 'g', personAliases: [...personAliases, { alias: '小乙', name: '测试成员乙' }] })
   const route = { messageId: 'named-request', messageVersion: 1, units: [
-    { unitKey: 'owner', summary: '他人负责发布', sourceRefs: [{ quote: '@测试成员乙 负责发布；' }], fixedTopic: 'out-of-scope', topics: [], reason: '明确他人负责，未要求本助手发布' },
+    { unitKey: 'owner', summary: '他人负责发布', sourceRefs: [{ quote: '@测试成员乙 负责发布；' }], topics: [{ newTopicKey: 'check', title: '核对修复结果' }], reason: '同一业务事项的人员分工仍保留原文，不授权本助手发布' },
     { unitKey: 'check', summary: '核对修复结果', sourceRefs: [{ quote: '助理请核对小甲的修复结果' }], topics: [{ newTopicKey: 'check', title: '核对修复结果' }] },
   ] }
   const stale = await h.rawCall('group_topic_route_submit', { requestId: old.requestId, routes: [route] })
@@ -2781,10 +2781,11 @@ test('Route and Topic receive only referenced group person identities without fi
   const request = h.envelope('[GROUP_TOPIC_ROUTE]')
   assert.deepEqual(request.personAliases, personAliases)
   assert.match(request.personAliasGuide, /仅提到人名不等于指定负责人/)
-  assert.doesNotMatch(h.sent.at(-1), /群成员讨论具体问题也可形成话题/)
+  assert.match(h.sent.at(-1), /话题归属与助手动作分开判断/)
   const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [route] })
   assert.equal(result.status, 'accepted'); assert.equal(result.pendingDecisions.length, 1)
-  assert.equal(result.pendingDecisions[0].messages[0].text, '助理请核对小甲的修复结果')
+  assert.equal(result.pendingDecisions[0].messages.map(item => item.text).join(''), text)
+  assert.equal((await h.store.listFixedTopicMessagesPage({ groupId: 'g', topicId: 'out-of-scope' })).total, 0)
   assert.deepEqual(h.envelope('[GROUP_TOPIC_DECISION]').personAliases, personAliases)
   const topicId = result.topicIdsByKey.check
   await ingest(h, 'quoted-fact', { text: '@测试成员乙 给你同步一下，这份结果是原核对事项的补充', quotedMessage: { messageId: 'named-request', content: '看小甲发的应该是这样吧' } })

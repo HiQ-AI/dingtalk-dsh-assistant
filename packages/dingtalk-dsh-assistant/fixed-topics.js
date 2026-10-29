@@ -1,7 +1,7 @@
 import { stableId } from './topic-model.js'
 
 export const FIXED_TOPICS = Object.freeze([
-  { topicId: 'out-of-scope', title: '无需本助手介入' },
+  { topicId: 'out-of-scope', title: '职责外话题' },
   { topicId: 'agent-platform', title: '职责内Agent平台相关' },
 ])
 export const fixedTopicIds = FIXED_TOPICS.map(topic => topic.topicId)
@@ -11,7 +11,7 @@ export function ensureFixedTopics(group) {
     createdAt: group.fixedTopics?.find(item => item.topicId === topic.topicId)?.createdAt ?? new Date().toISOString() }))
   return JSON.stringify(group.fixedTopics) === JSON.stringify(fixedTopics) ? group : { ...group, fixedTopics }
 }
-export const fixedTopicInstructions = '结合原消息、引用、近期上下文、本群职责及相关任务状态，先判断每个 source unit 是否需要本助手介入。fixedTopic="out-of-scope"（无需本助手介入）包含职责外事项，也包含明确指定其他负责人且未要求本助手参与的事项，即使业务本身在职责内也不重复承接。区分实际负责人、仅通知的收件人和同时请求本助手参与；不能看到 @ 别人就硬过滤。其他助手的“任务已创建/开始处理”通知、其他负责人修复发布的通知，若没有本助手参与诉求或已有本助手任务所需的新事实，归此固定类别并保持安静，不把通知当作本助手操作授权。若消息明确同时要求本助手参与，或提供已有本助手任务相关的新信息，相关部分仍归业务 Topic；信息补充不等于授权重做或另建任务。仅真正超出职责且明确向本助手求助的 unit 可设 outOfScopeHelp=true，Host 再按真实 @ 元数据决定是否简短说明职责边界；其他情况省略此字段并沉默，不能一概回答“不归我负责”。Agent 平台整体查询使用 fixedTopic="agent-platform"（职责内Agent平台相关），如当前执行中任务、昨天完成的任务；同事间讨论 Cortex/Claude 等工具账号不因技术词变成助手平台问询。固定类别的 topics=[]，不创建同名业务 Topic，不参与合并或关闭。具体业务进展如“UPR导入修好了吗”仍关联原业务 Topic；混合消息分别拆 unit，不得吞掉同消息的业务诉求。固定类别仍提供完整 sourceRefs 和 reason。路由不生成答复；平台类别由独立只读会话回答，不委派业务 Task。'
+export const fixedTopicInstructions = '结合原消息、引用、近期上下文、本群职责及相关任务状态，先判断每个 source unit 的事项归属，再独立判断本助手是否需要动作或回复。fixedTopic="out-of-scope"（职责外话题）只用于本群职责之外的事项，不能把“未交给本助手”当成“职责外”。职责内业务消息即使明确指定其他负责人、由其他助手发送状态通知，或仅引用同事信息，也应保留在对应业务 Topic；是否已有本助手 Task 不是保留业务上下文的前提。优先复用同一业务目标的原 Topic，不因换了负责人拆走上下文，不因 @ 别人就丢弃原文。明确他人负责且未要求本助手参与时，后续 Topic Decision 用 actions:[]、reason 和 topicUpdate.summary 保存事实，省略 reply，不创建或唤醒任务、不追问；他人处理进展只作为其报告的业务事实，不能自动作为本助手任务完成证据。信息补充本身不授权重做或另建任务。同时向本助手提出的诉求仍按原文处理。人员别名用于准确理解谁被提到，不改变事项归属。仅真正超出职责且明确向本助手求助的 unit 可设 outOfScopeHelp=true，Host 再按真实 @ 元数据决定是否简短说明职责边界；职责外讨论和明确无需助手回复的纠正省略此字段并沉默。Agent 平台整体查询使用 fixedTopic="agent-platform"（职责内Agent平台相关），如当前执行中任务、昨天完成的任务；Cortex/Claude 等技术词本身不决定分类，同事间职责外工具账号讨论仍归职责外话题。固定类别的 topics=[]，不创建同名业务 Topic，不参与合并或关闭。具体业务进展如“UPR导入修好了吗”仍关联原业务 Topic；混合消息分别拆 unit，不得吞掉同消息的业务上下文。固定类别仍提供完整 sourceRefs 和 reason。路由不生成答复；平台类别由独立只读会话回答，不委派业务 Task。'
 export const fixedUnitRequestId = (groupId, message, unit) => stableId('fixed-topic', JSON.stringify([groupId, message.messageId, message.messageVersion, unit.unitId, unit.unitRevision, unit.fixedTopic]))
 export const activeFixedUnits = message => (message.units ?? []).filter(unit => unit.fixedTopic && !unit.fixedTopicHandledAt
   && message.activeUnitRefs?.some(ref => ref.unitId === unit.unitId && ref.unitRevision === unit.unitRevision))
