@@ -35,7 +35,7 @@ export function taskIndexPage(tasks, offset, limit, query = '') {
 }
 
 // Topic owns routing and decision receipts; this adapter only supplies native request sessions.
-export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, readPlatformTasks, readMentioned, validateReply, quotedReminderContext, coordinationEnabled = false, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
+export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, readPlatformTasks, readArchivedTask, readMentioned, validateReply, quotedReminderContext, coordinationEnabled = false, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
   const fixedTopics = readPlatformTasks ? createFixedTopicHandler({ ctx, store, legacy, root, models, appendOutbox, readTasks: readPlatformTasks, readMentioned, onSettled: groupId => onInputSettled?.(groupId), onError }) : null
   // The original Topic protocol is retained, but retired workflow prompt catalogs
   // must not leak back into the generic task-session boundary.
@@ -95,17 +95,20 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
               const tasks = store.listTasks().filter(task => task.groupId === request.groupId && (!needle || `${task.title ?? ''} ${task.objective ?? ''}`.toLowerCase().includes(needle)))
               return taskIndexPage(tasks, offset, limit, needle)
             } })
-          agentCtx.tools.register({ name: 'group_task_context_get', description: '读取当前群任务的完整关联上下文。',
-            parameters: { type: 'object', properties: { taskIds: { type: 'array', items: { type: 'string' } } }, required: ['taskIds'], additionalProperties: false }, output,
-            execute: ({ taskIds }, exec) => {
+          agentCtx.tools.register({ name: 'group_task_context_get', description: '读取当前群任务的完整关联上下文；已归档任务仅返回身份、状态和空 allowedActions，不恢复或执行。',
+            parameters: { type: 'object', properties: { taskIds: { type: 'array', minItems: 1, maxItems: 8, uniqueItems: true, items: { type: 'string', minLength: 1 } } }, required: ['taskIds'], additionalProperties: false }, output,
+            execute: async (args, exec) => {
               assert(exec)
-              if (!taskIds.length || taskIds.length > 8 || taskIds.some(id => !id.trim()) || new Set(taskIds).size !== taskIds.length) throw new Error('group_task_context_request_invalid')
-              return { tasks: taskIds.map(id => {
-                const task = store.getTask(id)
+              const taskIds = args?.taskIds
+              if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => key !== 'taskIds') || !Array.isArray(taskIds) || !taskIds.length || taskIds.length > 8 || taskIds.some(id => typeof id !== 'string' || !id.trim()) || new Set(taskIds).size !== taskIds.length)
+                return { status: 'invalid-arguments', issues: [{ field: 'taskIds', code: 'group_task_context_request_invalid', message: 'taskIds must contain 1 to 8 distinct nonempty strings' }], nextAction: 'correct-arguments' }
+              return { tasks: await Promise.all(taskIds.map(async id => {
+                const task = store.getTask(id) ?? await readArchivedTask?.(id)
                 if (!task) throw new Error(`group_task_context_not_found:${id}`)
                 if (task.groupId !== request.groupId) throw new Error(`group_task_context_wrong_group:${id}`)
+                if (task.archivedAt) return { taskId: task.taskId, groupId: task.groupId, title: task.title, state: task.state, archivedAt: task.archivedAt, allowedActions: [] }
                 return task
-              }) }
+              })) }
             } })
           for (const tool of createCoordinationResourceTools({ request, assertCurrent: assert,
             readMessage: legacy.readGroupMessage?.bind(legacy) ?? legacy.readMessage?.bind(legacy), readResource: legacy.readGroupResource?.bind(legacy) ?? legacy.readResource?.bind(legacy), readImage: legacy.readImage?.bind(legacy),
@@ -185,7 +188,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     }
     return normalized
   }
-  topics = createTopicCoordinator({ store, workflowPromptsEnabled: false, fixedTopicsEnabled: !!fixedTopics, quotedReminderContext, onInputSettled,
+  topics = createTopicCoordinator({ store, workflowPromptsEnabled: false, fixedTopicsEnabled: !!fixedTopics, quotedReminderContext, onInputSettled, readArchivedTask,
     getAgent: (groupId, request) => request ? sessions.get(groupId, request) : !closed && store.getGroup(groupId) ? presence : undefined,
     dispatchRequest: (request, message) => {
       const work = sessions.dispatch(request, message)

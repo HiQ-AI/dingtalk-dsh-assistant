@@ -97,7 +97,7 @@ DSH 模型故障冷却期间补充需求后，到期复核仍会沿原执行身�
 
 收发信箱仅在后端提供安全恢复凭据时显示“重试原消息”或“核验发送结果”。先解决网络、鉴权或业务阻塞，再按原消息版本、事项集合和原请求/预约恢复；不复制消息、不重做已成功动作。Host 未知效果保持阻塞。发件 prepared 可尝试发送，failed 必须有严格原生未发送证明且允许重试；unknown/starting 只回读，已送达、已替代、退休或撤回不可重发。手动与自动共用原生发送门禁、持久 CAS 和同飞保护；过期且尚无许可的查询通知必须由原生刷新事实后再尝试，不能按旧结论发出。一次点击只请求一次恢复，不代表处理完成或送达；旧状态或重复点击须刷新核对。接口合同见 [任务决定与消息恢复](docs/api/task-decisions.md#消息处理投影与精确恢复)。
 
-收信箱“历时”固定为消息 occurredAt 到当前语义完成时间（多 Topic 取 max），不是纯模型时间、Host 排队或任务总耗时。待澄清若已有本轮完整语义决策戳，保留该历时，不把等待用户补充或通知时间追加进去。缺时显示未记录，负时显示时钟逆序异常，不归零或伪造历史时钟。“处理状态与计时”展开完整结论，并独立展示 Host 接收、来源收束、通知回读和接收到精确版本全部关联通知送达的 E2E；未绑定版本的历史通知不计 E2E。共享、重叠和多回合阶段不机械相加，通知 ACK 不等于送达。 `processingFacts.stages` 只投影无正文的 `spanId/stage/requestId/attempt/sessionId/startedAt/completedAt/quality/shared/phase/loopDelayMs`：阶段为 `ingress/queue/turn/host/send/readback`，每个原生 turn 各有 span，不以整个会话首尾代替单次请求。未结束 span 保留空结束时间；未记录阶段明确缺失，重启不以当前时间补齐。入站保留整体区间，并记录来源读取、每个图片资源读取、图片准备与保存、消息存储（含串行等待）、来源记录子阶段；`phase` 只用于这些入站子阶段，整体 `loopDelayMs` 是本轮事件循环最大采样延迟，不是阶段耗时，也不能据此独自判断阻塞根因。历史记录不补造子阶段。入口仅表示本插件 `ingest` 开始接收，不是钉钉服务端接收或网络延迟。 独立协调的 queue/turn/host 共用账本的零基重试次数，不以来源 generation 代替 attempt。
+收信箱“历时”固定为消息 occurredAt 到当前语义完成时间（多 Topic 取 max），不是纯模型时间、Host 排队或任务总耗时。待澄清若已有本轮完整语义决策戳，保留该历时，不把等待用户补充或通知时间追加进去。缺时显示未记录，负时显示时钟逆序异常，不归零或伪造历史时钟。“处理状态与计时”展开完整结论，并独立展示 Host 接收、来源收束、通知回读和接收到精确版本全部关联通知送达的 E2E；未绑定版本的历史通知不计 E2E。共享、重叠和多回合阶段不机械相加，通知 ACK 不等于送达。 `processingFacts.stages` 只投影无正文的 `spanId/stage/requestId/attempt/sessionId/startedAt/completedAt/quality/shared/phase/loopDelayMs`：阶段为 `ingress/queue/turn/host/send/readback`，每个原生 turn 各有 span，不以整个会话首尾代替单次请求。未结束 span 保留空结束时间；未记录阶段明确缺失，重启不以当前时间补齐。入站保留整体区间，并记录来源读取、每个图片资源读取、图片准备与保存、消息存储（含串行等待）、来源记录子阶段；`phase` 在 ingress 阶段用于这些入站子阶段；Host 阶段还可用于 Topic 任务动作子阶段，具体见下文。整体 `loopDelayMs` 是本轮事件循环最大采样延迟，不是阶段耗时，也不能据此独自判断阻塞根因。历史记录不补造子阶段。Topic 任务动作的 Host 阶段可细分为 `task-commit`、非 supplement 动作的 `old-drain` 与 `materialize`；各子阶段记录真实开始/完成时间，未结束时完成时间为空。子阶段嵌套于上层 Host span，统计总 Host 与子阶段时长时不可重复相加。入口仅表示本插件 `ingest` 开始接收，不是钉钉服务端接收或网络延迟。 独立协调的 queue/turn/host 共用账本的零基重试次数，不以来源 generation 代替 attempt。
 
 旧预约遗漏引用而误澄清时，可显式使用“重新核对引用”。仅原来源确有引用、当前仍待澄清且尚无执行安排或业务效果的预约可尝试；按消息版本、事项、预约代及原安排修订核验。沿原来源与安排重判，保留旧问题、已送达通知和语义戳审计，不重新导入消息或清重试预算；不自动扫描修复历史记录。准入、冻结及效果门禁详见[精确恢复接口](docs/api/task-decisions.md#收件)。
 
@@ -384,7 +384,9 @@ Web对原任务的补充、重开和取消沿已有话题继续，保留原文�
 
 话题决策通过 `topicUpdate.summary` 维护累计摘要，供历史话题检索及后续决策使用；已处理且摘要为空的话题沿现有只读摘要请求补齐，不重新执行任务或发送群回复。
 
-已完成事项的后续核查、审查修订和重新提测沿原 Task 续办。批量要求先分页查任务目录及必要详情，分别对 completed 任务提交 `task-reopen`，对活动任务提交 `task-context`；未列具体 PR 编号或新建协调 Topic 不意味着新建总执行任务。各原 Owner 先核验适用条件，无新评论等情况不重复修改或部署。任务目录 `group_task_list` 仅返回目标/结果摘要及身份、版本、话题引用，按字节预算分页；`hasMore=true` 时使用 `nextOffset` 继续，完整正文用 `group_task_context_get`。
+已完成事项的后续核查、审查修订和重新提测沿原 Task 续办。批量要求先分页查任务目录及必要详情，分别对 completed 任务提交 `task-reopen`，对活动任务提交 `task-context`；未列具体 PR 编号或新建协调 Topic 不意味着新建总执行任务。各原 Owner 先核验适用条件，无新评论等情况不重复修改或部署。任务目录 `group_task_list` 仅返回未归档任务的目标/结果摘要及身份、版本、话题引用，按字节预算分页；`hasMore=true` 时使用 `nextOffset` 继续，完整正文用 `group_task_context_get`。该上下文工具按明确 taskId 读取当前群关联任务；已归档任务仅返回 taskId、groupId、title、state、archivedAt 与 `allowedActions: []`，不恢复任务或授权动作。跨群任务仍拒绝读取；无效 taskIds 返回 `status: invalid-arguments`、结构化 `issues` 和纠正提示。底层 `task.get` 可按 ID 读取归档任务；默认任务目录仍只列活动任务。
+
+Topic 路由对遗漏的原文非空白片段返回 `issues[].uncoveredRanges`，每项包含 `start/end/quote`；偏移采用 UTF-16 左闭右开范围，按连续片段合并。
 
 通知回读允许已核验的 DWS 顶层无序列表项间换行（包括空行）消失；不删除正文中的空格、列表标记或段落边界，不变换代码围栏内列表。仍须独立核验原发送回执、目标群、发送者和原生引用；unknown 状态只回读，不重新发送。
 
