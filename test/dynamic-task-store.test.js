@@ -22,6 +22,33 @@ test('正常初始化与重启不触发全库完整性审计，任务身份保�
   assert.deepEqual(await f.query({ kind: 'task.get', taskId: 'retained' }), before)
 })
 
+test('same-host drain failure enters recovery without replacing results or clearing unknown operations', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const { operation } = (await f.command('operation.prepare', { binding, key: 'original', definition: { toolName: 'pwsh' }, resourceKeys: [] })).result
+  await f.command('operation.start', { binding, operationId: operation.operationId })
+  await f.command('operation.settle', { binding, operationId: operation.operationId, state: 'unknown', result: { originalReceipt: 'unverified' } })
+  await f.command('execution.result', { binding, error: { code: 'original_failure' } })
+  const before = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  const originalOperation = await f.query({ kind: 'operation.get', operationId: operation.operationId })
+  const error = { code: 'execution_session_drain_failed', message: 'drain failed', cause: { code: 'execution_process_drain_failed', phase: 'waitForExit', message: 'range cannot be observed' } }
+  await f.command('execution.drainFailed', { binding, error }, 'drain-failed')
+  assert.equal((await f.command('execution.drainFailed', { binding, error }, 'drain-failed')).replayed, true)
+  const held = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(held.drained, false); assert.equal(held.recovering, true)
+  assert.deepEqual(held.result, before.result); assert.deepEqual(held.drainFailure.error, error)
+  assert.equal(await f.query({ kind: 'execution.recovery-current', binding }), true)
+  await assert.rejects(f.query({ kind: 'execution.recovery-current', binding: { ...binding, leaseEpoch: binding.leaseEpoch + 1 } }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
+  await assert.rejects(f.command('execution.drained', { binding: { ...binding, leaseEpoch: binding.leaseEpoch + 1 } }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
+  await f.command('execution.drained', { binding }, 'proven-drained')
+  const drained = await f.query({ kind: 'execution.get', executionId: binding.executionId })
+  assert.equal(drained.drained, true); assert.equal(drained.recovering, false)
+  assert.ok(drained.drainFailure.recoveredAt)
+  assert.deepEqual(drained.result, before.result)
+  assert.deepEqual(await f.query({ kind: 'operation.get', operationId: operation.operationId }), originalOperation)
+  await f.reopen()
+  assert.deepEqual((await f.query({ kind: 'execution.get', executionId: binding.executionId })).drainFailure, drained.drainFailure)
+})
+
 test('执行后端固定于创建定义，续办及重启不改派；CLI反馈不伪称原生模型准入', async t => {
   const f = await fixture(t), owner = await f.task()
   await assert.rejects(f.command('execution.dispatch', { binding: owner.binding, key: 'invalid', prompt: '核验', definition: { executionBackend: 'other' } }), { code: 'TASK_EXECUTION_BACKEND_INVALID' })

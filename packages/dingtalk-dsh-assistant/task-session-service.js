@@ -51,6 +51,11 @@ export const dynamicExecutionOutputSchema = { type: 'object', properties: {
   status: { type: 'string', enum: ['completed','blocked','needs_input'] }, summary: { type: 'string' },
   evidence: texts, limitations: texts, artifacts: texts, question: string,
 }, required: ['status','summary','evidence','limitations','artifacts'], additionalProperties: false }
+const drainDiagnostic = (error, depth = 0) => ({
+  code: String(error?.code ?? 'execution_drain_failed'), message: String(error?.message ?? error).slice(0, 2000),
+  ...(typeof error?.phase === 'string' ? { phase: error.phase } : {}),
+  ...(error?.cause && depth < 4 ? { cause: drainDiagnostic(error.cause, depth + 1) } : {}),
+})
 /** All model decisions pass through this Host boundary. No workflow catalog or staged plan exists here. */
 export async function openTaskSessionService({ ctx, config, legacy, residentStore, notifications, readMessage, readResource, readMentioned,
   taskSessions: suppliedTaskSessions, executionSessions: suppliedExecutionSessions, claudeExecutionSessions: suppliedClaudeExecutionSessions,
@@ -221,6 +226,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     getWorkspaceDir: ({ binding }) => taskWorkspace(root, binding.taskId), registerPersistence: value => persistence.register(value) })
   const dshExecutionSessions = suppliedExecutionSessions ?? createExecutionSessions({ ctx, withPersistenceWriter: (binding, action) => persistence.runOwned(binding, action), registerPersistence: value => persistence.register(value),
     isCurrent: binding => query('execution.current', { binding }),
+    isRecoveryCurrent: binding => query('execution.recovery-current', { binding }),
     getWorkspaceDir: ({ binding }) => taskExecutionWorkspace(root, binding.taskId, binding.sessionId),
     readRestartDrainProof: args => readAuditedRestartDrain({ ctx, query, ...args }),
   })
@@ -241,6 +247,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     feedback: id => executionDriver(id).feedback(id),
     assertDrained: binding => executionDriver(binding.executionId).assertDrained(binding),
     recoverDrained: args => executionDriver(args.binding.executionId).recoverDrained(args),
+    confirmDrained: binding => executionDriver(binding.executionId).confirmDrained?.(binding),
     close: () => Promise.all([dshExecutionSessions.close(), claudeExecutionSessions.close()]),
   }
   const track = (map, id, action) => {
@@ -1038,6 +1045,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         if (drained) {
           try { await command('execution.result', { binding, error: { code: error.code ?? error.message, message: String(error.message), phase: error.phase ?? 'runtime' } }, `execution-result:${executionId}:${binding.inputVersion ?? 1}`) }
           catch (recordError) { throw Object.assign(new AggregateError([error, recordError], 'DYNAMIC_EXECUTION_FAILURE_RECORD_FAILED'), { code: 'DYNAMIC_EXECUTION_FAILURE_RECORD_FAILED' }) }
+        } else if (error.code === 'execution_session_drain_failed') {
+          await command('execution.drainFailed', { binding, error: drainDiagnostic(error) }, `execution-drain-failed:${executionId}:${binding.leaseEpoch}`)
         }
         throw error
       } finally {
@@ -1430,7 +1439,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         await command('task.drained', { binding: await query('task.binding', { taskId: task.taskId }) })
       for (const group of pending.groups ?? []) if (group.recovering && !ctx.agents.get(group.sessionId) && !ctx.sessions.get(group.sessionId))
         await command('group.drained', { binding: { kind: 'group-session', groupId: group.groupId, sessionId: group.sessionId, leaseEpoch: group.leaseEpoch, sessionBound: group.sessionBound } })
-      for (const execution of pending.executions) if (execution.recovering) {
+      for (const execution of pending.executions) if (execution.recovering && !inflightExecutions.has(execution.executionId)) {
         // Physical native-session drain is independent of effect certainty. The
         // operation fence stays unknown; recoverDrained validates real history
         // and absence of live handles before permitting any readonly continuation.
@@ -1438,8 +1447,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         try {
           const jobs = ctx.get?.('jobs')
           if (jobs?.list?.(execution.sessionId).some(job => ['running','stopping'].includes(job.status))) fail('DYNAMIC_JOB_DRAIN_UNPROVEN')
-          const drainProof = await executionSessions.recoverDrained({ binding, input: execution.input })
+          const drainProof = await executionSessions.recoverDrained({ binding, input: execution.input, drainFailure: execution.drainFailure })
           await command('execution.drained', { binding, ...(drainProof?.isolationAuditRefs ? { isolationAuditRefs: drainProof.isolationAuditRefs } : {}) }, `recovered-drained:${execution.executionId}:${binding.leaseEpoch}`)
+          executionSessions.confirmDrained(binding)
+          failures.delete(execution.executionId)
         } catch (error) { failures.set(execution.executionId, { id: execution.executionId, code: error.code ?? error.message }) }
       }
       await refreshTasks()

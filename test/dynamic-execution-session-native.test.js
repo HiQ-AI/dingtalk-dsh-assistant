@@ -55,7 +55,7 @@ async function temp() {
 }
 
 // 只有 LlmAdapter 为脚本；每次 Host 都用真实原生 Loop、Tools、文件 JSONL 后端。
-async function host({ root, script = [submit('done')], isCurrent = async () => true, repositoryInspect, tools, getWorkspaceDir } = {}) {
+async function host({ root, script = [submit('done')], isCurrent = async () => true, isRecoveryCurrent, repositoryInspect, tools, getWorkspaceDir } = {}) {
   root ??= await temp()
   const ctx = new Context()
   new AgentRegistry(ctx); new SessionStore(ctx); new SessionProjectionRegistry(ctx)
@@ -102,7 +102,7 @@ async function host({ root, script = [submit('done')], isCurrent = async () => t
     async execute(_args, exec) { const text = await readFile(join(root, 'fixture.txt'), { encoding: 'utf8', signal: exec.signal }); reads.push(exec.agent.session.id); return { text } },
   })
   ctx.tools.register({ name: 'unsafe_write', description: '用于拒绝测试的副作用', parameters: { type: 'object' }, output, execute() { effects.push('root-write'); return {} } })
-  const manager = createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools, getWorkspaceDir, contentRoot: join(root, 'model-content') })
+  const manager = createExecutionSessions({ ctx, isCurrent, isRecoveryCurrent, repositoryInspect, tools, getWorkspaceDir, contentRoot: join(root, 'model-content') })
   return { ctx, root, manager, requests, reads, effects, handles, async close() { await manager.close(); await ctx.fiber.dispose() } }
 }
 
@@ -313,7 +313,7 @@ test('native preset-only tools and workspace instructions are retained; managed 
   const { SubprocessRuntime } = await import('@deepseek-ai/dsh-subprocess')
   const trace = []
   class FixtureProcess extends SubprocessRuntime {
-    spawn() { trace.push('spawn'); return { done: Promise.resolve({ exitCode: 0 }), terminate: async () => trace.push('terminate'), waitForExit: async () => { await delay(10); trace.push('range-drained') } } }
+    spawn() { trace.push('spawn'); return { done: Promise.resolve({ exitCode: 0 }), terminate: async () => trace.push('terminate'), waitForExit: async () => { await delay(10); trace.push('range-drained'); return true } } }
     async spawnTerminal() { return { terminate: async () => trace.push('terminal-drained') } }
   }
   new FixtureProcess(h.ctx)
@@ -368,6 +368,92 @@ test('native process drain failure retains the execution slot and cannot report 
   await assert.rejects(dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async () => ({}), onResult: () => results++ }), error => error.executionDrained === false)
   assert.equal(results, 0)
   assert.throws(() => h.manager.assertDrained(dynamic()), error => error.executionDrained === false)
+  await assert.rejects(h.manager.recoverDrained({ binding: dynamic() }), { code: 'execution_recovery_lease_unverified' })
+})
+
+test('drain recovery rechecks original handles once, preserves tool history, and never replays the tool', async t => {
+  let mode = 'throw', waits = 0, calls = 0, results = 0, current = true
+  const h = await host({ script: [{ name: 'pwsh', args: {} }], isRecoveryCurrent: async () => current })
+  const { SubprocessRuntime } = await import('@deepseek-ai/dsh-subprocess')
+  class FixtureProcess extends SubprocessRuntime {
+    spawn() { return { terminate: async () => {}, waitForExit: async () => {
+      waits++; await delay(5)
+      if (mode === 'throw') throw new Error('temporary range observation failure')
+      return mode === 'ready'
+    } } }
+  }
+  new FixtureProcess(h.ctx)
+  const preset = await nativePreset(h, { execute: () => { calls++; h.ctx.subprocess.spawn({}); return { originalResult: 'retained' } } })
+  t.after(async () => { await h.manager.close().catch(() => {}); await h.ctx.fiber.dispose(); await preset.standing.dispose() })
+  await assert.rejects(dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async () => ({}), onResult: () => results++ }), { code: 'execution_session_drain_failed' })
+  assert.equal(waits, 1)
+  const agent = h.ctx.agents.get(dynamic().sessionId)
+  const original = agent.session.snapshotEvents().filter(event => event.type.startsWith('tool/'))
+  assert.match(JSON.stringify(original), /temporary range observation failure/)
+  current = false
+  await assert.rejects(h.manager.recoverDrained({ binding: dynamic() }), { code: 'execution_recovery_lease_unverified' })
+  assert.equal(waits, 1)
+  current = true
+  await assert.rejects(h.manager.recoverDrained({ binding: dynamic({ leaseEpoch: 2 }) }), { code: 'execution_session_identity_mismatch' })
+  await assert.rejects(h.manager.recoverDrained({ binding: dynamic() }), { code: 'execution_process_drain_failed' })
+  mode = 'unproven'
+  await assert.rejects(h.manager.recoverDrained({ binding: dynamic() }), { code: 'execution_process_drain_failed' })
+  assert.throws(() => h.manager.assertDrained(dynamic()), error => error.executionDrained === false)
+  mode = 'ready'
+  const drainFailure = { error: { code: 'execution_session_drain_failed' } }
+  let failRead = true
+  const open = h.ctx.sessionPersistence.open
+  t.mock.method(h.ctx.sessionPersistence, 'open', function (...args) {
+    if (args[1] === 'read' && failRead) { failRead = false; throw new Error('temporary history read failure') }
+    return open.apply(this, args)
+  })
+  await assert.rejects(h.manager.recoverDrained({ binding: dynamic(), drainFailure }), /temporary history read failure/)
+  const proofs = await Promise.all([h.manager.recoverDrained({ binding: dynamic(), drainFailure }), h.manager.recoverDrained({ binding: dynamic(), drainFailure })])
+  assert.deepEqual(proofs, [{ drained: true, sessionBound: true }, { drained: true, sessionBound: true }])
+  assert.equal(waits, 4); assert.equal(calls, 1); assert.equal(results, 0)
+  assert.equal(h.manager.assertDrained(dynamic()), true)
+  const stored = await inspectSession(h.ctx.sessionPersistence, dynamic().sessionId)
+  assert.deepEqual(stored.events.filter(event => event.type.startsWith('tool/')), original)
+  await h.manager.recoverDrained({ binding: dynamic() })
+  assert.equal(waits, 4); assert.equal(calls, 1)
+  h.manager.confirmDrained(dynamic())
+})
+
+test('lease change during process observation cannot release the retained execution', async t => {
+  let retry = false, current = true
+  const started = Promise.withResolvers(), observed = Promise.withResolvers()
+  const h = await host({ script: [{ name: 'pwsh', args: {} }], isRecoveryCurrent: async () => current })
+  const { SubprocessRuntime } = await import('@deepseek-ai/dsh-subprocess')
+  class FixtureProcess extends SubprocessRuntime {
+    spawn() { return { terminate: async () => {}, waitForExit: async () => {
+      if (!retry) throw new Error('first observation failed')
+      started.resolve(); await observed.promise; return true
+    } } }
+  }
+  new FixtureProcess(h.ctx)
+  const preset = await nativePreset(h, { execute: () => { h.ctx.subprocess.spawn({}); return {} } })
+  t.after(async () => { observed.resolve(); await h.manager.close().catch(() => {}); await h.ctx.fiber.dispose(); await preset.standing.dispose() })
+  await assert.rejects(dynamicDrive(h, { definition: definition({ nativeTools: true, allowedTools: [] }), onNativeExecution: async () => ({}) }), { code: 'execution_session_drain_failed' })
+  retry = true
+  const recovery = h.manager.recoverDrained({ binding: dynamic() })
+  const rejected = assert.rejects(recovery, { code: 'execution_recovery_lease_unverified' })
+  await started.promise
+  current = false; observed.resolve()
+  await rejected
+  assert.ok(h.ctx.agents.get(dynamic().sessionId))
+  assert.throws(() => h.manager.assertDrained(dynamic()), error => error.executionDrained === false)
+})
+
+test('missing process quiescence capability never becomes a drain proof on retry', async t => {
+  const { trackDynamicProcesses } = await import('../packages/dingtalk-dsh-assistant/dynamic-process-scope.js')
+  let calls = 0
+  const service = { spawn: () => ({ terminate: async () => {} }) }
+  const tracker = trackDynamicProcesses(service), scope = tracker.scope()
+  t.after(() => tracker.close())
+  await scope.run(() => { calls++; service.spawn() })
+  for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(scope.close(), { code: 'execution_process_drain_failed', phase: 'capability' })
+  assert.throws(() => scope.run(() => calls++), { code: 'execution_process_drain_failed' })
+  assert.equal(calls, 1)
 })
 
 test('process tracking handles async terminal allocation and isolates parallel native call ownership', async t => {
@@ -375,7 +461,7 @@ test('process tracking handles async terminal allocation and isolates parallel n
   const { SubprocessRuntime } = await import('@deepseek-ai/dsh-subprocess')
   const ctx = new Context(), trace = []
   class FixtureProcess extends SubprocessRuntime {
-    spawn({ id }) { return { terminate: async () => trace.push(`${id}:terminate`), waitForExit: async () => trace.push(`${id}:wait`) } }
+    spawn({ id }) { return { terminate: async () => trace.push(`${id}:terminate`), waitForExit: async () => { trace.push(`${id}:wait`); return true } } }
     async spawnTerminal({ id }) { await delay(10); return { terminate: async () => trace.push(`${id}:terminal`) } }
   }
   new FixtureProcess(ctx)
@@ -392,7 +478,7 @@ test('a later foreground drain failure still stops the same executors retained b
   const trace = []
   class FixtureProcess extends SubprocessRuntime {
     spawn({ background }) { return { terminate: async () => trace.push(background ? 'background' : 'foreground'),
-      waitForExit: async () => { if (!background) throw new Error('foreground range unknown') } } }
+      waitForExit: async () => { if (!background) throw new Error('foreground range unknown'); return true } } }
   }
   new FixtureProcess(h.ctx)
   const preset = await nativePreset(h, { execute: args => { h.ctx.subprocess.spawn({ background: args.run_in_background === true }); return { done: true } } })
@@ -405,7 +491,7 @@ test('a later foreground drain failure still stops the same executors retained b
 test('retained process scopes keep services alive between tools and isolate parallel execution cleanup', async t => {
   const { trackDynamicProcesses } = await import('../packages/dingtalk-dsh-assistant/dynamic-process-scope.js')
   const trace = []
-  const service = { spawn: ({ id }) => ({ terminate: async () => trace.push(id), waitForExit: async () => trace.push(`${id}:wait`) }) }
+  const service = { spawn: ({ id }) => ({ terminate: async () => trace.push(id), waitForExit: async () => { trace.push(`${id}:wait`); return true } }) }
   const tracker = trackDynamicProcesses(service), first = tracker.scope(), second = tracker.scope()
   t.after(() => tracker.close())
   await Promise.all([first.run(async () => service.spawn({ id: 'first' })), second.run(async () => service.spawn({ id: 'second' }))])
@@ -424,6 +510,7 @@ test('native recovery validates durable identity and refuses missing bound sessi
   const next = await host({ root, script: [] }); t.after(() => next.close())
   const proof = await next.manager.recoverDrained({ binding: dynamic({ sessionBound: true }) })
   assert.deepEqual(proof, { drained: true, sessionBound: true })
+  await assert.rejects(next.manager.recoverDrained({ binding: dynamic({ sessionBound: true }), drainFailure: { error: { code: 'execution_session_drain_failed' } } }), { code: 'execution_recovery_process_scope_missing' })
   await assert.rejects(next.manager.recoverDrained({ binding: dynamic({ taskId: 'wrong', sessionBound: true }) }), { code: 'execution_session_identity_mismatch' })
   await assert.rejects(next.manager.recoverDrained({ binding: dynamic({ sessionId: 'missing-session', sessionBound: true }) }), { code: 'execution_session_missing' })
 })
@@ -549,7 +636,7 @@ test('unverifiable background job without its native registry cannot report fals
 test('one failed process termination still attempts cleanup of every other managed handle', async t => {
   const { trackDynamicProcesses } = await import('../packages/dingtalk-dsh-assistant/dynamic-process-scope.js')
   const calls = []
-  const service = { spawn: ({ id }) => ({ terminate: async () => { calls.push(id); if (id === 'failure') throw new Error('cannot prove exit') }, waitForExit: async () => calls.push(`${id}:wait`) }) }
+  const service = { spawn: ({ id }) => ({ terminate: async () => { calls.push(id); if (id === 'failure') throw new Error('cannot prove exit') }, waitForExit: async () => { calls.push(`${id}:wait`); return true } }) }
   const tracker = trackDynamicProcesses(service); t.after(() => tracker.close())
   await assert.rejects(tracker.run(async () => { service.spawn({ id: 'failure' }); service.spawn({ id: 'success' }) }), error => error.executionDrained === false)
   assert.deepEqual(calls.sort(), ['failure','success','success:wait'])

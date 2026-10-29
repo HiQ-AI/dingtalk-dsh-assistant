@@ -4,7 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 // to its actual native tool call, including parallel task executions. No OS-wide kill.
 const owners = new AsyncLocalStorage()
 const installed = new Map()
-const failure = cause => Object.assign(new Error('execution_process_drain_failed'), { code: 'execution_process_drain_failed', executionDrained: false, cause })
+const failure = (cause, phase) => Object.assign(new Error(`execution_process_drain_failed: ${phase ?? 'scope'}: ${String(cause?.message ?? cause).slice(0, 2000)}`), { code: 'execution_process_drain_failed', executionDrained: false, cause, phase })
 export function trackDynamicProcesses(service) {
   if (!service) return { run: action => action(), scope: () => ({ run: action => action(), async close() {} }), async close() {} }
   const key = service.identity ?? service
@@ -35,23 +35,38 @@ export function trackDynamicProcesses(service) {
   let closed = false
   const scope = () => {
     const owner = { handles: [], pending: [] }
-    let closing
+    let closing, sealed = false
     return {
       run(action) {
-        if (closed || closing) throw failure(new Error('Process scope closed'))
+        if (closed || sealed) throw failure(new Error('Process scope closed'))
         return owners.run(owner, action)
       },
       close() {
+        sealed = true
         return closing ??= (async () => {
-          await Promise.allSettled(owner.pending)
-          const outcomes = await Promise.allSettled(owner.handles.map(async ({ handle, terminal }) => {
-            if (typeof handle?.terminate !== 'function' || !terminal && typeof handle?.waitForExit !== 'function') throw new Error('Subprocess quiescence capability is missing')
-            await handle.terminate()
-            if (!terminal) await handle.waitForExit()
+          const pending = await Promise.allSettled(owner.pending)
+          const outcomes = await Promise.allSettled(owner.handles.map(async owned => {
+            if (owned.drained) return
+            const { handle, terminal } = owned
+            if (typeof handle?.terminate !== 'function' || !terminal && typeof handle?.waitForExit !== 'function') throw failure(new Error('Subprocess quiescence capability is missing'), 'capability')
+            try { await handle.terminate() } catch (cause) { throw failure(cause, 'terminate') }
+            if (!terminal) {
+              try {
+                if (await handle.waitForExit() !== true) throw new Error('Managed process range exit is unproven')
+              } catch (cause) { throw failure(cause, 'waitForExit') }
+            }
+            owned.drained = true
           }))
           const failed = outcomes.find(outcome => outcome.status === 'rejected')
-          if (failed) throw failure(failed.reason)
-        })()
+          if (failed) throw failed.reason
+          const allocation = pending.find(outcome => outcome.status === 'rejected')
+          if (allocation) throw failure(allocation.reason, 'allocation')
+        })().catch(error => {
+          // Keep the original handles, but not a rejected Promise. A later explicit
+          // drain may verify them again; this sealed scope can never launch work.
+          closing = undefined
+          throw error
+        })
       },
     }
   }

@@ -12,6 +12,66 @@ import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persi
 import { taskSessionLogRoot } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
 import { retireTaskContext } from '../packages/dingtalk-dsh-assistant/task-session.js'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
+
+testRunner('same-host recovery drains the original native process without replaying an unknown operation', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'native-drain-retry-'))
+  const store = await openDynamicTaskStore({ dbPath: join(root, 'dynamic.db'), instanceId: 'native-test', initialize: true })
+  let h, delegated = false, requested = false, ready = false, rejectCommit = false, launches = 0, waits = 0
+  t.after(async () => { await h?.close().catch(() => {}); await store.close(); await rm(root, { recursive: true, force: true }) })
+  h = await nativeTaskHost(root, request => {
+    const topics = topicTaskCalls(request); if (topics) return topics
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      if (!delegated) { delegated = true; return [{ name: 'task_delegate', args: { key: 'original', objective: '只读取本地标识并保留原始回执' } }] }
+      return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '等待原执行排空与效果核验', evidence: [], limitations: [] } } }]
+    }
+    assert.equal(requested, false, 'unknown operation must not start another model/tool turn')
+    requested = true
+    return [{ name: nativeShell, args: { command: nativeShell === 'pwsh' ? "Write-Output 'drain-retry-native-marker'" : "printf 'drain-retry-native-marker'", description: '读取本地测试标识' } }]
+  }, { store: { ...store, command(command) {
+    if (command.kind === 'execution.drained' && rejectCommit) { rejectCommit = false; throw new Error('fixture ledger write unavailable') }
+    return store.command(command)
+  } }, serviceFactory: async options => {
+    const service = options.ctx.subprocess, spawn = service.spawn
+    service.spawn = function (...args) {
+      const handle = spawn.apply(this, args)
+      if (!JSON.stringify(args).includes('drain-retry-native-marker')) return handle
+      launches++
+      return new Proxy(handle, { get(target, key) {
+        if (key === 'waitForExit') return async (...waitArgs) => {
+          waits++
+          const empty = await target.waitForExit(...waitArgs)
+          if (!ready) throw new Error('fixture range observation unavailable')
+          return empty
+        }
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      } })
+    }
+    return openTaskSessionService(options)
+  } })
+  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'drain-retry', objective: '读取本地标识' })
+  await h.service.whenIdle()
+  assert.equal(launches, 1, JSON.stringify(h.toolResults.filter(item => item.name === nativeShell)))
+  const held = await waitUntil(async () => (await h.query('execution.list', { taskId: task.taskId })).find(item => item.recovering), 'original drain failure recorded')
+  assert.equal(held.drained, false)
+  assert.equal(held.drainFailure.error.cause.phase, 'waitForExit')
+  assert.match(held.drainFailure.error.cause.cause.message, /fixture range observation unavailable/)
+  const operations = await h.query('operation.list', { taskId: task.taskId })
+  assert.equal(operations.length, 1); assert.equal(operations[0].state, 'unknown')
+  await h.service.recover(); await h.service.whenIdle()
+  assert.equal((await h.query('execution.get', { executionId: held.executionId })).drained, false)
+  ready = true; rejectCommit = true
+  await h.service.recover(); await h.service.whenIdle()
+  assert.equal((await h.query('execution.get', { executionId: held.executionId })).drained, false, 'physical proof alone cannot settle the ledger')
+  await Promise.all([h.service.recover(), h.service.recover()]); await h.service.whenIdle()
+  const drained = await h.query('execution.get', { executionId: held.executionId })
+  assert.equal(drained.drained, true); assert.equal(drained.recovering, false)
+  assert.deepEqual(drained.result, held.result)
+  assert.ok(drained.drainFailure.recoveredAt)
+  assert.equal(launches, 1); assert.equal(waits, 3)
+  assert.deepEqual(await h.query('operation.list', { taskId: task.taskId }), operations)
+})
 
 testRunner('原生网页工具错误不建立未知效果，仍可完成后续读取', { skip: !available ? reason : false, timeout: 20000 }, async t => {
  const root=await mkdtemp(join(tmpdir(),'native-web-read-'))
