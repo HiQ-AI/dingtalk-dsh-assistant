@@ -495,10 +495,64 @@ window.__ModuleLoader__.load({
         ready ? React.createElement('p', { style: { color: colors.muted, fontSize: 12, margin: 0 } }, '耗时按本次开始到完成计算，包含工具等待；重试显示最近一次处理，不代表纯模型耗时。进行中记录可刷新查看最新状态。') : null,
         React.createElement('div', { style: { display: 'flex', gap: 8 } }, cursorHistory.length ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setUnitCursor('');setUnitCursorHistory([]);setCursor(cursorHistory.at(-1)); setCursorHistory((items) => items.slice(0, -1)) } }, '上一页') : null, page?.nextCursor ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: loading, onClick: () => { setUnitCursor('');setUnitCursorHistory([]);setCursorHistory((items) => [...items, cursor]); setCursor(page.nextCursor) } }, '下一页') : null))
     }
+    function FixedTopicDetail({ topicId, title, groupId, updatedAt }) {
+      const [offset, setOffset] = useState(0), [page, setPage] = useState(), [loading, setLoading] = useState(true)
+      const [error, setError] = useState(''), [retry, setRetry] = useState(0), snapshot = useRef()
+      const limit = 25
+      useEffect(() => {
+        let active = true
+        const controller = new AbortController(), params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+        if (groupId) params.set('groupId', groupId)
+        if (offset && snapshot.current?.offset !== offset && snapshot.current?.revision) params.set('pageRevision', snapshot.current.revision)
+        setLoading(true); setError('')
+        get(`/state/fixed-topics/${encodeURIComponent(topicId)}?${params}`, { signal: controller.signal }).then(value => {
+          if (!active) return
+          snapshot.current = value; setPage(value)
+          if (offset && offset >= value.total) setOffset(Math.max(0, Math.floor((value.total - 1) / limit) * limit))
+        }, cause => {
+          if (!active) return
+          if (cause.status === 409) { snapshot.current = undefined; setPage(undefined); setOffset(0); setRetry(value => value + 1) }
+          else setError(cause.message)
+        }).finally(() => { if (active) setLoading(false) })
+        return () => { active = false; controller.abort() }
+      }, [topicId, groupId, offset, retry, updatedAt])
+      const ready = page?.offset === offset
+      return React.createElement('section', { className: 'observer-topic-detail', 'aria-label': '固定话题详情', 'aria-busy': loading, style: { ...tableFrame, flex: '2 1 560px', width: '100%', minWidth: 0 } },
+        React.createElement('header', { style: { padding: '17px 18px 15px', borderBottom: `1px solid ${colors.border}` } },
+          React.createElement('h2', { style: { margin: 0, fontSize: 18, overflowWrap: 'anywhere' } }, title),
+          React.createElement('p', { style: { margin: '8px 0 0', color: colors.muted, fontSize: ui.textSm } }, `${groupId ? '当前群聊' : '全部群聊'}的分类消息与处理记录`)),
+        error ? React.createElement('div', { role: 'alert', style: { padding: 16, color: colors.danger } }, `记录加载失败：${error} `, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => setRetry(value => value + 1) }, '重试')) : null,
+        loading ? React.createElement('p', { role: 'status', style: { padding: '0 16px', color: colors.muted } }, '正在读取处理记录…') : null,
+        ready ? React.createElement('div', { style: { padding: '0 18px', overflowWrap: 'anywhere' } }, page.items.length ? page.items.map(item => {
+          const fixedDelivery = item.reply ? outboxDelivery(item.reply) : null
+          const state = item.manualCorrection && item.state === 'silent' ? '人工归类纠正 · 保持沉默' : ({ pending: '待处理', failed: '消息处理异常', silent: '已处理 · 保持沉默', replied: '已处理 · 回复已准备', superseded: '已被后续归类替代' })[item.state] || '处理状态未记录'
+          return React.createElement('article', { key: item.id, style: { padding: '16px 0', borderBottom: `1px solid ${colors.border}` } },
+            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, color: colors.muted, fontSize: ui.textSm } }, React.createElement('strong', null, item.senderName || '未知发送人'), !groupId ? React.createElement('span', null, item.groupName || item.groupId) : null, React.createElement('time', null, fmt(item.occurredAt))),
+            React.createElement('p', { style: { whiteSpace: 'pre-wrap', lineHeight: 1.7 } }, item.sourceText || item.summary),
+            React.createElement('details', null, React.createElement('summary', { style: { cursor: 'pointer', fontSize: ui.textSm } }, '查看来源消息'), React.createElement('p', { style: { whiteSpace: 'pre-wrap', lineHeight: 1.7 } }, item.text || '（空消息）')),
+            React.createElement('p', { style: { fontSize: ui.textSm, color: item.state === 'failed' ? colors.danger : colors.muted } }, state, item.handledAt ? ` · ${fmt(item.handledAt)}` : ''),
+            item.error ? React.createElement('p', { style: { color: colors.danger, whiteSpace: 'pre-wrap' } }, item.error) : null,
+            item.manualCorrection ? React.createElement('p', { style: { color: colors.muted, whiteSpace: 'pre-wrap' } }, item.manualCorrection.reason) : null,
+            item.reply ? React.createElement('section', { 'aria-label': '固定话题回复', style: { padding: 12, borderRadius: ui.radiusSm, background: colors.surface2 } },
+              React.createElement('strong', { style: { fontSize: ui.textSm } }, `回复 · ${fixedDelivery.label}`),
+              React.createElement('p', { style: { whiteSpace: 'pre-wrap', lineHeight: 1.7 } }, item.reply.text),
+              fixedDelivery.detail ? React.createElement('p', { style: { color: colors.muted, fontSize: ui.textSm } }, fixedDelivery.detail) : null) : null)
+        }) : emptyState('暂无分类消息', { detail: '收到属于此类别的消息后，会在这里显示处理记录。' })) : null,
+        page ? React.createElement('nav', { 'aria-label': '固定话题记录分页', style: { ...tableFooter, flexWrap: 'wrap' } },
+          React.createElement('span', { style: { marginRight: 'auto', color: colors.muted, fontSize: ui.textSm } }, `${page.total} 条事项 · 第 ${Math.floor(offset / limit) + 1} 页`),
+          React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading || offset === 0, onClick: () => setOffset(value => Math.max(0, value - limit)) }, '上一页'),
+          React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading || !ready || page.nextOffset === null, onClick: () => setOffset(page.nextOffset) }, '下一页')) : null)
+    }
+    function TopicListItem({ title, summary, selected, onSelect }) {
+      return React.createElement('li', { style: { borderBottom: `1px solid ${colors.border}` } }, React.createElement('button', { type: 'button', 'aria-pressed': selected, 'aria-label': title, onClick: onSelect, style: { position: 'relative', width: '100%', minWidth: 0, border: 0, borderLeft: `3px solid ${selected ? colors.accent : 'transparent'}`, padding: `${ui.space4}px ${ui.space4}px ${ui.space4}px ${ui.space3}px`, background: selected ? `color-mix(in srgb, ${colors.accent} 8%, ${colors.cardSurface})` : colors.cardSurface, color: 'inherit', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', outlineOffset: -2 } },
+        React.createElement('strong', { title, style: { display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflowWrap: 'anywhere', fontSize: ui.textMd, fontWeight: 650, lineHeight: 1.5 } }, title),
+        React.createElement('p', { title: summary, style: { margin: `${ui.space1}px 0 0`, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', color: colors.muted, fontSize: ui.textSm, lineHeight: 1.6 } }, summary)))
+    }
     function TopicBrowser({ groups, tasks, target, updatedAt, onOpenTask, onOpenSession }) {
       const [groupId, setGroupId] = useState(target?.groupId || '')
       const [offset, setOffset] = useState(0)
       const [selection, setSelection] = useState(target)
+      const [fixedTopics, setFixedTopics] = useState(), [fixedError, setFixedError] = useState('')
       const [relatedOffset,setRelatedOffset]=useState(0),[relatedPage,setRelatedPage]=useState(),[relatedError,setRelatedError]=useState('')
       const listingSnapshot=useRef(null),relatedSnapshot=useRef(null)
       const [messageOffset, setMessageOffset] = useState(0)
@@ -522,6 +576,14 @@ window.__ModuleLoader__.load({
       const topicPageSize = 10
       const messagePageSize = 25
       useEffect(() => {
+        let active = true
+        setFixedError(''); setFixedTopics(undefined)
+        const params = new URLSearchParams()
+        if (groupId) params.set('groupId', groupId)
+        get(`/state/fixed-topics?${params}`).then(value => { if (active) setFixedTopics(value.fixedTopics) }, cause => { if (active) setFixedError(cause.message) })
+        return () => { active = false }
+      }, [groupId, retry])
+      useEffect(() => {
         if (!target?.topicId) return
         setGroupId(target.groupId || '')
         setSelection(target)
@@ -540,6 +602,7 @@ window.__ModuleLoader__.load({
         return () => { active = false }
       }, [groupId, offset, retry, updatedAt])
       useEffect(() => {
+        if (selection?.fixed) return
         const current = listing?.topics.find(item => item.topicId === selection?.topicId && item.groupId === selection?.groupId)
         if (!current || current.revision === selection.revision && current.summaryRevision === selection.summaryRevision && current.updatedAt === selection.updatedAt) return
         setSelection({ groupId: current.groupId, topicId: current.topicId, revision: current.revision, summaryRevision: current.summaryRevision, updatedAt: current.updatedAt })
@@ -548,7 +611,7 @@ window.__ModuleLoader__.load({
         setContext(undefined); setTopicContext(undefined)
       }, [listing, selection])
       useEffect(() => {
-        if (!selection) { setContext(undefined); return }
+        if (!selection || selection.fixed) { setContext(undefined); return }
         let active = true
         setDetailLoading(true); setDetailError(''); setContext(undefined)
         const params = new URLSearchParams({ groupId: selection.groupId, revision: String(selection.revision), offset: String(messageOffset), limit: String(messagePageSize) })
@@ -557,7 +620,7 @@ window.__ModuleLoader__.load({
         return () => { active = false }
       }, [selection, messageOffset, retry])
       useEffect(() => {
-        if (!selection) { setTopicContext(undefined); return }
+        if (!selection || selection.fixed) { setTopicContext(undefined); return }
         let active = true
         setContextLoading(true); setContextError('')
         const params = new URLSearchParams({ groupId: selection.groupId })
@@ -573,7 +636,7 @@ window.__ModuleLoader__.load({
       const group = groups.find((item) => item.groupId === groupId)
       useEffect(()=>{setRelatedOffset(0);relatedSnapshot.current=null},[selection?.groupId,selection?.topicId])
       useEffect(()=>{
-        if(!selection){setRelatedPage(undefined);return}
+        if(!selection || selection.fixed){setRelatedPage(undefined);return}
         let active=true;const controller=new AbortController();setRelatedError('')
         const params=new URLSearchParams({groupId:selection.groupId,topicId:selection.topicId,archived:'all',offset:String(relatedOffset),limit:'10'})
         if(relatedOffset&&relatedSnapshot.current?.offset!==relatedOffset&&relatedSnapshot.current?.revision)params.set('revision',relatedSnapshot.current.revision)
@@ -588,13 +651,13 @@ window.__ModuleLoader__.load({
         React.createElement('div', { className: 'observer-toolbar', style: { ...toolbar, flexWrap: 'wrap' } }, React.createElement(SelectMenu, { label: '筛选话题群聊', value: groupId, options: [{ id: '', label: '全部群聊' }, ...groups.map((item) => ({ id: item.groupId, label: item.name || item.groupId }))], onChange: (value) => { setGroupId(value); setOffset(0); setListing(undefined); setSelection(undefined) } }), React.createElement('span', { style: { fontSize: ui.textSm, color: colors.muted } }, group?.topicProgress ? `待归类 ${group.topicProgress.unroutedMessages} 条 · 待处理 ${group.topicProgress.pending} 个话题` : '接收、话题处理与任务完成分别计量')),
         React.createElement('div', { className: 'observer-topics-layout', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: ui.space4 } },
           React.createElement('section', { className: 'observer-topic-list', 'aria-label': '话题列表', 'aria-busy': loading, style: { ...tableFrame, flex: '1 1 340px', width: '100%', minWidth: 0, maxWidth: 420, minHeight: 200 } },
+            React.createElement('div', { style: { ...toolbar, minHeight: 52 } }, React.createElement('strong', { style: { fontSize: 14 } }, '固定话题')),
+            fixedError ? failure(`固定话题加载失败：${fixedError}`) : !fixedTopics ? emptyState('正在读取固定话题…') : React.createElement('ul', { style: { listStyle: 'none', margin: 0, padding: 0 } }, ...fixedTopics.map(item => React.createElement(TopicListItem, { key: item.topicId, title: item.title, summary: '查看分类消息与处理记录', selected: selection?.fixed === true && selection.topicId === item.topicId,
+              onSelect: () => { setSelection({ fixed: true, topicId: item.topicId, title: item.title, groupId }); setSelectedIntentRun('') } }))),
             React.createElement('div', { role: 'status', style: { ...toolbar, minHeight: 52 } }, React.createElement('strong', { style: { fontSize: 14 } }, loading ? '正在刷新话题…' : '话题'), listing ? React.createElement('span', { style: { color: colors.muted, fontSize: 12, fontVariantNumeric: 'tabular-nums' } }, `${listing.total} 个`) : null),
-            listError ? failure(`话题加载失败：${listError}`) : !listing ? emptyState('正在读取话题…') : listing.topics.length === 0 ? emptyState('暂无话题', { detail: '新消息完成归类后会显示在这里。', actionLabel: '重新读取', onAction: () => setRetry((value) => value + 1) }) : React.createElement('ul', { style: { listStyle: 'none', margin: 0, padding: 0 } }, ...listing.topics.map((item) => { const selected = selection?.topicId === item.topicId && selection?.groupId === item.groupId; return React.createElement('li', { key: `${item.groupId}:${item.topicId}`, style: { borderBottom: `1px solid ${colors.border}` } }, React.createElement('button', { type: 'button', 'aria-pressed': selected, 'aria-label': item.title || item.topicId, onClick: () => selectTopic(item), style: { position: 'relative', width: '100%', minWidth: 0, border: 0, borderLeft: `3px solid ${selected ? colors.accent : 'transparent'}`, padding: `${ui.space4}px ${ui.space4}px ${ui.space4}px ${ui.space3}px`, background: selected ? `color-mix(in srgb, ${colors.accent} 8%, ${colors.cardSurface})` : colors.cardSurface, color: 'inherit', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', outlineOffset: -2 } },
-              React.createElement('strong', { title: item.title || item.topicId, style: { display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflowWrap: 'anywhere', fontSize: ui.textMd, fontWeight: 650, lineHeight: 1.5 } }, item.title || item.topicId),
-              React.createElement('p', { title: item.summary || '暂无摘要', style: { margin: `${ui.space1}px 0 0`, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', color: colors.muted, fontSize: ui.textSm, lineHeight: 1.6 } }, item.summary || '暂无摘要')
-            )) })),
+            listError ? failure(`话题加载失败：${listError}`) : !listing ? emptyState('正在读取话题…') : listing.topics.length === 0 ? emptyState('暂无业务话题', { detail: '新消息完成业务归类后会显示在这里。', actionLabel: '重新读取', onAction: () => setRetry((value) => value + 1) }) : React.createElement('ul', { style: { listStyle: 'none', margin: 0, padding: 0 } }, ...listing.topics.map(item => React.createElement(TopicListItem, { key: `${item.groupId}:${item.topicId}`, title: item.title || item.topicId, summary: item.summary || '暂无摘要', selected: !selection?.fixed && selection?.topicId === item.topicId && selection?.groupId === item.groupId, onSelect: () => selectTopic(item) }))),
             listing ? pager(offset, listing.total, topicPageSize, setOffset, loading) : null),
-          React.createElement('section', { className: 'observer-topic-detail', 'aria-label': '话题详情', 'aria-busy': detailLoading, style: { ...tableFrame, flex: '2 1 560px', width: '100%', minWidth: 0, minHeight: 200 } },
+          selection?.fixed ? React.createElement(FixedTopicDetail, { key: `${groupId}:${selection.topicId}`, topicId: selection.topicId, title: selection.title, groupId, updatedAt }) : React.createElement('section', { className: 'observer-topic-detail', 'aria-label': '话题详情', 'aria-busy': detailLoading, style: { ...tableFrame, flex: '2 1 560px', width: '100%', minWidth: 0, minHeight: 200 } },
             React.createElement('header', { style: { padding: '17px 18px 15px', borderBottom: `1px solid ${colors.border}`, background: colors.cardSurface } }, React.createElement('h2', { title: topic?.title, style: { minWidth: 0, margin: 0, overflowWrap: 'anywhere', fontSize: 18, fontWeight: 650, lineHeight: 1.5, letterSpacing: '-.01em' } }, topic?.title || '话题详情')),
             detailError ? failure(`上下文加载失败：${detailError}`) : detailLoading ? React.createElement('div', { role: 'status' }, emptyState('正在读取固定版本上下文…')) : !context ? emptyState('选择一个话题查看消息和关联任务') : React.createElement('div', { role: 'region', 'aria-label': '话题详情内容', style: { minWidth: 0, maxHeight: 'calc(100vh - 260px)', padding: '0 18px 18px', display: 'grid', gap: 0, overflowY: 'auto', overflowX: 'hidden', overflowWrap: 'anywhere' } },
               React.createElement('section', { 'aria-label': '话题摘要', style: { marginTop: 16, padding: '13px 14px', borderLeft: `3px solid ${colors.accent}`, borderRadius: '0 9px 9px 0', background: `color-mix(in srgb, ${colors.accent} 6%, ${colors.surface2})` } }, React.createElement('strong', { style: { display: 'block', fontSize: 12 } }, '话题摘要'), React.createElement('p', { style: { margin: '6px 0 0', whiteSpace: 'pre-wrap', color: topic?.summary ? 'inherit' : colors.muted, fontSize: 13, lineHeight: 1.65 } }, topic?.summary || '暂无摘要')),

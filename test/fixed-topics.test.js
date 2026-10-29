@@ -10,10 +10,12 @@ import { FIXED_TOPICS, fixedUnitRequestId, platformTaskPage } from '../packages/
 import { topicRouteSubmissionSchema } from '../packages/dingtalk-dsh-assistant/decision.js'
 import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
 import { normalizeHistoryMessage } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
+import { createFixedTopicPages } from '../packages/dingtalk-dsh-assistant/observer-fixed-topic-pages.js'
+import { messageProcessingProjection } from '../packages/dingtalk-dsh-assistant/observer-message-projection.js'
+import { correctOutOfScope } from '../packages/dingtalk-dsh-assistant/fixed-topic-correction.js'
 
-async function fixture(t, { tasks = [], decide = async () => {}, timezone = 'Asia/Shanghai', readMentioned } = {}) {
+async function fixture(t, { tasks = [], decide = async () => {}, timezone = 'Asia/Shanghai', readMentioned, snapshot = { tables: {}, global: null } } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'fixed-topic-'))
-  const snapshot = { tables: {}, global: null }
   const facility = new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
     loadAll: async () => structuredClone(snapshot), close: async () => {},
     async putRecord(table, key, value) { (snapshot.tables[table] ??= {})[key] = structuredClone(value) },
@@ -46,6 +48,174 @@ async function fixture(t, { tasks = [], decide = async () => {}, timezone = 'Asi
   } }
 }
 const unit = (key, quote, fixedTopic) => ({ unitKey: key, summary: key, sourceRefs: [{ quote }], topics: [], fixedTopic, reason: '语义分类' })
+
+test('manual correction assigns all 416–422 to out-of-scope silently, preserving audit, sent replies and existing tasks across restart', async t => {
+  const snapshot = { tables: {}, global: null }, f = await fixture(t, { snapshot, readMentioned: async () => { throw new Error('must not read mentions') } })
+  const texts = ['你们的cortex还能用吗', '我用Claude，还能用', '客户端似乎噶了', '间隔一会儿重试几次', '又复活了，神奇',
+    '鹏哥那套好像有个优先使用号池里上次对话的账号，你前面用的账号用量满了', '没你的事，不是找你']
+  for (const [i, text] of texts.entries()) await f.store.ingest({ groupId: 'g', messageId: `m${416 + i}`, text, occurredAt: '2026-10-29T05:09:00Z',
+    ...(i === 6 ? { quotedMessage: { messageId: 'old-reply', content: '你需要重试什么？' } } : {}) })
+  const routed = await f.store.routeMessages({ groupId: 'g', routeId: 'old-route', routingRevision: 0,
+    routes: texts.map((_, i) => ({ messageId: `m${416 + i}`, messageVersion: 1,
+      topics: i === 3 ? [{ newTopicKey: 'retry', title: '重试对象待确认' }] : [], reason: '旧分类' })) })
+  const topicId = routed.topicIdsByKey.retry
+  await f.store.acceptTopicDecision({ groupId: 'g', topicId, revision: 1, decisionId: 'old-decision', decision: { actions: [], reason: '旧判断', reply: '你需要重试什么？' } })
+  await f.store.completeTopicDecision({ groupId: 'g', topicId, decisionId: 'old-decision' })
+  await f.store.appendOutbox({ groupId: 'g', outboundId: 'old-reply', sourceMessageId: 'm419', text: '你需要重试什么？' })
+  await f.store.acknowledge({ groupId: 'g', outboundId: 'old-reply', deliveredMessageId: 'sent-old-reply' })
+  await f.store.markMessageAgentDelivery({ groupId: 'g', messageId: 'm421', status: 'decision-failed', error: 'dws_mentions_read_incomplete' })
+  const task = { taskId: 'task-existing', groupId: 'g', state: 'running', topicRefs: [{ topicId: 'unrelated', revision: 1 }] }
+  f.store.setTaskSessionReader({ listTasks: () => [task] })
+  const before = structuredClone(f.store.getGroup('g')), taskBefore = structuredClone(task)
+  const args = { groupId: 'g', requestId: 'manual-416-422', routingRevision: 1, reason: '用户明确纠正：同事间工具账号讨论，全部属于职责外话题。保持沉默。',
+    messages: texts.map((_, i) => ({ messageId: `m${416 + i}`, messageVersion: 1 })) }
+  const receipt = await f.store.correctFixedTopicClassification(args)
+  const corrected = structuredClone(f.store.getGroup('g'))
+  assert.equal(receipt.kind, 'manual-fixed-topic-correction')
+  assert.deepEqual(receipt.closedTopicIds, [topicId])
+  assert.equal(receipt.sources.find(item => item.messageId === 'm421').agentDeliveryError, 'dws_mentions_read_incomplete')
+  assert.deepEqual(corrected.outbox, before.outbox)
+  assert.deepEqual(corrected.topics[0].decisions, before.topics[0].decisions)
+  assert.deepEqual(corrected.routeHistory.slice(0, -1), before.routeHistory)
+  assert.equal(corrected.topics[0].entries.at(-1).action, 'remove')
+  assert.equal(corrected.topics[0].processedRevision, corrected.topics[0].revision)
+  assert.deepEqual(task, taskBefore)
+  for (const message of corrected.messages) {
+    const active = message.units.filter(unit => message.activeUnitRefs.some(ref => ref.unitId === unit.unitId && ref.unitRevision === unit.unitRevision))
+    assert.equal(active.length, 1); assert.equal(active[0].fixedTopic, 'out-of-scope'); assert.ok(active[0].fixedTopicHandledAt)
+    const projected = messageProcessingProjection(message, corrected.topics, { routed: false }, [])
+    assert.equal(projected.processingState, 'processed'); assert.equal(projected.processingBasis, 'manual-fixed-topic-correction')
+    assert.equal(projected.processingConclusion, args.reason)
+    assert.equal(message.replyTopicId, undefined)
+  }
+  assert.deepEqual(await f.store.correctFixedTopicClassification(args), receipt)
+  assert.deepEqual(f.store.getGroup('g'), corrected)
+  await f.store.markMessageAgentDelivery({ groupId: 'g', messageId: 'm421', status: 'decision-failed', error: 'late-old-error' })
+  assert.equal(f.store.getGroup('g').messages[5].agentDeliveryStatus, 'delivered')
+  f.handler.schedule('g'); await f.handler.whenIdle()
+  assert.equal(f.created.length, 0); assert.equal(f.replies.length, 0); assert.deepEqual(f.errors, [])
+  await f.store.close()
+  const restarted = await fixture(t, { snapshot, readMentioned: async () => { throw new Error('must not replay') } })
+  assert.deepEqual(await restarted.store.correctFixedTopicClassification(args), receipt)
+  restarted.handler.schedule('g'); await restarted.handler.whenIdle()
+  const page = await restarted.store.listFixedTopicMessagesPage({ groupId: 'g', topicId: 'out-of-scope' })
+  assert.equal(page.total, 7); assert.ok(page.items.every(item => item.state === 'silent' && item.manualCorrection.requestId === args.requestId))
+  await restarted.store.ingest({ groupId: 'g', messageId: 'm421', text: texts[5], occurredAt: '2026-10-29T05:09:00Z', senderName: '补全发送人', mentionedAgent: true })
+  restarted.handler.schedule('g'); await restarted.handler.whenIdle()
+  assert.equal(restarted.store.getGroup('g').messages[5].routingStatus, 'routed', 'late metadata cannot undo explicit silence')
+  assert.equal(restarted.replies.length, 0); assert.equal(restarted.created.length, 0); assert.deepEqual(restarted.errors, [])
+  await restarted.store.ingest({ groupId: 'g', messageId: 'm421', text: '新增业务请求', messageVersion: 3, occurredAt: '2026-10-29T05:09:00Z' })
+  assert.equal(restarted.store.getGroup('g').messages[5].routingStatus, 'pending', 'changed source content still needs routing')
+})
+
+test('manual fixed correction rejects stale/busy batches atomically and preserves topics with existing tasks', async t => {
+  const f = await fixture(t)
+  await f.route('业务', [{ unitKey: 'business', summary: '业务', sourceRefs: [{ quote: '业务' }], topics: [{ newTopicKey: 'b', title: '业务' }] }])
+  const topicId = f.store.getGroup('g').topics[0].topicId
+  const args = { groupId: 'g', requestId: 'correction', routingRevision: 1, reason: '人工纠正', messages: [{ messageId: 'm', messageVersion: 1 }] }
+  const before = structuredClone(f.store.getGroup('g'))
+  await assert.rejects(f.store.correctFixedTopicClassification({ ...args, messages: [...args.messages, { messageId: 'missing', messageVersion: 1 }] }), /FIXED_TOPIC_CORRECTION_STALE/)
+  assert.deepEqual(f.store.getGroup('g'), before)
+  await f.store.acceptTopicDecision({ groupId: 'g', topicId, revision: 1, decisionId: 'pending', decision: { actions: [], reason: 'pending' } })
+  await assert.rejects(f.store.correctFixedTopicClassification(args), /FIXED_TOPIC_CORRECTION_BUSY/)
+  await f.store.completeTopicDecision({ groupId: 'g', topicId, decisionId: 'pending' })
+  await f.store.appendOutbox({ groupId: 'g', outboundId: 'sending', sourceMessageId: 'm', text: 'existing' })
+  await assert.rejects(f.store.correctFixedTopicClassification(args), /FIXED_TOPIC_CORRECTION_BUSY/)
+  await f.store.acknowledge({ groupId: 'g', outboundId: 'sending' })
+  const archived = structuredClone(f.store.getGroup('g'))
+  archived.topics[0].decisions[0].operations = [{ operationId: 'historical-task', actionIndex: 0, taskId: 'task-archived', status: 'applied' }]
+  const { groupId: _groupId, ...input } = args
+  assert.equal(correctOutOfScope(archived, input, []).group.topics[0].status, 'active', 'durable task audit retains an archived task topic absent from the hot cache')
+  const task = { groupId: 'g', taskId: 'task-existing', state: 'running', topicRefs: [{ topicId, revision: 1 }] }
+  f.store.setTaskSessionReader({ listTasks: () => [task] })
+  await f.store.correctFixedTopicClassification(args)
+  assert.equal(f.store.getGroup('g').topics[0].status, 'active', 'existing task topic is retained')
+  await assert.rejects(f.store.correctFixedTopicClassification({ ...args, reason: 'different request' }), /FIXED_TOPIC_CORRECTION_IDENTITY_CONFLICT/)
+  assert.equal(task.state, 'running')
+})
+
+test('fixed reply queued behind a manual correction cannot prepare an outbox entry', async t => {
+  const f = await fixture(t, { readMentioned: async () => true })
+  await f.route('天气', [unit('weather', '天气', 'out-of-scope')])
+  const append = f.store.appendOutbox
+  f.store.appendOutbox = async args => {
+    await f.store.correctFixedTopicClassification({ groupId: 'g', requestId: 'during-send', reason: '人工确认保持沉默', routingRevision: 1,
+      messages: [{ messageId: 'm', messageVersion: 1 }] })
+    return append(args)
+  }
+  f.handler.schedule('g'); await f.handler.whenIdle()
+  assert.equal(f.store.getGroup('g').outbox.length, 0)
+  assert.deepEqual(f.errors, [], 'superseded reply must not fail unrelated in-flight sources through the group error callback')
+  assert.equal(f.store.getGroup('g').messages[0].agentDeliveryStatus, 'delivered')
+})
+
+test('plugin ensures durable fixed topics for existing/new groups, idempotently before any message', async t => {
+  const snapshot = { tables: {}, global: null }, first = await fixture(t, { snapshot })
+  await Promise.all(Array.from({ length: 5 }, () => first.store.subscribe({ groupId: 'new', responsibility: '' })))
+  for (const id of ['g', 'new']) {
+    assert.deepEqual(first.store.listFixedTopics(id).map(item => item.topicId), FIXED_TOPICS.map(item => item.topicId))
+    assert.equal(first.store.getGroup(id).messages.length, 0)
+    assert.equal(first.store.getGroup(id).topics.length, 0)
+    assert.equal(snapshot.tables.groups[id].fixedTopics.length, 2, 'stored before the first message')
+  }
+  const preserved = structuredClone(snapshot.tables.groups.new.fixedTopics)
+  await first.store.close()
+  delete snapshot.tables.groups.g.fixedTopics // upgrade an already subscribed group
+  const upgraded = await fixture(t, { snapshot })
+  assert.equal(snapshot.tables.groups.g.fixedTopics.length, 2)
+  assert.deepEqual(upgraded.store.listFixedTopics('new'), preserved)
+  const stable = structuredClone(snapshot.tables.groups.g.fixedTopics)
+  await upgraded.store.close()
+  const again = await fixture(t, { snapshot })
+  assert.deepEqual(again.store.listFixedTopics('g'), stable)
+  assert.equal(again.store.listTopics().length, 0)
+})
+
+test('fixed topic pages survive restart, expose pending/failure/silence/reply independently, and never create business topics', async t => {
+  const snapshot = { tables: {}, global: null }, f = await fixture(t, { snapshot })
+  for (const { topicId } of FIXED_TOPICS) assert.equal((await f.store.listFixedTopicMessagesPage({ topicId })).total, 0)
+  await f.route('天气', [unit('outside', '天气', 'out-of-scope')], { mentionedAgent: true })
+  const page = () => f.store.listFixedTopicMessagesPage({ topicId: 'out-of-scope', groupId: 'g' })
+  const first = await page(); assert.equal(first.items[0].state, 'pending')
+  await f.store.markMessageAgentDelivery({ groupId: 'g', messageId: 'm', status: 'decision-failed', error: 'dws_mentions_read_incomplete' })
+  assert.equal((await page()).items[0].state, 'failed')
+  assert.equal((await page()).items[0].error, 'dws_mentions_read_incomplete')
+  await assert.rejects(f.store.listFixedTopicMessagesPage({ topicId: 'out-of-scope', groupId: 'g', revision: first.revision }), { code: 'OBSERVER_PAGE_STALE' })
+  f.handler.schedule('g'); await f.handler.whenIdle()
+  const prepared = (await page()).items[0]
+  assert.equal(prepared.state, 'replied'); assert.equal(prepared.reply.status, 'pending'); assert.equal(prepared.error, undefined)
+  await f.store.acknowledge({ groupId: 'g', outboundId: prepared.reply.outboundId, deliveredMessageId: 'ding-reply' })
+  await f.store.close()
+  const reopened = await fixture(t, { snapshot })
+  const restored = await reopened.store.listFixedTopicMessagesPage({ topicId: 'out-of-scope' })
+  assert.equal(restored.items[0].reply.deliveredMessageId, 'ding-reply')
+  await reopened.store.ingest({ groupId: 'g', messageId: 'm', messageVersion: 2, text: '天气', occurredAt: '2026-10-28T00:00:00Z', senderName: '补全发送人' })
+  assert.equal((await reopened.store.listFixedTopicMessagesPage({ topicId: 'out-of-scope' })).items[0].reply.deliveredMessageId, 'ding-reply', 'enrichment preserves the explicit unit/reply association')
+  assert.equal(reopened.store.listTopics().length, 0)
+  assert.equal(reopened.replies.length, 0, 'reading/restarting the observer does not replay messages')
+  const silent = await fixture(t)
+  await silent.route('天气', [unit('outside', '天气', 'out-of-scope')], { mentionedAgent: false })
+  silent.handler.schedule('g'); await silent.handler.whenIdle()
+  assert.equal((await silent.store.listFixedTopicMessagesPage({ topicId: 'out-of-scope' })).items[0].state, 'silent')
+})
+
+test('fixed topic reads select stable metadata pages without scanning messages or reading other bodies', async () => {
+  let readOnly = false, bodyReads = 0
+  const raw = Array.from({ length: 205 }, (_, i) => ({ messageId: `m${i}`, messageVersion: 1, sequence: i + 1, occurredAt: '2026-10-29T00:00:00Z',
+    get text() { bodyReads++; assert(i >= 185 && i < 195); return `body${i}` },
+    units: [{ unitId: `u${i}`, unitRevision: 1, fixedTopic: 'out-of-scope', summary: '天气', sourceRanges: [{ quote: '天气' }] }], activeUnitRefs: [{ unitId: `u${i}`, unitRevision: 1 }] }))
+  const messages = new Proxy(raw, { get(target, key) { if (readOnly && !/^\d+$/.test(String(key))) throw new Error('GET scanned all messages'); return Reflect.get(target, key) } })
+  const group = { groupId: 'g', messages, outbox: [] }, empty = { groupId: 'empty', messages: [], outbox: [] }
+  const pages = createFixedTopicPages(id => id === 'g' ? group : empty)
+  pages.update(group); pages.update(empty); assert.equal(bodyReads, 0); readOnly = true
+  const page = await pages.page({ topicId: 'out-of-scope', offset: 10, limit: 10 })
+  assert.equal(page.total, 205); assert.equal(page.items.length, 10); assert.equal(bodyReads, 10); assert.equal(page.nextOffset, 20)
+  assert.equal(new Set(page.items.map(item => item.id)).size, 10); assert.equal(page.items[0].messageId, 'm194')
+  assert.equal((await pages.page({ topicId: 'out-of-scope', groupId: 'empty' })).total, 0)
+  assert.equal((await pages.page({ topicId: 'agent-platform' })).total, 0)
+  await assert.rejects(pages.page({ topicId: 'out-of-scope', limit: 101 }), { code: 'OBSERVER_PAGE_INVALID' })
+  pages.remove('g'); assert.equal((await pages.page({ topicId: 'out-of-scope' })).total, 0)
+})
 
 for (const mentionedAgent of [true, false, undefined]) test('out-of-scope fixed route respects native mention and duplicate identity: ' + mentionedAgent, async t => {
   const f = await fixture(t, { readMentioned: async () => false })
@@ -161,6 +331,51 @@ test('native mention metadata survives event/history normalization without text 
   const event = normalizeHistoryMessage({ conversationId: 'g', messageId: 'm', text: '@助理', isInAtList: false })
   assert.equal(event.mentionedAgent, false)
   assert.equal(normalizeHistoryMessage({ conversationId: 'g', messageId: 'm', isInAtList: true }).mentionedAgent, true)
+})
+
+test('native mention lookup reads grouped DWS messages across pages with exact source identity', async () => {
+  const cursors = []
+  const adapter = createDwsAdapter({ enabled: true, runner: { run: async args => {
+    const cursor = args[args.indexOf('--cursor') + 1]; cursors.push(cursor)
+    return { exitCode: 0, stdout: JSON.stringify({ success: true, result: { conversationMessagesList: cursor === '0'
+      ? [{ openConversationId: 'other', messages: [{ openMessageId: 'm' }] }, { openConversationId: 'g', messages: [{ messageId: 'other' }] }]
+      : [{ openConversationId: 'g', messages: [{ openMessageId: 'm', messageId: 'm', conversationId: 'g' }] }], hasMore: cursor === '0', nextCursor: 'next' } }) }
+  } } })
+  assert.equal(await adapter.isMessageMentioned('g', 'm', '2026-10-28T00:00:00Z'), true)
+  assert.deepEqual(cursors, ['0', 'next'])
+})
+
+test('documented empty terminal mention page settles a fixed unit silently, without replay or a task', async t => {
+  let calls = 0
+  const adapter = createDwsAdapter({ enabled: true, runner: { run: async () => {
+    calls++
+    return { exitCode: 0, stdout: JSON.stringify({ success: true, error: null, decryptCandidateCount: 0, decryptAllowedCount: 0,
+      decryptedCount: 0, decryptFailedCount: 0, result: { hasMore: false, nextCursor: 'terminal-cursor' } }) }
+  } } })
+  const f = await fixture(t, { readMentioned: (groupId, message) => adapter.isMessageMentioned(groupId, message.messageId, message.occurredAt) })
+  await f.route('天气', [unit('outside', '天气', 'out-of-scope')])
+  f.handler.schedule('g'); await f.handler.whenIdle()
+  f.handler.schedule('g'); await f.handler.whenIdle()
+  assert.equal(calls, 1); assert.equal(f.errors.length, 0); assert.equal(f.replies.length, 0); assert.equal(f.created.length, 0)
+  assert.equal((await f.store.listFixedTopicMessagesPage({ topicId: 'out-of-scope', groupId: 'g' })).items[0].state, 'silent')
+})
+
+test('mention lookup rejects failed, malformed, undecrypted and incomplete pages instead of treating them as empty', async () => {
+  const empty = { conversationMessagesList: [], hasMore: false }
+  const matched = { conversationMessagesList: [{ openConversationId: 'g', messages: [{ openMessageId: 'm' }] }], hasMore: false }
+  const invalid = [null, { success: false, result: empty }, { success: true, error: { reason: 'failed' }, result: empty },
+    { success: true, result: { hasMore: true, nextCursor: 'next' } }, { success: true, result: { conversationMessagesList: [] } },
+    { success: true, result: { conversationMessagesList: null, hasMore: false } }, { result: { hasMore: false } },
+    { success: true, result: { conversationMessagesList: [{ openConversationId: 'g' }], hasMore: false } },
+    { success: true, partial: true, result: matched }, { success: true, decryptFailedCount: 1, result: matched },
+    { success: true, decryptFailures: [{ reason: 'decrypt_failed' }], result: empty },
+    { success: true, result: { ...empty, failedCount: 1 } }]
+  for (const value of invalid) {
+    const adapter = createDwsAdapter({ enabled: true, runner: { run: async () => ({ exitCode: 0, stdout: JSON.stringify(value) }) } })
+    await assert.rejects(adapter.isMessageMentioned('g', 'm', '2026-10-28T00:00:00Z'), /dws_mentions_read_incomplete/, JSON.stringify(value))
+  }
+  const adapter = createDwsAdapter({ enabled: true, runner: { run: async () => ({ exitCode: 0, stdout: JSON.stringify({ success: true, result: { ...empty, hasMore: true } }) }) } })
+  await assert.rejects(adapter.isMessageMentioned('g', 'm', '2026-10-28T00:00:00Z'), /dws_mentions_cursor_missing/)
 })
 
 test('user timezone-only settings update persists and group timezone takes priority', async t => {

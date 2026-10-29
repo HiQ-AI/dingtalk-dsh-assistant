@@ -1,4 +1,4 @@
-import { FIXED_TOPICS } from './fixed-topics.js'
+import { FIXED_TOPICS, manuallySettled } from './fixed-topics.js'
 import {isPendingDecision,topicDecisionRecovery} from './topic-model.js'
 const instant = value => typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' && value.trim() ? Date.parse(value) : NaN
 const timing = (start, end) => {
@@ -80,7 +80,11 @@ export function messageProcessingProjection(message, topics, source, requests, s
     if (source) return null
     return records.length ? decisionTimes.every(Number.isFinite) ? new Date(Math.max(...decisionTimes)).toISOString() : null : message.agentDeliveryAt ?? null
   }
-  if (issues.some(item => item.status === 'failed')) state = 'failed'
+  if (manuallySettled(message)) {
+    state = 'processed'; basis = 'manual-fixed-topic-correction'; completedAt = message.agentDeliveryAt
+    conclusion = message.units.find(unit => unit.unitId === message.activeUnitRefs[0].unitId && unit.unitRevision === message.activeUnitRefs[0].unitRevision).manualCorrection.reason
+  }
+  else if (issues.some(item => item.status === 'failed')) state = 'failed'
   else if (message.routingStatus !== 'routed') state = 'routing'
   else if (topicPending || unitsPending) state = 'processing'
   else if (needsClarification) state = 'needs_clarification'
@@ -94,7 +98,7 @@ export function messageProcessingProjection(message, topics, source, requests, s
     completedAt = semanticCompletionTime()
   }
   if(stateOnly)return {processingState:state}
-  conclusion = [...new Set([...(topicPending ? [] : records.map(record => record?.decision?.reason ?? record?.decision?.reply)),
+  conclusion = [...new Set([conclusion, ...(topicPending ? [] : records.map(record => record?.decision?.reason ?? record?.decision?.reply)),
     ...coordination.map(item => item.conclusion), ...(['processed', 'needs_clarification'].includes(state) ? reasons : [])]
     .filter(text => typeof text === 'string' && text.trim()))].join('；') || null
   const notices = source?.notifications ?? []

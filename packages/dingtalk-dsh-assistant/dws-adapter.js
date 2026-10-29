@@ -43,6 +43,41 @@ function parseJson(stdout, operation) {
   }
 }
 
+function mentionPageItems(value) {
+  const page = value?.result ?? value
+  const object = item => item && typeof item === 'object' && !Array.isArray(item)
+  const incomplete = () => { throw new Error('dws_mentions_read_incomplete') }
+  if (!object(value) || !object(page) || typeof page.hasMore !== 'boolean') incomplete()
+  for (const layer of [value, page]) {
+    if (layer.success === false || layer.error || layer.partial === true || layer.truncated === true
+      || (layer.failedCount ?? 0) !== 0 || layer.failures?.length
+      || (layer.decryptFailedCount ?? 0) !== 0 || layer.decryptFailures?.length) incomplete()
+  }
+  const identity = (item, groupId) => {
+    if (!object(item)) incomplete()
+    const id = item.messageId ?? item.openMessageId ?? item.msgId
+    const conversation = item.openConversationId ?? item.conversationId ?? groupId
+    if (typeof id !== 'string' || !id || typeof conversation !== 'string' || !conversation
+      || groupId !== undefined && conversation !== groupId) incomplete()
+    return { messageId: id, groupId: conversation }
+  }
+  if (Object.hasOwn(page, 'conversationMessagesList')) {
+    if (!Array.isArray(page.conversationMessagesList)) incomplete()
+    return page.conversationMessagesList.flatMap(group => {
+      if (!object(group) || typeof group.openConversationId !== 'string' || !group.openConversationId || !Array.isArray(group.messages)) incomplete()
+      return group.messages.map(item => identity(item, group.openConversationId))
+    })
+  }
+  if (Object.hasOwn(page, 'items')) {
+    if (!Array.isArray(page.items)) incomplete()
+    return page.items.map(item => identity(item))
+  }
+  // DWS 4cd5d053, helpers/paged_command.go: parsePagedCommandPage explicitly
+  // accepts an omitted conversation list only on a terminal page (hasMore=false).
+  if (value.success === true && page.hasMore === false) return []
+  incomplete()
+}
+
 function commandError(prefix, result) {
   let detail, serverErrorCode
   try { detail = JSON.parse(result.stderr)?.error; serverErrorCode = detail?.server_error_code } catch {}
@@ -202,9 +237,8 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
         seen.add(cursor)
         const response = await runner.run(withProfile(['chat', 'message', 'list-mentions', '--group', assertStableId(groupId, 'group_id'), '--start', start, '--end', end, '--limit', '50', '--cursor', cursor, '--format', 'json']))
         if (response.exitCode !== 0) throw commandError('dws_mentions_read_failed', response)
-        const value = parseJson(response.stdout, 'list-mentions'), page = value.result ?? value
-        if (value.success === false || !Array.isArray(page.items) || typeof page.hasMore !== 'boolean') throw new Error('dws_mentions_read_incomplete')
-        if (page.items.some(item => item.msgId === messageId && item.openConversationId === groupId)) return true
+        const value = parseJson(response.stdout, 'list-mentions'), items = mentionPageItems(value), page = value.result ?? value
+        if (items.some(item => item.messageId === messageId && item.groupId === groupId)) return true
         if (!page.hasMore) return false
         if (page.nextCursor === undefined || page.nextCursor === null || String(page.nextCursor) === '') throw new Error('dws_mentions_cursor_missing')
         cursor = String(page.nextCursor)

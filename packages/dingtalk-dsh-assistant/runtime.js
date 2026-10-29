@@ -2359,7 +2359,8 @@ ${JSON.stringify((({ snapshotAt, objective, topicRefs, taskId, groupId, inputVer
       return results
     },
     getGroup: store.getGroup, listGroups: store.listGroups, getTask: store.getTask, listTasks: store.listTasks, listAlerts: store.listAlerts,
-    listTopics: store.listTopics, getTopic: store.getTopic, getTopicContext: store.getTopicContext,
+    listTopics: store.listTopics, listFixedTopics: store.listFixedTopics, listFixedTopicMessagesPage: store.listFixedTopicMessagesPage, getTopic: store.getTopic, getTopicContext: store.getTopicContext,
+    correctFixedTopicClassification: store.correctFixedTopicClassification,
     listTaskTimings: store.listTaskTimings ?? (() => []),
     listPerformance: store.listPerformance,
     flushPerformance: () => performanceTail,
