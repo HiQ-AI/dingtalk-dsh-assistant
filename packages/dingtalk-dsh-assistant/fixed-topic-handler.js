@@ -20,6 +20,7 @@ export function createFixedTopicHandler({ ctx, store, legacy, root, models, appe
       if (!current(groupId, message, unit)) throw new Error('fixed_topic_source_stale')
       if (!message.senderOpenDingTalkId) throw new Error('fixed_topic_reply_actor_required')
       await appendOutbox({ groupId, outboundId: requestId, sourceMessageId: requestId, topicRefs: [],
+        preflight: () => { if (!current(groupId, message, unit)) throw new Error('fixed_topic_source_stale') },
         matterSourceMessageIds: [message.messageId], matterUnitRefs: [{ unitId: unit.unitId, unitRevision: unit.unitRevision }],
         text, replyKind: 'substantive', replyToMessageId: message.messageId, replyToSenderOpenDingTalkId: message.senderOpenDingTalkId,
         atOpenDingTalkIds: [message.senderOpenDingTalkId], taskIds: [] })
@@ -99,7 +100,10 @@ export function createFixedTopicHandler({ ctx, store, legacy, root, models, appe
       for (const unit of activeFixedUnits(message)) {
         const id = fixedUnitRequestId(groupId, message, unit)
         if (flights.has(id)) continue
-        const work = Promise.resolve().then(() => process(groupId, message, unit)).catch(error => onError(groupId, error)).finally(() => flights.delete(id))
+        const work = Promise.resolve().then(() => process(groupId, message, unit)).catch(error => {
+          if (error.message === 'fixed_topic_source_stale' && !current(groupId, message, unit)) return
+          return onError(groupId, error)
+        }).finally(() => flights.delete(id))
         flights.set(id, work)
       }
     }

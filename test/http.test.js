@@ -43,6 +43,42 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
   try { await run(`http://127.0.0.1:${server.address().port}`) } finally { await new Promise((resolve) => server.close(resolve)) }
 }
 
+test('silent fixed correction requires local identity and exact bounded source versions', async () => {
+  const calls = [], body = { requestId: 'manual-416-422', routingRevision: 5, reason: '用户明确纠正为职责外话题', messages: [{ messageId: 'msg-id', messageVersion: 2 }] }
+  await withServer(false, async base => {
+    const path = base + '/config/groups/g%2Fa/fixed-topics/out-of-scope/corrections'
+    const post = value => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) })
+    assert.equal((await rawRequest(path, { method: 'POST', headers: { Host: 'remote.example', 'content-type': 'application/json' }, body: JSON.stringify(body) })).status, 403)
+    assert.equal(calls.length, 0)
+    for (const value of [{ ...body, groupId: 'other' }, { ...body, messages: [] }, { ...body, messages: Array(21).fill(body.messages[0]) }, { ...body, target: 'agent-platform' }])
+      assert.equal((await post(value)).status, 400)
+    assert.equal(calls.length, 0)
+    const saved = await post(body)
+    assert.equal(saved.status, 200); assert.equal((await saved.json()).reply, 'silent')
+    assert.deepEqual(calls, [{ ...body, groupId: 'g/a' }])
+    assert.equal((await post({ ...body, routingRevision: 4 })).status, 409)
+  }, { overrides: { correctFixedTopicClassification: async args => {
+    calls.push(args)
+    if (args.routingRevision === 4) throw new Error('FIXED_TOPIC_CORRECTION_STALE')
+    return { requestId: args.requestId, reply: 'silent', kind: 'manual-fixed-topic-correction' }
+  } } })
+})
+
+test('fixed topic HTTP pages preserve group/limit/revision and report unavailable, invalid and stale reads', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const path = '/state/fixed-topics/out-of-scope?groupId=g%2Fa&offset=25&limit=25&pageRevision=r1'
+    assert.deepEqual(await (await fetch(base + '/state/fixed-topics?groupId=g%2Fa')).json(), { fixedTopics: [{ topicId: 'out-of-scope', fixed: true }] })
+    const value = await fetch(base + path); assert.equal(value.status, 200); assert.equal((await value.json()).total, 0)
+    assert.deepEqual(calls[0], { topicId: 'out-of-scope', groupId: 'g/a', offset: 25, limit: 25, revision: 'r1' })
+    assert.equal((await fetch(base + '/state/fixed-topics/agent-platform?offset=-1')).status, 400)
+    assert.equal((await fetch(base + '/state/fixed-topics/agent-platform?limit=101')).status, 400)
+    assert.equal((await fetch(base + '/state/fixed-topics/unknown')).status, 404)
+    assert.equal((await fetch(base + '/state/fixed-topics/out-of-scope?pageRevision=stale')).status, 409)
+  }, { overrides: { listFixedTopics: groupId => { assert.equal(groupId, 'g/a'); return [{ topicId: 'out-of-scope', fixed: true }] }, listFixedTopicMessagesPage: async options => { calls.push(options); if (options.revision === 'stale') throw Object.assign(new Error('OBSERVER_PAGE_STALE'), { code: 'OBSERVER_PAGE_STALE' }); return options.topicId === 'unknown' ? null : { items: [], total: 0 } } } })
+  await withServer(false, async base => assert.equal((await fetch(base + '/state/fixed-topics/out-of-scope')).status, 503))
+})
+
 test('收发恢复HTTP要求本机身份、严格版本及CAS，拒绝伪造路径和敏感错误透传', async () => {
   const calls = [], token = 'a'.repeat(64)
   const input = { messageVersion: 2, activeUnitRefs: [{ unitId: 'u', unitRevision: 3 }], phase: 'decision', requestId: 'request', token }

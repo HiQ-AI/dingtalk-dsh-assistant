@@ -68,7 +68,7 @@ export function createObserverGroupPages({readGroup,readVersion,readMetadata,rea
   const byId=new Map()
   for(const source of selectedSources){const key=JSON.stringify([source.messageId,source.version]);if(!byId.has(key))byId.set(key,[]);byId.get(key).push(source)}
   if(await readVersion(groupId)!==version||readGroup(groupId)!==group)throw Object.assign(new Error('OBSERVER_PAGE_STALE'),{code:'OBSERVER_PAGE_STALE'})
-  return {...result,items:result.items.map(id=>{
+  return {...result,routingRevision:group.routingRevision,items:result.items.map(id=>{
    const message=cache.rawMessages.get(id), topics=cache.topicsByMessage.get(id)||[], sources=byId.get(JSON.stringify([id,message.messageVersion]))||[]
    return {...message,...messageProcessingProjection(message,topics,sources.length===1?sources[0]:undefined,cache.requestsByMessage.get(id)||[]),
     topicRefs:topics.flatMap(topic=>{const latest=new Map(topic.entries.map(entry=>[entry.unitId??`legacy:${id}`,entry]));return [...latest.values()].filter(entry=>entry.action==='add'&&entry.messageVersion===message.messageVersion).map(entry=>({topicId:topic.topicId,revision:topic.revision,title:topic.title,unitId:entry.unitId,unitRevision:entry.unitRevision}))})}

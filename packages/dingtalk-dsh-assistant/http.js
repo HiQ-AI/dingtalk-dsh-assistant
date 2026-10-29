@@ -3,6 +3,7 @@ const mixedTopicPages=new WeakMap()
 import { messageProcessingProjection } from './observer-message-projection.js'
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
+import { fixedTopicCorrectionSchema } from './fixed-topic-correction.js'
 import { isPendingDecision, topicDecisionRecovery } from './topic-model.js'
 import { taskContextProgressImpactSchema, taskContextSemanticsProblem } from './task-input-contract.js'
 
@@ -243,6 +244,22 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       return send(response, 200, groupId ? await groupSummary(store.getGroup(groupId), store, workflowMailboxes, workflowTopics)
         : await Promise.all(store.listGroups().map(group => groupSummary(group, store, workflowMailboxes, workflowTopics))))
     } catch { return send(response, 503, { error: 'message_processing_unavailable' }) }
+  }
+  if (request.method === 'GET' && url.pathname === '/state/fixed-topics') {
+    if (!store.listFixedTopics) return send(response, 503, { error: 'fixed_topics_unavailable' })
+    const fixedTopics = store.listFixedTopics(url.searchParams.get('groupId') || undefined)
+    return send(response, fixedTopics ? 200 : 404, fixedTopics ? { fixedTopics } : { error: 'group_not_subscribed' })
+  }
+  const fixedTopic = request.method === 'GET' && /^\/state\/fixed-topics\/([^/]+)$/u.exec(url.pathname)
+  if (fixedTopic) {
+    if (!store.listFixedTopicMessagesPage) return send(response, 503, { error: 'fixed_topic_pagination_unavailable' })
+    try {
+      const page = await store.listFixedTopicMessagesPage({ topicId: decodeURIComponent(fixedTopic[1]),
+        groupId: url.searchParams.get('groupId') || undefined,
+        offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 25, 100),
+        revision: url.searchParams.get('pageRevision') || undefined })
+      return send(response, page ? 200 : 404, page ?? { error: 'fixed_topic_not_found' })
+    } catch (error) { return send(response, error.code === 'OBSERVER_PAGE_STALE' ? 409 : 400, { error: error.message }) }
   }
   if (request.method === 'GET' && url.pathname === '/state/topics') {
     try {
@@ -552,6 +569,21 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'POST' && url.pathname.startsWith('/config/groups/') && url.pathname.endsWith('/messages/agent-delivery')) {
     const groupId = decodeURIComponent(url.pathname.slice('/config/groups/'.length, -'/messages/agent-delivery'.length))
     return send(response, 200, await store.markMessagesAgentDelivery({ groupId, ...(await readJson(request)) }))
+  }
+  const fixedCorrection = request.method === 'POST' ? /^\/config\/groups\/([^/]+)\/fixed-topics\/out-of-scope\/corrections$/u.exec(url.pathname) : null
+  if (fixedCorrection) {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+    try {
+      const parsed = fixedTopicCorrectionSchema.safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'FIXED_TOPIC_CORRECTION_INVALID' })
+      if (!store.correctFixedTopicClassification) return send(response, 503, { error: 'FIXED_TOPIC_CORRECTION_UNAVAILABLE' })
+      return send(response, 200, await store.correctFixedTopicClassification({ ...parsed.data, groupId: decodeURIComponent(fixedCorrection[1]) }))
+    } catch (error) {
+      if (error instanceof SyntaxError) return send(response, 400, { error: 'FIXED_TOPIC_CORRECTION_INVALID' })
+      const code = error.code ?? error.message
+      return send(response, code === 'FIXED_TOPIC_CORRECTION_GROUP_NOT_FOUND' ? 404 : /^FIXED_TOPIC_CORRECTION_/.test(code) ? 409 : 500,
+        { error: /^FIXED_TOPIC_CORRECTION_/.test(code) ? code : 'FIXED_TOPIC_CORRECTION_SAVE_FAILED' })
+    }
   }
   const messageRetry = request.method === 'POST' ? /^\/config\/groups\/([^/]+)\/messages\/([^/]+)\/retry$/u.exec(url.pathname) : null
   const notificationRetry = request.method === 'POST' ? /^\/config\/groups\/([^/]+)\/notifications\/([^/]+)\/retry$/u.exec(url.pathname) : null

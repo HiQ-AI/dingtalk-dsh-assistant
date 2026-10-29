@@ -67,6 +67,7 @@
     "observer-message-projection.js",
     "observer-outbox-state.js",
     "observer-group-pages.js",
+    "observer-fixed-topic-pages.js",
     "observer-alert-pages.js",
     "observer-trace-pages.js",
     "observer-work-index.js",
@@ -105,6 +106,7 @@
     "version-check.js",
     "web-client.js",
     "fixed-topics.js",
+    "fixed-topic-correction.js",
     "fixed-topic-handler.js"
   ],
   "exports": {

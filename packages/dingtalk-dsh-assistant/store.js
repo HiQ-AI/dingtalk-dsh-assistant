@@ -4,7 +4,9 @@ import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
-import { activeFixedUnits, fixedTopicIds } from './fixed-topics.js'
+import { activeFixedUnits, ensureFixedTopics, FIXED_TOPICS, fixedTopicIds, manuallySettled } from './fixed-topics.js'
+import { createFixedTopicPages } from './observer-fixed-topic-pages.js'
+import { correctOutOfScope } from './fixed-topic-correction.js'
 import { taskPlanSchema } from './task-plan.js'
 import { storedTaskCheckpointBaseSchema, storedTaskResultSchema } from './task-result.js'
 import { topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan, replyTopicForMessage } from './topic-model.js'
@@ -71,7 +73,7 @@ const messageFactFields = {
   messageVersion: z.number().int().positive(), imageRefs: z.array(z.record(z.string(), z.unknown())).optional(), mediaUnavailable: z.array(z.string()).optional(),
   sourceKind: z.enum(['dingtalk', 'web', 'internal', 'migration']).optional(), migrationSource: z.string().optional(),
   ignoredRanges: z.array(sourceRangeSchema.extend({ reason: z.string().min(1) })).optional(),
-  units: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive(), unitKey: z.string().min(1), fixedTopic: z.enum(fixedTopicIds).optional(), fixedTopicHandledAt: z.string().optional(), dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(), summary: z.string().min(1), sourceRanges: z.array(sourceRangeSchema), sourceAttachments: z.array(z.object({ imageRefId: z.string().min(1) }).strict()).default([]), contextRanges: z.array(sourceRangeSchema.extend({ purpose: z.string().min(1) })).default([]), predecessorUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().min(1).optional() }).refine((unit) => unit.sourceRanges.length + unit.sourceAttachments.length > 0, 'topic_unit_source_required')).optional(),
+  units: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive(), unitKey: z.string().min(1), fixedTopic: z.enum(fixedTopicIds).optional(), fixedTopicHandledAt: z.string().optional(), manualCorrection: z.object({ requestId: z.string().min(1), reason: z.string().min(1) }).optional(), dispatchOwner: z.enum(['legacy-topic', 'coordination']).optional(), summary: z.string().min(1), sourceRanges: z.array(sourceRangeSchema), sourceAttachments: z.array(z.object({ imageRefId: z.string().min(1) }).strict()).default([]), contextRanges: z.array(sourceRangeSchema.extend({ purpose: z.string().min(1) })).default([]), predecessorUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).default([]), effectInheritance: z.enum(['inherit', 'new-scope']).optional(), revisionReason: z.string().min(1).optional() }).refine((unit) => unit.sourceRanges.length + unit.sourceAttachments.length > 0, 'topic_unit_source_required')).optional(),
   activeUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(),
 }
 const inboundSchema = z.object({
@@ -140,6 +142,7 @@ const sourceDispatchSchema = z.object({
   createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })
 const groupSchema = z.object({
+  fixedTopics: z.array(z.object({ topicId: z.enum(fixedTopicIds), title: z.string().min(1), fixed: z.literal(true), createdAt: z.string().min(1) })).optional(),
   sourceDispatchOwnership: z.array(sourceDispatchSchema).default([]),
   coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed', 'superseded']), messageId: z.string().optional(), lastError: z.string().optional(), failurePhase: z.enum(['startup', 'dispatch']).optional(), failureCode: z.string().optional(), startupAttempt: z.number().int().nonnegative().optional(), supersededBy: z.string().optional(), supersedeReason: z.string().optional() })).default({}),
   groupId: z.string().min(1), name: z.string().optional(), timezone: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
@@ -388,7 +391,25 @@ function taskTiming(task, activities, now = Date.now()) {
 
 export async function openResidentStore(storageDomain) {
   const domain = await storageDomain.open(residentDomainSpec)
-  const groups = domain.table('groups')
+  const groupTable = domain.table('groups')
+  const fixedTopicPages = createFixedTopicPages(groupId => findGroupEntry(groupId)?.[1])
+  const groups = new Proxy(groupTable, { get(target, name) {
+    if (name === 'put' || name === 'update') return async (key, value) => {
+      const result = await target[name](key, value)
+      fixedTopicPages.update(target.get(key))
+      return result
+    }
+    if (name === 'delete') return async key => {
+      const groupId = target.get(key)?.groupId, result = await target.delete(key)
+      if (result) fixedTopicPages.remove(groupId)
+      return result
+    }
+    return Reflect.get(target, name)
+  } })
+  for (const [key, group] of groups.entries()) {
+    if (ensureFixedTopics(group) !== group) await groups.update(key, ensureFixedTopics)
+    else fixedTopicPages.update(group)
+  }
   const topicPages = new ObserverMemoryPages(),topicPageScopes=new Map()
   const scheduler = domain.table('scheduler')
   const tasks = domain.table('tasks')
@@ -717,7 +738,7 @@ export async function openResidentStore(storageDomain) {
       if (timezone !== undefined) new Intl.DateTimeFormat('en', { timeZone: timezone }).format()
       const existing = findGroupEntry(groupId)?.[1]
       if (existing !== undefined) return { created: false, group: existing }
-      const group = { groupId, ...(timezone ? { timezone } : {}), ...(name ? { name } : {}), responsibility, residentSessionId: residentSessionId ?? `session-${randomUUID()}`, ...(residentAgentPreset ? { residentAgentPreset } : {}), nextSequence: 1, messages: [], outbox: [], topics: [], routingRevision: 0, routeHistory: [], taskReservations: [] }
+      const group = ensureFixedTopics({ groupId, ...(timezone ? { timezone } : {}), ...(name ? { name } : {}), responsibility, residentSessionId: residentSessionId ?? `session-${randomUUID()}`, ...(residentAgentPreset ? { residentAgentPreset } : {}), nextSequence: 1, messages: [], outbox: [], topics: [], routingRevision: 0, routeHistory: [], taskReservations: [] })
       await groups.put(groupId, group)
       return { created: true, group }
     }),
@@ -772,7 +793,9 @@ export async function openResidentStore(storageDomain) {
           const { facts, ...oldFact } = previous
           next.facts = [...(facts ?? []), oldFact]
           next.messageVersion = Math.max(previous.messageVersion + 1, messageVersion ?? 1)
-          next.routingStatus = 'pending'
+          // Sender/@/quote enrichment must not undo an explicit silent correction.
+          // Changed message content still requires a new routing decision.
+          next.routingStatus = manuallySettled(previous) && next.text === previous.text && isDeepStrictEqual(next.imageRefs ?? [], previous.imageRefs ?? []) ? 'routed' : 'pending'
           const now = new Date().toISOString()
           return { ...latest, messages: latest.messages.map((item) => item.messageId === messageId ? next : item),
             topics: latest.topics.map((topic) => {
@@ -791,6 +814,8 @@ export async function openResidentStore(storageDomain) {
       return { duplicate, enriched, sequence, group }
     }),
     listTopics: (groupId) => [...groups.entries()].flatMap(([, group]) => groupId === undefined || group.groupId === groupId ? group.topics : []),
+    listFixedTopicMessagesPage: options => fixedTopicPages.page(options),
+    listFixedTopics: groupId => groupId ? findGroupEntry(groupId)?.[1].fixedTopics ?? null : FIXED_TOPICS.map(topic => ({ ...topic, fixed: true })),
     listTopicsPage: async ({groupId,offset=0,limit=50,includeMerged=false,revision}={}) => {
       const key=groupId??'*',entries=[...groups.entries()].map(([,value])=>value).filter(group=>!groupId||group.groupId===groupId)
       let cache=topicPageScopes.get(key)
@@ -820,6 +845,17 @@ export async function openResidentStore(storageDomain) {
       return { groupId, topicId, revision: selectedRevision, topic: snapshot, messages, total: topicMessageCount(group,topic,selectedRevision), intentTotal: visibleDecisions.length, offset, limit,
         taskRefs: !includeTaskRefs ? [] : currentTasks().filter((task) => task.groupId === groupId && task.topicRefs.some((ref) => ref.topicId === topicId)).map((task) => ({ taskId: task.taskId, inputVersion: task.inputVersion, topicRefs: task.topicRefs })) }
     },
+    correctFixedTopicClassification: ({ groupId, ...input }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error('FIXED_TOPIC_CORRECTION_GROUP_NOT_FOUND')
+      let receipt
+      await groups.update(entry[0], latest => {
+        const result = correctOutOfScope(latest, input, currentTasks())
+        receipt = result.receipt
+        return result.group
+      })
+      return receipt
+    }),
     routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
@@ -1241,7 +1277,7 @@ export async function openResidentStore(storageDomain) {
       return groups.update(entry[0], (latest) => ({
         ...latest,
         messages: latest.messages.map((message) => {
-          if (message.messageId !== messageId) return message
+          if (message.messageId !== messageId || manuallySettled(message)) return message
           const { agentDeliveryError: _previousError, agentDecisionRetryAt: _previousRetryAt, ...current } = message
           return {
             ...current,

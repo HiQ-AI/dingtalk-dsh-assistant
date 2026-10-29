@@ -117,8 +117,9 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
     },
     hasGroupConfiguration: store.hasGroupConfiguration,
     initializeGroupConfiguration: store.initializeGroupConfiguration,
-    listTopicsPage: options => store.listTopicsPage(options), getGroup: id => groupView(store.getGroup(id)), listGroups: () => store.listGroups().map(groupView),
+    listTopicsPage: options => store.listTopicsPage(options), listFixedTopicMessagesPage: options => store.listFixedTopicMessagesPage(options), getGroup: id => groupView(store.getGroup(id)), listGroups: () => store.listGroups().map(groupView),
     updateGroup: async input => groupView(await store.updateGroup(input)),
+    correctFixedTopicClassification: store.correctFixedTopicClassification,
     async subscribe(input) {
       if (closed) throw new Error('resident_runtime_closed')
       if (typeof input.groupId !== 'string' || !input.groupId.trim()) throw new Error('group_id_required')
@@ -138,7 +139,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
     onGroupSubscribed: listen(subscribed), onGroupUnsubscribed: listen(unsubscribed),
     onOutboxAppended: noListener, onHumanBlockerRequested: noListener, onAuthorizationDecided: noListener,
     listTasks: () => [], getTask: () => undefined,
-    listTopics: store.listTopics, getTopic: store.getTopic, getTopicContext: store.getTopicContext,
+    listTopics: store.listTopics, listFixedTopics: store.listFixedTopics, getTopic: store.getTopic, getTopicContext: store.getTopicContext,
     listTaskTimings: () => [], listPerformance: filter => listPerformance(undefined, filter),
     listActivities: () => [], listAlerts: () => [],
     listRecoveryIssues: () => [...issues.values()],
