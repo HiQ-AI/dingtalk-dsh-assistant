@@ -13,4 +13,4 @@ export function referencedPersonAliases(group, messages) {
   return (group.personAliases ?? []).filter(person => texts.some(text => text.includes(person.alias)))
 }
 
-export const personAliasInstructions = 'personAliases 是本群已确认的人员别名与组织姓名映射，只用于解释当前原文或引用中命中的称呼，不是助手别名、派工或操作授权。结合正文点名、原生 @、引用、近期上下文及已有任务判断：引用某人信息、通知收件人、明确指定负责人和同时请求本助手参与是不同语义。仅提到人名不等于指定负责人；身份歧义不得按相似字或助手昵称自动承接，也不得猜测未提供的人际关系。'
+export const personAliasInstructions = 'personAliases 是本群已确认的人员别名与组织姓名映射，只用于解释当前原文或引用中命中的称呼，不是助手别名、派工或操作授权。结合正文点名、原生 @、引用、近期上下文及已有任务判断：引用某人信息、通知收件人、明确指定负责人和同时请求本助手参与是不同语义。仅提到人名不等于指定负责人；映射只帮助理解身份，不能因业务消息指定别人就剥离其原业务 Topic 上下文。身份歧义不得按相似字或助手昵称自动承接，也不得猜测未提供的人际关系。'

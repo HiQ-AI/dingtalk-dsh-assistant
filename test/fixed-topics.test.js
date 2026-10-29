@@ -50,15 +50,13 @@ async function fixture(t, { tasks = [], decide = async () => {}, timezone = 'Asi
 const unit = (key, quote, fixedTopic) => ({ unitKey: key, summary: key, sourceRefs: [{ quote }], topics: [], fixedTopic, reason: '语义分类' })
 const outsideHelp = (key, quote) => ({ ...unit(key, quote, 'out-of-scope'), outOfScopeHelp: true })
 
-test('non-intervention notices, other owners and quoted names settle silently even when @ metadata is true or unavailable', async t => {
-  const f = await fixture(t, { readMentioned: async () => { throw new Error('must not scan mentions for non-intervention') } })
+test('independent out-of-scope discussion 416–422 settles silently even when @ metadata is true or unavailable', async t => {
+  const f = await fixture(t, { readMentioned: async () => { throw new Error('must not scan mentions for silent outside discussion') } })
   const texts = ['你们的cortex还能用吗', '我用Claude，还能用', '客户端似乎噶了', '间隔一会儿重试几次', '又复活了，神奇',
-    '小甲那套好像有个优先使用号池里上次对话的账号，你前面用的账号用量满了', '没你的事，不是找你',
-    '@测试成员乙 @测试成员丙 已修复样例数据页信息缺失并发布测试环境', '@测试成员丁 任务已创建，开始处理。任务codex:example — 另一测试助手',
-    '看小甲发的应该是这样吧', '这个修复由测试成员乙负责']
+    '小甲那套好像有个优先使用号池里上次对话的账号，你前面用的账号用量满了', '没你的事，不是找你']
   for (const [i, text] of texts.entries()) await f.store.ingest({ groupId: 'g', messageId: `m${416 + i}`, text, occurredAt: '2026-10-29T05:09:00Z',
     ...(i % 2 ? { mentionedAgent: true } : {}), ...(i === 6 ? { quotedMessage: { messageId: 'old-reply', content: '请确认重试对象' } } : {}) })
-  const routed = await f.store.routeMessages({ groupId: 'g', routeId: 'non-intervention', routingRevision: 0,
+  const routed = await f.store.routeMessages({ groupId: 'g', routeId: 'outside-discussion', routingRevision: 0,
     routes: texts.map((text, i) => ({ messageId: `m${416 + i}`, messageVersion: 1, units: [unit('discussion', text, 'out-of-scope')] })) })
   assert.equal(routed.status, 'routed')
   f.handler.schedule('g'); await f.handler.whenIdle(); f.handler.schedule('g'); await f.handler.whenIdle()
@@ -203,7 +201,7 @@ test('plugin ensures durable fixed topics for existing/new groups, idempotently 
   const preserved = structuredClone(snapshot.tables.groups.new.fixedTopics)
   await first.store.close()
   delete snapshot.tables.groups.g.fixedTopics // upgrade an already subscribed group
-  snapshot.tables.groups.new.fixedTopics[0].title = '职责外话题' // rename without changing stable identity or creation time
+  snapshot.tables.groups.new.fixedTopics[0].title = '无需本助手介入' // rename without changing stable identity or creation time
   const upgraded = await fixture(t, { snapshot })
   assert.equal(snapshot.tables.groups.g.fixedTopics.length, 2)
   assert.deepEqual(upgraded.store.listFixedTopics('new'), preserved)
@@ -354,7 +352,7 @@ test('local yesterday crosses UTC midnight and DST safely', () => {
 })
 
 test('fixed route values are stable and cannot also claim business effects', () => {
-  assert.deepEqual(FIXED_TOPICS.map(topic => topic.title), ['无需本助手介入', '职责内Agent平台相关'])
+  assert.deepEqual(FIXED_TOPICS.map(topic => topic.title), ['职责外话题', '职责内Agent平台相关'])
   assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'r', routes: [{ messageId: 'm', messageVersion: 1, units: [{ ...unit('bad', 'x', 'agent-platform'), topics: [{ newTopicKey: 'bad', title: 'bad' }] }] }] }))
   assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'r', routes: [{ messageId: 'm', messageVersion: 1, units: [{ ...unit('bad', 'x', 'agent-platform'), outOfScopeHelp: true }] }] }))
 })
