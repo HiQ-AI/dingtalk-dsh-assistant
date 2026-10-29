@@ -206,7 +206,7 @@ function validateHistory(events, binding) {
  * 补充递增 inputVersion；原生 step 事件累计预算，已结束执行间的等待不计耗时。
  * outputSchema 使用 dsh-tools 支持的 JSON Schema。工具仅提交 { output }，不接受模型身份。
  */
-export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, contentRoot, readRestartDrainProof, withPersistenceWriter = (_binding, action) => action() }) {
+export function createExecutionSessions({ ctx, isCurrent, isRecoveryCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, contentRoot, readRestartDrainProof, withPersistenceWriter = (_binding, action) => action() }) {
   if (typeof isCurrent !== 'function') throw failure('execution_current_check_required')
   if (getWorkspaceDir !== undefined && typeof getWorkspaceDir !== 'function') throw failure('execution_workspace_provider_invalid')
   if (!Array.isArray(tools)) throw failure('execution_tool_registry_invalid')
@@ -219,6 +219,9 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     registry.set(tool.name, { ...tool, parameters: copy(tool.parameters) })
   }
   const entries = new Map(), sessions = new Map()
+  const recoveryFlights = new Map()
+  const recoveredScopes = new Map()
+  const sameRecoveryBinding = (left, right) => [...keysFor(right), 'leaseEpoch'].every(key => left[key] === right[key])
   const processScopes = new Map()
   const processes = service => {
     const key = service?.identity ?? service ?? null
@@ -287,7 +290,7 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
   }
 
   async function current(entry) {
-    if (closed || entry.cancelled) return false
+    if (closed || entry.cancelled || recoveryFlights.has(executionKey(entry.binding))) return false
     if (!await isCurrent(entry.binding)) { entry.stale = true; return false }
     return !closed && !entry.cancelled
   }
@@ -415,8 +418,9 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
         exec.signal.throwIfAborted()
         try {
           const background = exec.arguments.run_in_background === true && ['bash', 'pwsh'].includes(exec.name)
-          const processScope = background ? entry.backgroundProcesses ??= processes(presetService).scope() : processes(presetService)
-          const dispatch = () => processScope.run(async () => {
+          const processScope = background ? entry.backgroundProcesses ??= processes(presetService).scope() : processes(presetService).scope()
+          const dispatch = async () => {
+            try { return await processScope.run(async () => {
             const startedAt = Date.now()
             const result = await next()
             const jobs = agentCtx.get?.('jobs') ?? ctx.get?.('jobs')
@@ -435,7 +439,13 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
             const foreground = !background && shellTools.has(exec.name) && shellTools.get(exec.name) === toolDefinition && foregroundShellOutput(result)
             if (!(exec.name === 'read' && isReadonly(exec)) && !foreground && hasRunningJob(result) && !call.jobReceipt) throw failure('execution_background_identity_missing')
             return result
-          })
+            }) } finally {
+              if (!background) {
+                try { await processScope.close() }
+                catch (error) { (entry.failedProcessScopes ??= new Set()).add(processScope); throw error }
+              }
+            }
+          }
           const result = await (entry.fileScope ? entry.fileScope.run(dispatch, { readOnly: isReadonly(exec) }) : dispatch())
           return result
         } catch (error) {
@@ -914,9 +924,81 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
     return true
   }
 
-  async function recoverDrained({ binding, input = {} }) {
+  async function retryOwnedDrain(entry, binding) {
+    if (entry.drainError?.cause?.code !== 'execution_process_drain_failed') throw entry.drainError ?? notDrained('execution_run_busy')
+    await entry.drained.promise
+    if (!sameRecoveryBinding(entry.binding, binding)) throw failure('execution_session_identity_mismatch')
+    const checkLease = async () => {
+      if (closed || typeof isRecoveryCurrent !== 'function' || !await isRecoveryCurrent(binding)) throw notDrained('execution_recovery_lease_unverified')
+    }
+    const agent = entry.handle?.agent
+    const checkOwner = () => {
+      if (!agent || ctx.agents.get(binding.sessionId) !== agent || ctx.sessions.get(binding.sessionId) !== agent.session
+        || entries.get(executionKey(binding)) !== entry || sessions.get(binding.sessionId) !== entry
+        || agent.status !== 'idle' || inboxHasPending(agent.inbox)) throw notDrained('execution_session_already_live')
+    }
+    await checkLease()
+    checkOwner()
+    // Maintenance excludes a new turn while the original managed ranges are
+    // re-observed. No native tool, model, or operation receipt is replayed here.
+    await agent.runMaintenance(async signal => {
+      await checkLease()
+      const events = agent.session.snapshotEvents()
+      validateHistory(events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
+      const input = events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
+      const end = events.findLast(event => event.type === 'turn/end')
+      if (!input || !end || end.seq < input.seq || inboxHasPending(agent.inbox)
+        || events.some(event => event.seq > end.seq && /^(turn|step|tool)\//u.test(event.type))) throw notDrained('execution_recovery_turn_unresolved')
+      const scopes = [...(entry.failedProcessScopes ?? [])]
+      if (entry.backgroundProcesses) scopes.push(entry.backgroundProcesses)
+      if (!scopes.length) throw notDrained('execution_recovery_process_scope_missing')
+      const jobs = agent.ctx.get?.('jobs') ?? ctx.get?.('jobs')
+      if (entry.backgroundJobs?.length && typeof jobs?.list !== 'function'
+        || jobs?.list?.(binding.sessionId).some(job => ['running', 'stopping'].includes(job.status))) throw notDrained('execution_recovery_job_unresolved')
+      const outcomes = await Promise.allSettled(scopes.map(scope => scope.close()))
+      const failed = outcomes.find(outcome => outcome.status === 'rejected')
+      if (failed) throw failed.reason
+      await checkLease()
+      signal.throwIfAborted()
+      if (inboxHasPending(agent.inbox) || JSON.stringify(agent.session.snapshotEvents()) !== JSON.stringify(events)) throw notDrained('execution_recovery_turn_unresolved')
+      await entry.fileScope?.close()
+      await ctx.sessions.flush(agent.session)
+    })
+    await checkLease()
+    checkOwner()
+    await entry.handle.dispose()
+    if (ctx.agents.get(binding.sessionId) || ctx.sessions.get(binding.sessionId)) throw notDrained('execution_session_already_live')
+    // Keep this lease's physical proof until the caller commits execution.drained.
+    // A transient history read or ledger failure must not discard a proven scope.
+    recoveredScopes.set(executionKey(binding), copy(binding))
+    entry.drainError = undefined
+    entry.processDrainError = undefined
+    entries.delete(executionKey(binding)); sessions.delete(binding.sessionId)
+  }
+
+  async function recoverDrained({ binding, input = {}, drainFailure }) {
     validateBinding(binding)
     if (!dynamicExecution(binding)) throw failure('execution_binding_invalid', 'task-execution required')
+    const key = executionKey(binding)
+    const active = recoveryFlights.get(key)
+    if (active) {
+      if (!sameRecoveryBinding(active.binding, binding)) throw failure('execution_session_identity_mismatch')
+      return active.promise
+    }
+    const promise = recoverSessionDrain(binding, input, drainFailure)
+    recoveryFlights.set(key, { binding, promise })
+    try { return await promise }
+    finally { recoveryFlights.delete(key) }
+  }
+
+  async function recoverSessionDrain(binding, input, drainFailure) {
+    const entry = entries.get(executionKey(binding)) ?? sessions.get(binding.sessionId)
+    if (entry) await retryOwnedDrain(entry, binding)
+    const proof = recoveredScopes.get(executionKey(binding))
+    if (proof) {
+      if (!sameRecoveryBinding(proof, binding)) throw failure('execution_session_identity_mismatch')
+      if (!await isRecoveryCurrent?.(binding)) throw notDrained('execution_recovery_lease_unverified')
+    } else if (drainFailure && !drainFailure.recoveredAt) throw notDrained('execution_recovery_process_scope_missing')
     assertDrained(binding)
     const cwd = getWorkspaceDir ? await getWorkspaceDir({ binding, input }) : undefined
     await registerPersistence?.({ taskId: binding.taskId, sessionId: binding.sessionId, cwd })
@@ -939,10 +1021,16 @@ export function createExecutionSessions({ ctx, isCurrent, repositoryInspect, too
       if (!Array.isArray(isolationAuditRefs) || isolationAuditRefs.length !== pendingCalls.length) throw notDrained('execution_recovery_tool_unresolved')
     }
     assertDrained(binding)
+    if (recoveredScopes.has(executionKey(binding)) && !await isRecoveryCurrent?.(binding)) throw notDrained('execution_recovery_lease_unverified')
     return { drained: true, sessionBound: true, ...(isolationAuditRefs ? { isolationAuditRefs } : {}) }
   }
 
-  return { run, cancel, async feedback(executionId) { const entry = entries.get(`task-execution:${executionId}`); if (entry) await deliverFeedback(entry) }, assertDrained, recoverDrained, prepareManagedSession, async close() {
+  return { run, cancel, async feedback(executionId) { const entry = entries.get(`task-execution:${executionId}`); if (entry) await deliverFeedback(entry) }, assertDrained, recoverDrained,
+    confirmDrained(binding) {
+      const key = executionKey(binding), proof = recoveredScopes.get(key)
+      if (proof && !sameRecoveryBinding(proof, binding)) throw failure('execution_session_identity_mismatch')
+      recoveredScopes.delete(key)
+    }, prepareManagedSession, async close() {
     closed = true
     await Promise.all([...entries.keys()].map(cancel))
     await Promise.all([...processScopes.values()].map(scope => scope.close()))

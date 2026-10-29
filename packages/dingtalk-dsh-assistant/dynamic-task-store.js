@@ -1120,12 +1120,18 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const wakeId = wake(execution.taskId, 'execution.stage.progress', { executionId: execution.executionId, ...report }, `execution-stage:${commandId}`)
       return changed({ execution, wakeId })
     }
-    if (kind === 'execution.sessionBound' || kind === 'execution.drained' || kind === 'execution.result' || kind === 'execution.cancel') {
+    if (kind === 'execution.sessionBound' || kind === 'execution.drainFailed' || kind === 'execution.drained' || kind === 'execution.result' || kind === 'execution.cancel') {
       const execution = kind === 'execution.cancel' && a.binding?.kind === 'task-session' ? (() => {
         const task = currentTask(a.binding, { active: false }); const item = get('dynamic_executions', a.executionId)
         if (item.taskId !== task.taskId) fail('DYNAMIC_EXECUTION_SCOPE_INVALID'); return item
       })() : boundExecution(a.binding)
       if (kind === 'execution.sessionBound') execution.sessionBound = true
+      if (kind === 'execution.drainFailed') {
+        record(a.error); text(a.error.code)
+        if (execution.drained || execution.leaseEpoch < 1) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+        execution.recovering = true
+        execution.drainFailure = { error: clone(a.error), leaseEpoch: execution.leaseEpoch, inputVersion: execution.inputVersion, recordedAt: stamp }
+      }
       if (kind === 'execution.cancel') { execution.cancelRequested = true; if (execution.drained) execution.status = 'cancelled' }
       if (kind === 'execution.drained') {
         if (a.isolationAuditRefs !== undefined) {
@@ -1141,6 +1147,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const wasDrained = execution.drained
         stopExecutionTiming(execution, stamp)
         execution.drained = true; execution.recovering = false
+        if (execution.drainFailure?.leaseEpoch === execution.leaseEpoch) execution.drainFailure.recoveredAt ??= stamp
         if (execution.cancelRequested && !terminalExecutions.has(execution.status)) execution.status = 'cancelled'
         else if (execution.status === 'running' && !execution.result) execution.status = 'queued'
         // An Owner may already have consumed the result while native drain was
@@ -1858,6 +1865,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'execution.list') value = executionViews(q.taskId ? execs(q.taskId) : all('dynamic_executions'))
       else if (q.kind === 'execution.binding') value = executionBinding(get('dynamic_executions', q.executionId))
       else if (q.kind === 'execution.current') { const e = boundExecution(q.binding); value = !e.drained && e.status === 'running' && executionCurrent(e) }
+      else if (q.kind === 'execution.recovery-current') { const e = boundExecution(q.binding); value = !e.drained && e.recovering === true }
       else if (q.kind === 'execution.team') {
         const source = boundExecution(q.binding), task = assertScope(q.binding)
         value = { taskId: task.taskId, executionId: source.executionId, executions: execs(task.taskId).map(execution => ({
