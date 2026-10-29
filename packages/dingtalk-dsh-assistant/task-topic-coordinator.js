@@ -35,7 +35,7 @@ export function taskIndexPage(tasks, offset, limit, query = '') {
 }
 
 // Topic owns routing and decision receipts; this adapter only supplies native request sessions.
-export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, readPlatformTasks, readArchivedTask, readMentioned, validateReply, quotedReminderContext, coordinationEnabled = false, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
+export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, readPlatformTasks, readArchivedTask, readMentioned, validateReply, quotedReminderContext, taskFacts, coordinationEnabled = false, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
   const fixedTopics = readPlatformTasks ? createFixedTopicHandler({ ctx, store, legacy, root, models, appendOutbox, readTasks: readPlatformTasks, readMentioned, onSettled: groupId => onInputSettled?.(groupId), onError }) : null
   // The original Topic protocol is retained, but retired workflow prompt catalogs
   // must not leak back into the generic task-session boundary.
@@ -118,10 +118,14 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
           agentCtx.tools.restrict({ allow: [...allowed].filter(name => agentCtx.tools.get(name)) })
           agentCtx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'coordination_tool_outside_role')
           agentCtx.systemPrompt.section({ name: 'dingtalk-group-reply', order: 119, text: groupReplyInstructions })
-          agentCtx.systemPrompt.section({ name: 'dingtalk-task-continuation', order: 121, text: `${taskContinuationInstructions}\n同一请求当前上下文中已读的Task目录可直接复用，不重复读同一查询第一页。group_task_list返回query、snapshotFingerprint和nextCall；续页照用nextCall，改变query从offset=0重新查询，当前目录指纹变化后重新核对。目录只有摘要，提交已有任务动作前仍须核对完整目标和版本；本轮linkedTasks.snapshots是Host重新读取的未截断正文，未内联的任务按group_task_context_get读取。group_reply_review_get在固定决策/审阅会话中由Host绑定本请求，{}即可读取，不能填写别的requestIds。${role === 'decision' ? '本决策会话group_topic_context_get可用{}读取Host绑定的当前固定版本。' : '当前会话没有唯一当前Topic；候选摘要足以排除不同业务目标时直接路由，不因关键词相近强读历史。确需历史时原样复制候选readCall.arguments，不得传空参数，不从标题猜topicId。'}` })
+          agentCtx.systemPrompt.section({ name: 'dingtalk-reply-ownership', order: 130, text:
+            request.trigger === 'task-facts'
+              ? '本轮由已绑定Topic处理任务事实。只判断回复或沉默并更新摘要，不能调用任务动作、路由或把事实当新需求。默认输入是有界摘要和证据引用；只有影响决定的缺口才补读。无需重新总结执行会话，不复述内部标识或逐条日志。'
+              : '接收与回复使用同一种Topic。跨Topic消息路由时，在route.replyTopic中从本条topics选一个现有/本批业务Topic负责整体回复，不新建回复专用Topic。Decision输入replyOwnership明确谁回复：其他Topic可执行本事项任务动作，使用reason说明由指定Topic统一回复，不各自发送确认。回复Topic结合整条原文说明本次接纳的事项及真实处理进度，不把其他Topic未处理说成已经执行；后续实质结果仍可回复。' })
+          agentCtx.systemPrompt.section({ name: 'dingtalk-task-continuation', order: 121, text: `${taskContinuationInstructions}\n同一请求当前上下文中已读的Task目录可直接复用，不重复读同一查询第一页。group_task_list返回query、snapshotFingerprint和nextCall；续页照用nextCall，改变query从offset=0重新查询，当前目录指纹变化后重新核对。目录和本轮linkedTasks.snapshots均只有有界状态摘要；提交已有任务动作前，按group_task_context_get核对完整目标、授权和版本，不能把摘要当作完整任务合同。group_reply_review_get在固定决策/审阅会话中由Host绑定本请求，{}即可读取，不能填写别的requestIds。${role === 'decision' ? '本决策会话group_topic_context_get可用{}读取Host绑定的当前固定版本。' : '当前会话没有唯一当前Topic；候选摘要足以排除不同业务目标时直接路由，不因关键词相近强读历史。确需历史时原样复制候选readCall.arguments，不得传空参数，不从标题猜topicId。'}` })
           agentCtx.systemPrompt.section({ name: 'dingtalk-task-boundary', order: 123, text: taskBoundaryInstructions })
           if (role === 'decision') agentCtx.systemPrompt.section({ name: 'dingtalk-linked-task-context', order: 124,
-            text: '输入linkedTasks只包含Host在本轮话题版本创建时重新读取的本群关联任务，不沿用旧会话审批。snapshots内是未截断的完整任务，可直接核对目标和inputVersion/runSequence，避免重复目录或正文读取；reads内但未出现在snapshots的任务只有身份和版本，按readCall读取完整上下文。hasMore=true或业务目标指向其他任务时再查询目录；输入未含linkedTasks时使用原查询工具。提交前仍由Host校验当前来源、Topic和Task版本；新消息与新授权必须重新判断。' })
+            text: '输入linkedTasks只包含Host在本轮话题版本创建时重新读取的本群关联任务状态摘要，不沿用旧会话审批。snapshots含有界标题、状态、版本和结果摘要，不含完整目标或执行正文；需要对已有任务采取动作时按reads中的readCall核对完整上下文。hasMore=true或业务目标指向其他任务时再查询目录；输入未含linkedTasks时使用原查询工具。replyOwnership指定每条来源的回复归属：混合批次推进全部本Topic事项，只确认由本Topic负责回复的来源，其他来源由其replyTopic统一答复。提交前仍由Host校验当前来源、Topic和Task版本；新消息与新授权必须重新判断。' })
           agentCtx.systemPrompt.section({ name: 'dingtalk-task-progress-query', order: 124,
             text: '普通进度询问只读取原任务当前事实并一次答复，不能作为任务补充、恢复、重开、依赖或持续观察；提到多个任务不等于批量执行授权。单项在原Topic用actions:[]和reply回答；多个任务需要统一查询时可交独立协调的query/taskIds，不能创建task-observe安排。明确催办或追加要求才按原文范围选择任务动作，不能仅因问“修复了没”而唤醒Owner。' })
           if (role === 'route') agentCtx.systemPrompt.section({ name: 'dingtalk-independent-task-coordination', order: 122,
@@ -188,7 +192,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     }
     return normalized
   }
-  topics = createTopicCoordinator({ store, workflowPromptsEnabled: false, fixedTopicsEnabled: !!fixedTopics, quotedReminderContext, onInputSettled, readArchivedTask,
+  topics = createTopicCoordinator({ store, workflowPromptsEnabled: false, fixedTopicsEnabled: !!fixedTopics, quotedReminderContext, onInputSettled, taskFacts, readArchivedTask,
     getAgent: (groupId, request) => request ? sessions.get(groupId, request) : !closed && store.getGroup(groupId) ? presence : undefined,
     dispatchRequest: (request, message) => {
       const work = sessions.dispatch(request, message)

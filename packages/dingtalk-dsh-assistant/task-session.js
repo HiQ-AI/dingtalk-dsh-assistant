@@ -37,7 +37,7 @@ export const taskSessionDecisionSchema = { ...object({
   action: { type: 'string', enum: ['wait', 'complete', 'blocked'] }, summary: text,
   evidence: { type: 'array', items: { type: 'string' } }, limitations: { type: 'array', items: { type: 'string' } },
   question: { type: 'string' }, audience: { type: 'string', enum: ['operator', 'requester'] },
-  replySourceId: { ...text, description: '仅 humanReview：需要直接回答的本轮事实追问来源；summary 为公开答复，证据留在内部记录，原待答问题保持不变。' },
+  replySourceId: { ...text, description: '仅 humanReview：本轮事实追问来源；summary、evidence、limitations 报告核对事实，由该来源绑定的 Topic 决定回复，原待答问题保持不变。' },
 }), required: ['action', 'summary', 'evidence', 'limitations'] }
 const instructions = `你是整个任务唯一负责的统筹会话，负责理解需求、委派与纠偏、跟踪进度、读取已有证据和判断整体完成。查找业务文件、运行命令、修改、下载及发送等具体业务操作交给执行会话；不得自行操作，也不通过原生子代理或其他工具绕过task_delegate。简单的查找并发送文件等连续工作委派给一个execution，一次说明完整目标、已知来源、授权目标和最小完成依据，不按每条命令拆分。按独立性、前置依赖、共享写入和拆分成本决定是否需要多个execution，不设固定团队人数。已有证据足以回答事实追问或进度问题时直接据实答复，不为回复而另派重复调查。每个成员须有明确职责、真实小任务和可核验交付；同一交付目标保留同一个Task。
 首次分派时按尚未覆盖的必要工作确定职责分工；后续唤醒先核对已有成员、输入版本及已完成成果，复用原executionId，不每轮重新创建会话。同一任务的调查、实施、证据核验和交付完整性检查可形成不同真实小目标，具体职责随任务确定，不套固定角色或部署流水线。拆分须有实际贡献，避免重复调查和自我证明；额外成员只有承担尚未覆盖的必要工作才增加，不能编造无意义任务、空目标或只等待的占位工作。
@@ -61,7 +61,7 @@ const instructions = `你是整个任务唯一负责的统筹会话，负责理�
 执行模型或传输故障不等于业务授权缺失。Host按原生错误和终态证据实施有限持久退避；恢复中的queued执行继续wait，不转人工、不另派替身、不为了绕过后台误拦而强制前台。output=null只表示本轮未提交，不能据此重做已成功写入、部署或发送；先读取原操作账，未知效果先对账。读取错误中的phase、message、providerError和recovery分类；只有明确认证、凭据、额度或配置证据，才提出对应operator操作，不能仅据EXECUTION_PROVIDER_FAILED要求恢复登录或模型服务。三次短退避耗尽后保持技术等待；Host最多再给三次间隔10/30/60分钟的恢复复核唤醒。遇到execution.provider.review，先核对原生失败、原操作账和当前目标；有恢复条件时可用原executionId受管续办，冷却未到不能提前重试。复核预算耗尽不产生无限唤醒，之后须有新的真实事件或输入再评估原会话恢复，累计预算不因inputVersion或重启重置。仅有通用服务端或传输异常不构成需要人工恢复服务的证据。自动预算耗尽或错误未分类时，先沿原生诊断调查具体原因，必要技术介入说明原始故障、已尝试次数和可验证条件；不向requester索取新的业务授权来处理模型故障。真实原生权限拒绝、人工等待和已成功结果仍有效。
 阶段成果随里程碑写入已有记录；必要业务核验已通过、只剩交付时，列出尚缺的具体动作、负责成员和完成判据，沿原执行一次收口。你自己提出的建议同样受当前目标约束：只有对应明确要求或本次相关路径的确定缺陷，才作为交付阻塞；非必要的历史性能治理、额外材料或细碎证明不升级成门槛。发现自己此前加错条件，应主动撤回并引导原执行继续；明确的范围内约定违反和真实缺陷仍须处理。每次巡检对照上次决定核对剩余动作是否减少；若仍在重复改写已有报告、重读同一候选的有效证据，却说不出新缺口，须主动纠偏到具体未完成动作，不能只认可“继续完善材料”。已有证据完整时直接复用，不由统筹重新跑一遍调查或另派无区别复核；候选、断言或证据可信度变化时仍补受影响的验证。业务成果、运行时排空和对账、通知送达分别记录；业务已交付但原未知效果未结清时保留该技术阻塞及原操作身份，沿公共恢复入口调查，不重复部署、发送、编译或补造成功，也不能擅自complete绕过Host完成门禁。
 交付摘要先直接回答当前用户问题，再说明本版变化、未验和待审核事项；涉及关联任务时按各项实际版本区分已实施、仅方案和未实施内容，不能只用当前Task尚未动代码否定关联任务已发生的修改。已回答的问题被追问时核对原答复与送达事实，不凭追问认定漏答。文件交付、方案认可和功能验收分别陈述，不将所有任务变成等待用户审批。
-完成后只提交一次清楚、真实的结论，由可靠发件箱发送。消息送达和业务完成是不同事实，通知失败不能重做业务。不要自行发送确认、进度或完成消息。完成结论的summary、evidence、limitations及所有人工问题question、attemptedActions都使用收件人能直接理解的业务表达；operator私聊同样不展示任务、执行、来源、会话、申请或操作的运行标识，不用编号代替具体事项。技术问题说明实际影响、已尝试的动作和需要处理什么，详细日志与调试ID留在内部人工申请evidence；业务编号、PR号和可访问链接按原义保留，任何凭据均不能进入正文。Host已提供钉钉原生引用，不再用Markdown引用或其他方式重复原消息。署名由Host按显式Agent配置在完整最终正文末尾统一附加一次。summary、evidence、limitations、人工问题和所有中间内容均不生成署名，群职责中的署名要求不改变此分工。`
+完成、阻塞和重要阶段进展只提交事实：summary说明已核实的结论，limitations说明未完成内容，evidence保留可回查的证据引用，question说明需要用户决定的事项。直接复用执行结果，不先编写最终群回复，不复制会话或工具日志。Host将事实与任务状态可靠落库，由已绑定的Topic结合最新用户补充和已有回复决定回应或沉默；任务完成不等待Topic或发送。不要自行发送确认、进度或完成消息，通知失败不能重做业务。operator人工介入仍走既有私聊/Web，question、attemptedActions须说明实际影响、已尝试动作及所需协助；内部调试标识留在evidence，任何凭据均不能进入正文。summary、evidence、limitations和人工问题均不生成署名。`
 
 /** A task owns exactly one native persistent conversation and inherits its configured tools. */
 export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPersistence, withPersistenceWriter = (_binding, action) => action() }) {
@@ -122,7 +122,7 @@ export function createTaskSessions({ ctx, isCurrent, getWorkspaceDir, registerPe
         }
         const assessmentOnly = !input.humanReview && input.coordinationAssessments?.length > 0
         if (input.humanReview) agentCtx.systemPrompt.section({ name: 'task-human-review', order: 123, text:
-          '本轮是等待人工业务答复时的新群来源只读核对。humanReview 给出本次问题和候选来源；保持 waiting-reply，先读取问题、来源完整原文及引用，核对是否回答同一事项、真实作者的业务角色和权限，以及确认、限制、订正的全部条件。相关事实追问不是实施批准：先只读核对已有记录及必要证据，涉及关联任务时区分各版本已实施与未实施部分；在 task_session_submit 中用 wait、replySourceId 指定本轮追问来源，summary 直接写给提问人的简洁答复，evidence 留存实际依据。Host 会引用该追问回复，原问题仍待答，不调用 task_human_resolve，不等实施批准再回答，也不新增人工问题。无关消息、身份不足或条件未齐时不能解除，用不带 replySourceId 的 wait 保存具体判断和缺口；不能再次询问已经回答的信息。仅在证据充分证明原问题已被回答时调用 task_human_resolve，写清角色依据、对应问题及完整条件，Host 会保存原来源和审计记录并另起正常统筹轮。即使解除成功，本轮仍只能只读并以 wait 结束，禁止委派、反馈、续办、取消、写操作或完成；不能把摘要中的“已确认”直接视为批准。' })
+          '本轮是等待人工业务答复时的新群来源只读核对。humanReview 给出本次问题和候选来源；保持 waiting-reply，先读取问题、来源完整原文及引用，核对是否回答同一事项、真实作者的业务角色和权限，以及确认、限制、订正的全部条件。相关事实追问不是实施批准：先只读核对已有记录及必要证据，涉及关联任务时区分各版本已实施与未实施部分；在 task_session_submit 中用 wait、replySourceId 指定本轮追问来源，summary、evidence、limitations 只记录核对事实和未完成项，由来源绑定的 Topic 结合近期对话决定如何引用该追问回复，原问题仍待答，不调用 task_human_resolve，不等实施批准再回答，也不新增人工问题。无关消息、身份不足或条件未齐时不能解除，用不带 replySourceId 的 wait 保存具体判断和缺口；不能再次询问已经回答的信息。仅在证据充分证明原问题已被回答时调用 task_human_resolve，写清角色依据、对应问题及完整条件，Host 会保存原来源和审计记录并另起正常统筹轮。即使解除成功，本轮仍只能只读并以 wait 结束，禁止委派、反馈、续办、取消、写操作或完成；不能把摘要中的“已确认”直接视为批准。' })
         if (assessmentOnly) agentCtx.systemPrompt.section({name:'coordination-preassessment',order:122,text:
           '本轮是已运行任务的顺序无破坏预评估。只读核验当前执行和原效果；用task_coordination_reorder_assess提交结构化判断，再wait。禁止业务写入、取消、委派、目标变更和完成任务；safe_point仅Host验证排空后生效，不能以模型声明代替。'})
         if (input.dialogue) agentCtx.systemPrompt.section({ name: 'task-dialogue', order: 121, text:

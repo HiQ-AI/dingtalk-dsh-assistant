@@ -148,7 +148,7 @@ export function residentErrorStatus(error) {
   if (/TASK_(?:REQUIREMENT|CONTROL|REQUEST|SESSION).*?(?:CONFLICT|STALE|BUSY)|TASK_SESSION_TERMINAL/.test(message)) return 409
   if (/TASK_(?:(?:SESSION|NOTIFICATION)_)?NOT_FOUND/.test(message)) return 404
   if (/LEGACY_TASK_READONLY|WORKFLOW_RETIRED/.test(message)) return 410
-  return /^(group_has_(active_tasks|referenced_topics|pending_decisions|pending_outbox)|task-stale|task_input_version_(conflict|stale)|task_request_identity_conflict|task_input_pending|task_topic_version_invalid|task_result_context_changed|task_prompts_version_conflict|task_web_(task-stale|topic-stale|routing-required)|web_task_version_conflict)(:|$)/u.test(message) ? 409 : 400
+  return /^(group_has_(active_tasks|referenced_topics|pending_decisions|pending_outbox|pending_topic_facts)|task-stale|task_input_version_(conflict|stale)|task_request_identity_conflict|task_input_pending|task_topic_version_invalid|task_result_context_changed|task_prompts_version_conflict|task_web_(task-stale|topic-stale|routing-required)|web_task_version_conflict)(:|$)/u.test(message) ? 409 : 400
 }
 
 async function submitWebTask(request, response, runtime, kind, taskId) {

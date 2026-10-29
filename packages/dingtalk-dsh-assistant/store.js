@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { activeFixedUnits, fixedTopicIds } from './fixed-topics.js'
 import { taskPlanSchema } from './task-plan.js'
 import { storedTaskCheckpointBaseSchema, storedTaskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan } from './topic-model.js'
+import { topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan, replyTopicForMessage } from './topic-model.js'
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 import { PERFORMANCE_EVENT_TYPES, performanceProjectionSchema, performanceChunkKey, hasPerformanceFirstStream, projectPerformanceEvent, listPerformance, workflowPerformance, coordinationCosts } from './performance.js'
 
@@ -64,6 +64,7 @@ const replacementBusy = (group, replacesOutboundIds, decisionId) => replacesOutb
 
 const quotedMessageSchema = z.object({ messageId: z.string().min(1).optional(), senderName: z.string().min(1).optional(), occurredAt: z.union([z.string().min(1), z.number().finite()]).optional(), content: z.string() })
 const messageFactFields = {
+  replyTopicId: z.string().min(1).optional(),
   mentionedAgent: z.boolean().optional(),
   taskSessionRefs: z.array(z.string().min(1)).optional(),
   resourceRefs: z.array(z.record(z.string(), z.unknown())).optional(),
@@ -83,6 +84,7 @@ const inboundSchema = z.object({
   agentDecisionAttemptCount: z.number().int().nonnegative().optional(), agentDecisionRetryAt: z.string().min(1).optional(),
 })
 const outboundSchema = z.object({
+  replyTopicId: z.string().optional(), coveredEventIds: z.array(z.string()).optional(),
   topicRefs: z.array(topicRefSchema).optional(), decisionId: z.string().optional(), resultFingerprint: z.string().min(1).optional(),
   outboundId: z.string().min(1), sourceMessageId: z.string().min(1), text: z.string(), status: z.enum(['pending', 'sent', 'superseded']),
   taskInputVersion: z.number().int().positive().optional(), taskRunSequence: z.number().int().positive().optional(),
@@ -839,6 +841,16 @@ export async function openResidentStore(storageDomain) {
         }
         if (new Set(routes.map((route) => route.messageId)).size !== routes.length) throw new Error('topic_route_message_duplicate')
         const { newTopics, topicIdsByKey, unitsByMessage, ignoredByMessage } = resolveRouteBatch(latest, { groupId, routeId, routes })
+        const replyTopics = new Map()
+        for (const route of routes) {
+          const ids = [...new Set(unitsByMessage.get(route.messageId).filter(unit => unit.dispatchOwner !== 'coordination')
+            .flatMap(unit => unit.topics.map(ref => ref.topicId ?? topicIdsByKey[ref.newTopicKey])))]
+          const selected = route.replyTopic ?? route.effectOwner
+          const replyTopicId = selected ? selected.topicId ?? topicIdsByKey[selected.newTopicKey] : ids.length === 1 ? ids[0] : undefined
+          if (ids.length > 1 && !replyTopicId) throw new Error('topic_route_reply_owner_required')
+          if (replyTopicId && !ids.includes(replyTopicId)) throw new Error('topic_route_reply_owner_invalid')
+          replyTopics.set(route.messageId, replyTopicId)
+        }
         const sourceDispatchOwnership = [...(latest.sourceDispatchOwnership ?? [])]
         for (const route of routes) {
           const message = latest.messages.find(message => message.messageId === route.messageId)
@@ -884,7 +896,7 @@ export async function openResidentStore(storageDomain) {
           const current = unitsByMessage.get(message.messageId).map(({ topics: _topics, effectOwner: _owner, reason: _reason, ...unit }) => unit)
           const historical = [...(message.units ?? [])]
           for (const unit of current) if (!historical.some((item) => item.unitId === unit.unitId && item.unitRevision === unit.unitRevision)) historical.push(unit)
-          return { ...message, units: historical, activeUnitRefs: current.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ignoredRanges: ignoredByMessage.get(message.messageId), routingStatus: 'routed', routingError: undefined }
+          return { ...message, replyTopicId: replyTopics.get(message.messageId), units: historical, activeUnitRefs: current.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ignoredRanges: ignoredByMessage.get(message.messageId), routingStatus: 'routed', routingError: undefined }
         })
         return { ...latest, topics, sourceDispatchOwnership, routingRevision: latest.routingRevision + 1, routeHistory: [...latest.routeHistory, receipt],
           messages: settleCompletedMessageDeliveries(routedMessages, topics, sourceDispatchOwnership) }
@@ -913,6 +925,11 @@ export async function openResidentStore(storageDomain) {
           if (!dependency || dependency.revision !== ref.revision) { result = { status: 'topic-stale', topicId: ref.topicId }; return latest }
         }
         if (topic.revision !== revision) { result = { status: 'topic-stale', revision: topic.revision }; return latest }
+        const basis = latest.messages.filter(message => decision.basisMessageIds?.includes(message.messageId))
+        if (decision.reply?.trim() && basis.length && basis.every(message => {
+          const owner = replyTopicForMessage(latest, message)
+          return owner && owner !== topicId
+        })) { result = { status: 'reply-owned-by-other-topic' }; return latest }
         if (topic.decisions.some(isPendingDecision)) { result = { status: 'topic-busy' }; return latest }
         const replacing = decision.replyReview?.replaceOutboundIds ?? []
         if (replacementBusy(latest, replacing, decisionId)) {
@@ -946,6 +963,24 @@ export async function openResidentStore(storageDomain) {
             ...operations.filter((item) => item.taskId && decision.actions[item.actionIndex].kind === 'new-task').map((item) => ({ taskId: item.taskId, inputVersion: 1, runSequence: 1, decisionId, topicId }))] }
       })
       return result
+    }),
+    commitTopicFactDecision: ({ groupId, topicId, revision, expectedSummary, commit }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId), topic = entry?.[1].topics.find(item => item.topicId === topicId)
+      if (!topic || topic.mergedInto || topic.revision !== revision || topic.summary !== expectedSummary
+        || topic.processedRevision < topic.revision || topic.decisions.some(isPendingDecision)
+        || entry[1].messages.some(message => message.routingStatus !== 'routed')) return { status: 'topic-stale' }
+      // Only local ledger I/O inside the existing group lock. No model or channel wait.
+      return commit()
+    }),
+    applyTopicFactSummary: ({ groupId, topicId, revision, requestId, expectedSummary, decision }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) return { status: 'missing' }
+      await groups.update(entry[0], group => ({ ...group, topics: group.topics.map(topic => {
+        if (topic.topicId !== topicId || topic.lastFactDecisionId === requestId || topic.revision !== revision
+          || topic.summary !== expectedSummary || topic.processedRevision < topic.revision) return topic
+        return { ...topic, ...decision.topicUpdate, summaryRevision: revision, lastFactDecisionId: requestId, updatedAt: new Date().toISOString() }
+      }) }))
+      return { status: 'projected' }
     }),
     reconcileWebTaskTopics: ({ groupId, requestId, expectedDigest, checkOnly = false }) => serialize(groupId, async () => {
       if (!taskSessionReader) throw new Error('task_session_required')

@@ -1,4 +1,5 @@
 import {installTaskArchive, archiveTable, archiveTaskRows, readReceiptRow, insertReceipt, canArchiveRecord} from './task-archive.js'
+import { installTopicFacts, topicFactLedger } from './topic-facts.js'
 import {observerWorkMetadata} from './observer-work-index.js'
 import { installObserverPagination, installObserverArchivePagination, observerPage, observerGroupQuery } from './observer-pagination.js'
 import { executionSessionTitle } from './session-workspaces.js'
@@ -432,6 +433,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         WHERE coalesce(json_extract(body,'$.routed'),0)=0 AND json_type(body,'$.processingCompleted') IS NULL`)
       // Recovery never authorizes a second send. Tool/process state must first be drained or reconciled.
       installTaskArchive(db, { indexes: !existed || paginationMigrate || migrate })
+      installTopicFacts(db)
       const startupOperations = ops(), startupExecutions = all('dynamic_executions')
       for (const operation of startupOperations) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
       const blockingExecutions = new Set(startupOperations.filter(operationBlocksRecovery).map(operation => JSON.stringify([operation.taskId, operation.executionId])))
@@ -534,7 +536,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   const hasCoordinationNotificationWork = snapshot => snapshot.members.some(member => !member.observation)
     || snapshot.occurrences.some(occurrence => !occurrence.cancelledAt
       && (['failed','expired','blocked'].includes(occurrence.actionState) || occurrence.deliveryState === 'failed'))
+  const topicFacts = topicFactLedger({ db, get: (table, id) => get(table, id, true), put })
   function reduce(kind, a, commandId) {
+    if (kind.startsWith('topic.fact.')) {
+      const result = topicFacts.reduce(kind, a)
+      if (result !== undefined) return changed(result)
+    }
     const stamp = now()
     if (kind === 'coordination.aggregate') {
       const item = get('dynamic_coordination', a.coordinationId)
@@ -699,6 +706,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         requirementRevision: 1, controlRevision: 1, status: 'active', control: 'active', leaseEpoch: 0, sessionBound: false, drained: true,
         humanRequests: [], ...(a.coordinationHold ? { coordinationHold: clone(record(a.coordinationHold)) } : {}), createdAt: stamp, updatedAt: stamp }
       text(task.request, 'request'); array(task.sourceRefs); array(task.requirements)
+      task.replyBindings = topicFacts.bindings(task, a.replyBindings)
       saveTask(task); if (!task.coordinationHold) wake(taskId, 'task.created', { sourceRefs: task.sourceRefs }, `wake:${commandId}`)
       return changed({ task })
     }
@@ -772,6 +780,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           && Date.parse(source.timestamp) >= Date.parse(request.createdAt) && Date.parse(source.timestamp) <= Date.parse(stamp)) : []
       task.contextRevision = (task.contextRevision ?? 0) + 1
       for (const field of ['request', 'sourceRefs', 'topicRefs']) if (a[field] !== undefined) task[field] = clone(a[field])
+      if (a.replyBindings !== undefined) task.replyBindings = topicFacts.bindings(task, a.replyBindings)
       if (a.operationId) task.appliedOperations = [...new Set([...(task.appliedOperations ?? []), a.operationId])]
       ;(task.supplements ??= []).push({ id: messageId, text: message, receivedAt: stamp, contextRevision: task.contextRevision })
       // 待答来源先由统筹核对；不能把未经确认的摘要提前反馈给仍在运行的执行。
@@ -855,6 +864,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         } else if (task.status === 'completed' || task.control === 'cancelled') fail('DYNAMIC_TASK_TERMINAL')
         task.requirementRevision++
         for (const field of ['request','objective','title','requirements','sourceRefs','topicRefs']) if (a[field] !== undefined) task[field] = clone(a[field])
+        if (a.replyBindings !== undefined) task.replyBindings = topicFacts.bindings(task, a.replyBindings)
         if (a.request !== undefined) text(a.request, 'request')
       } else {
         if (a.expectedControlRevision !== undefined && a.expectedControlRevision !== task.controlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
@@ -948,20 +958,23 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const review = pendingTaskHumanReview(task, wakes(task.taskId).filter(item => item.state === 'claimed' && item.leaseEpoch === a.binding.leaseEpoch))
         if (!review || review.requestId !== a.humanReply.requestId || !review.sourceIds.includes(a.humanReply.sourceId)) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
         const request = task.humanRequests.find(item => item.requestId === review.requestId)
-        const source = get('dynamic_sources', a.humanReply.sourceId), payload = clone(record(a.humanReply.notification))
+        const source = get('dynamic_sources', a.humanReply.sourceId)
         if (task.status !== 'active' || task.control !== 'active' || source.groupId !== task.groupId || source.channel !== 'im'
           || !task.sourceRefs.includes(source.sourceId) || !(Date.parse(source.timestamp) >= Date.parse(request.createdAt) && Date.parse(source.timestamp) <= Date.parse(stamp))) fail('DYNAMIC_HUMAN_RESPONSE_FORBIDDEN')
-        if (payload.conversationId !== source.groupId || payload.sourceMessageId !== source.messageId || payload.actorId !== source.actorId
+        const payload = a.topicFacts === true ? null : clone(record(a.humanReply.notification))
+        if (payload && (payload.conversationId !== source.groupId || payload.sourceMessageId !== source.messageId || payload.actorId !== source.actorId
           || payload.sourceId !== source.sourceId || payload.sourceVersion !== source.version || payload.replyToMessageId !== source.messageId
-          || payload.replyToSenderOpenDingTalkId !== source.actorId || digest(payload.atOpenDingTalkIds ?? []) !== digest([source.actorId])) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
+          || payload.replyToSenderOpenDingTalkId !== source.actorId || digest(payload.atOpenDingTalkIds ?? []) !== digest([source.actorId]))) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
         const evidence = array(a.evidence).map(item => text(item, 'evidence'))
         if (!evidence.length) fail('DYNAMIC_ARGUMENT_INVALID', 'evidence')
         const id = `human-followup:${task.taskId}:${request.requestId}:${source.sourceId}`
         // 答复与待答状态在同一事务落账；发送前崩溃也不重跑同一追问或重新生成通知。
-        notification = { id, notificationId: id, kind: 'status', taskId: task.taskId, requirementRevision: task.requirementRevision,
-          payload, state: 'prepared', createdAt: stamp, updatedAt: stamp }
-        put('dynamic_notifications', notification)
-        ;(request.followupReplies ??= []).push({ sourceId: source.sourceId, notificationId: id,
+        if (payload) {
+          notification = { id, notificationId: id, kind: 'status', taskId: task.taskId, requirementRevision: task.requirementRevision,
+            payload, state: 'prepared', createdAt: stamp, updatedAt: stamp }
+          put('dynamic_notifications', notification)
+        }
+        ;(request.followupReplies ??= []).push({ sourceId: source.sourceId, ...(notification ? { notificationId: id } : {}),
           sessionId: a.binding.sessionId, leaseEpoch: a.binding.leaseEpoch, recordedAt: stamp })
       }
       if (a.reviewFailureCode !== undefined) {
@@ -1799,6 +1812,16 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           if (occurrence?.action.kind === 'read-query' && !notification.sendPermit
             && Date.parse(stamp) - Date.parse(occurrence.result.observedAt) >= (occurrence.freshnessWindowMs ?? 300000)) fail('DYNAMIC_NOTIFICATION_RECOVERY_STALE')
         }
+        if (notification.kind === 'topic-reply' && notification.payload.humanRequests?.some(ref => {
+          const task = get('dynamic_tasks', ref.taskId, true)
+          const request = task?.humanRequests?.find(item => item.requestId === ref.requestId)
+          return !task || task.status !== 'active' || task.control !== 'active' || !request || request.status !== 'waiting-reply'
+            || request.requirementRevision !== task.requirementRevision || request.controlRevision !== task.controlRevision
+        })) {
+          notification.state = 'superseded'; notification.reason = 'stale_question'; notification.updatedAt = stamp
+          put('dynamic_notifications', notification)
+          return changed({ notification, topicFacts: topicFacts.requeueUnsent(notification) })
+        }
         const task = ['topic-reply','coordination'].includes(notification.kind) ? null : get('dynamic_tasks', notification.taskId)
         const request = notification.kind === 'question' && task.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)
         if (notification.kind === 'question' && (notification.requirementRevision !== task.requirementRevision || task.status !== 'active' || task.control !== 'active'
@@ -2035,6 +2058,23 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             }
           }
         }
+        if (args.topicFacts === true && recordsDecision && (kind === 'task.complete'
+          || kind === 'task.wait' && (args.action === 'blocked' || args.humanReply || args.audience === 'requester' || args.humanRequest?.audience === 'requester'
+            || triggers.some(trigger => trigger.kind === 'execution.stage.progress')))) {
+          const task = get('dynamic_tasks', args.binding.taskId)
+          value.topicFacts = topicFacts.record(task, kind === 'task.complete' ? 'completed' : args.humanReply ? 'followup' : args.question ? 'needs-input' : args.action === 'blocked' ? 'blocked' : 'progress',
+            value.taskDecision.decision, id, args.replyBindings)
+          if (args.humanReply) {
+            const followup = task.humanRequests.find(item => item.requestId === args.humanReply.requestId)?.followupReplies?.at(-1)
+            if (followup) followup.topicFactIds = value.topicFacts.map(fact => fact.id)
+          }
+          if (args.question && (args.audience ?? args.humanRequest?.audience) === 'requester') {
+            const request = task.humanRequests.find(item => item.requestId === args.humanRequest?.requestId)
+            if (request) request.topicFactIds = value.topicFacts.map(fact => fact.id)
+          }
+          saveTask(task)
+          value.result.task = task
+        }
         insertReceipt(db, id, requestDigest, canonical(value), value)
         return value
       }))
@@ -2043,6 +2083,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (closed) fail('DYNAMIC_STORE_CLOSED')
       record(q)
       let value
+      if (q.kind.startsWith('topic.fact.')) return clone(topicFacts.query(q))
       if(q.kind==='observer.work-metadata')return observerWorkMetadata(db,q)
       if(q.kind==='observer.revision')return `${incarnation}:${db.prepare('SELECT total_changes() n').get().n}`
       if(['observer.group-version','observer.group-metadata','observer.message-contexts'].includes(q.kind))return observerGroupQuery(db,q)

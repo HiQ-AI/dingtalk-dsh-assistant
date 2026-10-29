@@ -1,0 +1,266 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
+import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
+import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task-resident-runtime.js'
+import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import { createTopicFactHandler } from '../packages/dingtalk-dsh-assistant/topic-facts.js'
+import { createTopicCoordinator } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
+import { replyTopicForMessage } from '../packages/dingtalk-dsh-assistant/topic-model.js'
+import { projectTaskNotification } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
+import { deliverTaskNotification } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
+
+async function fixture(t) {
+  const root = await mkdtemp(join(tmpdir(), 'topic-facts-')), snapshot = { tables: {}, global: null }
+  const facility = new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
+    loadAll: async () => structuredClone(snapshot), close: async () => {},
+    async putRecord(table, key, value) { (snapshot.tables[table] ??= {})[key] = structuredClone(value) },
+    async deleteRecord(table, key) { delete snapshot.tables[table][key] },
+  } } } }) } } }, { backend: 'isolated' })
+  const resident = await openResidentStore(facility)
+  const config = { dbPath: join(root, 'facts.sqlite'), instanceId: 'fact-test' }
+  let ledger = await openDynamicTaskStore({ ...config, initialize: true }), sequence = 0
+  t.after(async () => { await ledger.close(); await resident.close(); await rm(root, { recursive: true, force: true }) })
+  const query = (kind, args = {}) => ledger.query({ kind, ...args })
+  const commit = (kind, args = {}, id = `cmd-${++sequence}`) => ledger.command({ id, kind, args })
+  await resident.subscribe({ groupId: 'group' })
+  await resident.ingest({ groupId: 'group', messageId: 'origin', text: '请核对两个结果', senderOpenDingTalkId: 'user', occurredAt: new Date().toISOString() })
+  await resident.routeMessages({ groupId: 'group', routeId: 'route', routingRevision: 0, routes: [{ messageId: 'origin', messageVersion: 1,
+    topics: [{ newTopicKey: 'existing', title: '核对结果' }] }] })
+  const topicId = resident.listTopics('group')[0].topicId
+  await resident.acceptTopicDecision({ groupId: 'group', topicId, revision: 1, decisionId: 'user-decision',
+    decision: { basisMessageIds: ['origin'], actions: [], reason: '记录需求', topicUpdate: { summary: '等待结果' } } })
+  await resident.completeTopicDecision({ groupId: 'group', topicId, decisionId: 'user-decision' })
+  await commit('source.record', { sourceId: 'source', groupId: 'group', messageId: 'origin', actorId: 'user', text: '请核对两个结果' })
+  const handler = createTopicFactHandler({ residentStore: resident, query, commit, signature: () => '',
+    onNotification: notification => projectTaskNotification({ residentStore: resident, notification }) })
+  const context = () => handler.context('group', resident.getTopic('group', topicId))
+  const submission = (ctx, id, reply) => ({ requestId: id, groupId: 'group', topicId, revision: resident.getTopic('group', topicId).revision,
+    factContext: ctx, decision: { actions: [], topicUpdate: { summary: '已核对结果' }, reason: '有新结论', ...(reply ? { reply } : {}) } })
+  const submit = request => handler.submit(request, Object.fromEntries(['requestId', 'topicId', 'revision', 'decision'].map(key => [key, request[key]])))
+  async function task(taskId, sourceIds = ['source']) {
+    await commit('task.create', { taskId, groupId: 'group', ownerActorId: 'user', title: '核对结果', request: '核对结果', sourceRefs: sourceIds,
+      topicRefs: [{ topicId, revision: 1 }], replyBindings: [{ groupId: 'group', topicId, sourceIds }] })
+    return (await commit('task.claim', { taskId })).result.binding
+  }
+  const finish = (binding, summary = '检查通过', id = `complete-${binding.taskId}`) => commit('task.complete', {
+    binding, summary, result: { summary, evidence: ['可回查的结果'], limitations: ['尚未部署'] }, topicFacts: true,
+  }, id)
+  return { root, resident, config, query, commit, handler, context, submission, submit, task, finish, topicId,
+    async reopen() { await ledger.close(); ledger = await openDynamicTaskStore(config) } }
+}
+
+test('完成与事实同事务，回复失败不影响完成；重启复用结论、沉默也消费事件', async t => {
+  const f = await fixture(t), a = await f.task('alpha'), b = await f.task('beta')
+  await assert.rejects(f.commit('task.complete', { binding: a, summary: 'invalid', topicFacts: true,
+    replyBindings: [{ groupId: 'other', topicId: f.topicId, sourceIds: ['source'] }] }), { code: 'TOPIC_REPLY_SOURCE_INVALID' })
+  assert.equal((await f.query('task.get', { taskId: 'alpha' })).status, 'active')
+  await Promise.all([f.finish(a), f.finish(b)])
+  assert.equal((await f.query('notification.list')).length, 0)
+  assert.ok((await f.query('task.list')).every(task => task.status === 'completed'))
+  await f.reopen()
+  const ctx = await f.context()
+  assert.equal(ctx.eventIds.length, 2)
+  const sub = f.submission(ctx, 'fact-decision', '两个结果均已核对，尚未部署。')
+  const apply = f.resident.applyTopicFactSummary
+  f.resident.applyTopicFactSummary = async () => { throw new Error('projection interruption') }
+  await assert.rejects(f.submit(sub), /projection interruption/)
+  assert.equal((await f.query('notification.list')).length, 1, '回复意图已随处理结论落库')
+  assert.equal(await f.context(), null)
+  f.resident.applyTopicFactSummary = apply
+  await f.reopen(); await f.handler.recover(); await f.handler.recover()
+  assert.equal(f.resident.getGroup('group').outbox.length, 1)
+  assert.equal(f.resident.getTopic('group', f.topicId).summary, '已核对结果')
+  assert.equal((await f.finish(a)).replayed, true)
+  const [notice] = await f.query('notification.list')
+  assert.deepEqual(notice.payload.taskIds, ['alpha', 'beta'])
+  assert.deepEqual(notice.payload.coveredEventIds, ctx.eventIds)
+  let sends = 0
+  const notifications = { send: async () => { sends++; throw new Error('transport uncertain') }, readback: async () => ({ messageId: 'dingtalk-result', visible: true }) }
+  await assert.rejects(deliverTaskNotification({ notification: notice, command: f.commit, notifications }), /transport uncertain/)
+  await f.reopen()
+  await f.commit('notification.recovery.start', { notificationId: notice.id,
+    expectedToken: (await import('../packages/dingtalk-dsh-assistant/notification-delivery.js')).taskNotificationRecovery(await f.query('notification.get', { notificationId: notice.id })).expectedToken })
+  await deliverTaskNotification({ notification: await f.query('notification.get', { notificationId: notice.id }), command: f.commit, notifications })
+  const delivered = await f.query('notification.get', { notificationId: notice.id })
+  assert.equal(sends, 1, 'unknown仅回查，不重新生成或发送')
+  assert.equal(delivered.payload.text, notice.payload.text)
+  await projectTaskNotification({ residentStore: f.resident, notification: delivered })
+  assert.equal(f.resident.getGroup('group').outbox[0].deliveredMessageId, 'dingtalk-result')
+  const later = await f.task('later'); await f.finish(later, '新增核对结论')
+  const next = await f.context(), silent = f.submission(next, 'silent')
+  assert.equal(next.input.replies.length, 1)
+  await f.submit(silent); await f.reopen(); await f.handler.recover()
+  assert.equal(await f.context(), null)
+  assert.equal((await f.query('notification.list')).length, 1)
+})
+
+test('旧事实请求不能覆盖已到达补充或任务新版本，新结论允许再回复', async t => {
+  const f = await fixture(t), a = await f.task('alpha')
+  await f.finish(a)
+  const ctx = await f.context(), sub = f.submission(ctx, 'stale', '已完成。')
+  await f.resident.ingest({ groupId: 'group', messageId: 'supplement', text: '先不要部署', senderOpenDingTalkId: 'user', occurredAt: new Date().toISOString() })
+  assert.equal((await f.submit(sub)).status, 'topic-stale')
+  await f.resident.routeMessages({ groupId: 'group', routeId: 'supplement-route', routingRevision: f.resident.getGroup('group').routingRevision,
+    routes: [{ messageId: 'supplement', messageVersion: 1, topics: [{ topicId: f.topicId }] }] })
+  assert.equal((await f.submit(sub)).status, 'topic-stale')
+  await f.resident.acceptTopicDecision({ groupId: 'group', topicId: f.topicId, revision: 2, decisionId: 'supplement-decision',
+    decision: { actions: [], reason: '保留限制', topicUpdate: { summary: '先不要部署' } } })
+  await f.resident.completeTopicDecision({ groupId: 'group', topicId: f.topicId, decisionId: 'supplement-decision' })
+  const current = await f.context()
+  assert.ok(current.input.recentMessages.some(item => item.text.includes('先不要部署')))
+  const reply = f.submission(current, 'fresh', '已核对，按补充要求保持未部署。')
+  await f.submit(reply)
+  const later = await f.task('beta'); await f.finish(later, '第二项也核对完成')
+  const followup = f.submission(await f.context(), 'later', '第二项已核对完成。')
+  await f.submit(followup)
+  assert.equal((await f.query('notification.list')).length, 2)
+})
+
+test('事实轮拒绝任何任务动作，引用已送达回复能反查 Topic', async t => {
+  const f = await fixture(t), a = await f.task('alpha'); await f.finish(a)
+  const texts = [], tools = new Map(), actions = []
+  const coordinator = createTopicCoordinator({ store: f.resident, taskFacts: f.handler, workflowPromptsEnabled: false,
+    getAgent: () => ({ steer: message => texts.push(message.content[0].text), whenIdle: () => new Promise(() => {}) }),
+    assertSession() {}, serializeTasks: run => run(), applyAction: action => actions.push(action), appendOutbox: () => {},
+    reviewCandidates: () => [], validateReplyReview() {}, onError: error => { throw error }, isClosing: () => false })
+  t.after(() => coordinator.close())
+  coordinator.register({ tools: { register: tool => tools.set(tool.name, tool) } }, 'group')
+  await Promise.all([coordinator.schedule('group'), coordinator.schedule('group')])
+  const envelopes = () => texts.map(text => JSON.parse(text.split('\n').find(line => line.startsWith('Topic 请求：')).slice('Topic 请求：'.length)))
+  const [request] = envelopes()
+  assert.equal(envelopes().length, 1)
+  assert.equal(request.trigger, 'task-facts')
+  const submit = decision => tools.get('group_decision_submit').execute({ requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision })
+  const decision = { actions: [], topicUpdate: { summary: '结果已核验' }, reason: '新结果', reply: '核对完成。' }
+  assert.equal((await submit({ ...decision, actions: [{ kind: 'new-task' }] })).status, 'invalid-arguments')
+  assert.equal((await submit(decision)).status, 'accepted')
+  assert.equal(actions.length, 0)
+  const [notice] = await f.query('notification.list')
+  await projectTaskNotification({ residentStore: f.resident, notification: { ...notice, state: 'delivered', receipt: { messageId: 'quoted-delivery' } } })
+  await f.resident.ingest({ groupId: 'group', messageId: 'followup', text: '这个结果还有一个问题', senderOpenDingTalkId: 'user',
+    quotedMessage: { messageId: 'quoted-delivery', content: '核对完成。' }, occurredAt: new Date().toISOString() })
+  await coordinator.schedule('group')
+  const route = envelopes().find(value => value.messages?.some(item => item.messageId === 'followup'))
+  assert.deepEqual(route.messages[0].quotedReply, { topicId: f.topicId, taskIds: ['alpha'], coveredEventIds: request.facts.map(f => f.eventId) })
+  assert.ok(route.relatedTopics.some(topic => topic.topicId === f.topicId))
+})
+
+test('默认事实上下文使用有界 SQL 投影，长执行材料不进入判断', async t => {
+  const f = await fixture(t)
+  const many = '执行全文不应加载'.repeat(100000)
+  await f.commit('source.record', { sourceId: 'long-source', groupId: 'group', messageId: 'long', actorId: 'user', text: many })
+  const a = await f.task('alpha', ['long-source']), b = await f.task('beta')
+  await f.finish(a, many); await f.finish(b, many)
+  await f.task('related-active')
+  const prepare = DatabaseSync.prototype.prepare, statements = []
+  t.mock.method(DatabaseSync.prototype, 'prepare', function(sql) { statements.push(sql); return prepare.call(this, sql) })
+  const ctx = await f.context()
+  assert.equal(statements.length, 4)
+  assert.ok(statements.every(sql => /LIMIT\s+\d+/i.test(sql) && !/SELECT\s+(?:\*|body)\s+FROM/i.test(sql)))
+  assert.ok(ctx.input.tasks.some(task => task.taskId === 'related-active'))
+  assert.ok(ctx.metrics.queryResultBytes < 40 * 1024)
+  assert.ok(ctx.metrics.contextBytes <= 22 * 1024)
+  assert.ok(!JSON.stringify(ctx.input).includes(many))
+  t.diagnostic(JSON.stringify({ ...ctx.metrics, sourceBytes: Buffer.byteLength(many), measuredStatements: statements.length }))
+})
+
+test('历史归属只取有效来源，移除与合并记录不广播历史 topicRefs', () => {
+  const message = { messageId: 'm', messageVersion: 1, sequence: 1 }
+  const entry = { messageId: 'm', messageVersion: 1, unitId: 'u', unitRevision: 1, action: 'add', revision: 1, effectOwner: true }
+  const group = { messages: [message], topics: [{ topicId: 'old', revision: 2, entries: [entry, { ...entry, action: 'remove', revision: 2 }] },
+    { topicId: 'current', revision: 1, entries: [entry] }] }
+  assert.equal(replyTopicForMessage(group, message), 'current')
+  group.topics[0].mergedInto = 'current'
+  assert.equal(replyTopicForMessage(group, { ...message, replyTopicId: 'old' }), 'current')
+  assert.equal(replyTopicForMessage(group, { ...message, replyTopicId: 'deleted' }), null)
+})
+
+for (const answeredBeforeDecision of [true, false]) test(`旧问题失效不会吞掉混合完成事实：接纳前答复=${answeredBeforeDecision}`, async t => {
+  const f = await fixture(t), question = await f.task('question'), done = await f.task('done')
+  await f.finish(done)
+  await f.commit('task.wait', { binding: question, action: 'wait', summary: '等待日期', question: '请确认日期', topicFacts: true,
+    humanRequest: { requestId: 'date', audience: 'requester', reason: '缺少日期' } })
+  await f.commit('task.drained', { binding: question })
+  const answer = async () => {
+    await f.commit('source.record', { sourceId: 'answer', groupId: 'group', messageId: 'answer-message', actorId: 'user', text: '明日', channel: 'im' })
+    await f.commit('task.human.respond', { taskId: 'question', requestId: 'date', sourceId: 'answer', expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  }
+  const before = await f.context()
+  if (answeredBeforeDecision) {
+    await answer()
+    assert.equal((await f.submit(f.submission(before, 'stale-question', '结果已完成，请确认日期。'))).status, 'topic-stale')
+  }
+  const context = await f.context()
+  if (answeredBeforeDecision) assert.equal(context.input.facts.find(fact => fact.kind === 'needs-input').questionState, 'resolved')
+  await f.submit(f.submission(context, 'mixed-result', '另一项核对完成。'))
+  const [notice] = await f.query('notification.list')
+  if (!answeredBeforeDecision) await answer()
+  const started = await f.commit('notification.start', { notificationId: notice.id })
+  if (answeredBeforeDecision) assert.equal(started.dispatchEligible, true)
+  else {
+    assert.equal(started.result.notification.state, 'superseded')
+    assert.deepEqual(started.result.topicFacts.map(fact => fact.taskId), ['done'])
+    await f.reopen()
+    const retry = await f.context()
+    assert.notEqual(retry.generation, context.generation)
+    assert.deepEqual(retry.eventIds, context.input.facts.filter(fact => fact.taskId === 'done').map(fact => fact.eventId))
+    await f.submit(f.submission(retry, 'retained-result', '另一项核对完成。'))
+    assert.equal((await f.commit('topic.fact.projected', { factId: retry.eventIds[0], decisionId: 'mixed-result' }, 'late-old-projection')).result.status, 'superseded')
+    assert.deepEqual(await f.query('topic.fact.projections'), [], '同一事件重排后投影新决定，不能重放旧投影收据')
+    await f.reopen()
+    assert.deepEqual(await f.handler.recover(), [])
+    const current = (await f.query('notification.list')).find(item => item.id !== notice.id)
+    assert.equal((await f.commit('notification.start', { notificationId: current.id })).dispatchEligible, true)
+    assert.equal((await f.query('task.get', { taskId: 'done' })).status, 'completed')
+  }
+})
+
+test('待处理事实阻止取消订阅，单条投影故障不阻断其余恢复', async t => {
+  const f = await fixture(t), a = await f.task('first')
+  const runtime = await openTaskResidentRuntime({ agentDefaultModel: { currentSelection: () => ({ provider: 'fixture', model: 'fixture' }) } }, f.resident, f.root)
+  runtime.hasPendingTopicFacts = groupId => f.query('topic.fact.unsettled', { groupId })
+  await f.finish(a)
+  await assert.rejects(runtime.unsubscribe({ groupId: 'group' }), /group_has_pending_topic_facts/)
+  const apply = f.resident.applyTopicFactSummary
+  f.resident.applyTopicFactSummary = async () => { throw new Error('projection temporarily unavailable') }
+  await assert.rejects(f.submit(f.submission(await f.context(), 'first-result', '第一项已完成。')), /projection temporarily unavailable/)
+  await assert.rejects(runtime.unsubscribe({ groupId: 'group' }), /group_has_pending_topic_facts/)
+  const b = await f.task('second'); await f.finish(b)
+  await assert.rejects(f.submit(f.submission(await f.context(), 'second-result', '第二项已完成。')), /projection temporarily unavailable/)
+  f.resident.applyTopicFactSummary = async decision => {
+    if (decision.requestId === 'first-result') throw new Error('projection temporarily unavailable')
+    return apply(decision)
+  }
+  assert.equal((await f.handler.recover()).length, 1)
+  assert.equal(f.resident.getGroup('group').outbox.length, 1, '故障事实不阻断其他已接纳回复的恢复')
+  f.resident.applyTopicFactSummary = apply
+  assert.deepEqual(await f.handler.recover(), [])
+  assert.equal(f.resident.getGroup('group').outbox.length, 2)
+  assert.equal(await f.query('topic.fact.unsettled', { groupId: 'group' }), false)
+})
+
+test('归档后仍以有界投影提供待处理任务状态和已送达回复', async t => {
+  const f = await fixture(t), a = await f.task('archived')
+  await f.finish(a); await f.commit('task.drained', { binding: a })
+  await f.commit('task.archive', { taskId: a.taskId, actorId: 'operator' })
+  const ctx = await f.context()
+  assert.ok(ctx.input.tasks[0].archivedAt)
+  await f.submit(f.submission(ctx, 'archived-result', '结果已核验。'))
+  const [notice] = await f.query('notification.list')
+  await deliverTaskNotification({ notification: notice, command: f.commit,
+    notifications: { send: async () => ({ messageId: 'archived-delivery' }), readback: async () => ({ messageId: 'archived-delivery', visible: true }) } })
+  // Archive a second completed task together with its already delivered reply.
+  const b = await f.task('later'); await f.finish(b); await f.commit('task.drained', { binding: b })
+  await f.submit(f.submission(await f.context(), 'later-result', '新增结果已核验。'))
+  const second = (await f.query('notification.list')).find(item => item.id !== notice.id)
+  await deliverTaskNotification({ notification: second, command: f.commit,
+    notifications: { send: async () => ({ messageId: 'later-delivery' }), readback: async () => ({ messageId: 'later-delivery', visible: true }) } })
+  await f.commit('task.archive', { taskId: b.taskId, actorId: 'operator' })
+  const replies = await f.query('topic.fact.replies', { groupId: 'group', topicId: f.topicId })
+  assert.deepEqual(new Set(replies.map(reply => reply.deliveredMessageId)), new Set(['archived-delivery', 'later-delivery']))
+})

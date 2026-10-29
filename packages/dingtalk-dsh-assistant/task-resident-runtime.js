@@ -130,6 +130,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
     async unsubscribe({ groupId }) {
       const tasks = await api.listTaskView?.() ?? []
       if (tasks.some(task => task.groupId === groupId && !['completed','cancelled'].includes(task.state))) throw new Error('group_has_active_tasks')
+      if (await api.hasPendingTopicFacts?.(groupId)) throw new Error('group_has_pending_topic_facts')
       const result = await store.removeGroup({ groupId })
       for (const listener of unsubscribed) await listener({ groupId })
       return result

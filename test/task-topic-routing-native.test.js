@@ -179,7 +179,8 @@ testRunner('native revised Topic supplies current linked Task reads without resc
       if (names.includes('group_decision_submit')) {
         assert.equal(input.linkedTasks.total, 1)
         assert.equal(input.linkedTasks.reads[0].taskId, taskId)
-        assert.deepEqual(input.linkedTasks.snapshots, [], '大正文不能被截成貌似完整的目标')
+        assert.equal(input.linkedTasks.snapshots[0].summary, '等待后续资料')
+        assert.equal(input.linkedTasks.snapshots[0].objective, undefined, '首包只含状态摘要，完整目标按需读')
         const full = modelToolValues(request).flatMap(value => value.tasks ?? []).find(task => task.taskId === taskId && task.objective)
         if (!full) { contextReads++; return [call(input.linkedTasks.reads[0].readCall.name, input.linkedTasks.reads[0].readCall.arguments)] }
         assert.equal(full.objective, '必须完整核验的原目标'.repeat(800))
@@ -261,6 +262,7 @@ testRunner('native batch followup reopens each original completed task and sessi
   const reopenedInputs = []
   const h = await extraHost(t, 'task-batch-followup-', async (request, host) => {
     const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (input.trigger === 'task-facts') return topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
       assert.ok(JSON.stringify(request).includes('批量事项即使由新协调 Topic 承接'))
       if (!values.some(value => Array.isArray(value.tasks))) return [call('group_task_list', { limit: 100 })]
@@ -502,6 +504,7 @@ testRunner('native Topic handoff keeps the explicit requester as task and comple
   const reviewed = new Set()
   const h = await extraHost(t, 'task-topic-owner-', async (request, host) => {
     const names = request.tools.map(tool => tool.name)
+    if (latestInput(request).trigger === 'task-facts') return topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
       const input = envelope(request, '[GROUP_TOPIC_ROUTE]')
       const existing = host.residentStore.listTopics('native-group')[0]
@@ -536,12 +539,15 @@ testRunner('native Topic handoff keeps the explicit requester as task and comple
   assert.equal(task.ownerActorId, 'native-user')
   assert.equal(task.metadata.authorizationSourceId, handoff.sourceId)
   assert.equal(h.residentStore.listTopics('native-group').length, 1)
-  const completion = (await h.query('notification.list')).find(item => item.kind === 'completion')
-  assert.ok(completion, 'Native task completion must prepare its real notification')
+  const completion = (await h.query('notification.list')).find(item => item.payload.coveredEventIds?.length)
+  if (!completion) t.diagnostic(JSON.stringify({ alerts: h.service.listAlerts(), binding: task.replyBindings,
+    pending: await h.query('topic.fact.pending', { groupId: task.groupId, topicId: task.replyBindings?.[0]?.topicId }),
+    errors: h.toolResults.filter(item => item.result?.isError).map(item => ({ name: item.name, result: item.result })) }))
+  assert.ok(completion, 'Topic must consume the completed fact and prepare its reply')
   assert.equal(completion.payload.sourceMessageId, 'explicit-handoff')
   assert.equal(completion.payload.actorId, 'native-user')
   assert.equal(completion.payload.replyToMessageId, 'explicit-handoff')
-  assert.ok(h.sent.some(item => item.kind === 'completion' && item.payload.sourceMessageId === 'explicit-handoff'))
+  assert.ok(h.sent.some(item => item.payload.coveredEventIds?.length && item.payload.sourceMessageId === 'explicit-handoff'))
 })
 
 for (const committed of [false, true]) testRunner(`replan fences an execution claim ${committed ? 'after commit' : 'before commit'}`, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {

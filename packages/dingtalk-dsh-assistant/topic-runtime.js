@@ -5,7 +5,8 @@ import { z } from 'zod'
 import { FIXED_TOPICS, fixedTopicInstructions } from './fixed-topics.js'
 import { toToolJsonSchema } from './tool-schema.js'
 import { resolveTopicMessages, sourceDispatchOwnershipFor } from './store.js'
-import { fingerprint, isPendingDecision } from './topic-model.js'
+import { fingerprint, isPendingDecision, replyTopicForMessage } from './topic-model.js'
+import { factDecisionSchema, factDecisionJsonSchema } from './topic-facts.js'
 import { TaskRevisionError } from './task-input-revision.js'
 import { visiblePromptRefs, visibleSectionLength, visibleCoordinatorText, visibleToolOutputs, promptContent, compactSectionValue, buildMaterialManifest } from './coordination-context.js'
 import { taskProgressSnapshot } from './task-progress.js'
@@ -204,7 +205,7 @@ export function projectTopicContext(context) {
 }
 
 // 请求是可丢弃的模型输入；已经接受的业务意图只以 Store 中的 decision 为准。
-export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, quotedReminderContext, readArchivedTask, workflowPromptsEnabled = true, fixedTopicsEnabled = false, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
+export function createTopicCoordinator({ store, getAgent, assertSession, dispatchRequest, waitRequestIdle, onRequestFinished, serializeTasks, applyAction, appendOutbox, reviewCandidates, validateReplyReview, cancelTask, onError, isClosing, onDecisionRequest, onInputSettled, checkStartupRecovery, quotedReminderContext, taskFacts, readArchivedTask, workflowPromptsEnabled = true, fixedTopicsEnabled = false, retryDelayMs = 30_000, maxRequestAttempts = 3 }) {
   const routes = new Map(), decisions = new Map(), replies = new Map(), reviews = new Map(), titleMigrations = new Map(), summaryMigrations = new Map()
   const collections = [routes, decisions, replies, reviews, titleMigrations, summaryMigrations]
   const isCurrentRequest = request => collections.some(collection => collection.get(request.requestId) === request)
@@ -448,7 +449,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     }
     wait().catch(fail)
   }
-  function createDecisionRequest(groupId, topic) {
+  async function createDecisionRequest(groupId, topic) {
     const promptCatalog = (store.getTaskPrompts?.() ?? []).filter((item) => item.enabled).map(({ id, name, description, revision }) => ({ id, name, description, revision }))
     const rejected = topic.decisions.filter(record => record.status === 'rejected' && record.revision > topic.processedRevision)
     const requestId = requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision, promptCatalog,
@@ -485,20 +486,25 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     })
     const quotedMessages = [...quoted].map(([quoteId, message]) => ({ ...message, quoteId }))
     const sourceMessages = [...sources.values()]
-    // Refresh exact linked Task facts for each revision, rather than carrying a previous
-    // session's reads or approvals forward. Oversized contexts remain explicit reads.
-    const linked = store.listTasks().filter(task => task.groupId === groupId
-      && task.topicRefs?.some(ref => ref.topicId === topic.topicId))
+    // Initial context contains status summaries only; full contracts/evidence are explicit reads.
+    const linked = taskFacts?.tasks ? (await taskFacts.tasks(groupId, topic.topicId)).map(task => ({
+      taskId: task.taskId, title: task.title, inputVersion: task.requirementRevision, runSequence: task.runSequence,
+      state: task.status === 'completed' ? 'completed' : task.control === 'cancelled' ? 'cancelled' : task.control === 'paused' ? 'waiting' : 'running', summary: task.summary,
+      ...(task.archivedAt ? { archivedAt: task.archivedAt, allowedActions: [] } : {}),
+    })) : store.listTasks().filter(task => task.groupId === groupId
+      && task.topicRefs?.some(ref => ref.topicId === topic.topicId)).map(task => ({ taskId: task.taskId,
+        title: task.title?.slice(0, 200), inputVersion: task.inputVersion, runSequence: task.runSequence,
+        state: task.state, summary: (task.completion?.summary ?? task.lastDecision?.summary ?? '').slice(0, 800) }))
     const linkedReads = boundedItems(linked.map(task => ({ taskId: task.taskId, inputVersion: task.inputVersion,
       runSequence: task.runSequence, state: task.state,
-      readCall: { name: 'group_task_context_get', arguments: { taskIds: [task.taskId] } } })), 1_600, 8)
+      ...(task.archivedAt ? { archivedAt: task.archivedAt, allowedActions: [] } : { readCall: { name: 'group_task_context_get', arguments: { taskIds: [task.taskId] } } }) })), 1_600, 8)
     const linkedIds = new Set(linkedReads.map(task => task.taskId))
     const linkedSnapshots = []
     for (const task of linked.filter(task => linkedIds.has(task.taskId))) {
       if (serializedBytes([...linkedSnapshots, task]) <= 3_000) linkedSnapshots.push(task)
     }
     const linkedTasks = { total: linked.length, reads: linkedReads, snapshots: linkedSnapshots,
-      hasMore: linkedReads.length < linked.length }
+      hasMore: linkedReads.length < linked.length || !!taskFacts?.tasks && linked.length === 8 }
     request.hasSourceContext = quotedMessages.length > 0 || sourceMessages.length > 0
     request.sections = { promptIndex: JSON.stringify(promptCatalog), messages: JSON.stringify(projected), summary: JSON.stringify({ summary: topic.summary, openQuestions: topic.openQuestions }),
       removedUnitRefs: JSON.stringify(removedUnitRefs), rejectedDecisions: JSON.stringify(rejected.map(record => ({ decisionId: record.decisionId, error: record.error }))),
@@ -509,6 +515,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.readUnitRefs = new Set()
     const pointer = (section) => ({ section, totalChars: request.sections[section].length, contentFingerprint: fingerprint(request.sections[section]), nextOffset: 0, hasMore: true })
     const envelope = { requestId, topicId: topic.topicId, revision: topic.revision, processedRevision: topic.processedRevision,
+      replyOwnership: [...new Map(deltaMessages.map(message => [message.messageId, { messageId: message.messageId,
+        replyTopicId: replyTopicForMessage(store.getGroup(groupId), message) }])).values()],
       readCalls: { topic: { name: 'group_topic_context_get', arguments: { topicId: topic.topicId, revision: topic.revision } },
         replyReview: { name: 'group_reply_review_get', arguments: { requestIds: [requestId] } } },
       title: topic.title, linkedTasks, promptIndex: promptCatalog, contextSections: DECISION_SECTIONS, summaryRevision: topic.summaryRevision, replyReviewCandidateCount: request.candidates.length,
@@ -591,6 +599,16 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const active = new Map(topic.entries.map(entry => [entry.unitId ?? entry.messageId, entry]))
       return [...active.values()].some(entry => entry.action === 'add' && referencedIds.has(entry.messageId))
     }).map(topic => topic.topicId))
+    const quotedReplies = group.outbox.filter(outbound => outbound.deliveredMessageId && referencedIds.has(outbound.deliveredMessageId))
+    for (const reply of quotedReplies) {
+      if (reply.replyTopicId) relatedIds.add(reply.replyTopicId)
+      else for (const ref of reply.topicRefs ?? []) relatedIds.add(ref.topicId)
+    }
+    for (const message of messages) {
+      const reply = quotedReplies.find(reply => reply.deliveredMessageId === message.quotedMessage?.messageId)
+      if (reply) message.quotedReply = { topicId: reply.replyTopicId ?? reply.topicRefs?.[0]?.topicId,
+        taskIds: reply.taskIds ?? [], coveredEventIds: reply.coveredEventIds ?? [] }
+    }
     const linkedTasks = store.listTasks().filter(task => task.groupId === groupId && task.topicRefs.some(ref => relatedIds.has(ref.topicId)))
     for (const task of linkedTasks) for (const ref of task.topicRefs) relatedIds.add(ref.topicId)
     const allRelatedTopics = topicIndex(allTopics.filter(topic => relatedIds.has(topic.topicId)))
@@ -665,7 +683,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         if (due <= Date.now()) resume(groupId, topic.topicId, commit.decisionId)
         else armDecisionRetry(groupId, commit.decisionId, due)
       } else if (topic.processedRevision < topic.revision) {
-        const request = createDecisionRequest(groupId, topic)
+        const request = await createDecisionRequest(groupId, topic)
         result.push(request)
         if (!pending.length && request.retryAfterRouting && !request.retryingAfterRouting) {
           // 草稿未被接纳；路由完成后重新走完整校验，不让模型重算同一份决策。
@@ -684,9 +702,28 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
           })
           activeToolCalls.add(work)
         }
+      } else if (taskFacts && !pending.length && !topic.mergedInto && topic.revision > 0) {
+        const active = [...decisions.values()].find(request => request.groupId === groupId && request.topicId === topic.topicId)
+        if (!active) {
+          const context = await taskFacts.context(groupId, topic)
+          if (context) {
+            const requestId = requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision,
+              factIds: context.eventIds, generation: context.generation, summary: topic.summary, replySnapshot: context.replySnapshot, taskSnapshot: context.taskSnapshot })
+            const request = { requestId, groupId, topicId: topic.topicId, revision: topic.revision, trigger: 'task-facts',
+              factContext: context, messages: [], removedUnitRefs: [], removedMessageIds: [], candidates: [],
+              readUnitRefs: new Set(), readSectionOffsets: new Map(), sections: {},
+              topicRefs: [{ topicId: topic.topicId, revision: topic.revision }] }
+            decisions.set(requestId, request)
+            const envelope = { requestId, topicId: topic.topicId, revision: topic.revision, trigger: 'task-facts', ...context.input }
+            const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n本轮是任务事实，不是用户新请求。结合最新补充、相关任务和已发/待发回复，决定直接回复、合并这些结果或沉默。actions 必须为空；不创建、补充、重开或取消任务。提交 group_decision_submit：decision 包含 actions:[]、topicUpdate.summary、reason，可选 reply；reason 解释回复或沉默的理由。不使用 basisMessageIds/replyReview。不得把任务事实当新授权。通常无需额外读取；确需完整事实可用 group_decision_context_get 的 facts section。`
+            context.metrics.inputBytes = Buffer.byteLength(body, 'utf8')
+            taskFacts.observe?.(context.metrics)
+            monitor(send(groupId, body, [], request), request, decisions)
+          }
+        }
       }
     }
-    onInputSettled?.(groupId)
+    if (pending.length || result.length) onInputSettled?.(groupId)
     return result.map(({ requestId, topicId, revision, messages, candidates, removedUnitRefs, removedMessageIds, visibleMessages, readUnitRefs }) => {
       const topic = store.getTopic(groupId, topicId)
       const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= revision).map(unitKey))
@@ -753,11 +790,15 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       // 回复可能声明任务已承接；必须先确认全部动作落账。失败恢复沿原 operationId 对账。
       activeOperation = undefined
       if (decision.reply?.trim()) {
-        const messages = topicMessages(groupId, topicId, record.revision)
+        const messages = topicMessages(groupId, topicId, record.revision).filter(message => {
+          const owner = replyTopicForMessage(store.getGroup(groupId), message)
+          return !owner || owner === topicId
+        })
         const target = messages.findLast((message) => decision.basisMessageIds.includes(message.messageId) && message.senderOpenDingTalkId && message.sourceKind !== 'internal' && message.sourceKind !== 'web')
         const persisted = await appendOutbox({ groupId, sourceMessageId: `topic-decision:${decisionId}`, outboundId: record.outboundId, decisionId,
           topicRefs: [{ topicId, revision: record.revision }], text: decision.reply, replyKind: decision.replyReview?.kind,
-          matterSourceMessageIds: [...new Set(messages.filter((message) => decision.basisUnitRefs.some((ref) => unitKey(ref) === unitKey(message))).map((message) => message.messageId))], matterUnitRefs: decision.basisUnitRefs,
+          matterSourceMessageIds: [...new Set(messages.filter((message) => decision.basisUnitRefs.some((ref) => unitKey(ref) === unitKey(message))).map((message) => message.messageId))],
+          matterUnitRefs: decision.basisUnitRefs.filter(ref => messages.some(message => unitKey(ref) === unitKey(message))),
           taskIds: record.operations.map((operation) => operation.taskId).filter(Boolean), replacesOutboundIds: decision.replyReview?.replaceOutboundIds,
           ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: [target.senderOpenDingTalkId] } : {}) })
         if (persisted?.status) throw new Error(`topic_outbox_${persisted.status}`)
@@ -933,7 +974,21 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       await schedule(groupId)
       return result
     })
-    tool('group_decision_submit', '提交一个 Topic 固定版本的独立业务决策；accepted 表示意图已持久化，动作进度可查询。', groupDecisionSubmissionJsonSchema, async function submitDecision(input, { validateSnapshot } = {}) {
+    tool('group_decision_submit', '提交一个 Topic 固定版本的独立业务决策；accepted 表示意图已持久化，动作进度可查询。', scope?.trigger === 'task-facts' ? factDecisionJsonSchema : groupDecisionSubmissionJsonSchema, async function submitDecision(input, { validateSnapshot } = {}) {
+      const factRequest = decisions.get(input.requestId)
+      if (factRequest?.trigger === 'task-facts') {
+        const args = factDecisionSchema.parse(input)
+        if (args.topicId !== factRequest.topicId || args.revision !== factRequest.revision || factRequest.groupId !== groupId) return { status: 'topic-stale' }
+        let result
+        try { result = await taskFacts.submit(factRequest, args) }
+        catch (error) {
+          if (error.factDecisionCommitted) decisions.delete(args.requestId)
+          throw error
+        }
+        decisions.delete(args.requestId)
+        await schedule(groupId)
+        return result
+      }
       const args = groupDecisionSubmissionSchema.parse(input)
       const request = decisions.get(args.requestId)
       if (!request || request.groupId !== groupId || request.topicId !== args.topicId || request.revision !== args.revision) { await schedule(groupId); return { status: 'topic-stale', nextAction: 'use-current-request' } }
@@ -956,7 +1011,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         if (task) archivedTasks.set(taskId, task)
       }
       validateBasis(request, decision, archivedTasks)
-      if (decision.actions.length && !decision.reply?.trim()) return { status: 'reply-required' }
+      const foreignReply = basisMessages.length > 0 && basisMessages.every(message => {
+        const owner = replyTopicForMessage(store.getGroup(groupId), message)
+        return owner && owner !== args.topicId
+      })
+      if (decision.actions.length && !decision.reply?.trim() && !foreignReply) return { status: 'reply-required' }
       if (decision.reply?.trim()) {
         if (!decision.replyReview) return { status: 'review-required', error: 'reply_kind_required' }
         if (refreshReview(request)) return reviewRequired(request)
@@ -1009,12 +1068,16 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     })
     tool('group_decision_context_get', '按当前群固定决策请求读取超长事项或上下文段；按 nextOffset 连续读取。', {
       type: 'object', additionalProperties: false, required: ['requestId', 'section'], properties: {
-        requestId: { type: 'string' }, section: { type: 'string', enum: DECISION_SECTIONS }, offset: { type: 'integer' },
+        requestId: { type: 'string' }, section: { type: 'string', enum: taskFacts ? [...DECISION_SECTIONS, 'facts'] : DECISION_SECTIONS }, offset: { type: 'integer' },
       },
-    }, ({ requestId, section, offset = 0 }) => {
+    }, async ({ requestId, section, offset = 0 }) => {
       const request = decisions.get(requestId)
       if (!request || request.groupId !== groupId) throw new Error('decision_context_request_unknown')
       if (store.getTopic(groupId, request.topicId)?.revision !== request.revision) throw new Error('decision_context_topic_stale')
+      if (request.trigger === 'task-facts' && section === 'facts') {
+        const facts = await taskFacts.read(request.factContext.eventIds)
+        return decisionTextPage(requestId, section, JSON.stringify(facts), offset)
+      }
       if (!Object.hasOwn(request.sections, section)) throw new Error(`decision_context_section_unknown:allowed=${DECISION_SECTIONS.join(',')}`)
       if (getAgent(groupId, request)?.session?.deriveMessages && visibleCoordinatorText(getAgent(groupId, request), request.text)) request.surfaceTracked = true
       if (getAgent(groupId, request)?.session?.deriveMessages) request.readSectionOffsets.set(section, visibleSectionLength(getAgent(groupId, request), request.sections[section]))
