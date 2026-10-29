@@ -11,9 +11,9 @@
 - `packages/dingtalk-dsh-assistant/decision.js:42`：回复分支新增 `replyToMessageId` / `atOpenDingTalkIds`；附件不可用的自动失败回复保留显式路由。不回复分支仍独立且严格。
 - `packages/dingtalk-dsh-assistant/topic-runtime.js:1039`：持久接纳前复用 `replyRouting`，限定固定 Topic 消息、回复归属及唯一参与者；执行不再使用最后 basis 作者。共享消息属于其他 Topic 时保留原 `reply-owned-by-other-topic` 拒绝合同。
 - `packages/dingtalk-dsh-assistant/task-topic-coordinator.js`：说明纠正本助手沟通对象不等于把业务交给他人，不取消原任务，也不放宽已有任务授权。
-- `packages/dingtalk-dsh-assistant/task-session-service.js:728`：公共 outbox 边界核对冻结 notification/outbox 的群、Topic/revision、可用任务身份和正文/引用/@；prepared、notification-only 投影和仅 outbox 场景沿原冻结路由恢复，避免旧正文混新对象。
-- `packages/dingtalk-dsh-assistant/task-session-service.js:795`：格式化后恢复已经验证的 @ 集合，避免 formatter 的单目标默认值覆盖多收件人。
-- `packages/dingtalk-dsh-assistant/task-session-service.js:1332`：独立通知 scanner 在 prepared 或明确未发送可重试状态，同样按原 decision revision、outbound 和 `record.operations` 派生的 taskIds 核对冻结身份，防止决定已阻断但 scanner 仍错误发送。unknown/starting 仍只回读，delivered 不重发。
+- `packages/dingtalk-dsh-assistant/task-session-service.js:739`：公共 outbox 边界核对冻结 notification/outbox 的群、Topic/revision、可用任务身份和正文/引用/@；prepared、notification-only 投影和仅 outbox 场景沿原冻结路由恢复，避免旧正文混新对象。
+- `packages/dingtalk-dsh-assistant/task-session-service.js:806`：格式化后恢复已经验证的 @ 集合，避免 formatter 的单目标默认值覆盖多收件人。
+- `packages/dingtalk-dsh-assistant/task-session-service.js:1334`：独立通知 scanner 在 prepared 或明确未发送可重试状态，同样按原 decision revision、outbound 和 `record.operations` 派生的 taskIds 核对冻结身份，防止决定已阻断但 scanner 仍错误发送。unknown/starting 仍只回读，delivered 不重发。
 
 明确目标后，省略或显式空 @ 数组均沿既有合同默认 @ 目标作者；非空数组必须唯一且来自固定 Topic 参与者。纯 web/internal 可无真人目标，但不因此增加群外发权限。没有完整冻结证据的旧无路由 pending 决定保守阻断，不根据当前消息顺序补猜对象。
 
@@ -43,7 +43,7 @@ schema 暴露已有消息和参与者 ID，Host 不从展示名猜身份；是�
 
 路由非法时在 decision/operation 接纳前返回可纠正参数错误，不先执行业务再发现外发对象不合法。
 
-`packages/dingtalk-dsh-assistant/task-session-service.js:795`
+`packages/dingtalk-dsh-assistant/task-session-service.js:806`
 
 ```js
       args = { ...args, ...reply, atOpenDingTalkIds: previous ? previous.atOpenDingTalkIds ?? [] : args.atOpenDingTalkIds ?? [] }
@@ -67,6 +67,17 @@ schema 暴露已有消息和参与者 ID，Host 不从展示名猜身份；是�
 - [x] 通知恢复代表路径：指定 native profile 执行 `node --test --test-name-pattern='notification service manual unknown recovery is readback-only|manual notification recovery of starting and legacy guard-unknown remains readback-only|deferred service confirmation persists ACK, recovers after restart and never resends|native service reopens an unknown notification for readback without resending' test/task-session-http-integration.test.js test/task-notification-delivery.test.js test/task-session-service-native.test.js`：6 pass / 0 fail / 0 cancelled / 0 skip，13724.6618 ms，exit 0。starting/unknown 只回读、ACK 重启不重发，native unknown 不重放已完成业务；不代表全部通知组合或实际钉钉送达。
 - [x] 材料历史真实 group ingest/helper 路径：`test/task-session-material-history.test.js` 的 `source text and actual attachment bytes are materialized` 在全新临时工作目录运行，1 pass / 0 fail / 0 cancelled / 0 skip，5968.4886 ms，exit 0；源文本及附件材料复用而不重复下载。完整隔离执行命令见验收 round-14。
 - [ ] 真实 LLM 自然语言消歧、真实钉钉送达、正式数据库及进程 crash 验收：未执行，不属于本次本地受控验证结论。
+
+### 最新 main 整合
+
+PR 创建后 main 推进到 `fd631460`（协调退役与轻量 inbox 投影），GitHub 回读曾为 `CONFLICTING`，因此重开交付。采用正常合并 main 到本修复分支，不 force-push、不合并 PR。冲突文件以最新 main 为底，仅叠加本任务 `readFrozenReply` 参数/透传及语义收件人指令，保留主干进度查询和协调退役合同；service、README、ops 自动合并也复核两侧语义。
+
+- [x] 稳定整合版本语义回归：`node --test --test-name-pattern='多依据普通回复应指向语义接收人|普通回复只接受固定Topic真人来源|普通回复省略或明确空收件人|引用已送达助手回复的对象纠正|引用其他人消息或外群助手消息不取得本群回复归属|旧决定已应用取消动作后恢复' test/topic-runtime.test.js`：12 pass / 0 fail / 0 cancelled / 0 skip，1608.2497 ms，exit 0。
+- [x] 主干协调退役兼容：`node --test test/coordination-retirement.test.js`：2 pass / 0 fail / 0 cancelled / 0 skip，1632.8269 ms，exit 0；保留主干退役合同，不重引旧协调提示。
+- [x] 稳定整合版本 native 多 @ / 四种冻结恢复：指定 native profile 执行 `node --test --test-name-pattern='普通回复显式多收件人贯穿原生通知格式化|旧回复冻结恢复' test/task-topic-routing-native.test.js`：5 pass / 0 fail / 0 cancelled / 0 skip，11681.9089 ms，exit 0；覆盖 prepared、projected 及 revision/taskIds 冲突零发送。
+- [x] service 自动合并涉及的 inbox 资源释放代表：`node --test --test-name-pattern='inbox projection startup failure releases the ledger and runtime listeners for retry' test/task-session-http-integration.test.js`：1 pass / 0 fail / 0 cancelled / 0 skip，1830.9759 ms，exit 0；启动坏库失败后释放 ledger/listeners，随后重试成功，不代表全部 inbox 投影。
+
+以上是更正后稳定版本的真实验证；此前被拒绝的中间解法上的通过仅作历史，不代替最终版本。独立审查确认已审合并路径暂无剩余已证阻断。其余已列测试保留为对应原基线的真实证据，不声称均在最新 main 全部重跑。
 
 ## 风险与边界
 

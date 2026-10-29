@@ -35,7 +35,7 @@ export function taskIndexPage(tasks, offset, limit, query = '') {
 }
 
 // Topic owns routing and decision receipts; this adapter only supplies native request sessions.
-export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, readFrozenReply, readPlatformTasks, readArchivedTask, readMentioned, validateReply, quotedReminderContext, taskFacts, coordinationEnabled = false, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
+export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, readFrozenReply, readPlatformTasks, readArchivedTask, readMentioned, validateReply, quotedReminderContext, taskFacts, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
   const fixedTopics = readPlatformTasks ? createFixedTopicHandler({ ctx, store, legacy, root, models, appendOutbox, readTasks: readPlatformTasks, readMentioned, onSettled: groupId => onInputSettled?.(groupId), onError }) : null
   // The original Topic protocol is retained, but retired workflow prompt catalogs
   // must not leak back into the generic task-session boundary.
@@ -45,7 +45,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
       return target.acceptTopicDecision(args)
     }
     if (key === 'routeMessages') return async args => {
-      if (!coordinationEnabled && args.routes.some(route => route.units?.some(unit => unit.dispatchOwner === 'coordination'))
+      if (args.routes.some(route => route.units?.some(unit => unit.dispatchOwner === 'coordination'))
         && !target.getGroup(args.groupId)?.routeHistory.some(record => record.routeId === args.routeId)) throw new Error('coordination_ingress_disabled')
       const request = { groupId: args.groupId, messages: args.routes }
       const stage = target.getGroup(args.groupId)?.routeHistory.some(record => record.routeId === args.routeId) ? null
@@ -127,11 +127,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
           if (role === 'decision') agentCtx.systemPrompt.section({ name: 'dingtalk-linked-task-context', order: 124,
             text: '输入linkedTasks只包含Host在本轮话题版本创建时重新读取的本群关联任务状态摘要，不沿用旧会话审批。snapshots含有界标题、状态、版本和结果摘要，不含完整目标或执行正文；需要对已有任务采取动作时按reads中的readCall核对完整上下文。hasMore=true或业务目标指向其他任务时再查询目录；输入未含linkedTasks时使用原查询工具。replyOwnership指定每条来源的回复归属：混合批次推进全部本Topic事项，只确认由本Topic负责回复的来源，其他来源由其replyTopic统一答复。提交前仍由Host校验当前来源、Topic和Task版本；新消息与新授权必须重新判断。' })
           agentCtx.systemPrompt.section({ name: 'dingtalk-task-progress-query', order: 124,
-            text: '普通进度询问只读取原任务当前事实并一次答复，不能作为任务补充、恢复、重开、依赖或持续观察；提到多个任务不等于批量执行授权。单项在原Topic用actions:[]和reply回答；多个任务需要统一查询时可交独立协调的query/taskIds，不能创建task-observe安排。明确催办或追加要求才按原文范围选择任务动作，不能仅因问“修复了没”而唤醒Owner。' })
-          if (role === 'route') agentCtx.systemPrompt.section({ name: 'dingtalk-independent-task-coordination', order: 122,
-            text: coordinationEnabled
-              ? '独立任务协调接纳已启用。用户明确授权的跨任务安排、依赖、批量修改、定时查询/继续及关联改口，应拆成稳定 source unit，并在 group_topic_route_submit 的对应 units 设置 dispatchOwner="coordination"。该 unit 的 topics 可为空，或仅提供真实 Topic 上下文引用，不设置 effectOwner，不新建总 Topic 或总 Task 替代原任务。普通讨论及原单项单独保留旧链，混合消息按 unit 划分，不能整条吞并。这里只提交候选归属和原文引用；任务目标、要求版本、时间与通知对象由独立协调服务核查和接纳。'
-              : '独立任务协调的新接纳已关闭。不要生成 dispatchOwner="coordination" 的新 unit。已经持久保留给 coordination 的 unit 仍由其独占，不得交旧 Topic 链执行或承诺。' })
+            text: '普通进度询问只读取原任务当前事实并一次答复，不能作为任务补充、恢复、重开、依赖或持续观察；提到多个任务不等于批量执行授权。单项在原Topic用actions:[]和reply回答；涉及多个任务时在对应Topic读取相关任务状态后答复，不创建持续观察任务。明确催办或追加要求才按原文范围选择任务动作，不能仅因问“修复了没”而唤醒Owner。' })
           agentCtx.systemPrompt.section({ name: 'dingtalk-running-input', order: 119,
             text: 'task-context 必须显式填写progressImpact：preserve声明目标、授权、验收和既有证据有效性不变，适用于明确要求推进的提醒、定位信息和事实澄清；仅询问进度不属于任务补充；不要重复附带objective/acceptanceCriteria/stageTasks。replan声明真实目标、验收或证据变化，须根据原文补判，不能因字段遗漏或无法判断就默认replan。收回或改变授权必须authorizationChange=changed并使用replan；明确取消用task-cancel独立路径。缺失分类或preserve与变更字段冲突会被拒绝，原执行保持；先读取来源补判，仍无法判定则不提交任务动作并说明缺口。Host会保留普通补充的原作业并在安全步骤送入；补充受理不代表已进入模型步骤。' })
           agentCtx.systemPrompt.section({ name: 'dingtalk-reply-recipient', order: 121, text: '回复由话题语义决定对象：有真人参与者的非空回复须用 replyToMessageId 选择固定话题内的目标消息，atOpenDingTalkIds 只填写需提醒的参与者，省略或空数组默认提醒目标作者。对本助手同事项回复对象的明确纠正不是业务转派；核对原回复与人员身份后，可用 actions:[] 和 reply 适当沟通，不因此取消或重建任务。身份不明先澄清，不猜测；无需每次纠正都另发消息。' })

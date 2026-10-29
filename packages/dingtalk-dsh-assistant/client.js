@@ -134,9 +134,9 @@ export function agentSaveSummary(desired, actual) {
   const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b)
   const modelSaved = (desired.provider === undefined || desired.provider === actual.provider) && desired.model.trim() === actual.model && (desired.reasoningEffort || '') === (actual.reasoningEffort || '')
   const pluginSaved = equal([...new Set(desired.agentNames)], actual.agentNames) && desired.replySignature.trim() === (actual.replySignature || '')
-    && desired.proxyUrl.trim() === (actual.proxyUrl || '') && equal(desired.taskSessionModel, actual.taskSessionModel) && equal(desired.coordinationModel, actual.coordinationModel)
+    && desired.proxyUrl.trim() === (actual.proxyUrl || '') && equal(desired.taskSessionModel, actual.taskSessionModel)
     && (desired.executionBackend ?? 'dsh') === (actual.executionBackend ?? 'dsh')
-  return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹、协调和执行后端）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
+  return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹和执行后端）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
 }
 
 function Environment({ value }) {
@@ -156,16 +156,13 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
   const [replySignature, setReplySignature] = useState('')
   const [agentModel, setAgentModel] = useState({ provider: '', model: '', reasoningEffort: 'low' })
   const [taskModel, setTaskModel] = useState(independentModelDefault)
-  const [coordinationModel, setCoordinationModel] = useState(independentModelDefault)
   const [executionBackend, setExecutionBackend] = useState('dsh')
   const { options: taskOptions, error: taskOptionsError } = useIndependentModelOptions(taskModel)
-  const { options: coordinationOptions, error: coordinationOptionsError } = useIndependentModelOptions(coordinationModel)
   const [taskFeedback, setTaskFeedback] = useState(null)
   const [taskBusy, setTaskBusy] = useState(false)
   const taskSaving = useRef(false)
   const taskDirty = useRef(false)
   const changeTask = transform => { taskDirty.current = true; setTaskModel(transform); setTaskFeedback(null) }
-  const changeCoordination = transform => { taskDirty.current = true; setCoordinationModel(transform); setTaskFeedback(null) }
       const [proxyUrl, setProxyUrl] = useState('')
   const [deletingGroupId, setDeletingGroupId] = useState('')
   const [newGroup, setNewGroup] = useState({ groupId: '', name: '', responsibility: '' })
@@ -185,9 +182,8 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => {
     if (!taskDirty.current && overview?.agentConfig?.taskSessionModel) setTaskModel(overview.agentConfig.taskSessionModel)
-    if (!taskDirty.current) setCoordinationModel(overview?.agentConfig?.coordinationModel ?? independentModelDefault)
     if (!taskDirty.current) setExecutionBackend(overview?.agentConfig?.executionBackend ?? 'dsh')
-  }, [overview?.agentConfig?.taskSessionModel, overview?.agentConfig?.coordinationModel, overview?.agentConfig?.executionBackend])
+  }, [overview?.agentConfig?.taskSessionModel, overview?.agentConfig?.executionBackend])
   useEffect(() => {
     if (taskFeedback?.kind !== 'success') return
     const timer = setTimeout(() => setTaskFeedback(null), 5000)
@@ -199,22 +195,18 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
   const taskEffortInvalid = !!requestedTaskEffort && !taskEfforts.some(value => value.id === requestedTaskEffort)
   const taskChanged = JSON.stringify(taskModel) !== JSON.stringify(overview?.agentConfig?.taskSessionModel)
   const taskValid = taskOptions?.available && !taskOptionsError && !taskEffortInvalid && !!taskModel.provider.trim() && !!taskModel.model.trim()
-  const requestedCoordinationEffort = coordinationModel.reasoningMode === 'inherit' ? agentModel.reasoningEffort
-    : coordinationModel.reasoningMode === 'explicit' ? coordinationModel.reasoningEffort : undefined
-  const coordinationValid = coordinationOptions?.available && !coordinationOptionsError && !!coordinationModel.provider.trim() && !!coordinationModel.model.trim()
-    && (!requestedCoordinationEffort || coordinationOptions.reasoning?.efforts?.some(value => value.id === requestedCoordinationEffort))
-  const coordinationChanged = JSON.stringify(coordinationModel) !== JSON.stringify(overview?.agentConfig?.coordinationModel ?? independentModelDefault)
+
   const saveAgentConfig = async event => {
     event?.preventDefault()
-    if (taskSaving.current || !taskValid || !coordinationValid || !(taskChanged || coordinationChanged || agentConfigChanged)) return
+    if (taskSaving.current || !taskValid || !(taskChanged || agentConfigChanged)) return
     taskDirty.current = true
     taskSaving.current = true; setTaskBusy(true); setTaskFeedback(null)
-    const desired = { agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl, taskSessionModel: taskModel, coordinationModel, executionBackend }
+    const desired = { agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl, taskSessionModel: taskModel, executionBackend }
     try {
       const saved = await request('/config/agent', { method: 'PUT', body: JSON.stringify(desired) })
       refreshGeneration.current++
       taskDirty.current = false
-      setOverview(current => ({ ...current, agentConfig: saved })); setTaskModel(saved.taskSessionModel); setCoordinationModel(saved.coordinationModel)
+      setOverview(current => ({ ...current, agentConfig: saved })); setTaskModel(saved.taskSessionModel)
       setExecutionBackend(saved.executionBackend ?? 'dsh')
       setAgentNames((saved.agentNames ?? []).join(',')); setReplySignature(saved.replySignature ?? ''); setAgentWorkspace(saved.workspaceDir); setAgentModel({ provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort ?? '' }); setProxyUrl(saved.proxyUrl ?? '')
       setTaskFeedback({ kind: 'success', message: 'Agent 配置已保存；执行后端仅用于新执行，已有执行及续办保持原后端。' })
@@ -306,9 +298,7 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
     React.createElement(IndependentModelFields, { id: 'task', label: '统筹模型', value: taskModel, change: changeTask,
       bridge: modelBridge, options: taskOptions, error: taskOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
       help: '仅影响任务统筹的下一轮请求；DSH 原生执行和话题仍使用默认处理模型。' }),
-    React.createElement(IndependentModelFields, { id: 'coordination', label: '协调模型', value: coordinationModel, change: changeCoordination,
-      bridge: modelBridge, options: coordinationOptions, error: coordinationOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
-      help: '仅影响下一次协调规划；保存模型不会启用协调功能，也不改变运行中的规划会话。' }),
+
       React.createElement('label', { htmlFor: 'dingtalk-execution-backend', style: { fontSize: 13, fontWeight: 600, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '执行后端'),
       React.createElement('select', { id: 'dingtalk-execution-backend', disabled: taskBusy, style: input, value: executionBackend, 'aria-describedby': 'dingtalk-execution-backend-help', onChange: event => { taskDirty.current = true; setExecutionBackend(event.target.value); setTaskFeedback(null) } },
         React.createElement('option', { value: 'dsh' }, 'DSH 原生（默认）'),
@@ -317,7 +307,7 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
       React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '网络代理'),
       React.createElement('input', { 'aria-label': 'Agent 网络代理', disabled: taskBusy, placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
-React.createElement('button', { type: 'submit', style: { ...button, justifySelf: 'end', minWidth: 132, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: taskBusy || !taskValid || !coordinationValid || !agentModel.model.trim() || !(agentConfigChanged || taskChanged || coordinationChanged), 'aria-busy': taskBusy }, taskBusy ? '正在保存…' : '保存配置'),
+React.createElement('button', { type: 'submit', style: { ...button, justifySelf: 'end', minWidth: 132, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: taskBusy || !taskValid || !agentModel.model.trim() || !(agentConfigChanged || taskChanged), 'aria-busy': taskBusy }, taskBusy ? '正在保存…' : '保存配置'),
       React.createElement('div', { role: taskFeedback?.kind === 'error' ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskFeedback?.kind === 'error' ? colors.danger : colors.muted } }, taskFeedback?.message ?? '')),
     React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '在“运行看板 → 任务看板”查看任务会话、动态执行、结果与日志路径。'),
     React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),

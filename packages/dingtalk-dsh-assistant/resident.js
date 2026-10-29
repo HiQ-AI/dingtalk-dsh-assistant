@@ -81,7 +81,6 @@ export async function apply(ctx, config = {}) {
     agentWorkspaceDir: config.agentWorkspaceDir,
     agentReplySignature: config.agentReplySignature,
     taskSessionModel: taskConfig,
-    coordinationModel: taskConfig.coordination ?? {},
     executionBackend: taskConfig.executionBackend ?? 'dsh',
     resumeTimeoutMs: config.resumeTimeoutMs ?? 10_000,
     maxConcurrentTasks: config.maxConcurrentTasks ?? 5,
@@ -154,11 +153,6 @@ export async function apply(ctx, config = {}) {
   runtime.getTaskSessionIdentity = tasks.taskIdentity
   runtime.getTaskSessionExecutions = tasks.taskExecutions
   runtime.getTaskSessionDecisions = tasks.taskDecisions
-  runtime.coordinationSources = tasks.coordinationSources
-  runtime.coordinationSourceDetail = tasks.coordinationSourceDetail
-  runtime.coordinationWork = tasks.coordinationWork
-  runtime.coordinationWorkDetail = tasks.coordinationWorkDetail
-  runtime.retireCoordinationObservation = tasks.retireCoordinationObservation
   runtime.createTask = tasks.createTask
   runtime.appendTaskContext = tasks.appendTaskContext
   runtime.reopenTask = tasks.reopenTask

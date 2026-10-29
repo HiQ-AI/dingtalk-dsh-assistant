@@ -139,6 +139,7 @@ const sourceDispatchSchema = z.object({
   semanticState: z.enum(['reserved', 'needs_clarification', 'accepted', 'rejected']), settled: z.boolean(),
   sourceSnapshot: z.record(z.string(), z.unknown()), coordinationId: z.string().min(1).optional(),
   clarification: z.string().min(1).optional(), frozen: z.boolean().default(false),
+  retirement: z.object({ kind: z.literal('feature-removed'), reason: z.string().min(1), at: z.string().min(1) }).optional(),
   handoff: z.record(z.string(), z.unknown()).optional(), history: z.array(z.record(z.string(), z.unknown())).default([]),
   createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })
@@ -394,16 +395,21 @@ function taskTiming(task, activities, now = Date.now()) {
 export async function openResidentStore(storageDomain) {
   const domain = await storageDomain.open(residentDomainSpec)
   const groupTable = domain.table('groups')
+  const groupCommitted = new Set()
   const fixedTopicPages = createFixedTopicPages(groupId => findGroupEntry(groupId)?.[1])
   const groups = new Proxy(groupTable, { get(target, name) {
     if (name === 'put' || name === 'update') return async (key, value) => {
-      const result = await target[name](key, value)
+      const previous = target.get(key)
+      let next = value
+      const result = await target[name](key, name === 'update' ? current => { next = value(current); return next } : value)
       fixedTopicPages.update(target.get(key))
+      for (const listener of groupCommitted) listener({ previous, next, group: target.get(key) })
       return result
     }
     if (name === 'delete') return async key => {
       const groupId = target.get(key)?.groupId, result = await target.delete(key)
       if (result) fixedTopicPages.remove(groupId)
+      if (result) for (const listener of groupCommitted) listener({ removed: groupId })
       return result
     }
     return Reflect.get(target, name)
@@ -496,6 +502,7 @@ export async function openResidentStore(storageDomain) {
   }
 
   return {
+    onGroupCommitted(listener) { groupCommitted.add(listener); return () => groupCommitted.delete(listener) },
     listPerformance: (filter) => {
       const projections = [...scheduler.entries()].map(([, value]) => value.performanceProjection).filter(Boolean)
       const base = listPerformance(undefined, filter)
@@ -523,104 +530,28 @@ export async function openResidentStore(storageDomain) {
       const value = group ? sourceDispatchOwnershipFor(group, { unitId, unitRevision }) : undefined
       return value ? JSON.parse(JSON.stringify(value)) : undefined
     },
-    retrySourceDispatch: ({ groupId, messageId, messageVersion, activeUnitRefs, reservationId, phase }, retry) => serialize(groupId, async () => {
-      const group = findGroupEntry(groupId)?.[1]
-      const message = group?.messages.find(item => item.messageId === messageId)
-      const keys = refs => refs.map(ref => JSON.stringify([ref.unitId, ref.unitRevision])).sort()
-      const owner = group?.sourceDispatchOwnership.find(item => item.reservationId === reservationId)
-      if (!message || message.messageVersion !== messageVersion || !Array.isArray(activeUnitRefs)
-        || JSON.stringify(keys(message.activeUnitRefs ?? [])) !== JSON.stringify(keys(activeUnitRefs))
-        || !owner || owner.dispatchOwner !== 'coordination' || owner.frozen
-        || owner.semanticState !== (phase === 'coordination-context' ? 'needs_clarification' : 'reserved')
-        || phase === 'coordination-context' && (owner.settled || owner.sourceSnapshot.quotedMessage !== undefined)
-        || owner.sourceSnapshot.messageId !== messageId || owner.sourceSnapshot.messageVersion !== messageVersion
-        || !message.activeUnitRefs?.some(ref => ref.unitId === owner.unitId && ref.unitRevision === owner.unitRevision)) throw new Error('MESSAGE_RETRY_STALE')
-      // Hold the message-version queue until the separate source-ledger CAS commits; never dispatch under this lock.
-      const result = await retry(JSON.parse(JSON.stringify(owner)))
-      if (phase === 'coordination-context') {
-        const entry = findGroupEntry(groupId)
-        await groups.update(entry[0], latest => {
-          const previous = latest.sourceDispatchOwnership.find(item => item.reservationId === reservationId)
-          if (!previous || previous.generation !== owner.generation || previous.semanticState !== 'needs_clarification') throw new Error('MESSAGE_RETRY_STALE')
-          const at = new Date().toISOString()
-          const next = sourceDispatchSchema.parse({ ...previous, semanticState: 'reserved', updatedAt: at,
-            history: [...previous.history, { kind: 'context-reconsideration', question: previous.clarification ?? null,
-              generation: previous.generation, coordinationId: previous.coordinationId, at }] })
-          return { ...latest, sourceDispatchOwnership: latest.sourceDispatchOwnership.map(item => item.reservationId === reservationId ? next : item) }
+    retrySourceDispatch: async () => { throw new Error('INDEPENDENT_COORDINATION_RETIRED') },
+    listSourceDispatchOwnership: groupId => JSON.parse(JSON.stringify(findGroupEntry(groupId)?.[1].sourceDispatchOwnership ?? [])),
+    reserveSourceDispatch: async () => { throw new Error('INDEPENDENT_COORDINATION_RETIRED') },
+    // Upgrade-only domain operation: preserve original questions and Task links.
+    async retireIndependentCoordination(retirement) {
+      if (retirement?.kind !== 'feature-removed') throw new Error('coordination_retirement_required')
+      for (const [, group] of groups.entries()) {
+        if (!(group.sourceDispatchOwnership ?? []).some(owner => owner.dispatchOwner === 'coordination' && !owner.retirement)) continue
+        await serialize(group.groupId, async () => {
+          const entry = findGroupEntry(group.groupId)
+          await groups.update(entry[0], latest => {
+            const ownership = latest.sourceDispatchOwnership.map(owner => owner.dispatchOwner !== 'coordination' || owner.retirement ? owner
+              : sourceDispatchSchema.parse({ ...owner, settled: true, retirement, updatedAt: retirement.at,
+                history: [...owner.history, { ...retirement, previousSemanticState: owner.semanticState, previousSettled: owner.settled }] }))
+            return { ...latest, sourceDispatchOwnership: ownership, messages: settleCompletedMessageDeliveries(latest.messages, latest.topics, ownership) }
+          })
         })
       }
-      return result
-    }),
-    listSourceDispatchOwnership: groupId => JSON.parse(JSON.stringify(findGroupEntry(groupId)?.[1].sourceDispatchOwnership ?? [])),
-    reserveSourceDispatch: ({ groupId, unitId, unitRevision, expectedGeneration = 0, sourceSnapshot }) => serialize(groupId, async () => {
-      const entry = findGroupEntry(groupId)
-      if (!entry) throw new Error(`group_not_found:${groupId}`)
-      let reservation
-      await groups.update(entry[0], latest => {
-        const message = latest.messages.find(message => message.units?.some(unit => unit.unitId === unitId && unit.unitRevision === unitRevision))
-        const unit = message?.units.find(unit => unit.unitId === unitId && unit.unitRevision === unitRevision)
-        if (!unit) throw new Error('source_dispatch_unit_not_found')
-        const previous = sourceDispatchOwnershipFor(latest, unit)
-        if (expectedGeneration !== 0 && previous?.generation !== expectedGeneration || !previous && expectedGeneration !== 0) throw new Error('source_dispatch_generation_stale')
-        reservation = reserveSourceDispatchRecord(latest, message, unit)
-        if (sourceSnapshot && (sourceSnapshot.text !== undefined && sourceSnapshot.text !== reservation.sourceSnapshot.text
-          || sourceSnapshot.sourceRefs !== undefined && fingerprint(sourceSnapshot.sourceRefs) !== fingerprint(reservation.sourceSnapshot.sourceRefs))) throw new Error('source_dispatch_snapshot_conflict')
-        if (previous) return latest
-        const ownership = [...(latest.sourceDispatchOwnership ?? []), reservation]
-        return { ...latest, sourceDispatchOwnership: ownership, messages: settleCompletedMessageDeliveries(latest.messages, latest.topics, ownership) }
-      })
-      return JSON.parse(JSON.stringify(reservation))
-    }),
-    updateSourceDispatch: ({ groupId, unitId, unitRevision, expectedGeneration, semanticState, coordinationId, clarification, settled = false }) => serialize(groupId, async () => {
-      const entry = findGroupEntry(groupId)
-      if (!entry) throw new Error(`group_not_found:${groupId}`)
-      let reservation
-      await groups.update(entry[0], latest => {
-        const previous = sourceDispatchOwnershipFor(latest, { unitId, unitRevision })
-        if (!previous || previous.generation !== expectedGeneration || previous.dispatchOwner !== 'coordination' || previous.frozen) throw new Error('source_dispatch_generation_stale')
-        if (!['reserved','needs_clarification','accepted','rejected'].includes(semanticState)
-          || settled && semanticState !== 'accepted' || semanticState === 'needs_clarification' && !clarification?.trim()) throw new Error('source_dispatch_state_invalid')
-        if (previous.semanticState === 'accepted' && semanticState !== 'accepted'
-          || previous.semanticState === 'rejected' && semanticState !== 'rejected') throw new Error('source_dispatch_state_terminal')
-        if (previous.coordinationId && coordinationId && previous.coordinationId !== coordinationId) throw new Error('source_dispatch_coordination_conflict')
-        reservation = sourceDispatchSchema.parse({ ...previous, semanticState, settled: previous.settled || settled,
-          ...(coordinationId ? { coordinationId } : {}), ...(clarification ? { clarification } : {}), updatedAt: new Date().toISOString() })
-        const ownership = latest.sourceDispatchOwnership.map(item => item.reservationId === reservation.reservationId ? reservation : item)
-        return { ...latest, sourceDispatchOwnership: ownership, messages: settleCompletedMessageDeliveries(latest.messages, latest.topics, ownership) }
-      })
-      return JSON.parse(JSON.stringify(reservation))
-    }),
-    beginSourceDispatchHandoff: ({ groupId, unitId, unitRevision, expectedGeneration, freezeId, reason }) => serialize(groupId, async () => {
-      const entry = findGroupEntry(groupId)
-      if (!entry) throw new Error(`group_not_found:${groupId}`)
-      if (!freezeId?.trim() || !reason?.trim()) throw new Error('source_dispatch_handoff_invalid')
-      let reservation
-      await groups.update(entry[0], latest => {
-        const previous = sourceDispatchOwnershipFor(latest, { unitId, unitRevision })
-        if (!previous || previous.generation !== expectedGeneration || previous.dispatchOwner !== 'coordination' || previous.semanticState !== 'rejected') throw new Error('source_dispatch_generation_stale')
-        if (previous.frozen && previous.handoff?.freezeId !== freezeId) throw new Error('source_dispatch_handoff_conflict')
-        reservation = sourceDispatchSchema.parse({ ...previous, frozen: true, handoff: { freezeId, reason, state: 'pending' }, updatedAt: new Date().toISOString() })
-        return { ...latest, sourceDispatchOwnership: latest.sourceDispatchOwnership.map(item => item.reservationId === reservation.reservationId ? reservation : item) }
-      })
-      return JSON.parse(JSON.stringify(reservation))
-    }),
-    completeSourceDispatchHandoff: ({ groupId, unitId, unitRevision, expectedGeneration, proof }) => serialize(groupId, async () => {
-      const entry = findGroupEntry(groupId)
-      if (!entry) throw new Error(`group_not_found:${groupId}`)
-      let reservation
-      await groups.update(entry[0], latest => {
-        const previous = sourceDispatchOwnershipFor(latest, { unitId, unitRevision })
-        if (!previous || previous.generation !== expectedGeneration || previous.dispatchOwner !== 'coordination' || !previous.frozen) throw new Error('source_dispatch_generation_stale')
-        if (proof?.kind !== 'coordination.no-commands' || proof.reservationId !== previous.reservationId || proof.generation !== expectedGeneration
-          || proof.unitId !== unitId || proof.unitRevision !== unitRevision || proof.freezeId !== previous.handoff?.freezeId
-          || !proof.dynamicSourceId?.trim() || proof.commandCount !== 0 || proof.unknownCount !== 0 || !proof.checkedAt?.trim()) throw new Error('source_dispatch_handoff_proof_invalid')
-        reservation = sourceDispatchSchema.parse({ ...previous, generation: previous.generation + 1, dispatchOwner: 'legacy-topic', settled: false,
-          handoff: { ...previous.handoff, state: 'completed', proof }, history: [...previous.history, { generation: previous.generation, dispatchOwner: previous.dispatchOwner, semanticState: previous.semanticState, reason: previous.handoff.reason }], updatedAt: new Date().toISOString() })
-        return { ...latest, sourceDispatchOwnership: latest.sourceDispatchOwnership.map(item => item.reservationId === reservation.reservationId ? reservation : item),
-          messages: latest.messages.map(message => message.messageId === previous.sourceSnapshot.messageId ? { ...message, routingStatus: 'pending', agentDeliveryStatus: 'pending' } : message) }
-      })
-      return JSON.parse(JSON.stringify(reservation))
-    }),
+    },
+    updateSourceDispatch: async () => { throw new Error('INDEPENDENT_COORDINATION_RETIRED') },
+    beginSourceDispatchHandoff: async () => { throw new Error('INDEPENDENT_COORDINATION_RETIRED') },
+    completeSourceDispatchHandoff: async () => { throw new Error('INDEPENDENT_COORDINATION_RETIRED') },
     updateCoordinationRequest: (groupId, requestId, patch, validateSnapshot) => serialize(groupId, async () => {
       validateSnapshot?.()
       const entry = findGroupEntry(groupId)
@@ -873,6 +804,7 @@ export async function openResidentStore(storageDomain) {
           if (previous.fingerprint !== requestFingerprint) throw new Error('topic_route_identity_conflict')
           receipt = previous; return latest
         }
+        if (routes.some(route => route.units?.some(unit => unit.dispatchOwner === 'coordination'))) throw new Error('INDEPENDENT_COORDINATION_RETIRED')
         if (latest.routingRevision !== routingRevision) throw new Error('topic_routing_stale')
         // Host 直达入口必须在提交时覆盖全部待路由来源，包含新入站和旧消息富化产生的 pending。
         if (requireAllPending === true) {

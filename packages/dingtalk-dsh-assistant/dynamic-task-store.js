@@ -12,11 +12,9 @@ import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
 import { createExecutionResourceCatalog } from './execution-resource-catalog.js'
 import { DatabaseSync } from 'node:sqlite'
-import { coordinationSchema, coordinationLedger } from './coordination-ledger.js'
-import { scheduleSchema, coordinationSchedules } from './coordination-schedules.js'
+import { retireIndependentCoordination, coordinationSchema, scheduleSchema } from './coordination-retirement.js'
 import { assertTaskContextSemantics } from './task-input-contract.js'
 import { migrationStateDigest } from './coordination-migration-state.js'
-import { coordinationSnapshot, coordinationNotificationState, formatCoordinationSnapshot } from './coordination-summary.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs'
 import { isAbsolute, dirname, basename } from 'node:path'
@@ -170,6 +168,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     put('dynamic_wakes', { id, wakeId: id, taskId, kind, payload: clone(payload), state: 'pending', leaseEpoch: null, createdAt: now() })
     return id
   }
+  const inputScope = (task, inputVersion) => ({ kind: 'existing', taskId: task.taskId, inputVersion,
+    requirementRevision: task.requirementRevision, controlRevision: task.controlRevision,
+    runSequence: task.runSequence, contextRevision: task.contextRevision ?? 0, instructionIds: [], boundAt: now() })
   const bindingOf = task => ({ kind: 'task-session', taskId: task.taskId, sessionId: task.sessionId,
     contextRevision: task.claimContextRevision ?? task.contextRevision ?? 0,
     requirementRevision: task.claimRequirementRevision ?? task.requirementRevision, controlRevision: task.claimControlRevision ?? task.controlRevision,
@@ -434,6 +435,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       // Recovery never authorizes a second send. Tool/process state must first be drained or reconciled.
       installTaskArchive(db, { indexes: !existed || paginationMigrate || migrate })
       installTopicFacts(db)
+      retireIndependentCoordination(db, now())
       const startupOperations = ops(), startupExecutions = all('dynamic_executions')
       for (const operation of startupOperations) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
       const blockingExecutions = new Set(startupOperations.filter(operationBlocksRecovery).map(operation => JSON.stringify([operation.taskId, operation.executionId])))
@@ -484,58 +486,13 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     db?.close(); livePaths.delete(pathKey); throw error
   }
 
-  const coordination = coordinationLedger({ get, put, all, fail, text, integer, array, record, clone, digest, now, webActorId,
-    validateOwner: binding => currentTask(binding),
-    triggerState: id => schedules.memberTriggerState(id),
-    notifyTask: (taskId, payload) => wake(taskId, 'coordination.changed', payload, `coordination-change:${payload.sourceId}:${payload.instructionId}`),
-    apply(command) {
-      const requestDigest = digest({ kind: command.kind, args: command.args })
-      const previous = readReceiptRow(db, command.id)
-      if (previous) {
-        if (previous.digest !== requestDigest) fail('DYNAMIC_COMMAND_ID_CONFLICT')
-        return JSON.parse(previous.body)
-      }
-      const value = { ...reduce(command.kind, command.args, command.id), replayed: false }
-      insertReceipt(db, command.id, requestDigest, canonical(value), value)
-      return value
-    } })
-  const schedules = coordinationSchedules({ get, put, all, fail, text, integer, array, record, clone, digest, now,
-    instantiateInstructions: input => coordination.instantiateRecurring(input),
-    dispatchInstruction: ({ instructionId }) => {
-      const member = get('dynamic_coordination_members', instructionId)
-      return coordination.command('coordination.apply', { instructionId, expectedRevision: get('dynamic_coordination', member.coordinationId).revision })
-    },
-    readCommandReceipt: command => {
-      const row = readReceiptRow(db, command.id)
-      if (!row) return null
-      if (row.digest !== digest({ kind: command.kind, args: command.args })) fail('DYNAMIC_COMMAND_ID_CONFLICT')
-      return JSON.parse(row.body)
-    } })
+  const taskVersion = task => ({ requirementRevision: task.requirementRevision, contextRevision: task.contextRevision ?? 0, controlRevision: task.controlRevision, runSequence: task.runSequence })
   const taskEvents = (after = 0, limit = 100) => {
     if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('DYNAMIC_ARGUMENT_INVALID')
     const rows = db.prepare('SELECT sequence,body FROM dynamic_task_events WHERE sequence>? UNION ALL SELECT sequence,body FROM dynamic_archived_task_events WHERE sequence>? ORDER BY sequence LIMIT ?').all(after, after, limit + 1)
     const events = rows.slice(0, limit).map(row => ({ ...JSON.parse(row.body), sequence: row.sequence }))
     return { events, nextCursor: events.at(-1)?.sequence ?? after, hasMore: rows.length > limit }
   }
-  const controlNotice = payload => {
-    const fact = payload.fact
-    if (fact?.noticeKind !== 'control' || !fact.sourceAcceptanceId) return false
-    const source = get('dynamic_coordination_sources', fact.sourceAcceptanceId, true)
-    return source?.state === 'accepted' && source.coordinationId === fact.coordinationId
-      && ['change','resolve'].includes(source.acceptedKind)
-      && ['change','schedule-change','occurrence-control'].includes(source.acceptedProposal?.kind)
-  }
-  function currentCoordinationSnapshot(item) {
-    const members = item.memberIds.map(id => coordination.view(get('dynamic_coordination_members', id)))
-    const occurrences = schedules.list('occurrences').filter(o => o.coordinationId === item.id)
-    const occurrenceIds = new Set(occurrences.map(o => o.id))
-    return coordinationSnapshot({ coordination: item, members, tasks: all('dynamic_tasks'),
-      schedules: schedules.list('schedules').filter(s => s.coordinationId === item.id), occurrences,
-      jobs: schedules.list('jobs').filter(j => occurrenceIds.has(j.occurrenceId)) })
-  }
-  const hasCoordinationNotificationWork = snapshot => snapshot.members.some(member => !member.observation)
-    || snapshot.occurrences.some(occurrence => !occurrence.cancelledAt
-      && (['failed','expired','blocked'].includes(occurrence.actionState) || occurrence.deliveryState === 'failed'))
   const topicFacts = topicFactLedger({ db, get: (table, id) => get(table, id, true), put })
   function reduce(kind, a, commandId) {
     if (kind.startsWith('topic.fact.')) {
@@ -543,182 +500,20 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (result !== undefined) return changed(result)
     }
     const stamp = now()
-    if (kind === 'coordination.aggregate') {
-      const item = get('dynamic_coordination', a.coordinationId)
-      const snapshot = currentCoordinationSnapshot(item)
-      const snapshotDigest = digest(snapshot), changedSnapshot = item.aggregateDigest !== snapshotDigest
-      const significanceDigest = digest(coordinationNotificationState(snapshot))
-      item.lifecycleState = snapshot.state; item.aggregateSnapshot = snapshot; item.aggregateDigest = snapshotDigest
-      let notification
-      let prior = item.summaryNotificationId ? get('dynamic_notifications', item.summaryNotificationId, true) : null
-      // 只有已送达摘要才抑制同一业务状态；发送中/未知由下方 prior 门禁防重，不能冒充送达。
-      if (prior?.state === 'delivered' && prior.payload.fact.significanceDigest)
-        item.lastNotifiedSignificanceDigest = prior.payload.fact.significanceDigest
-      const notificationWork = hasCoordinationNotificationWork(snapshot)
-      if (!notificationWork && prior?.state === 'prepared' && !prior.sendPermit) {
-        prior.state = 'superseded'; prior.retirement = { reason: 'coordination-observation-only', at: stamp }
-        put('dynamic_notifications', prior)
-      }
-      if (prior?.state === 'prepared' && !prior.sendPermit && prior.payload.fact.snapshotDigest !== snapshotDigest) {
-        prior.state = 'superseded'; prior.retirement = { reason: 'coordination-facts-changed', at: stamp }; put('dynamic_notifications', prior)
-        item.summaryNotificationId = null; item.lastNotifiedDigest = null; prior = null
-      }
-      const failedOccurrences = snapshot.occurrences.filter(occurrence => !occurrence.cancelledAt && (['failed','expired','blocked'].includes(occurrence.actionState) || occurrence.deliveryState === 'failed'))
-      const shouldNotify = notificationWork && !['needs_clarification','cancelled'].includes(item.state)
-        && ['completed','partially_completed','needs_attention'].includes(snapshot.state)
-        && item.lastNotifiedSignificanceDigest !== significanceDigest
-        && item.lastNotifiedDigest !== snapshotDigest
-      if (shouldNotify && !prior?.state?.match(/^(starting|unknown|prepared)$/)) {
-        item.summaryRevision = (item.summaryRevision ?? 0) + 1
-        const notificationId = `coordination:${item.id}:summary:${item.summaryRevision}`
-        notification = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
-          payload: { kind: 'coordination', replyKind: 'substantive', conversationId: item.groupId,
-            atOpenDingTalkIds: [...new Set(failedOccurrences.flatMap(occurrence => occurrence.recipientIds))],
-            text: formatCoordinationSnapshot(snapshot),
-            fact: { coordinationId: item.id, eventId: `summary:${item.summaryRevision}`, snapshotDigest, significanceDigest, summaryRevision: item.summaryRevision } } }, commandId).result.notification
-        item.summaryNotificationId = notification.id; item.lastNotifiedDigest = snapshotDigest
-      }
-      put('dynamic_coordination', item); return changed({ coordination: item, snapshot, changed: changedSnapshot, ...(notification ? { notification } : {}) })
-    }
-    if (kind === 'coordination.runtime.set') {
-      if (!['active','frozen'].includes(a.mode)) fail('DYNAMIC_ARGUMENT_INVALID')
-      const runtime = { mode: a.mode, changedAt: stamp, reason: text(a.reason, 'reason') }
-      db.prepare("INSERT INTO dynamic_meta(key,value) VALUES ('coordinationRuntime',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(canonical(runtime))
-      return changed({ runtime })
-    }
-    const runtimeMode = db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value
-    if (runtimeMode && JSON.parse(runtimeMode).mode === 'frozen' && ['coordination.accept','coordination.apply','coordination.source.retry','coordination.source.reconsiderContext','coordination.schedule.scan','coordination.job.claim','coordination.job.command'].includes(kind)) fail('DYNAMIC_COORDINATION_FROZEN')
-    if (kind === 'coordination.events.consume') {
-      const consumerId = text(a.consumerId, 'consumerId'), previous = get('dynamic_coordination_consumers', consumerId, true)
-      if ((previous?.cursor ?? 0) !== a.expectedCursor) fail('DYNAMIC_COORDINATION_CURSOR_STALE')
-      const page = taskEvents(a.expectedCursor, a.limit ?? 100), changedTaskIds = new Set(page.events.map(event => event.taskId))
-      const reconciledMembers = []
-      for (const member of all('dynamic_coordination_members')) {
-        if (!changedTaskIds.has(member.taskId) && !member.dependencies.some(id => changedTaskIds.has(get('dynamic_coordination_members', id).taskId))) continue
-        const projected = coordination.view(member)
-        member.waitingReason = projected.waitingReason; member.lastReconciledSequence = page.nextCursor
-        put('dynamic_coordination_members', member); reconciledMembers.push(projected)
-      }
-      put('dynamic_coordination_consumers', { id: consumerId, cursor: page.nextCursor, updatedAt: stamp })
-      return changed({ ...page, cursor: page.nextCursor, reconciledMembers })
-    }
-    if (kind === 'coordination.notification.freeze') {
-      const occurrence = schedules.read('occurrences', a.occurrenceId)
-      if (occurrence.cancelledAt || occurrence.actionState !== 'succeeded') fail('DYNAMIC_COORDINATION_JOB_STALE')
-      if (occurrence.notificationId) return changed({ notification: get('dynamic_notifications', occurrence.notificationId) })
-      occurrence.resultVersion ??= 1
-      const notificationId = `coordination:${occurrence.coordinationId}:${occurrence.id}:result:${occurrence.resultVersion}`
-      // 提醒沿已接纳来源回复，复用任务的原生引用与提及；已冻结通知在上方直接返回，不改写历史 payload。
-      const source = occurrence.action.kind === 'message-reminder'
-        ? get('dynamic_coordination_sources', get('dynamic_coordination', occurrence.coordinationId).sourceId, true) : null
-      const reply = source?.sourceMessageId && source.actorId && source.groupId === occurrence.target.conversationId
-        ? { sourceMessageId: source.sourceMessageId, actorId: source.actorId } : {}
-      const notification = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
-        payload: { kind: 'coordination', replyKind: 'substantive', conversationId: occurrence.target.conversationId, atOpenDingTalkIds: occurrence.target.recipientIds,
-          ...reply,
-          text: occurrence.action.kind === 'message-reminder' ? occurrence.result.text : JSON.stringify(occurrence.result), fact: { coordinationId: occurrence.coordinationId, eventId: `${occurrence.id}:result:${occurrence.resultVersion}`,
-            occurrenceId: occurrence.id, instanceControlRevision: occurrence.instanceControlRevision,
-            deliveryControlRevision: occurrence.deliveryControlRevision, resultVersion: occurrence.resultVersion, resultDigest: digest(occurrence.result) } } }, commandId)
-      occurrence.notificationId = notificationId; put('dynamic_coordination_occurrences', occurrence)
-      return notification
-    }
-    if (kind === 'coordination.notification.refresh') {
-      const occurrence = schedules.read('occurrences', a.occurrenceId)
-      if (occurrence.action.kind !== 'read-query') fail('DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED')
-      const old = get('dynamic_notifications', a.expectedNotificationId)
-      if (occurrence.notificationId !== old.id || occurrence.resultVersion !== a.expectedResultVersion
-        || occurrence.instanceControlRevision !== a.expectedInstanceControlRevision || occurrence.deliveryControlRevision !== a.expectedDeliveryControlRevision
-        || occurrence.cancelledAt || occurrence.actionState !== 'succeeded' || get('dynamic_coordination', occurrence.coordinationId).state === 'cancelled'
-        || old.state !== 'prepared' || old.sendPermit || old.ack || old.receipt || old.supersededBy) fail('DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED')
-      if (Date.parse(stamp) - Date.parse(occurrence.result.observedAt) < (occurrence.freshnessWindowMs ?? 300000)) fail('DYNAMIC_COORDINATION_RESULT_FRESH')
-      ;(occurrence.resultHistory ??= []).push({ resultVersion: occurrence.resultVersion, notificationId: old.id, result: clone(occurrence.result) })
-      occurrence.result = schedules.snapshot(occurrence); occurrence.resultVersion++
-      const notificationId = `coordination:${occurrence.coordinationId}:${occurrence.id}:result:${occurrence.resultVersion}`
-      old.state = 'superseded'; old.supersededBy = notificationId; old.updatedAt = stamp
-      put('dynamic_notifications', old)
-      occurrence.notificationId = notificationId; put('dynamic_coordination_occurrences', occurrence)
-      const prepared = reduce('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
-        payload: { ...clone(old.payload), text: JSON.stringify(occurrence.result), fact: { ...clone(old.payload.fact),
-          eventId: `${occurrence.id}:result:${occurrence.resultVersion}`, resultVersion: occurrence.resultVersion,
-          resultDigest: digest(occurrence.result) } } }, commandId)
-      return prepared
-    }
-    if (/^coordination\.(schedule\.|job\.|occurrence\.)/.test(kind)) return changed(schedules.command(kind, a))
-    if (kind.startsWith('coordination.')) {
-      const result = coordination.command(kind, a)
-      if (kind === 'coordination.accept' && a.schedule) {
-        result.schedule = schedules.command('coordination.schedule.create', { ...record(a.schedule), coordinationId: result.coordination.id }).schedule
-      }
-      if (kind === 'coordination.change') {
-        if (result.coordination.state === 'cancelled') schedules.cancelCoordination(result.coordination.id)
-        if (a.change.action === 'schedule') {
-          const existing = schedules.read('schedules', a.change.scheduleChange.scheduleId)
-          if (existing.coordinationId !== result.coordination.id) fail('DYNAMIC_COORDINATION_SCOPE')
-          result.schedule = schedules.command('coordination.schedule.change', a.change.scheduleChange).schedule
-        }
-        if (a.change.action === 'occurrence') {
-          const existing = schedules.read('occurrences', a.change.occurrenceControl.occurrenceId)
-          if (existing.coordinationId !== result.coordination.id) fail('DYNAMIC_COORDINATION_SCOPE')
-          result.occurrence = schedules.command('coordination.occurrence.control', a.change.occurrenceControl).occurrence
-        }
-        if (a.change.action === 'resolve' && a.change.schedule) result.schedule = schedules.command('coordination.schedule.create', { ...a.change.schedule, coordinationId: result.coordination.id }).schedule
-      }
-      if (kind === 'coordination.cancel') schedules.cancelCoordination(a.coordinationId)
-      if (kind === 'coordination.retireObservation') {
-        const snapshot = currentCoordinationSnapshot(result.coordination)
-        result.coordination.lifecycleState = snapshot.state; result.coordination.aggregateSnapshot = snapshot
-        result.coordination.aggregateDigest = digest(snapshot)
-        put('dynamic_coordination', result.coordination)
-      }
-      return changed(result)
-    }
-    if (kind === 'task.coordination.input') {
-      const task = get('dynamic_tasks', a.taskId)
-      if (task.requirementRevision !== a.expectedRequirementRevision || task.controlRevision !== a.expectedControlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
-      assertTaskContextSemantics({ progressImpact: a.progressImpact, ...(a.objective !== undefined ? { objective: a.objective } : {}),
-        ...(a.requirements !== undefined ? { acceptanceCriteria: a.requirements } : {}) })
-      const origin = record(a.originalSource), admitted = get('dynamic_sources', origin.sourceId)
-      if (admitted.groupId !== task.groupId || admitted.actorId !== origin.actorId) fail('DYNAMIC_COORDINATION_SCOPE')
-      if (!['supplement','continue','reopen','cancel'].includes(a.action)) fail('DYNAMIC_ARGUMENT_INVALID')
-      if (a.action === 'cancel') {
-        if (![task.ownerActorId, a.authorizedOwnerActorId].includes(origin.actorId)) fail('DYNAMIC_COORDINATION_CONTROL_FORBIDDEN')
-        return reduce('task.control', { ...a, control: 'cancelled', reason: a.text }, commandId)
-      }
-      if (a.action === 'reopen') {
-        if (a.progressImpact !== 'replan') fail('DYNAMIC_COORDINATION_IMPACT_REQUIRED')
-        return reduce('task.reopen', a, commandId)
-      }
-      let expectedControlRevision = a.expectedControlRevision
-      if (task.control === 'paused') {
-        if (a.action !== 'continue') fail('DYNAMIC_TASK_NOT_ACTIVE')
-        reduce('task.control', { taskId: a.taskId, expectedControlRevision, control: 'active' }, `${commandId}:resume`)
-        expectedControlRevision++
-      }
-      return reduce(a.progressImpact === 'preserve' ? 'task.supplement' : 'task.revise',
-        { ...a, expectedControlRevision, messageId: commandId }, commandId)
-    }
+    if (kind.startsWith('coordination.') || kind.startsWith('task.coordination.')) fail('INDEPENDENT_COORDINATION_RETIRED')
     if (kind === 'task.create') {
+      if (a.coordinationHold) fail('INDEPENDENT_COORDINATION_RETIRED')
       const taskId = text(a.taskId, 'taskId')
       if (get('dynamic_tasks', taskId, true)) fail('DYNAMIC_TASK_EXISTS')
       const task = { id: taskId, taskId, sessionId: `task-session-${randomUUID()}`, groupId: a.groupId ?? null,
         sourceRefs: a.sourceRefs ?? [], topicRefs: a.topicRefs ?? [], appliedOperations: a.operationId ? [a.operationId] : [], runSequence: 1, ownerActorId: a.ownerActorId ?? null, title: a.title ?? a.objective ?? a.request ?? taskId,
         objective: a.objective ?? a.request ?? '', request: a.request ?? a.objective ?? '', requirements: a.requirements ?? [], metadata: a.metadata ?? {},
         requirementRevision: 1, controlRevision: 1, status: 'active', control: 'active', leaseEpoch: 0, sessionBound: false, drained: true,
-        humanRequests: [], ...(a.coordinationHold ? { coordinationHold: clone(record(a.coordinationHold)) } : {}), createdAt: stamp, updatedAt: stamp }
+        humanRequests: [], createdAt: stamp, updatedAt: stamp }
       text(task.request, 'request'); array(task.sourceRefs); array(task.requirements)
       task.replyBindings = topicFacts.bindings(task, a.replyBindings)
-      saveTask(task); if (!task.coordinationHold) wake(taskId, 'task.created', { sourceRefs: task.sourceRefs }, `wake:${commandId}`)
+      saveTask(task); wake(taskId, 'task.created', { sourceRefs: task.sourceRefs }, `wake:${commandId}`)
       return changed({ task })
-    }
-    if (kind === 'task.coordination.start') {
-      const task = get('dynamic_tasks', a.taskId)
-      if (task.requirementRevision !== a.expectedRequirementRevision || task.controlRevision !== a.expectedControlRevision
-        || task.coordinationHold?.coordinationId !== a.coordinationId || task.coordinationHold?.instructionId !== a.instructionId) fail('DYNAMIC_TASK_REVISION_STALE')
-      const admitted = get('dynamic_sources', a.originalSource.sourceId)
-      if (admitted.groupId !== task.groupId || admitted.actorId !== task.ownerActorId) fail('DYNAMIC_COORDINATION_SCOPE')
-      task.coordinationHold = null; saveTask(task)
-      const wakeId = wake(task.taskId, 'task.created', { sourceRefs: task.sourceRefs, instructionId: a.instructionId }, `wake:${commandId}`)
-      return changed({ task, wakeId })
     }
     if (kind === 'task.archive') {
       const task = get('dynamic_tasks', a.taskId)
@@ -987,9 +782,6 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           contextRevision: task.contextRevision ?? 0, leaseEpoch: a.binding.leaseEpoch, recordedAt: stamp,
           sourceIds: [...new Set(claimed.flatMap(item => item.payload.sourceIds))], wakeIds: claimed.map(item => item.id) })
       }
-      if (task.humanReviewLease !== a.binding.leaseEpoch && all('dynamic_coordination_members').some(member=>member.taskId === task.taskId && member.reorderAssessment?.state === 'pending'
-        && member.control !== 'cancelled' && get('dynamic_coordination',member.coordinationId).state === 'active'
-        && coordination.current(member))) fail('DYNAMIC_COORDINATION_ASSESSMENT_REQUIRED')
       const question = a.question ?? a.decision?.question ?? null
       if (typeof question === 'string' && question.trim()) {
         const executions = execs(task.taskId).filter(executionCurrent)
@@ -1119,16 +911,11 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.complete') {
       const task = currentTask(a.binding)
-      if (all('dynamic_coordination_members').some(member=>member.taskId === task.taskId
-        && ['pending','needs_clarification'].includes(member.reorderAssessment?.state) && member.control !== 'cancelled'
-        && get('dynamic_coordination',member.coordinationId).state === 'active' && coordination.current(member))) fail('DYNAMIC_COORDINATION_ASSESSMENT_REQUIRED')
-      if (task.coordinationHold) fail('DYNAMIC_COORDINATION_WAITING')
       if (task.dialogue?.some(item => !item.reply)) fail('DYNAMIC_TASK_DIALOGUE_PENDING')
       if (execs(task.taskId).some(execution => (execution.feedback ?? []).some(item => !item.consumedAt && currentFeedback(execution, item)
         && item.requirementRevision === task.requirementRevision && item.controlRevision === task.controlRevision))) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
       assertClear(task.taskId)
-      const instructionIds = coordination.coverage(task.taskId)
-      for (const id of instructionIds) if (coordination.waiting(get('dynamic_coordination_members', id)).length) fail('DYNAMIC_COORDINATION_WAITING', id)
+      const instructionIds = []
       task.status = 'completed'; task.completion = { summary: text(a.summary, 'summary'), result: a.result ?? null, at: stamp,
         commandId, instructionIds, runSequence: task.runSequence, contextRevision: task.contextRevision ?? 0,
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, leaseEpoch: task.leaseEpoch }
@@ -1161,7 +948,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       const executionId = a.executionId ?? randomUUID()
       if (get('dynamic_executions', executionId, true)) fail('DYNAMIC_EXECUTION_EXISTS')
-      const instructionScope = coordination.scope(task.taskId, 1)
+      const instructionScope = inputScope(task, 1)
       const execution = { id: executionId, executionId, taskId: task.taskId, key, ...clone(payload), instructionScope, instructionIds: instructionScope.instructionIds, title: executionSessionTitle({ input: payload.input, key }), dispatchDigest, inputDigest: digest(payload.input),
         requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, sessionId: `task-execution-${randomUUID()}`,
         ...(payload.definition?.executionBackend === 'claude-code' ? { claudeSessionMode: 'interactive-team-v1' } : {}),
@@ -1199,7 +986,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision, instructionScope: clone(execution.instructionScope) })
       if (execution.result) execution.results.push(execution.result)
       execution.result = null; execution.progressReview = null; execution.inputVersion++; execution.inputDigest = digest(payload.input)
-      execution.instructionScope = coordination.scope(task.taskId, execution.inputVersion)
+      execution.instructionScope = inputScope(task, execution.inputVersion)
       execution.instructionIds = execution.instructionScope.instructionIds
       execution.title ||= executionSessionTitle(execution)
       execution.prompt = payload.prompt; execution.input = clone(payload.input)
@@ -1225,7 +1012,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         requirementRevision: execution.requirementRevision, controlRevision: execution.controlRevision, instructionScope: clone(execution.instructionScope) })
       execution.results.push(execution.result)
       execution.result = null; execution.progressReview = null; execution.inputVersion++
-      execution.instructionScope = coordination.scope(task.taskId, execution.inputVersion)
+      execution.instructionScope = inputScope(task, execution.inputVersion)
       execution.instructionIds = execution.instructionScope.instructionIds
       execution.status = 'queued'; execution.providerRecovery.nextAttemptAt = null
       execution.providerRecovery.activeInputVersion = execution.inputVersion
@@ -1286,9 +1073,6 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'execution.claim') {
       const execution = get('dynamic_executions', a.executionId)
-      if (get('dynamic_tasks', execution.taskId).coordinationHold) fail('DYNAMIC_COORDINATION_WAITING')
-      if (runtimeMode && JSON.parse(runtimeMode).mode === 'frozen' && execution.instructionScope?.instructionIds?.length) fail('DYNAMIC_COORDINATION_FROZEN')
-      coordination.gate(execution)
       assertNoLegacy(execution.taskId)
       if (execution.result || execution.providerRecovery?.nextAttemptAt) fail('DYNAMIC_EXECUTION_RECOVERY_PENDING')
       if (!execution.drained || terminalExecutions.has(execution.status)) fail('DYNAMIC_EXECUTION_BUSY')
@@ -1298,7 +1082,6 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const keys = resourceKeys(execution.resourceKeys)
       resourceCatalog.phase(resourceCatalog.executionPhase(execution), keys)
       lock(keys, executionHolder(execution))
-      execution.instructionScope = coordination.claimScope(execution)
       if (keys.length) execution.resourceLease ??= { acquiredAt: stamp }
       execution.leaseEpoch++; execution.status = 'running'; execution.drained = false; execution.recovering = false
       // Legacy history stays explicitly incomplete; collect only this new, observed lease.
@@ -1654,23 +1437,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       put('dynamic_legacy_blockers', item); release(item.id); return changed({ blocker: item })
     }
     if (kind === 'notification.prepare') {
-      const task = ['topic-reply','coordination'].includes(a.kind) ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
-      if (!['question','status','topic-reply','coordination'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
-      if (a.kind === 'coordination') {
-        const fact = record(a.payload?.fact), coordination = get('dynamic_coordination', fact.coordinationId)
-        text(fact.eventId, 'eventId')
-        const sameEvent = all('dynamic_notifications').find(n => n.id !== id && n.kind === 'coordination'
-          && n.payload.fact.coordinationId === fact.coordinationId && n.payload.fact.eventId === fact.eventId)
-        if (sameEvent) fail('DYNAMIC_NOTIFICATION_EVENT_CONFLICT')
-        if (a.payload.conversationId !== coordination.groupId || coordination.state === 'cancelled' && !controlNotice(a.payload)) fail('DYNAMIC_COORDINATION_SCOPE')
-        if (fact.occurrenceId) {
-          const occurrence = schedules.read('occurrences', fact.occurrenceId)
-          if (occurrence.coordinationId !== coordination.id || occurrence.actionState !== 'succeeded' || occurrence.cancelledAt
-            || fact.resultDigest !== digest(occurrence.result) || fact.instanceControlRevision !== occurrence.instanceControlRevision
-            || fact.deliveryControlRevision !== occurrence.deliveryControlRevision
-            || digest(a.payload.atOpenDingTalkIds ?? []) !== digest(occurrence.target.recipientIds)) fail('DYNAMIC_COORDINATION_JOB_STALE')
-        }
-      }
+      if (a.kind === 'coordination') fail('INDEPENDENT_COORDINATION_RETIRED')
+      const task = a.kind === 'topic-reply' ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
+      if (!['question','status','topic-reply'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
       integer(a.requirementRevision, 'requirementRevision')
       if (a.kind === 'topic-reply' && (!Array.isArray(a.payload?.fact?.topicRefs) || !a.payload.fact.topicRefs.length)) fail('DYNAMIC_ARGUMENT_INVALID', 'topicRefs')
       const body = { taskId: task?.taskId ?? null, requirementRevision: a.requirementRevision, kind: a.kind, payload: clone(record(a.payload)) }
@@ -1760,58 +1529,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const notification = get('dynamic_notifications', a.notificationId)
       if (kind === 'notification.start') {
         if (notification.state !== 'prepared') return changed({ notification })
-        if (notification.kind === 'coordination' && runtimeMode && JSON.parse(runtimeMode).mode === 'frozen') return changed({ notification })
-        if (notification.kind === 'coordination') {
-          const fact = notification.payload.fact, coordination = get('dynamic_coordination', fact.coordinationId)
-          // 只有账本已确认被后续来源补全的旧回复才失效；未知发送不会重新进入此许可分支。
-          const source = fact.sourceUnitId ? get('dynamic_coordination_sources', digest({ unitId: fact.sourceUnitId, revision: fact.sourceUnitRevision }), true) : null
-          if (source?.resolvedBy) {
-            notification.state = 'superseded'; notification.retirement = { reason: 'coordination-source-resolved', resolvedBy: source.resolvedBy, at: stamp }
-            notification.updatedAt = stamp; put('dynamic_notifications', notification); return changed({ notification })
-          }
-          const accepted = source?.acceptedProposal
-          const initialSchedule = accepted?.kind === 'schedule' || accepted?.kind === 'resolve' && accepted.resolution?.kind === 'schedule'
-          // 此类来源只创建 revision=1 的计划；从原接纳事实判断，避免改写历史通知 payload 破坏幂等回放。
-          if (fact.eventId.startsWith('accepted:') && !fact.occurrenceId && initialSchedule
-            && schedules.read('schedules', `schedule:${coordination.id}`, true)?.revision > 1) {
-            notification.state = 'superseded'; notification.retirement = { reason: 'coordination-schedule-changed', at: stamp }
-            notification.updatedAt = stamp; put('dynamic_notifications', notification); return changed({ notification })
-          }
-          if (!fact.occurrenceId && /^(?:clarification|accepted):/u.test(fact.eventId)) {
-            const originId = source?.sourceRefs?.[0]
-            const origin = originId && db.prepare('SELECT rowid AS sequence,body FROM dynamic_sources WHERE id=?').get(originId)
-            if (origin) {
-              const admitted = JSON.parse(origin.body)
-              // 按准入账本顺序拦住已收到的后续消息，不依赖同秒消息或客户端时钟。
-              // 抛出暂缓信号使事务回滚：不能缓存本次 start ID，也不能消耗发送次数。
-              const pending = db.prepare(`SELECT id FROM dynamic_sources WHERE rowid>?
-                AND json_extract(body,'$.groupId')=? AND json_extract(body,'$.actorId')=?
-                AND (coalesce(json_extract(body,'$.routed'),0)=0 OR json_extract(body,'$.processingPending')=1)
-                AND json_type(body,'$.processingCompleted') IS NULL LIMIT 1`).get(origin.sequence, admitted.groupId, admitted.actorId)
-              if (pending) fail('DYNAMIC_NOTIFICATION_SOURCE_PENDING')
-            }
-          }
-          // 在发送许可同一事务内回读摘要事实，取消本次安排不能被尚未运行的聚合扫描绕过。
-          const summarySnapshot = fact.snapshotDigest ? currentCoordinationSnapshot(coordination) : null
-          if (summarySnapshot && !hasCoordinationNotificationWork(summarySnapshot)) {
-            notification.state = 'superseded'; notification.retirement = { reason: 'coordination-observation-only', at: stamp }
-            put('dynamic_notifications', notification); return changed({ notification })
-          }
-          if (summarySnapshot && fact.snapshotDigest !== digest(summarySnapshot)) {
-            notification.state = 'superseded'; notification.retirement = { reason: 'coordination-facts-changed', at: stamp }
-            put('dynamic_notifications', notification); return changed({ notification })
-          }
-          const occurrence = fact.occurrenceId ? schedules.read('occurrences', fact.occurrenceId) : null
-          if (notification.supersededBy || coordination.state === 'cancelled' && !controlNotice(notification.payload) || occurrence && (occurrence.cancelledAt
-            || occurrence.notificationId !== notification.id || occurrence.resultVersion !== fact.resultVersion || digest(occurrence.result) !== fact.resultDigest
-            || occurrence.instanceControlRevision !== fact.instanceControlRevision || occurrence.deliveryControlRevision !== fact.deliveryControlRevision)) {
-            notification.state = 'failed'; notification.reason = 'coordination_cancelled'; put('dynamic_notifications', notification)
-            return changed({ notification })
-          }
-          // Freshness must hold at the permit transaction, not depend on an asynchronous scan winning first.
-          if (occurrence?.action.kind === 'read-query' && !notification.sendPermit
-            && Date.parse(stamp) - Date.parse(occurrence.result.observedAt) >= (occurrence.freshnessWindowMs ?? 300000)) fail('DYNAMIC_NOTIFICATION_RECOVERY_STALE')
-        }
+        if (notification.kind === 'coordination') fail('INDEPENDENT_COORDINATION_RETIRED')
         if (notification.kind === 'topic-reply' && notification.payload.humanRequests?.some(ref => {
           const task = get('dynamic_tasks', ref.taskId, true)
           const request = task?.humanRequests?.find(item => item.requestId === ref.requestId)
@@ -1849,15 +1567,6 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (state === 'delivered') { notification.nextAttemptAt = null; notification.deliveredAt ??= stamp }
       if (a.error) notification.deliveryError = clone(record(a.error))
       notification.state = state; notification.receipt = a.receipt ?? null; notification.evidenceRef = a.evidenceRef ?? null; notification.updatedAt = stamp
-      if (notification.kind === 'coordination' && notification.payload.fact.occurrenceId) {
-        const occurrence = schedules.read('occurrences', notification.payload.fact.occurrenceId)
-        occurrence.deliveryState = state
-        put('dynamic_coordination_occurrences', occurrence)
-        if (state === 'delivered' && occurrence.scheduleId) {
-          const schedule = schedules.read('schedules', occurrence.scheduleId)
-          if (schedule.rule.kind === 'once' && schedule.state === 'active') { schedule.state = 'completed'; put('dynamic_coordination_schedules', schedule) }
-        }
-      }
       put('dynamic_notifications', notification); return changed({ notification })
     }
     if (kind === 'source.record' || kind === 'source.acceptHistory' || kind === 'source.captureRevision') {
@@ -1932,6 +1641,14 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const identity = refs => refs.map(ref => `${text(ref.unitId, 'unitId')}:${integer(ref.unitRevision, 'unitRevision')}`).sort()
       const previous = source.activeUnitRefs ?? source.processingCompleted?.activeUnitRefs
       if (new Set(identity(refs)).size !== refs.length) fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
+      // Host projects the exact retired Resident ownership after an interrupted
+      // cross-store reservation. Never infer retirement from business Task state.
+      if (a.retiredCoordinationUnits?.length) {
+        const retired = array(a.retiredCoordinationUnits), keys = new Set(identity(refs))
+        if (identity(retired).some(key => !keys.has(key))) fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
+        const retirement = JSON.parse(db.prepare("SELECT value FROM dynamic_meta WHERE key='independentCoordinationRetired'").get().value)
+        source.coordinationRetirement = { ...retirement, units: clone(retired) }
+      }
       if (!previous || digest(identity(previous)) !== digest(identity(refs)) || a.legacyPending === true && source.processingCompleted) {
         if (source.processingCompleted) (source.processingHistory ??= []).push(source.processingCompleted)
         delete source.processingCompleted
@@ -1955,8 +1672,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       for (const unit of units) {
         const ledger = coordinated.get(key(unit))
         if (unit.dispatchOwner === 'coordination') {
+          if (source.coordinationRetirement?.kind === 'feature-removed' && source.coordinationRetirement.units.some(ref => key(ref) === key(unit))) continue
           if (!ledger || ledger.groupId !== source.groupId || ledger.sourceMessageId !== source.messageId
-            || !(ledger.resolvedBy || ['accepted', 'needs_clarification'].includes(ledger.state))) fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
+            || !(ledger.retirement?.kind === 'feature-removed' || ledger.resolvedBy || ['accepted', 'needs_clarification'].includes(ledger.state))) fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
         } else if (unit.dispatchOwner !== 'legacy-topic' || unit.processingComplete !== true
           || ledger && ledger.dispatchOwner !== 'legacy-topic') fail('DYNAMIC_SOURCE_PROCESSING_INCOMPLETE')
       }
@@ -2006,13 +1724,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   return Object.freeze({
     info: Object.freeze({ dbPath, instanceId, version: VERSION, ingressEpoch: boundIngressEpoch }),
     get healthy() { return !closed && healthy },
-    async maintain({ kind, args = {} }) {
-      if (!['coordination.aggregate','coordination.observe.reconcile','coordination.schedule.scan'].includes(kind)) fail('DYNAMIC_MAINTENANCE_KIND_INVALID')
-      record(args)
-      return clone(transaction(() => ({ ...reduce(kind, args, `maintenance:${randomUUID()}`), replayed: false })))
-    },
+    async maintain() { fail('INDEPENDENT_COORDINATION_RETIRED') },
     async command(command) {
       record(command); const id = text(command.id, 'id'), kind = text(command.kind, 'kind'), args = record(command.args ?? {})
+      if (kind.startsWith('coordination.') || kind.startsWith('task.coordination.')) fail('INDEPENDENT_COORDINATION_RETIRED')
       const requestDigest = digest({ kind, args })
       return clone(transaction(() => {
         const previous = readReceiptRow(db, id)
@@ -2038,24 +1753,14 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             recordedAt: now(), triggers, decision: clone(decision) }
           if (kind === 'task.complete') {
             const task = get('dynamic_tasks', args.binding.taskId)
-            const instructionCoverage = task.completion.instructionIds.map(instructionId => {
-              const member = get('dynamic_coordination_members', instructionId)
-              return { instructionId, commandId: member.command.id, effectiveVersion: clone(member.effectiveVersion),
-                assessmentReceiptId: id, assessmentKind: 'current-owner-completion' }
-            })
+            const instructionCoverage = []
             value.taskDecision.instructionCoverage = instructionCoverage
             const event = { id: `task-completed:${id}`, eventVersion: 1, kind: 'task.completed', taskId: task.taskId,
-              commandId: id, taskDecisionReceiptId: id, ...coordination.version(task),
+              commandId: id, taskDecisionReceiptId: id, ...taskVersion(task),
               instructionCoverage, result: clone(task.completion.result), recordedAt: now() }
             const inserted = db.prepare('INSERT INTO dynamic_task_events(id,body) VALUES (?,?)').run(event.id, canonical(event))
             value.completionEvent = { ...event, sequence: Number(inserted.lastInsertRowid) }
-            for (const coverage of instructionCoverage) {
-              const member = get('dynamic_coordination_members', coverage.instructionId)
-              member.completionReceipt = id
-              member.completionProof = { eventId: event.id, sequence: Number(inserted.lastInsertRowid), commandId: id,
-                taskDecisionReceiptId: id, ...coordination.version(task) }
-              member.state = 'fulfilled'; put('dynamic_coordination_members', member)
-            }
+
           }
         }
         if (args.topicFacts === true && recordsDecision && (kind === 'task.complete'
@@ -2086,7 +1791,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (q.kind.startsWith('topic.fact.')) return clone(topicFacts.query(q))
       if(q.kind==='observer.work-metadata')return observerWorkMetadata(db,q)
       if(q.kind==='observer.revision')return `${incarnation}:${db.prepare('SELECT total_changes() n').get().n}`
-      if(['observer.group-version','observer.group-metadata','observer.message-contexts'].includes(q.kind))return observerGroupQuery(db,q)
+      if(['observer.group-version','observer.group-metadata','observer.message-contexts','observer.message-list-contexts'].includes(q.kind))return observerGroupQuery(db,q)
       if (q.kind === 'observer.page') return observerPage(db, q, incarnation)
       if (['task.index','execution.index','coordination.index'].includes(q.kind)) {
         const table = { 'task.index': 'dynamic_tasks', 'execution.index': 'dynamic_executions', 'coordination.index': 'dynamic_coordination' }[q.kind]
@@ -2107,23 +1812,21 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         return { items, nextAfter: rows.length > limit ? items.at(-1).sequence : null }
       }
       if (q.kind === 'ingress.policy') value = { instanceId, ingressEpoch: boundIngressEpoch }
-      else if (q.kind === 'coordination.retireObservation.check') value = coordination.checkObservationRetirement(q)
-      else if (q.kind === 'coordination.runtime') value = JSON.parse(db.prepare("SELECT value FROM dynamic_meta WHERE key='coordinationRuntime'").get()?.value ?? '{"mode":"active"}')
-      else if (q.kind === 'coordination.assessments') value = all('dynamic_coordination_members').filter(m => m.taskId === q.taskId
-        && m.control !== 'cancelled' && get('dynamic_coordination',m.coordinationId).state === 'active'
-        && coordination.current(m)
-        && ['pending','needs_clarification'].includes(m.reorderAssessment?.state)).map(m => ({instructionId:m.id,coordinationId:m.coordinationId,...m.reorderAssessment}))
+      else if (q.kind === 'coordination.retireObservation.check') fail('INDEPENDENT_COORDINATION_RETIRED')
+      else if (q.kind === 'coordination.runtime') value = ({mode:'retired'})
+      else if (q.kind === 'coordination.retirement') value = JSON.parse(db.prepare("SELECT value FROM dynamic_meta WHERE key='independentCoordinationRetired'").get().value)
+      else if (q.kind === 'coordination.assessments') value = []
       else if (q.kind === 'coordination.list') value = all('dynamic_coordination').filter(c => !q.groupId || c.groupId === q.groupId)
       else if (q.kind === 'coordination.get') value = { coordination: get('dynamic_coordination', q.coordinationId),
-        members: all('dynamic_coordination_members').filter(m => m.coordinationId === q.coordinationId).map(coordination.view) }
+        members: all('dynamic_coordination_members').filter(m => m.coordinationId === q.coordinationId).map(member => ({...member,eligible:false,waitingReason:{code:'coordination-feature-removed'}})) }
       else if (q.kind === 'coordination.consumer.get') value = get('dynamic_coordination_consumers', q.consumerId, true)
       else if (q.kind === 'task.events') value = taskEvents(q.after ?? 0, q.limit ?? 100)
       else if (q.kind === 'coordination.source') value = get('dynamic_coordination_sources', digest({ unitId: q.unitId, revision: q.revision }), true)
       else if (q.kind === 'coordination.source.list') value = all('dynamic_coordination_sources').filter(s => !q.groupId || s.groupId === q.groupId)
-      else if (q.kind === 'coordination.schedule.list') value = schedules.list('schedules').filter(s => !q.coordinationId || s.coordinationId === q.coordinationId)
-      else if (q.kind === 'coordination.occurrence.list') value = schedules.list('occurrences').filter(o => !q.coordinationId || o.coordinationId === q.coordinationId)
-      else if (q.kind === 'coordination.occurrence.get') value = schedules.read('occurrences', q.occurrenceId)
-      else if (q.kind === 'coordination.job.list') value = schedules.list('jobs')
+      else if (q.kind === 'coordination.schedule.list') value = all('dynamic_coordination_schedules').filter(s => !q.coordinationId || s.coordinationId === q.coordinationId)
+      else if (q.kind === 'coordination.occurrence.list') value = all('dynamic_coordination_occurrences').filter(o => !q.coordinationId || o.coordinationId === q.coordinationId)
+      else if (q.kind === 'coordination.occurrence.get') value = get('dynamic_coordination_occurrences', q.occurrenceId)
+      else if (q.kind === 'coordination.job.list') value = all('dynamic_coordination_jobs')
       else if (q.kind === 'task.get') value = get('dynamic_tasks', q.taskId, true)
       else if (q.kind === 'task.decisions') {
         get('dynamic_tasks', q.taskId)

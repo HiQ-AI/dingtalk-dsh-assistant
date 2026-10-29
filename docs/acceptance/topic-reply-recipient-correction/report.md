@@ -4,7 +4,7 @@
 
 ## 结论
 
-本次限定的本地受控 Host 修复与风险相关回归通过，独立只读审查在已审源码和测试范围内暂无剩余已证阻断。`matrix.csv` 共保留 53 条历史记录；按 round 数字取每个 case 的最新状态，22 个范围内 case 为 PASS，4 个为 OUT_OF_SCOPE，case×round 无重复。这不是 22 个独立测试的汇总，也不是全仓测试通过声明。
+本次限定的本地受控 Host 修复与风险相关回归在原实现及最新稳定合并基线的已测范围内通过。`matrix.csv` 共保留 57 条历史记录；按 round 数字取每个 case 的最新状态，26 个范围内 case 为 PASS，4 个为 OUT_OF_SCOPE，无当前 PENDING/FAIL case，case×round 无重复。历史 FAIL/取消仍保留；这些数字不是独立测试数，也不是全仓测试通过声明。round-17 对稳定合并工作树（合并前 HEAD `9675c13a`、MERGE_HEAD `fd631460`）实跑 12+2+5+1 共 20 个定向用例；inbox 仅验证启动失败资源释放及重试代表路径。
 
 提交、推送及新 PR 的最终真实状态由本桶 `goal.md` 记录；本报告不代表已合并、部署或真实钉钉现场验收。
 
@@ -34,12 +34,14 @@
 | round-14 材料历史真实 group ingest/helper | 1 PASS，5968.4886 ms，exit 0 | 源文本和附件字节归属自己的任务且复用不重复下载；临时 cwd 在 finally 清理 |
 | round-15 通知恢复代表 | 6 PASS（4 主 case 含 starting/unknown 子 case），13724.6618 ms，exit 0 | starting/unknown 只回读；ACK 重启不重发；native unknown 不重放已完成业务 |
 | round-16 来源语义戳修后 | 1 PASS，2653.141 ms，exit 0 | reason 夹具移除残留路由字段后，保留原落账时序、无任务/通知及幂等断言 |
+| round-17 稳定合并基线 | runtime 12 PASS、coordination retirement 2 PASS、native routing/frozen recovery 5 PASS，均 0 FAIL/CANCEL/SKIP，分别 exit 0 | 最终冲突解决版本的 Topic 路由、main 协调退役和多 @/冻结恢复代表路径；不推导 inbox 或现场结果 |
+| round-17 Lead inbox 代表 | 1 PASS，0 FAIL/CANCEL/SKIP，1830.9759 ms，exit 0 | 坏 SQLite sidecar 导致启动失败时释放 ledger/listeners，随后重试成功；不代表全部 inbox 投影 |
 
 原生验证均指定 `DSH_NATIVE_TEST_PROFILE=D:/dsh_home/profiles/web/package.json` 复用依赖入口，使用临时 root/数据库、结构化脚本模型及通知桩，没有启动正式 profile 或真实外发。
 
 ## 独立审查与调用方影响
 
-review 最终核对了已审实现、共享 helper 及三处非 helper 迁移，未发现剩余已证阻断。共享 helper 只选固定输入中的真人来源；23 个引用不等于 23 文件都已实测，不用文件名判断历史排除。必要材料历史真实调用已定向执行。故意非法决定及 legacy 无路由负例未机械补字段。
+此前独立 review 对已审源码、共享 helper 及三处非 helper 迁移未发现剩余已证阻断。最终 round-17 稳定合并版也完成独立只读审查：coordinator 相对最新 main 仅保留本任务三处必要增量，主干协调退役与 inbox 接入未回退；冻结身份、显式多 @ 以及 scanner 的 operations→taskIds 门禁保留，已审合并路径暂无剩余已证阻断。源码审查和受控测试分别留证，不互相替代。共享 helper 只选固定输入中的真人来源；23 个引用不等于 23 文件都已实测，不用文件名判断历史排除。必要材料历史真实调用已定向执行。故意非法决定及 legacy 无路由负例未机械补字段。
 
 单真人夹具中的末条选择只对各自固定输入成立，不证明多参与者语义理解；多参与者执行合同由显式 A/B 专项证明。源码静态审查确认没有硬编码业务姓名/纠正关键词发送规则，也保留不回复分支；不将该结论扩大为真实模型自然语言稳定性。
 
@@ -59,7 +61,8 @@ README 的公开回复合同和 `docs/ops/task-session-clean-start.md` 的冻结
 - 修复提交：`aaa7d823b908f1ca2528cb39632b29f7a6cb9ea9`；推送后独立 `git ls-remote` 回读一致。
 - 新 PR：[#297](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/297)，`fix(topic): 保留语义回复对象并修正收件人纠正沟通`。
 - 2026-10-29T18:08:11+08:00 独立 `gh pr view` 回读：OPEN，`main ← worktree-topic-reply-recipient-correction`，正文、标题及修复 SHA 符合预期，`mergedAt=null`。
-- 本报告及目标状态回填仅为后续文档提交，不改变已验证源码。没有合并、部署、手动 CI 或真实消息副作用；原六窗口保留。
+- 随后独立回查发现 PR 为 CONFLICTING，交付重开。最新 main `fd631460` 已以普通 merge 整合到隔离工作树，正确解法暂存、无 UU；稳定版 20 个定向用例与最终只读审查通过。远端解除冲突及最终 SHA 仍待提交/push 后独立回读，不能由本地测试推导远端已可合并。
+- 没有合并 PR、部署、手动 CI 或真实消息副作用；原六窗口保留。
 
 ## 未验及禁区
 
