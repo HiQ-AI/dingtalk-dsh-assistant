@@ -124,30 +124,9 @@ window.__ModuleLoader__.load({
     }
     const ui = { textSm: 12, textMd: 14, textLg: 16, textXl: 20, space1: 4, space2: 8, space3: 12, space4: 16, space6: 24, radiusSm: 8, radiusMd: 12 }
     const observerCss = `
-      [data-dingtalk-observer] .observer-coordination-layout { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 24px; align-items: start; }
-      [data-dingtalk-observer] .observer-coordination-layout :is(article, section, li, div) { min-width: 0; }
-      [data-dingtalk-observer] .observer-coordination-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; margin: 8px 0; }
-      [data-dingtalk-observer] .observer-coordination-work { width: 100%; text-align: left; white-space: normal; font: inherit; color: inherit; background: transparent; padding: 9px 12px; border: 0; border-radius: 5px; cursor: pointer; }
-      [data-dingtalk-observer] .observer-coordination-work:hover { background: ${colors.surface2}; }
-      [data-dingtalk-observer] .observer-coordination-work[aria-pressed=true] { background: ${colors.surface2}; box-shadow: inset 2px 0 ${colors.accent}; }
-      [data-dingtalk-observer] .observer-coordination-work:focus:not(:focus-visible) { outline: none; }
-      [data-dingtalk-observer] .observer-coordination-work:focus-visible { outline: 2px solid ${colors.accent}; outline-offset: -2px; }
-      [data-dingtalk-observer] .observer-coordination-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 21px; font-weight: 500; }
-      [data-dingtalk-observer] .observer-coordination-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; color: ${colors.muted}; }
-      [data-dingtalk-observer] .observer-coordination-meta time { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
-      [data-dingtalk-observer] .observer-coordination-section { padding: 14px 0; border-top: 1px solid ${colors.border}; }
-      [data-dingtalk-observer] .observer-coordination-section h3 { margin: 0 0 10px; font-size: 16px; }
-      [data-dingtalk-observer] .observer-coordination-section h4 { margin: 0; font-size: 14px; }
-      [data-dingtalk-observer] .observer-coordination-disclosure { padding: 12px 0; border-top: 1px solid ${colors.border}; }
-      [data-dingtalk-observer] .observer-coordination-disclosure > summary { cursor: pointer; font-size: 12px; color: ${colors.muted}; }
-      [data-dingtalk-observer] .observer-coordination-group { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       @media (forced-colors: active) {
-        [data-dingtalk-observer] .observer-coordination-work[aria-pressed=true] { border-inline-start: 2px solid Highlight; padding-inline-start: 10px; background: Canvas; }
-        [data-dingtalk-observer] .observer-coordination-work:focus-visible { outline-color: Highlight; }
       }
       @media (max-width: 720px) {
-        [data-dingtalk-observer] .observer-coordination-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-        [data-dingtalk-observer] .observer-coordination-layout[data-selected=true] > nav { display: none; }
       }
       .observer-human-modal { box-sizing: border-box; width: min(1040px, calc(100vw - 48px)); height: min(900px, calc(100dvh - 48px)); max-width: none; max-height: none; margin: auto; padding: 0; border: 1px solid ${colors.border}; border-radius: 12px; background: ${colors.surface}; color: inherit; box-shadow: 0 24px 80px rgba(0,0,0,.22); overflow: hidden; }
       .observer-human-modal[open] { display: flex; flex-direction: column; }
@@ -282,14 +261,19 @@ window.__ModuleLoader__.load({
       if (!response.ok) throw Object.assign(new Error(value.error || `HTTP ${response.status}`), { status: response.status })
       return value
     }
-    async function load({ taskPages = {}, historyPage = 1, revisions = {}, selectedGroupId='', messagePage=1,outboxPage=1,messageDeliveryFilter='all',outboxStatusFilter='all',authorizationPage=1,authorizationFilter='all',alertType='all',resolvedAlertPage=1 } = {}) {
+    async function load({ activePage='groups',signal,taskPages = {}, historyPage = 1, revisions = {}, selectedGroupId='', messagePage=1,outboxPage=1,messageDeliveryFilter='all',outboxStatusFilter='all',authorizationPage=1,authorizationFilter='all',alertType='all',resolvedAlertPage=1 } = {}) {
+      const empty=()=>({items:[],total:0,offset:0,limit:10}), read=path=>get(path,{signal})
       const [health, groups, taskCollections, alertPages, authorizationCollection, topicPage] = await Promise.all([
-        get('/health'), get('/state/groups?summary=true'), Promise.all([...taskBuckets.map(bucket => get(`/state/tasks?state=${bucket.state}&offset=${((taskPages[bucket.state] || 1) - 1) * 10}&limit=10${revisions[bucket.state] ? `&revision=${encodeURIComponent(revisions[bucket.state])}` : ''}`)), get(`/state/tasks?archived=true&offset=${(historyPage - 1) * 20}&limit=20${revisions.archive ? `&revision=${encodeURIComponent(revisions.archive)}` : ''}`)]), Promise.all(['active','resolved'].map(view=>get(`/state/supervisor/alerts?view=${view}&type=${alertType}&offset=${(resolvedAlertPage-1)*10}&limit=10`))), get(`/state/authorizations?offset=${(authorizationPage-1)*10}&limit=10&filter=${authorizationFilter}${revisions.authorizations?`&pageRevision=${encodeURIComponent(revisions.authorizations)}`:''}`), get('/state/topics?offset=0&limit=100')
+        read('/health'), read('/state/groups?summary=true'),
+        Promise.all([...taskBuckets.map(bucket => activePage==='tasks' ? read(`/state/tasks?state=${bucket.state}&offset=${((taskPages[bucket.state] || 1) - 1) * 10}&limit=10${revisions[bucket.state] ? `&revision=${encodeURIComponent(revisions[bucket.state])}` : ''}`) : empty()), activePage==='archive' ? read(`/state/tasks?archived=true&offset=${(historyPage - 1) * 20}&limit=20${revisions.archive ? `&revision=${encodeURIComponent(revisions.archive)}` : ''}`) : empty()]),
+        Promise.all(['active','resolved'].map(view=>activePage==='alerts'?read(`/state/supervisor/alerts?view=${view}&type=${alertType}&offset=${(resolvedAlertPage-1)*10}&limit=10`):empty())),
+        activePage==='authorizations'?read(`/state/authorizations?offset=${(authorizationPage-1)*10}&limit=10&filter=${authorizationFilter}${revisions.authorizations?`&pageRevision=${encodeURIComponent(revisions.authorizations)}`:''}`):empty(),
+        activePage==='topics'?read('/state/topics?offset=0&limit=100'):{topics:[]}
       ])
       const groupId=groups.some(group=>group.groupId===selectedGroupId)?selectedGroupId:groups[0]?.groupId
-      const groupCollections=groupId?await Promise.all(['messages','outbox'].map(collection=>{
+      const groupCollections=activePage==='groups'&&groupId?await Promise.all(['messages','outbox'].map(collection=>{
         const page=collection==='messages'?messagePage:outboxPage,filter=collection==='messages'?messageDeliveryFilter:outboxStatusFilter
-        return get(`/state/groups/${encodeURIComponent(groupId)}/${collection}?offset=${(page-1)*10}&limit=10&filter=${encodeURIComponent(filter)}${revisions[collection]?`&pageRevision=${encodeURIComponent(revisions[collection])}`:''}`).then(value=>({...value,groupId,filter}))
+        return read(`/state/groups/${encodeURIComponent(groupId)}/${collection}?offset=${(page-1)*10}&limit=10&filter=${encodeURIComponent(filter)}${revisions[collection]?`&pageRevision=${encodeURIComponent(revisions[collection])}`:''}`).then(value=>({...value,groupId,filter}))
       })):[]
       return { health, groups, groupCollections:Object.fromEntries(groupCollections.map((value,i)=>[['messages','outbox'][i],value])), tasks: taskCollections.flatMap(page => page.items), taskCollections: Object.fromEntries(taskBuckets.map((bucket,index) => [bucket.state,taskCollections[index]])), archiveCollection: taskCollections.at(-1), alerts:alertPages.flatMap(page=>page.items),alertCollections:Object.fromEntries(alertPages.map((page,i)=>[['active','resolved'][i],page])),authorizations:authorizationCollection.items,authorizationCollection:{...authorizationCollection,filter:authorizationFilter},topics: topicPage.topics }
     }
@@ -311,7 +295,7 @@ window.__ModuleLoader__.load({
       { state: 'waiting', label: '等待中', tone: colors.warning, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary, #a56500) 8%, var(--dsw-alias-bg-layer-1, #fff))' },
       { state: 'completed', label: '已结束', tone: 'var(--dsw-alias-state-success-primary, #248a3d)', background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary, #248a3d) 8%, var(--dsw-alias-bg-layer-1, #fff))' }
     ]
-    const pages = [{ id: 'groups', label: '群消息' }, { id: 'coordination', label: '协调工作' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '历史任务' }, { id: 'alerts', label: '告警' }]
+    const pages = [{ id: 'groups', label: '群消息' }, { id: 'topics', label: '话题' }, { id: 'tasks', label: '任务看板' }, { id: 'authorizations', label: '人工介入' }, { id: 'archive', label: '历史任务' }, { id: 'alerts', label: '告警' }]
     const traceStatus = (status) => ({ succeeded: '已完成', applied: '已接纳', settled: '处理已结束', processed: '处理已结束', running: '处理中', claimed: '处理中', pending: '等待处理', queued: '等待处理', waiting: '等待继续', waiting_user: '待补充', interrupted: '待恢复', cancelling: '正在停止', ready: '等待执行', needs_attention: '需要处理', failed: '失败', blocked: '已阻塞', superseded: '已被新消息替代', cancelled: '已取消', rejected: '未接纳', accepted: '已接纳' }[status] || '状态未记录')
     const taskDisplayTitle = task => {
       const text = String(task.title || task.objective || '未命名任务').replace(/\s+/gu, ' ').trim() || '未命名任务'
@@ -343,7 +327,6 @@ window.__ModuleLoader__.load({
       return `历时 ${value}`
     }
     function MessageRecovery({ path, body, token, readback = false, onChanged }) {
-      const reconsiderContext = body?.phase === 'coordination-context'
       const flight = useRef(false)
       const consumed = useRef(null)
       const [busy, setBusy] = useState(false)
@@ -366,30 +349,10 @@ window.__ModuleLoader__.load({
       }
       return React.createElement('div', { style: { marginTop: 6, fontSize: 11, overflowWrap: 'anywhere' } },
         React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy || consumed.current === token,
-          onClick: retry }, busy ? '恢复中…' : readback ? '核验发送结果' : reconsiderContext ? '重新核对引用' : '重试原消息'),
-        React.createElement('div', { style: { marginTop: 3, color: colors.muted } }, readback ? '仅回读，不重新发送。' : reconsiderContext
-          ? '补齐原消息已有引用后重新判断；保留原澄清记录，仅限尚无执行安排的事项。'
+          onClick: retry }, busy ? '恢复中…' : readback ? '核验发送结果' : '重试原消息'),
+        React.createElement('div', { style: { marginTop: 3, color: colors.muted } }, readback ? '仅回读，不重新发送。'
           : '先解除网络、鉴权或其他阻塞；仅恢复原请求，不重做已完成效果。'),
         feedback ? React.createElement('div', { role: 'status', style: { marginTop: 3 } }, feedback) : null)
-    }
-    function MessageProcessingFacts({ message }) {
-      const facts = message.processingFacts ?? {}
-      const labels = { settled: '已收束', unsettled: '未收束', unknown: '未记录' }
-      const notification = { prepared: '待发送', starting: '发送中', acknowledged: '已确认发送，待回读', unknown: '效果待核对', delivered: '已回读送达', failed: '失败', superseded: '已失效', unconfirmed: '未全部回读' }
-      const elapsed = value => value?.quality === 'negative' ? '时钟逆序，异常' : value?.quality === 'valid' ? fmtDuration(value.durationMs) : '未记录'
-      const phaseLabels = { 'source-read': '来源读取', 'resource-read': '图片资源读取', 'image-save': '图片准备与保存', 'resident-store': '消息存储（含串行等待）', 'source-record': '来源记录' }
-      const stageLabels = { ingress: 'Host接收', queue: '排队', turn: '原生回合（含模型/工具）', host: 'Host动作', send: '通知发送', readback: '送达回读' }
-      return React.createElement('details', { style: { marginTop: 6, fontSize: 12, overflowWrap: 'anywhere' } },
-        React.createElement('summary', { style: { color: colors.accent, cursor: 'pointer' } }, '处理状态与计时'),
-        message.processingConclusion ? React.createElement('p', { style: { whiteSpace: 'pre-wrap' } }, `${message.processingState === 'needs_clarification' ? '待补充' : '结论'}：${message.processingConclusion}`) : null,
-        React.createElement('p', null, '语义完成不代表业务任务完成或通知送达；阶段可能共享或重叠，不相加。'),
-        React.createElement('p', null, `Host接收：${fmt(facts.receivedAt)}；语义完成：${fmt(message.processingCompletedAt)}`),
-        React.createElement('p', null, `来源：${labels[facts.sourceState] || '未记录'}；通知：${facts.notificationState === 'unknown' && !facts.notifications?.length ? '未记录' : notification[facts.notificationState] || '未记录'}`),
-        React.createElement('p', null, `发生至语义完成：${elapsed(facts.semantic)}；接收至关联通知全部送达：${elapsed(facts.notificationE2e)}`),
-        ...(facts.issues ?? []).map((issue, index) => React.createElement('p', { key: `issue-${issue.requestId || index}` }, `${issue.phase === 'host' ? 'Host动作' : issue.phase === 'coordination' ? '独立协调' : issue.phase === 'decision' ? '语义判断' : '归类'}：${issue.status === 'retrying' ? '等待自动重试' : '处理失败'}${issue.retryAt ? `；预计重试 ${fmt(issue.retryAt)}` : ''}${issue.attempt ? `；尝试 ${issue.attempt}` : ''}`)),
-        ...(facts.notifications ?? []).map(notice => React.createElement('p', { key: notice.notificationId }, `通知：${notification[notice.state] || '未记录'}${notice.versionMatched !== true ? '（消息版本未核实，不计端到端）' : ''}；回读送达：${fmt(notice.deliveredAt)}`)),
-        ...(facts.stages ?? []).map((stage, index) => React.createElement('p', { key: stage.spanId || `${stage.stage}:${stage.requestId}:${index}` }, `${stageLabels[stage.stage] || stage.stage}${stage.phase ? ` · ${phaseLabels[stage.phase] || stage.phase}` : ''}：${fmt(stage.startedAt)} → ${fmt(stage.completedAt)}${stage.quality === 'negative' ? '（时钟异常）' : ''}${stage.shared ? '（共享区间）' : ''}${stage.attempt ? `；尝试 ${stage.attempt}` : ''}${stage.loopDelayMs !== undefined ? `；事件循环最大延迟 ${Math.round(stage.loopDelayMs)} 毫秒` : ''}；请求 ${stage.requestId}`)),
-        React.createElement('p', null, `未记录阶段：${Object.entries(stageLabels).filter(([key]) => !facts.stages?.some(stage => stage.stage === key)).map(([, label]) => label).join('、') || '无'}；原生回合不是纯模型用时，不跨回合求包络。`))
     }
     const traceReason = (reason) => {
       if (!reason) return null
@@ -682,160 +645,6 @@ window.__ModuleLoader__.load({
                 pager(messageOffset, context.total, messagePageSize, setMessageOffset, detailLoading))
             ))))
     }
-    const coordinationState = state => ({ reserved: '等待判断', accepted: '已接纳', rejected: '未接纳', needs_clarification: '等待澄清', active: '进行中', completed: '已完成', partially_completed: '部分完成', needs_attention: '需要处理', cancelled: '已取消', paused: '已暂停', ready: '等待执行', applied: '已接纳，尚未完成', fulfilled: '已正式完成', observing: '等待原任务完成', template: '周期安排模板', superseded: '已被替代', version_changed: '任务版本已变化', waiting: '等待执行', running: '执行中', succeeded: '已执行', failed: '失败', blocked: '已阻塞', expired: '已过期', pending: '待确认', unknown: '结果未知', delivered: '已送达', prepared: '已准备', sending: '发送中' }[state] || '状态未记录')
-    const dispatchReason = reason => ({ waiting_completion_proof: '等待前置任务正式完成', waiting_dependency: '等待前置任务正式完成', paused: '前置安排已暂停', cancelled: '前置安排已取消', stale: '前置任务版本已变化', unknown: '前置任务状态未确认', target_version_changed: '任务版本已变化，需核对安排', reorder_pending: '正在核对处理顺序', reorder_needs_clarification: '处理顺序需要澄清', waiting_batch_clarification: '等待本批安排澄清', waiting_trigger: '等待约定触发条件满足', trigger_paused: '触发安排已暂停', trigger_cancelled: '触发安排已取消', trigger_superseded: '触发安排已被替代' }[reason] || reason)
-    const coordinationRelations = (relations, onOpenTask) => relations?.length ? React.createElement('section', { 'aria-label': '任务调度关系', className: 'observer-coordination-section', style: { minWidth: 0, overflowWrap: 'anywhere' } },
-      React.createElement('h3', null, '任务调度关系'),
-      ...relations.map(relation => React.createElement('section', { key: relation.id, 'data-dispatch-target': relation.target.taskId, style: { padding: '12px 0', borderBottom: `1px solid ${colors.border}` } },
-        React.createElement('h4', null, `${relation.prerequisites.filter(item => relation.state !== 'waiting' || item.fulfilled === false).map(item => item.title || item.taskId).join('、') || '约定条件'} → ${relation.target.title || relation.target.taskId}`),
-        React.createElement('p', { className: 'observer-coordination-text' }, relation.prerequisites.length ? relation.condition === 'all' ? '触发条件：所有前置任务正式完成后调度目标任务。' : '触发条件：前置条件未确认。' : '触发条件：按已记录的调度安排。'),
-        React.createElement('p', { className: 'observer-coordination-text', 'data-dispatch-state': relation.state }, `调度结果：${({ waiting: '等待前置任务完成', pending: '等待调度', dispatched: '调度成功', failed: '调度失败', blocked: '调度受阻', cancelled: '调度已取消', paused: '调度已暂停', stale: '安排版本已变化', unknown: '调度结果未确认' })[relation.state] || '调度结果未确认'}`),
-        relation.state === 'waiting' ? React.createElement('section', { 'aria-label': '前置任务等待' }, React.createElement('p', null, '等待以下前置任务正式完成：'),
-          ...relation.prerequisites.filter(item => item.fulfilled === false).map(item => React.createElement('div', { key: item.instructionId },
-            React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', 'data-prerequisite-task': item.taskId, onClick: () => onOpenTask({ taskId: item.taskId }) }, item.title || item.taskId),
-            item.reason ? React.createElement('p', { className: 'observer-coordination-text' }, dispatchReason(item.reason)) : null))) : null,
-        relation.state !== 'waiting' && relation.prerequisites.length ? React.createElement('nav', { 'aria-label': '前置任务', style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
-          ...relation.prerequisites.map(item => React.createElement(Button, { key: item.instructionId, type: 'button', variant: 'outline', size: 'sm', 'data-prerequisite-task': item.taskId, onClick: () => onOpenTask({ taskId: item.taskId }) }, item.title || item.taskId))) : null,
-        relation.dispatch.reason ? React.createElement('p', { className: 'observer-coordination-text' }, `原因：${dispatchReason(relation.dispatch.reason)}`) : null,
-        React.createElement('p', { className: 'observer-coordination-text' }, `下一步：${relation.dispatch.nextStep || '未记录下一步'}`),
-        relation.dispatch.triggerAt ? React.createElement('p', { className: 'observer-coordination-text' }, `已安排触发时间：${fmt(relation.dispatch.triggerAt)}`) : null,
-        React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: () => onOpenTask({ taskId: relation.target.taskId }) }, `查看目标任务：${relation.target.title || relation.target.taskId}`)))) : null
-    // 每个读取范围独立轮询；换范围立即隔离旧内容，失败只保留同范围数据。
-    function useCoordinationRead(path) {
-      const [resource, setResource] = useState({ path, loading: Boolean(path) })
-      const [retry, setRetry] = useState(0)
-      const pagingSnapshot=useRef(null)
-      useEffect(() => {
-        if (!path) return
-        let active = true, pending = false, controller
-        const read = async () => {
-          if (!active || pending) return
-          pending = true; controller = new AbortController()
-          const timeout = window.setTimeout(() => controller.abort(), 15000)
-          setResource(current => ({ path, value: current.path === path ? current.value : undefined, error: current.path === path ? current.error : '', loading: true }))
-          try {
-            let requestPath=path,paging
-            if(/^\/state\/coordination-(work|sources)\?/u.test(path)){
-              paging=new URL(path,'http://observer.local');const offset=Number(paging.searchParams.get('offset')||0);paging.searchParams.delete('offset');const scope=paging.pathname+paging.search
-              const prior=pagingSnapshot.current
-              if(offset&&prior?.scope===scope&&prior.offset!==offset&&prior.revision)requestPath+=`&pageRevision=${encodeURIComponent(prior.revision)}`
-              paging={scope,offset}
-            }
-            const value = await get(requestPath, { signal: controller.signal })
-            if(active){if(paging)pagingSnapshot.current={...paging,revision:value.revision};setResource({ path, value, error: '', loading: false })}
-          } catch (cause) {
-            if (active) {if(cause.status===409)pagingSnapshot.current=null;setResource(current => ({ ...current, conflict:cause.status===409, loading: false, error: cause.message === 'coordination_observer_unavailable' ? '当前服务尚未提供协调工作读取，请核对安装版本。' : '协调记录读取失败，请重试；未能确认最新状态。' }))
-            }
-          } finally { window.clearTimeout(timeout); pending = false }
-        }
-        void read()
-        const timer = window.setInterval(read, 5000)
-        return () => { active = false; controller?.abort(); window.clearInterval(timer) }
-      }, [path, retry])
-      return { ...(resource.path === path ? resource : { loading: Boolean(path) }), reload: () => setRetry(value => value + 1) }
-    }
-    function CoordinationBrowser({ groups, groupsReady = true, target, onOpenTask }) {
-      const knownGroups = groups.filter((group, index) => typeof group.groupId === 'string' && group.groupId.trim() && groups.findIndex(item => item.groupId === group.groupId) === index).map(group => ({ id: group.groupId, label: group.name || group.groupId }))
-      const [selection, setSelection] = useState(() => ({ groupId: target?.groupId, offset: target?.offset || 0, workId: target?.workId || '' }))
-      // 未初始化不是全部群；先解析有效范围，避免异步加载闪出全部或旧群内容。
-      const groupId = !groupsReady || !knownGroups.length ? undefined : selection.groupId === '' || knownGroups.some(group => group.id === selection.groupId) ? selection.groupId : knownGroups[0].id
-      const scopeChanged = selection.groupId !== groupId
-      const offset = scopeChanged ? 0 : selection.offset, workId = groupId === undefined || scopeChanged ? '' : selection.workId
-      useEffect(() => {
-        if (groupsReady && scopeChanged) setSelection({ groupId, offset: 0, workId: '' })
-      }, [groupsReady, groupId, scopeChanged])
-      const setOffset = update => setSelection(current => ({ ...current, offset: typeof update === 'function' ? update(current.offset) : update, workId: '' }))
-      const setWorkId = id => setSelection({ groupId, offset, workId: id })
-      const navigation = useRef(null), detailHeading = useRef(null), focusDetail = useRef(Boolean(target?.workId)), focusWork = useRef('')
-      const params = new URLSearchParams({ offset: String(offset), limit: '10' })
-      if (groupId) params.set('groupId', groupId)
-      const listing = useCoordinationRead(groupId === undefined ? null : `/state/coordination-work?${params}`)
-      const detail = useCoordinationRead(workId ? `/state/coordination-work/${encodeURIComponent(workId)}` : null)
-      const value = detail.value, work = value?.work, history = value?.history
-      const members = value?.members || [], works = listing.value?.works || []
-      useEffect(() => {
-        if (workId && value && focusDetail.current) { detailHeading.current?.focus(); focusDetail.current = false }
-        if (!workId && focusWork.current) {
-          const button = [...(navigation.current?.querySelectorAll('[data-work-id]') || [])].find(item => item.dataset.workId === focusWork.current)
-          button?.focus(); focusWork.current = ''
-        }
-      }, [workId, value])
-      useEffect(() => {
-        if(listing.conflict&&offset>0){setOffset(0);return}
-        if (listing.value && offset > 0 && offset >= listing.value.total) { setOffset(Math.max(0, Math.floor((listing.value.total - 1) / 10) * 10)) }
-      }, [listing.value,listing.conflict, offset])
-      const choose = id => { focusDetail.current = true; setWorkId(id) }
-      const back = () => { focusWork.current = workId; setWorkId('') }
-      const refresh = () => { listing.reload(); detail.reload() }
-      const text = value => React.createElement('p', { className: 'observer-coordination-text' }, value || '未记录')
-      const section = (title, ...children) => React.createElement('section', { className: 'observer-coordination-section' }, React.createElement('h3', null, title), ...children)
-      const evidence = (items, label) => React.createElement('div', { style: { margin: '12px 0' } }, React.createElement('strong', { style: { fontSize: 12, color: colors.muted } }, label), items?.length ? React.createElement('ul', { 'aria-label': label, style: { paddingLeft: 20, margin: '8px 0', overflowWrap: 'anywhere' } }, ...items.map((item, index) => React.createElement('li', { key: index }, item))) : text('未记录'))
-      const notice = (resource, label) => resource.error ? React.createElement('div', { role: 'alert', style: { ...card, marginBottom: 12, color: colors.danger } }, resource.error, resource.value ? ` 保留上次${label}，内容可能已过期。` : '', React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: resource.reload, style: { marginLeft: 8 } }, `重试${label}`)) : null
-      const selectGroup = id => { focusWork.current = ''; setSelection({ groupId: id, offset: 0, workId: '' }) }
-      const disclosure = (title, ...children) => React.createElement('details', { className: 'observer-coordination-disclosure' }, React.createElement('summary', null, title), ...children)
-      const inputState = state => ({ reserved: '等待判断', accepted: '已接纳', rejected: '未接纳', needs_clarification: '等待澄清' }[state] || '状态未确认')
-      const resultTone = tone => ({ danger: 'error', warning: 'warning', info: 'ongoing', success: 'done' }[tone] || undefined)
-      const resultBadge = result => React.createElement('span', { 'data-work-result': result?.code || 'unknown' }, statusTag(result?.label || '状态未确认', resultTone(result?.tone)))
-      const kindLabel = kind => ({ schedule: '定时安排', dispatch: '任务调度', trigger: '触发调度' }[kind] || '协调工作')
-      const planRule = plan => `${plan.rule.kind === 'once' ? `单次 ${new Date(plan.rule.at).toLocaleString('zh-CN', { hour12: false, timeZone: plan.timezone })}` : plan.rule.kind === 'daily' ? `每日 ${plan.rule.time || '时间未记录'}` : plan.rule.kind === 'weekly' ? `每周${'日一二三四五六'[plan.rule.weekday] ?? '（星期未记录）'} ${plan.rule.time || '时间未记录'}` : '未记录'}${plan.timezone ? ` · 时区 ${plan.timezone}` : ''}`
-      const proof = (item, label) => React.createElement('details', null, React.createElement('summary', null, label), text(`事件：${item.eventId || '未记录'}\n命令：${item.commandId || '未记录'}`))
-      const listingPage = React.createElement('nav', { ref: navigation, 'aria-label': '协调工作列表' },
-        notice(listing, '列表'),
-        !groupsReady ? React.createElement('p', { role: 'status' }, '正在读取群聊…') : !knownGroups.length ? emptyState('暂无可选群聊', { detail: '群聊列表为空，未读取全部群组。' }) : null,
-        listing.loading && !listing.value ? React.createElement('p', { role: 'status' }, '正在读取协调工作…') : null,
-        ...works.map(item => React.createElement('button', { key: item.id, type: 'button', className: 'observer-coordination-work', 'data-work-id': item.id, 'aria-pressed': item.id === workId, onClick: () => choose(item.id), style: { marginBottom: 2 } },
-          React.createElement('span', { className: 'observer-coordination-title' }, (item.title || kindLabel(item.kind)).replace(/\s+/g, ' ')),
-          React.createElement('span', { className: 'observer-coordination-meta' }, resultBadge(item.result), groupId === '' ? React.createElement('span', { className: 'observer-coordination-group' }, knownGroups.find(group => group.id === item.groupId)?.label || item.groupId || '群归属未记录') : null, React.createElement('time', { dateTime: item.updatedAt || undefined }, fmt(item.updatedAt))))),
-        groupId !== undefined && !listing.loading && !listing.error && !works.length ? emptyState('暂无协调工作', { detail: '当前群聊没有定时安排或任务调度；输入与修改记录不单独计为工作。' }) : null,
-        listing.value ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 12 } },
-          React.createElement('span', { style: { fontSize: 12, color: colors.muted, marginRight: 'auto' } }, `共 ${listing.value.total} 条 · 第 ${Math.floor(offset / 10) + 1} 页`),
-          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: offset === 0 || listing.loading, onClick: () => setOffset(value => Math.max(0, value - 10)) }, '上一页'),
-          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: offset + 10 >= listing.value.total || listing.loading, onClick: () => setOffset(value => value + 10) }, '下一页')) : null)
-      const reading = workId ? React.createElement('article', { 'aria-label': '协调工作详情', 'aria-busy': detail.loading, style: { ...card, overflowWrap: 'anywhere', minWidth: 0 } },
-        React.createElement(Button, { variant: 'ghost', size: 'sm', type: 'button', onClick: back }, '返回协调工作'),
-        notice(detail, '详情'),
-        !value && detail.loading ? React.createElement('p', { role: 'status' }, '正在读取协调详情…') : null,
-        work ? React.createElement(React.Fragment, null,
-          React.createElement('h2', { ref: detailHeading, tabIndex: -1, className: 'observer-coordination-heading', style: { fontSize: 20, margin: '14px 0 10px', outline: 'none' } }, work.title || kindLabel(work.kind)),
-          resultBadge(work.result),
-          React.createElement('p', { className: 'observer-coordination-group', style: { color: colors.muted, fontSize: 12 } }, `${kindLabel(work.kind)} · 所属群聊：${knownGroups.find(group => group.id === work.groupId)?.label || work.groupId || '未记录'}`),
-          work.result?.reason ? text(work.result.reason) : null,
-          section('计划与下一步',
-            text(`计划：${work.plan?.label || '无定时计划'}`),
-            work.plan?.rule ? text(`周期：${planRule(work.plan)}`) : null,
-            text(`下一步：${work.nextStep?.label || '无后续触发安排'}`),
-            text(`下次触发：${work.nextStep?.triggerAt ? fmt(work.nextStep.triggerAt) : '无后续触发安排'}`),
-            text(`重试：${work.nextStep?.sendRetryAt ? fmt(work.nextStep.sendRetryAt) : '无重试安排'}`),
-            text(`送达核实：${work.nextStep?.readbackAt ? fmt(work.nextStep.readbackAt) : '无核实安排'}`)),
-          coordinationRelations(value.relations, task => onOpenTask(task, { groupId, offset, workId })),
-          disclosure('输入与变更历史',
-            ...(history?.sources || []).map(source => React.createElement('section', { key: source.id, style: { padding: '8px 0' } }, text(`${fmt(source.createdAt)} · 输入判断：${inputState(source.state)}`), text(source.original), source.answerText ? text(`已记录答复：${source.answerText}`) : null, source.question ? text(`需要澄清：${source.question}`) : null, source.rejectionReason ? text(`未接纳原因：${source.rejectionReason}`) : null)),
-            history?.changes?.length ? React.createElement('ol', { style: { paddingLeft: 20 } }, ...history.changes.map((item, index) => React.createElement('li', { key: index }, text(`${fmt(item.at)} · 修订 ${item.revision ?? '未记录'} · ${item.action === 'schedule-revision' ? '计划修订' : item.action || '已记录变更'}`), item.reason ? text(item.reason) : null,
-              item.action === 'schedule-revision' ? React.createElement(React.Fragment, null, text(`历史计划状态：${({ active: '已启用', paused: '已暂停', cancelled: '已取消', completed: '已结束', needs_clarification: '等待澄清' })[item.state] || '状态未确认'}`), item.rule ? text(`历史周期：${planRule(item)}`) : null, text(`历史下次触发：${item.nextDueAt ? fmt(item.nextDueAt) : '无后续触发安排'}`)) : null))) : text('未记录安排变更。'),
-            text('输入接纳不等于工作完成；关联协调记录不表示每条输入都修改了本项安排。')),
-          members.length ? disclosure('任务要求与证据',
-            ...members.map(member => React.createElement('section', { key: member.instructionId, style: { padding: '12px 0' } },
-              React.createElement('h4', null, member.title || member.taskId),
-              React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => onOpenTask({ taskId: member.taskId }, { groupId, offset, workId }) }, '查看任务'),
-              member.requirement ? text(member.requirement) : null,
-              member.observation ? text('仅观察原任务完成，不追加要求或唤醒任务。') : member.progressImpact ? text(`协调方式：${member.progressImpact === 'preserve' ? '保留既有工作' : member.progressImpact === 'replan' ? '按新要求重新规划' : '未记录'}${member.impactReason ? `；${member.impactReason}` : ''}`) : null,
-              member.reorderAssessment ? React.createElement('div', null, text(`顺序评估：${member.reorderAssessment.summary || '未记录摘要'}`), evidence(member.reorderAssessment.evidence, '顺序评估依据')) : null,
-              member.decision ? React.createElement('div', null, text(`任务最近记录的结论（${member.decision.action || '未记录动作'}）：${member.decision.summary || '未记录摘要'}`), evidence(member.decision.evidence, '任务结论依据'), evidence(member.decision.limitations, '任务结论限制')) : null,
-              member.completionProofCurrent && member.completionProof ? proof(member.completionProof, '正式完成证明引用') : text('暂无当前指令的正式完成证明。'),
-              member.historicalCompletionProof ? proof(member.historicalCompletionProof, '历史完成证明引用（不证明当前指令完成）') : null))) : null,
-          history?.occurrences?.length || history?.jobs?.length ? disclosure('触发与送达记录',
-            ...(history?.occurrences || []).map(item => React.createElement('div', { key: item.occurrenceId, style: { marginBottom: 12 } }, text(`计划时间：${fmt(item.plannedAt)}${item.cancelledAt ? `\n本次已取消于 ${fmt(item.cancelledAt)}，既有执行/送达事实不被撤销。` : item.paused ? '\n本次已暂停。' : ''}`), text(`执行：${coordinationState(item.actionState)} · 通知：${coordinationState(item.deliveryState)}`), item.resultRef ? text(`结果引用：${item.resultRef}`) : null, item.failureCode ? text('存在触发故障记录，需核对；不能视为已完成。') : null)),
-            ...(history?.jobs || []).map(item => React.createElement('p', { key: item.jobId }, `触发作业：${coordinationState(item.state)}；作业结束不代表通知送达或任务完成。`))) : null,
-          ...Object.entries(value.collections || {}).filter(([, info]) => info.truncated).map(([key, info]) => React.createElement('p', { key, role: 'status', style: { color: colors.warning, fontSize: 12 } }, `${{ changes: '变更记录', sources: '关联输入', members: '任务', occurrences: '触发记录', jobs: '作业' }[key] || key}仅显示最近 ${info.returned} / ${info.total} 条；主要结果依据完整记录计算。`)),
-          disclosure('证据与读取边界', text('这里只展示已保存的判断结果与事实，不展示或推测内部思维过程。证据文字和引用仅表示已记录，不代表本看板已独立核验。各条查询并非同一事务快照。'), text('通知送达不等于任务完成。'), text(`读取于 ${fmt(value.observedAt)}`))) : null) : emptyState('选择一项协调工作', { detail: '查看实体结果、计划、任务依赖和完成证据。' })
-      return React.createElement('section', { 'aria-label': '协调工作', style: { minWidth: 0 } },
-        React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: 20 } },
-          groupsReady && knownGroups.length ? React.createElement(SelectMenu, { label: '筛选协调群组', value: groupId, options: [...knownGroups, { id: '', label: '全部群组' }], onChange: selectGroup }) : null,
-          React.createElement('span', { style: { color: colors.muted, fontSize: 12, marginRight: 'auto' } }, '只读 · 每 5 秒刷新', listing.value ? ` · 列表读取于 ${fmt(listing.value.observedAt)}` : ''),
-          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: refresh, disabled: groupId === undefined || listing.loading || detail.loading }, listing.loading || detail.loading ? '正在刷新…' : '刷新协调记录')),
-        React.createElement('div', { className: 'observer-coordination-layout', 'data-selected': Boolean(workId) }, listingPage, reading))
-    }
-
     function TaskStepOutput({ taskId, node, detailRevision }) {
       return React.createElement(TaskStepOutputContent, { key: `${taskId}:${node.runId}:${node.nodeRunId}:${node.outputRef}`, taskId, node, detailRevision })
     }
@@ -1398,7 +1207,7 @@ window.__ModuleLoader__.load({
         if (!live) return
         setNow(Date.now())
         const timer = window.setInterval(() => setNow(Date.now()), 1000)
-        return () => window.clearInterval(timer)
+        return () => { window.clearInterval(timer); pendingRefresh.current?.controller.abort(); pendingRefresh.current=null }
       }, [live, timeline])
       if (!timeline) return React.createElement('section', { className: 'detail-panel detail-timeline', 'aria-label': '执行时间泳道图' }, React.createElement('h2', null, '执行时间'), React.createElement('p', { className: 'detail-muted' }, '历史执行过程未记录。'), React.createElement(TaskOutcomeRecords, { taskId, timeline, readonly }))
       const rows = [...timeline.executions, timeline.human]
@@ -1669,7 +1478,6 @@ window.__ModuleLoader__.load({
           question ? React.createElement(HumanRequestContent, { request: humanRequest || { reason: traceReason(task.waitingReason), question, evidence: task.lastDecision?.evidence } })
             : React.createElement('p', null, ...linkedTaskText(traceReason(task.waitingReason))),
           question ? React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => onOpenHumanRequest(task.taskId) }, '查看人工介入问题') : null) : null,
-        coordinationRelations(task.coordination?.relations, onOpenTask),
         React.createElement('div', { className: 'detail-columns' },
           React.createElement('div', { className: 'detail-primary' },
             React.createElement('section', { className: 'detail-panel', 'aria-label': '目标与要求' }, React.createElement('h2', null, '目标与要求'), React.createElement('p', { className: 'detail-objective' }, task.objective || '尚未记录任务目标。'),
@@ -1754,8 +1562,6 @@ window.__ModuleLoader__.load({
         catch { /* 浏览器禁用存储时仍允许正常切页。 */ }
       }, [])
       const [topicTarget, setTopicTarget] = useState()
-      const [coordinationTarget, setCoordinationTarget] = useState()
-      const [taskCoordinationReturn, setTaskCoordinationReturn] = useState(false)
       const [data, setData] = useState()
       const [expandedTaskId, setExpandedTaskId] = useState('')
       const expansionInitialized = useRef(false)
@@ -1816,8 +1622,9 @@ window.__ModuleLoader__.load({
       const openAuthorization=item=>{if(!item)return;authorizationIdentity.current={taskId:item.taskId,requestId:item.requestId};setAuthorizationDetailData(item);setSelectedAuthorizationId(item.requestId)}
       const pendingRefresh = useRef(null), pageSnapshots = useRef({})
       const refresh = useCallback(() => {
-        const key = JSON.stringify([taskPages,historyPage,selectedGroupId,messagePage,outboxPage,messageDeliveryFilter,outboxStatusFilter,authorizationPage,authorizationFilter,alertType,alertView,resolvedAlertPage])
+        const key = JSON.stringify([activePage,taskPages,historyPage,selectedGroupId,messagePage,outboxPage,messageDeliveryFilter,outboxStatusFilter,authorizationPage,authorizationFilter,alertType,alertView,resolvedAlertPage])
         if (pendingRefresh.current?.key === key) return pendingRefresh.current.promise
+        pendingRefresh.current?.controller.abort()
         const revisions = {}
         for (const bucket of taskBuckets) {
           const prior = pageSnapshots.current[bucket.state], offset = ((taskPages[bucket.state] || 1)-1)*10
@@ -1830,32 +1637,32 @@ window.__ModuleLoader__.load({
           if(page>1&&prior&&(!selectedGroupId||prior.groupId===selectedGroupId)&&prior.filter===filter&&prior.offset!==(page-1)*10)revisions[collection]=prior.revision
         }
 const previousAuthorization=pageSnapshots.current.authorizations
-        if(authorizationPage>1&&previousAuthorization?.filter===authorizationFilter&&previousAuthorization.offset!==(authorizationPage-1)*10)revisions.authorizations=previousAuthorization.revision
-        const request = {key}
-        request.promise = load({taskPages,historyPage,revisions,selectedGroupId,messagePage,outboxPage,messageDeliveryFilter,outboxStatusFilter,authorizationPage,authorizationFilter,alertType,resolvedAlertPage}).then(value => {
+        if(activePage==='authorizations'&&authorizationPage>1&&previousAuthorization?.filter===authorizationFilter&&previousAuthorization.offset!==(authorizationPage-1)*10)revisions.authorizations=previousAuthorization.revision
+        const request = {key,controller:new AbortController()}
+        request.promise = load({activePage,signal:request.controller.signal,taskPages,historyPage,revisions,selectedGroupId,messagePage,outboxPage,messageDeliveryFilter,outboxStatusFilter,authorizationPage,authorizationFilter,alertType,resolvedAlertPage}).then(value => {
           if (pendingRefresh.current !== request) return
-          pageSnapshots.current = {...value.taskCollections,archive:value.archiveCollection,...value.groupCollections,authorizations:{...value.authorizationCollection,filter:authorizationFilter}}
+          pageSnapshots.current = {...pageSnapshots.current, ...(activePage==='tasks'?value.taskCollections:{}), ...(activePage==='archive'?{archive:value.archiveCollection}:{}), ...value.groupCollections, ...(activePage==='authorizations'?{authorizations:{...value.authorizationCollection,filter:authorizationFilter}}:{})}
           setData({ ...value, tasks: (value.tasks || []).map(task => archivedTasksRef.current.has(task.taskId) ? { ...task, ...archivedTasksRef.current.get(task.taskId) } : task) })
           const clamped = {...taskPages}; let changed = false
           for (const bucket of taskBuckets) {
             const maximum = Math.max(1,Math.ceil(value.taskCollections[bucket.state].total/10))
             if ((clamped[bucket.state] || 1)>maximum) {clamped[bucket.state]=maximum;changed=true}
           }
-          if(changed)setTaskPages(clamped)
-          if((historyPage-1)*20>=value.archiveCollection.total && historyPage>1)setHistoryPage(Math.max(1,Math.ceil(value.archiveCollection.total/20)))
+          if(changed&&activePage==='tasks')setTaskPages(clamped)
+          if(activePage==='archive'&&(historyPage-1)*20>=value.archiveCollection.total && historyPage>1)setHistoryPage(Math.max(1,Math.ceil(value.archiveCollection.total/20)))
           for(const [name,setPage,page] of [['messages',setMessagePage,messagePage],['outbox',setOutboxPage,outboxPage]]){const collection=value.groupCollections?.[name];if(collection&&page>1&&(page-1)*10>=collection.total)setPage(Math.max(1,Math.ceil(collection.total/10)))}
-          if(authorizationPage>1&&(authorizationPage-1)*10>=value.authorizationCollection.total)setAuthorizationPage(Math.max(1,Math.ceil(value.authorizationCollection.total/10)))
+          if(activePage==='authorizations'&&authorizationPage>1&&(authorizationPage-1)*10>=value.authorizationCollection.total)setAuthorizationPage(Math.max(1,Math.ceil(value.authorizationCollection.total/10)))
           const alertTotal=value.alertCollections?.[alertView]?.total
-          if(resolvedAlertPage>1&&alertTotal!==undefined&&(resolvedAlertPage-1)*10>=alertTotal)setResolvedAlertPage(Math.max(1,Math.ceil(alertTotal/10)))
+          if(activePage==='alerts'&&resolvedAlertPage>1&&alertTotal!==undefined&&(resolvedAlertPage-1)*10>=alertTotal)setResolvedAlertPage(Math.max(1,Math.ceil(alertTotal/10)))
           setUpdatedAt(new Date());setError(undefined)
         },cause=>{
-          if(pendingRefresh.current !== request)return
+          if(pendingRefresh.current !== request||cause.name==='AbortError')return
           if(cause.status===409){pageSnapshots.current={};setTaskPages({});setHistoryPage(1);setMessagePage(1);setOutboxPage(1);setAuthorizationPage(1);setResolvedAlertPage(1);setError('列表已更新，已返回第一页，请重新翻页。')}
           else setError(cause instanceof Error ? cause.message : String(cause))
         }).finally(()=>{if(pendingRefresh.current===request)pendingRefresh.current=null})
         pendingRefresh.current=request
         return request.promise
-      }, [taskPages,historyPage,selectedGroupId,messagePage,outboxPage,messageDeliveryFilter,outboxStatusFilter,authorizationPage,authorizationFilter,alertType,alertView,resolvedAlertPage])
+      }, [activePage,taskPages,historyPage,selectedGroupId,messagePage,outboxPage,messageDeliveryFilter,outboxStatusFilter,authorizationPage,authorizationFilter,alertType,alertView,resolvedAlertPage])
       const manualRefresh = useCallback(async () => {
         if (refreshState === 'refreshing') return
         setRefreshState('refreshing')
@@ -1879,7 +1686,7 @@ const previousAuthorization=pageSnapshots.current.authorizations
       useEffect(() => {
         refresh()
         const timer = window.setInterval(refresh, 5000)
-        return () => window.clearInterval(timer)
+        return () => { window.clearInterval(timer); pendingRefresh.current?.controller.abort(); pendingRefresh.current=null }
       }, [refresh])
       useEffect(() => {
         const closeForSession = (event) => {
@@ -1903,8 +1710,8 @@ const previousAuthorization=pageSnapshots.current.authorizations
         catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
         finally { setNavigatingSessionId('') }
       }
-      const openTask = (task, returnTarget) => { setTaskCoordinationReturn(Boolean(returnTarget)); if (returnTarget) setCoordinationTarget(returnTarget); setSelectedTaskId(task.taskId); setActivePage('tasks') }
-      const returnFromTask = () => { setSelectedTaskId(''); if (taskCoordinationReturn && coordinationTarget) { setActivePage('coordination'); setTaskCoordinationReturn(false) } }
+      const openTask = task => { setSelectedTaskId(task.taskId); setActivePage('tasks') }
+      const returnFromTask = () => setSelectedTaskId('')
       const copyId = async (value) => {
         let copied = false
         try {
@@ -1952,13 +1759,13 @@ const previousAuthorization=pageSnapshots.current.authorizations
       const messageRows = visibleMessages.map((message, rowIndex) => {
         const workflowState = messageWorkflowState(message)
         const status = delivery[workflowState]
-        const recovery = message.processingFacts?.recovery?.[0]
+        const recovery = message.processingRecovery
         const recoveryBody = recovery ? { messageVersion: message.messageVersion, activeUnitRefs: message.activeUnitRefs || [], phase: recovery.phase, requestId: recovery.requestId, token: recovery.token } : null
         const conclusion = message.processingConclusion ? `${workflowState === 'needs_clarification' ? '待补充' : '结论'}：${message.processingConclusion}`
           : workflowState === 'processed' ? '结论未记录'
           : workflowState === 'needs_clarification' ? '等待补充必要信息'
           : workflowState === 'failed' ? '未完成，需排查后按原请求恢复'
-            : message.processingFacts?.issues?.some(issue => issue.status === 'retrying') ? '等待自动重试，尚未完成'
+            : message.processingRetrying ? '等待自动重试，尚未完成'
               : workflowState === 'unknown' ? '处理状态未记录' : '尚未处理完成'
         const notificationLabels = { prepared: '待发送', sending: '发送中', acknowledged: '已确认发送，待回读', unknown: '发送结果待核对', delivered: '已回读送达', superseded: '已失效' }
         const responsibilityLabels = { host: '助手读取和核对', requester: '请求人补充', system: '系统维护人员排查', approver: '审批人确认', acceptor: '验收人确认' }
@@ -1975,12 +1782,12 @@ const previousAuthorization=pageSnapshots.current.authorizations
         return React.createElement('tr', { key: message.messageId, style: { background: rowIndex % 2 ? `color-mix(in srgb, ${colors.surface2} 55%, transparent)` : colors.cardSurface } },
           React.createElement('td', { style: { ...tableBodyCell, width: 144 }, title: traceReason(message.workflowStatusDetail || message.agentDeliveryError) || '' }, clampTableContent(tableStatusTag(status.label, status.state, { fontWeight: 600 }))),
           React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, clampTableContent(React.createElement('strong', { style: { fontSize: 14, fontWeight: 600 } }, message.senderName || message.senderOpenDingTalkId || '发送人未记录'), React.createElement('div', { style: { marginTop: 3, fontSize: 11, color: colors.muted } }, fmt(message.occurredAt)))),
-          React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, React.createElement('div', { style: { display: 'flex', gap: 4, minWidth: 0, overflow: 'hidden' } }, ...(message.taskSessionRefs || []).map(taskId => React.createElement(Button, { key: `task:${taskId}`, type: 'button', variant: 'outline', size: 'sm', onClick: () => openTask(tasksById.get(taskId) || { taskId }), style: { maxWidth: 140, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }, 'aria-label': `查看任务 ${tasksById.get(taskId)?.title || taskId}` }, taskDisplayTitle(tasksById.get(taskId) || { title: taskId }))), ...(message.topicRefs?.length ? message.topicRefs.map((ref) => React.createElement('button', { key: ref.topicId, type: 'button', title: ref.title, 'aria-label': `话题 ${ref.title}`, onClick: () => { setTopicTarget({ groupId: selectedGroup.groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', flex: '0 1 auto', minWidth: 0, maxWidth: 120, border: 0, padding: '2px 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontFamily: 'inherit' } }, ref.title)) : message.taskSessionRefs?.length ? [] : [React.createElement('span', { key: 'unrouted', style: { color: colors.muted, fontSize: 12 } }, workflowState === 'processed' ? '—' : workflowState === 'needs_clarification' ? '关联待确认' : workflowState === 'unknown' ? '关联未记录' : '待归类')]))),
+          React.createElement('td', { style: { ...tableBodyCell, width: 160 } }, React.createElement('div', { style: { display: 'flex', gap: 4, minWidth: 0, overflow: 'hidden' } }, ...(message.taskSessionRefs || []).map(taskId => React.createElement(Button, { key: `task:${taskId}`, type: 'button', variant: 'outline', size: 'sm', onClick: () => openTask(tasksById.get(taskId) || { taskId }), style: { maxWidth: 140, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }, 'aria-label': `查看任务 ${message.taskTitles?.[taskId] || tasksById.get(taskId)?.title || taskId}` }, taskDisplayTitle({title:message.taskTitles?.[taskId] || tasksById.get(taskId)?.title || taskId}))), ...(message.topicRefs?.length ? message.topicRefs.map((ref) => React.createElement('button', { key: ref.topicId, type: 'button', title: ref.title, 'aria-label': `话题 ${ref.title}`, onClick: () => { setTopicTarget({ groupId: selectedGroup.groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', flex: '0 1 auto', minWidth: 0, maxWidth: 120, border: 0, padding: '2px 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontFamily: 'inherit' } }, ref.title)) : message.taskSessionRefs?.length ? [] : [React.createElement('span', { key: 'unrouted', style: { color: colors.muted, fontSize: 12 } }, workflowState === 'processed' ? '—' : workflowState === 'needs_clarification' ? '关联待确认' : workflowState === 'unknown' ? '关联未记录' : '待归类')]))),
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）'),
             React.createElement('div', { 'aria-label': '处理结论与历时', style: { display: 'flex', gap: 12, minWidth: 0, marginTop: 4, height: 20, lineHeight: '20px', fontSize: 12, color: colors.muted } },
-              React.createElement('span', { title: conclusion, style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, conclusion),
+              React.createElement('span', { title: conclusion, tabIndex: 0, 'aria-label': conclusion, style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, conclusion),
               React.createElement('span', { title: '消息发生至本轮语义决策结束，不是业务执行耗时', style: { flex: '0 0 auto', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, ['processed', 'needs_clarification'].includes(workflowState) ? messageProcessingElapsed(message) : '—'))),
-          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, React.createElement(MessageProcessingFacts, { message }), recovery && workflowState !== 'processed' ? React.createElement(MessageRecovery, { key: recovery.requestId, path: `/config/groups/${encodeURIComponent(selectedGroup.groupId)}/messages/${encodeURIComponent(message.messageId)}/retry`, body: recoveryBody, token: recovery.token, onChanged: refresh }) : workflowState === 'failed' ? React.createElement('div', { style: { marginTop: 6, fontSize: 11, color: colors.muted } }, '需先核实并解除原操作阻塞；未知效果不允许重放。') : null, messageFacts))
+          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, recovery && workflowState !== 'processed' ? React.createElement(MessageRecovery, { key: recovery.requestId, path: `/config/groups/${encodeURIComponent(selectedGroup.groupId)}/messages/${encodeURIComponent(message.messageId)}/retry`, body: recoveryBody, token: recovery.token, onChanged: refresh }) : workflowState === 'failed' ? React.createElement('div', { style: { marginTop: 6, fontSize: 11, color: colors.muted } }, '需先核实并解除原操作阻塞；未知效果不允许重放。') : null, messageFacts))
       })
       const outboxCollection=data?.groupCollections?.outbox
       const selectedOutbox=outboxCollection&&outboxCollection.groupId===selectedGroup?.groupId&&outboxCollection.filter===outboxStatusFilter?outboxCollection.items:[]
@@ -2131,7 +1938,7 @@ const previousAuthorization=pageSnapshots.current.authorizations
       const tasksPage = selectedTaskId ? React.createElement('div', { className: 'observer-task-detail-route', style: { maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 16 } },
           React.createElement('style', null, taskDetailCss),
           detailError ? React.createElement('div', { className: 'detail-fetch-error', role: 'alert' }, `${selectedTask ? '详情刷新失败，已读取内容可能过期' : '详情读取失败'}：${detailError}`, React.createElement(Button, { type: 'button', variant: 'outline', onClick: () => setDetailRetry(value => value + 1) }, '重试读取详情')) : null,
-          selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onBack: returnFromTask, onOpenTask: task => openTask(task, taskCoordinationReturn ? coordinationTarget : undefined), updatedAt, onOpenHumanRequest: taskId => { openAuthorization((data?.authorizations||[]).find(item=>item.taskId===taskId&&item.status==='waiting-reply')||((taskDetail?.humanRequests||[]).find(item=>item.status==='waiting-reply')?{...taskDetail.humanRequests.find(item=>item.status==='waiting-reply'),taskId,groupId:taskDetail.groupId}:undefined));setActivePage('authorizations') } })
+          selectedTask ? React.createElement(TaskSessionDetail, { task: selectedTask, onOpenSession: navigate, onBack: returnFromTask, onOpenTask: openTask, updatedAt, onOpenHumanRequest: taskId => { openAuthorization((data?.authorizations||[]).find(item=>item.taskId===taskId&&item.status==='waiting-reply')||((taskDetail?.humanRequests||[]).find(item=>item.status==='waiting-reply')?{...taskDetail.humanRequests.find(item=>item.status==='waiting-reply'),taskId,groupId:taskDetail.groupId}:undefined));setActivePage('authorizations') } })
             : React.createElement('section', { className: 'observer-session-detail detail-fetch-state', 'aria-label': '任务详情读取状态' }, React.createElement('div', { className: 'detail-topline' }, React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', onClick: returnFromTask }, '返回看板'), React.createElement('span', { className: 'detail-muted' }, '任务详情')), React.createElement('h1', null, '任务详情'), !detailError ? React.createElement('span', { role: 'status' }, '正在读取任务详情…') : React.createElement('p', { className: 'detail-muted' }, '未读取到任务内容，请重试或返回看板。')))
         : React.createElement('section', { style: { display: 'grid', gap: 16 } }, React.createElement('div', { className: 'observer-task-board', style: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(300px, 1fr))', gap: ui.space3, overflowX: 'auto', alignItems: 'start', paddingBottom: ui.space2 } }, ...bucketColumns))
       const authorizationStatus = {
@@ -2204,8 +2011,7 @@ const previousAuthorization=pageSnapshots.current.authorizations
           selectedAlertCollection ? React.createElement('div', { style: tableFooter }, React.createElement('span', { style: { marginRight: 'auto', fontSize: 11, color: colors.muted } }, `${data?.alertCollections?.resolved?.total||0} 条 · 每页 ${resolvedAlertPageSize} 条`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage <= 1, onClick: () => setResolvedAlertPage((page) => Math.max(1, page - 1)) }, '上一页'), React.createElement('span', { style: { fontSize: 11, color: colors.muted } }, `${currentResolvedAlertPage} / ${resolvedAlertPageCount}`), React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: currentResolvedAlertPage >= resolvedAlertPageCount, onClick: () => setResolvedAlertPage((page) => Math.min(resolvedAlertPageCount, page + 1)) }, '下一页')) : null))
       )
       const topicsPage = React.createElement(TopicBrowser, { groups: data?.groups || [], tasks: data?.tasks || [], target: topicTarget, updatedAt, onOpenTask: openTask, onOpenSession: navigate })
-      const coordinationPage = React.createElement(CoordinationBrowser, { groups: data?.groups || [], groupsReady: Boolean(data), target: coordinationTarget, onOpenTask: openTask })
-      const pageContent = activePage === 'coordination' ? coordinationPage : activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
+      const pageContent = activePage === 'topics' ? topicsPage : activePage === 'tasks' ? tasksPage : activePage === 'authorizations' ? authorizationsPage : activePage === 'archive' ? archivePage : activePage === 'alerts' ? alertsPage : groupsPage
       const pageViewport = React.createElement('div', { style: { width: '100%', maxWidth: 1320, ...(activePage === 'groups' ? { minWidth: 0 } : {}), minHeight: 400, boxSizing: 'border-box', margin: '0 auto' } }, pageContent)
       const main = React.createElement('main', { className: 'observer-main', style: { width: '100%', minHeight: 'calc(100dvh - 90px)', boxSizing: 'border-box', padding: activePage === 'tasks' ? `${ui.space6}px ${ui.space6}px 0` : `${ui.space6}px ${ui.space6}px ${ui.space6 + ui.space2}px`, display: 'grid', alignContent: 'start', gap: ui.space6, pointerEvents: 'auto' } },
         error ? React.createElement(FeedbackNotice, { text: `无法连接 resident 插件：${error}`, error: true }) : null,

@@ -195,11 +195,13 @@ export function observerGroupQuery(db,q) {
   return db.prepare(`SELECT ${select} FROM ${table} WHERE ${where}`).all(...args).map(row=>JSON.parse(row.body))
  }
  if(q.kind==='observer.group-metadata')return {
-  sources:read('dynamic_sources',fields(['sourceId','groupId','messageId','version','routed','processingCompleted']),"json_extract(body,'$.groupId')=?",[q.groupId]).map(source=>({...source,routed:source.routed===1||source.routed===true})),
-  coordinationSources:read('dynamic_coordination_sources',fields(['id','groupId','sourceMessageId','sourceRefs','dispatchOwner','unitId','revision','reservationId','reservationGeneration','state','resolvedBy','pendingClarifications','attemptCount','nextRetryAt','frozen']),"json_extract(body,'$.groupId')=?",[q.groupId])
+  sources:read('dynamic_sources',fields(['sourceId','groupId','messageId','version','routed','processingCompleted','coordinationRetirement']),"json_extract(body,'$.groupId')=?",[q.groupId]).map(source=>({...source,routed:source.routed===1||source.routed===true})),
  }
- if(q.kind!=='observer.message-contexts'||!Array.isArray(q.messageIds)||q.messageIds.length>100||q.messageIds.some(id=>typeof id!=='string'))throw error('OBSERVER_PAGE_INVALID')
+ if(!['observer.message-contexts','observer.message-list-contexts'].includes(q.kind)||!Array.isArray(q.messageIds)||q.messageIds.length>100||q.messageIds.some(id=>typeof id!=='string'))throw error('OBSERVER_PAGE_INVALID')
  const ids=JSON.stringify(q.messageIds), args=[q.groupId,ids]
+ if(q.kind==='observer.message-list-contexts')return {
+  sources:read('dynamic_sources',fields(['sourceId','groupId','messageId','version','routed','processingCompleted','coordinationRetirement']),"json_extract(body,'$.groupId')=? AND json_extract(body,'$.messageId') IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM json_each(?) requested WHERE json_extract(requested.value,'$.messageId')=json_extract(dynamic_sources.body,'$.messageId') AND json_extract(requested.value,'$.version')=json_extract(dynamic_sources.body,'$.version'))",[...args,JSON.stringify(q.messages??[])]).map(source=>({...source,routed:source.routed===1||source.routed===true})),
+ }
  const sources=read('dynamic_sources','body',"json_extract(body,'$.groupId')=? AND json_extract(body,'$.messageId') IN (SELECT value FROM json_each(?))"+(q.messages?" AND EXISTS(SELECT 1 FROM json_each(?) requested WHERE json_extract(requested.value,'$.messageId')=json_extract(dynamic_sources.body,'$.messageId') AND json_extract(requested.value,'$.version')=json_extract(dynamic_sources.body,'$.version'))":''),q.messages?[...args,JSON.stringify(q.messages)]:args)
  const notifications=read('dynamic_notifications','body',"json_extract(body,'$.payload.conversationId')=? AND json_extract(body,'$.payload.sourceMessageId') IN (SELECT value FROM json_each(?))",args)
  const coordinationSources=read('dynamic_coordination_sources','body',"json_extract(body,'$.groupId')=? AND json_extract(body,'$.sourceMessageId') IN (SELECT value FROM json_each(?))",args)

@@ -1,5 +1,6 @@
 import {createObserverAlertPages} from './observer-alert-pages.js'
 import {createObserverGroupPages} from './observer-group-pages.js'
+import {retiredSourceOwnership} from './coordination-retirement.js'
 import { deliverTaskNotification, recallTaskOperatorNotification, retryTaskNotification, taskNotificationRecovery } from './notification-delivery.js'
 import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
 import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
@@ -21,7 +22,6 @@ import { createClaudeExecutionSessions, claudeExecutionLogPath } from './claude-
 import { createTaskSessionObservability } from './task-session-observability.js'
 import { activeFixedUnits } from './fixed-topics.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
-import { createCoordinationObserver } from './coordination-observer.js'
 import { resolveTaskArtifactScope } from './task-artifact-scope.js'
 import { resolveTopicMessages, stableId, replyTopicForMessage, canonicalReplyTopic } from './topic-model.js'
 import { createTopicFactHandler } from './topic-facts.js'
@@ -92,9 +92,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   let closed = false, recovering, scheduling, scheduleRequested = false, providerRetryTimer
   let notificationScan, notificationScanRequested = false, notificationTransportRetryAt = 0
   let sourceProcessingRevision = 0
+  let observerGroupPage
   const sourceHeldNotifications = new Map()
   const query = (kind, args = {}) => store.query({ kind, ...args })
-  const coordinationObserver = createCoordinationObserver(query)
+  if (residentStore.retireIndependentCoordination)
+    await residentStore.retireIndependentCoordination(await query('coordination.retirement'))
   const taskCache = new Map(), operationCache = new Map(), notificationCache = new Map(), executionCache = new Map()
   const documentTails = new Map()
   function publishExecutionDocument(executionId) {
@@ -123,9 +125,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   function topicTaskView(task) { return { ...task, state: task.status === 'completed' ? 'completed' : task.control === 'cancelled' ? 'cancelled' : task.control === 'paused' || task.drained ? 'waiting' : 'running', inputVersion: task.requirementRevision, runSequence: task.runSequence ?? 1, topicRefs: task.topicRefs ?? [], appliedOperations: task.appliedOperations ?? [], acceptanceCriteria: task.requirements ?? [], taskPromptRefs: [] } }
   const command = async (kind, args, id) => {
     if (kind === 'execution.continue' || kind === 'execution.retry-provider') await refreshExecutionDocument(args.executionId ?? args.binding.executionId)
-    const receipt = !id && store.maintain && ['coordination.aggregate','coordination.observe.reconcile','coordination.schedule.scan'].includes(kind)
-      ? await store.maintain({ kind, args: clean(args) })
-      : await store.command({ id: id ?? `${kind}:${randomUUID()}`, kind, args: clean(args) })
+    const receipt = await store.command({ id: id ?? `${kind}:${randomUUID()}`, kind, args: clean(args) })
+    observerGroupPage?.sourceChanged(receipt.result?.source ?? args.source)
     // 幂等收据保存的是当时快照；通知当前态须独立回读，不能用旧 prepared 覆盖已送达缓存。
     if (receipt.replayed && receipt.result?.notification)
       receipt.result.notification = await query('notification.get', { notificationId: receipt.result.notification.id })
@@ -143,7 +144,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const operation = await query('operation.get', { operationId: resolution.operationId })
       operationCache.set(operation.id ?? operation.operationId, operation)
     }
-    if (receipt.result?.notification) notificationCache.set(receipt.result.notification.id, receipt.result.notification)
+    if (receipt.result?.notification) {
+      const previous=notificationCache.get(receipt.result.notification.id), notification=receipt.result.notification
+      notificationCache.set(notification.id,notification)
+      if(observerGroupPage)for(const item of [previous,notification].filter(Boolean))
+        for(const value of [item.receipt,item.ack])observerGroupPage.sourceChanged({groupId:item.payload?.conversationId,messageId:receiptMessageId(value)})
+    }
     if (receipt.result?.notification) await projectTaskNotification({ residentStore, notification: receipt.result.notification })
     if (receipt.result?.task) taskCache.set(receipt.result.task.taskId, topicTaskView(receipt.result.task))
     for (const fact of receipt.topicFacts ?? receipt.result?.topicFacts ?? []) {
@@ -156,7 +162,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (['execution.drained', 'execution.cancel', 'task.control', 'task.revise', 'task.reopen'].includes(kind)
       || kind.startsWith('operation.') && ['succeeded', 'failed', 'cancelled'].includes(receipt.result?.operation?.state)) void schedulePending()
     // 持久通知已可发送，无需等待协调规划、其他群恢复或下个轮询周期。
-    if (['source.processingCompleted', 'coordination.source.reconsiderContext'].includes(kind) && !receipt.replayed) sourceProcessingRevision++
+    if (kind === 'source.processingCompleted' && !receipt.replayed) sourceProcessingRevision++
     if (!closed && (receipt.result?.notification?.state === 'prepared'
       || kind === 'source.processingCompleted' && !receipt.replayed)) void deliverNotifications().catch(error => {
       ctx.logger?.warn?.(`notification scan: ${error.code ?? error.message}`)
@@ -429,7 +435,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return { ...await taskDTO(task), executions: (await taskExecutions(taskId)).executions,
       timeline: projectTaskTimeline(task, await query('execution.list', { taskId }), wakes, lifecycle),
       blockers: await query('task.blockers', { taskId }), notifications: await query('notification.list', { taskId }),
-      coordination: await coordinationObserver.taskCoordination(taskId, task.groupId) }
+      }
   }
   async function taskExecutions(taskId, { offset = 0, limit = 50, revision, summary = false } = {}) {
     const page = await query('observer.page', { collection: 'executions', taskId, offset, limit, revision, summary })
@@ -579,18 +585,23 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       return
     }
     if (source.version !== message.messageVersion) return
+    const retiredUnits = coordinated.filter(owner => owner.retirement?.kind === 'feature-removed' && owner.settled)
+      .filter(owner => message.activeUnitRefs?.some(ref => ref.unitId === owner.unitId && ref.unitRevision === owner.unitRevision))
+      .map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
+    const isRetired = entry => retiredUnits.some(ref => ref.unitId === entry.unitId && ref.unitRevision === entry.unitRevision)
     const refs = residentStore.listTopics(source.groupId).filter(topic => resolveTopicMessages(group, topic.topicId, topic.revision)
       .some(item => item.messageId === source.messageId && item.messageVersion === source.version))
     const legacyComplete = !activeFixedUnits(message).length && refs.every(topic => {
       const latest = new Map()
       for (const entry of topic.entries) if (entry.messageId === source.messageId) latest.set(entry.unitId ?? 'legacy', entry)
-      return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === source.version).every(entry =>
+      return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === source.version && !isRetired(entry)).every(entry =>
         topic.processedRevision >= entry.revision && topic.decisions.some(record => record.status === 'completed' && record.revision >= entry.revision))
     })
     if (Array.isArray(message.activeUnitRefs)) {
-      if (!sameProcessingRefs(source, message.activeUnitRefs) || source.processingCompleted && !legacyComplete)
+      if (!sameProcessingRefs(source, message.activeUnitRefs) || source.processingCompleted && !legacyComplete
+        || retiredUnits.some(ref => !source.coordinationRetirement?.units.some(old => old.unitId === ref.unitId && old.unitRevision === ref.unitRevision)))
         source = (await command('source.processingStarted', { sourceId: source.sourceId, messageVersion: source.version,
-          activeUnitRefs: message.activeUnitRefs, legacyPending: !legacyComplete })).result.source
+          activeUnitRefs: message.activeUnitRefs, legacyPending: !legacyComplete, retiredCoordinationUnits: retiredUnits })).result.source
       const ownership = new Map((residentStore.listSourceDispatchOwnership?.(source.groupId) ?? [])
         .map(item => [`${item.unitId}:${item.unitRevision}`, item]))
       const units = message.activeUnitRefs.map(ref => {
@@ -604,7 +615,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         catch (error) { if (error.code !== 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE') throw error }
       }
     }
-    if (coordinated.some(r => !r.settled)) return
+    if (coordinated.some(r => !r.settled && !source.coordinationRetirement?.units.some(ref => ref.unitId === r.unitId && ref.unitRevision === r.unitRevision))) return
     if (source.routed || !legacyComplete) return
     await command('source.routed', { sourceId: source.sourceId, receipt: [...refs.map(topic => ({ topicId: topic.topicId, revision: topic.revision })),
       ...coordinated.map(r => ({ reservationId: r.reservationId, generation: r.generation, coordinationId: r.coordinationId }))] }, `topic-routed:${source.sourceId}`)
@@ -724,8 +735,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (!closed) void deliverNotifications()
     } })
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction, taskFacts: topicFacts,
-    // 独立协调会话整体暂停；普通 Topic 路由继续，但不再接纳协调来源。
-    coordinationEnabled: false, onStage: recordMessageStage, readMentioned,
+    // 独立协调已移除；保留普通 Topic 路由和事实回复。
+    onStage: recordMessageStage, readMentioned,
     readArchivedTask: async taskId => {
       const task = await query('task.get', { taskId })
       return task?.archivedAt ? topicTaskView(task) : undefined
@@ -1036,7 +1047,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const operations = await query('operation.list', { taskId })
         const executions = await Promise.all((await query('execution.list', { taskId })).map(execution => documentedExecution(execution.executionId)))
         const runResult = await taskSessions.run({ binding, input: { task, artifactScope: await resolveTaskArtifactScope({ root, task, query }), sources, ...(dialogue ? { dialogue } : {}), ...(humanReview ? { humanReview } : {}), materials: materials.map(({ resources, ...value }) => ({ ...value, resources: resources.map(({ value: _body, ...resource }) => resource) })), wakes, executions,
-          operations, coordinationAssessments: await query('coordination.assessments', {taskId}),
+          operations,
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
           blockers: await query('task.blockers', { taskId }) }, ...taskModelSelection(models(), legacy.getAgentConfig().taskSessionModel ?? config), agentPreset: legacy.getAgentConfig().agentPreset,
           groupResponsibility: legacy.getGroup(task.groupId)?.responsibility ?? '',
@@ -1044,7 +1055,6 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, taskId), task.title); return command('task.sessionBound', { binding }, `task-bound:${taskId}:${binding.leaseEpoch}`) },
           delegate: async args => {
             if (humanReview) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
-            if ((await query('coordination.assessments', {taskId})).length) fail('DYNAMIC_COORDINATION_ASSESSMENT_READ_ONLY')
             if (dialogue && (args.feedback !== true || !args.executionId)) fail('TASK_DIALOGUE_FEEDBACK_ONLY')
             if (args.readbackOperationId) {
               const operation = await query('operation.get', { operationId: args.readbackOperationId })
@@ -1157,20 +1167,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           },
           cancelExecution: async ({ executionId, reason }) => {
             if (humanReview) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
-            if ((await query('coordination.assessments', {taskId})).length) fail('DYNAMIC_COORDINATION_ASSESSMENT_READ_ONLY')
             if (dialogue) fail('TASK_DIALOGUE_CANNOT_CANCEL')
             const execution = await query('execution.get', { executionId }); if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
             await command('execution.cancel', { binding, executionId, reason })
             await executionSessions.cancel(executionId)
             return { executionId, cancellationRequested: true }
-          },
-          assessCoordinationReorder: async args => {
-            if (humanReview) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
-            if (dialogue) fail('TASK_DIALOGUE_FEEDBACK_ONLY')
-            const result = (await command('coordination.reorder.assess', {binding,...args},
-              `coordination-assessment:${args.assessmentId}:${binding.leaseEpoch}`)).result
-            await command('coordination.aggregate',{coordinationId:result.coordination.id})
-            return result
           },
           resolveHuman: async args => {
             if (!humanReview) fail('DYNAMIC_HUMAN_REVIEW_NOT_PENDING')
@@ -1335,7 +1336,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     for (let notification of await query('notification.list')) {
       if (closed) return
       // 历史协调通知保持原账，不发送、不刷新、不自动重试。
-      if (notification.kind === 'coordination') continue
+      if (notification.kind === 'coordination') { await projectTaskNotification({ residentStore, notification }); continue }
       // 只释放被新来源暂缓的尝试；未知发送和限流的本轮去重不受影响。
       if (sourceHeldNotifications.has(notification.id) && sourceHeldNotifications.get(notification.id) < sourceProcessingRevision) {
         attempted?.delete(notification.id)
@@ -1694,12 +1695,26 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (!prior) void kickTask(task.taskId)
     return taskDTO(result.result.task)
   }
-  const observerGroupPage=createObserverGroupPages({
-    readGroup:groupId=>residentStore.getGroup(groupId),readVersion:groupId=>query('observer.group-version',{groupId}),
-    readMetadata:groupId=>query('observer.group-metadata',{groupId}),readRequests:groupId=>topicCoordinator.messageProcessingRequests(groupId),
-    ownerships:groupId=>residentStore.listSourceDispatchOwnership(groupId),isOwnNotification,
-    readSources:async(groupId,messages)=>{const context=await query('observer.message-contexts',{groupId,messages,messageIds:messages.map(item=>item.messageId)});return messageProcessingSources(context.sources,context.notifications,groupId,context.coordinationSources,residentStore.listSourceDispatchOwnership(groupId),context.arrangements)}
+  let stopInboxProjection
+  try {
+   observerGroupPage=createObserverGroupPages({
+    indexPath:config.dbPath+'.observer-inbox.sqlite',
+    readGroup:groupId=>residentStore.getGroup(groupId),readRequests:groupId=>topicCoordinator.messageProcessingRequests(groupId),
+    readTask:taskId=>taskCache.get(taskId),isOwnNotification,
+    readSources:async(groupId,messages)=>(await query('observer.message-list-contexts',{groupId,messages,messageIds:messages.map(item=>item.messageId)})).sources
   })
+   stopInboxProjection=residentStore.onGroupCommitted?.(observerGroupPage.update)
+   for(const group of residentStore.listGroups())observerGroupPage.update({group})
+   await observerGroupPage.ready()
+  }catch(error){
+    closed=true
+    clearTimeout(providerRetryTimer)
+    stopInboxProjection?.();stopObservation?.()
+    await observationTail
+    await Promise.allSettled([topicCoordinator.close(),taskSessions.close(),executionSessions.close(),persistence.close(),observerGroupPage?.close()])
+    if(!suppliedStore)await store.close()
+    throw error
+  }
 
   const observerAlerts=createObserverAlertPages({failures,tasks:taskCache,operations:operationCache,notifications:notificationCache,groups:()=>residentStore.listGroups()})
 
@@ -1709,6 +1724,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         ? await query('notification.get', { notificationId }) : null
       if (!groupId || !legacy.getGroup(groupId) || !notification || notification.payload.audience === 'operator'
         || notification.payload.conversationId !== groupId) throw notificationRecoveryError('TASK_NOTIFICATION_NOT_FOUND', 404)
+      if (notification.kind === 'coordination') throw notificationRecoveryError('INDEPENDENT_COORDINATION_RETIRED')
       if (inflightNotifications.has(notificationId)) throw notificationRecoveryError('TASK_NOTIFICATION_RECOVERY_IN_PROGRESS')
       if (taskNotificationRecovery(notification).expectedToken !== expectedToken) throw notificationRecoveryError('DYNAMIC_NOTIFICATION_RECOVERY_STALE')
       const pending = Promise.resolve().then(async () => {
@@ -1733,10 +1749,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     async taskIdentity(taskId) { return await query('task.get', { taskId }) ? { taskId, legacyReadonly: false } : null },
     messageProcessingRequests: groupId => topicCoordinator.messageProcessingRequests(groupId),
     async messageProcessingSources(groupId) {
-      const [sources, notifications, coordinationSources, arrangements] = await Promise.all([
-        query('source.list', { groupId }), query('notification.list', { groupId }), query('coordination.source.list', { groupId }), query('coordination.list', { groupId }),
+      const [sources, notifications] = await Promise.all([
+        query('source.list', { groupId }), query('notification.list', { groupId }),
       ])
-      return messageProcessingSources(sources, notifications, groupId, coordinationSources, residentStore.listSourceDispatchOwnership(groupId), arrangements)
+      return messageProcessingSources(retiredSourceOwnership(sources, residentStore.getGroup(groupId)?.sourceDispatchOwnership, groupId), notifications, groupId)
     },
     async retryMessageProcessing(args) {
       const { groupId, messageId, phase, requestId } = args
@@ -1750,25 +1766,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           const request = topicCoordinator.messageProcessingRequests(groupId).find(item => item.requestId === requestId)
           if (!request || Boolean(request.topicId) !== (phase === 'decision')) fail('MESSAGE_RETRY_STALE')
           await topicCoordinator.retryMessageRequest(args)
-        } else if (phase === 'coordination' || phase === 'coordination-context') {
-          fail('MESSAGE_RETRY_UNAVAILABLE')
         } else fail('MESSAGE_RETRY_STALE')
-        if (phase !== 'coordination' && phase !== 'coordination-context') void kickGroup(groupId)
+        void kickGroup(groupId)
         return { groupId, messageId, requestId, status: 'attempted' }
       } finally { messageRecoveryFlights.delete(key) }
     },
-    coordinationSources: coordinationObserver.coordinationSources, coordinationSourceDetail: coordinationObserver.coordinationSourceDetail,
-    coordinationWork: coordinationObserver.coordinationWork, coordinationWorkDetail: coordinationObserver.coordinationWorkDetail,
-    async retireCoordinationObservation({ checkOnly = false, ...args }) {
-      if (closed || !legacy.getGroup(args.groupId)) fail('DYNAMIC_COORDINATION_SCOPE_FORBIDDEN')
-      if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
-      const input = { ...args, actorId: config.webActorId }
-      if (checkOnly) return query('coordination.retireObservation.check', input)
-      const receipt = await command('coordination.retireObservation', input, `retire-observation:${hash(input)}`)
-      return { coordinationId: receipt.result.coordination.id, state: receipt.result.coordination.state,
-        revision: receipt.result.coordination.revision, retirement: receipt.result.coordination.retirement,
-        retiredNotificationIds: receipt.result.retiredNotificationIds ?? [], replayed: receipt.replayed === true }
-    },
+
     listActivities: observation.listActivities, listTaskTimings: observation.listTaskTimings, listPerformance: observation.listPerformance, getActivityAuditStatus: observation.getActivityAuditStatus,
     listAlerts:observerAlerts.all, listAlertPage:observerAlerts.page,
     listTopics: groupId => residentStore.listTopics(groupId), getTopic: (groupId, topicId) => residentStore.getTopic(groupId, topicId),
@@ -1856,6 +1859,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await Promise.all([taskSessions.close(), executionSessions.close()])
       await Promise.allSettled([scheduling, recovering, notificationScan, ...sourceProjections, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
       await persistence.close()
+      stopInboxProjection?.()
+      await observerGroupPage.close()
       if (!suppliedStore) await store.close()
     },
   }

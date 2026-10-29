@@ -1,5 +1,6 @@
 # Observer Design Contract
 
+> 2026-10-29：独立协调功能已移除，协调工作页面、模型配置和所有协调 HTTP 入口退役（410）。下文相关段落仅保留历史合同；Task Owner/普通话题能力继续运行。历史协调数据及审计保留，启动自动结清旧协调等待，不重放通知。
 This maintained design/UX equivalent lives under docs/manual rather than root DESIGN.md / UX-CONTRACT.md because project policy places all non-source outputs under docs. Runtime ownership stays in `packages/dingtalk-dsh-observer/web-client.js` and host primitives; this document does not generate or duplicate tokens.
 
 ## Product direction

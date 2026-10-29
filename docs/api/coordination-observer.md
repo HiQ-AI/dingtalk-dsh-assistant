@@ -1,5 +1,6 @@
 # Coordination Observer API
 
+> 2026-10-29：独立协调功能已移除，协调工作页面、模型配置和所有协调 HTTP 入口退役（410）。下文相关段落仅保留历史合同；Task Owner/普通话题能力继续运行。历史协调数据及审计保留，启动自动结清旧协调等待，不重放通知。
 The loopback observer exposes persisted coordination entities and source history through read-only GET routes. The work browser uses entities; source endpoints remain diagnostic/history readers. GET routes never write the coordination ledger. The explicit observation-retirement POST operation below is a separate, locally authenticated maintenance action.
 
 ## 历史纯观察协调退役
