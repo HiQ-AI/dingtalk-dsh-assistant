@@ -72,7 +72,9 @@ execution_restart_scope_probe({
 node docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.mjs freeze-drain-maintenance <db> <agentWorkspace> <原HostPID> <intent.json> > <frozen.json>
 ```
 
-冻结命令要求原 owner 仍存活，只读绑定任务/执行完整摘要、输入与租约、原会话终态日志、unknown、来源/唤醒/命令回执/资源声明；不运行模型或工具。同一 SQLite 只读事务中按 rowid 逐行哈希全部控制及 guard 表，仅排除原 owner 元数据。结果保留每表行数/摘要、unknown 的数量/摘要及至多 8 个指定执行的绑定，不积累全部正文或逐行摘要数组；内存随单行大小和目标原生会话记录变化，不随数据库总行数累积。`controlDigestFormat=sqlite-row-stream-v1` 明确区分新算法，旧格式清单直接拒绝，需在未停机时显式重新冻结；零字节或中断的输出不能用作清单。
+冻结命令要求原 owner 仍存活，只读绑定任务/执行完整摘要、输入与租约、原会话终态日志、unknown、来源/唤醒/命令回执/资源声明；不运行模型或工具。输入身份取 `user/message` 或 inbox 插入消息中最后一个 `source.executionSession`，`source.executionFeedback` 补充不替换版本和租约。原生消费可能在 `turn/start` 之后才写入绑定输入，要求它早于最终 `turn/end` 且无未结束新轮次；终态后的执行输入、反馈消息、工具调用或作业注册仍拒绝。全部原生日志（含反馈及 inbox 移除）继续参与摘要，不能据此声称排空成功。
+
+同一 SQLite 只读事务中按 rowid 逐行哈希全部控制及 guard 表，仅排除原 owner 元数据。结果保留每表行数/摘要、unknown 的数量/摘要及至多 8 个指定执行的绑定，不积累全部正文或逐行摘要数组；内存随单行大小和目标原生会话记录变化，不随数据库总行数累积。`controlDigestFormat=sqlite-row-stream-v1` 明确区分新算法，旧格式清单直接拒绝，需在未停机时显式重新冻结；零字节或中断的输出不能用作清单。
 
 沿原双包安装命令追加 `-DrainFailureMaintenanceProposal <frozen.json>`，先 `-Check`。安装器核对 CIM 的 PID、创建时间、命令摘要与既有端口/控制台归属，禁用已核验的自启任务，重读同一冻结清单，再执行原控制台 SIGINT。捕获后代时逐边要求 child.CreationDate >= parent.CreationDate，快照的父链必须直达原根，重复 PID、环或缺父拒绝。停止后只核对已捕获的 PID/创建时间；同一身份的 Name、已捕获路径或命令摘要改变则拒绝，复用 PID 的新进程不作为原后代，不能对已退出父 PID 再递归。旧快照缺命令/路径字段时仅保留原有身份校验，不宣称已经核验缺失字段。只有原 Host、捕获的后代身份全部退出、双端口释放、离线同一清单及安装前复核通过才换包。清单变化、任何新输入/写入、身份变化或后代残留都拒绝；不刷新摘要来掩盖变化，不强杀其他进程，不提供 skip 开关。不与其他维护/宿主补丁/ResumeNativeDispose 模式混用。
 

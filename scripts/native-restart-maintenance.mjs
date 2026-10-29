@@ -173,12 +173,15 @@ export function inspectDrainFailureMaintenance({ db, workspace, proposal, ownerP
     if (identity.length !== 1 || !['taskId', 'executionId', 'sessionId'].every(key => identity[0].data?.identity?.[key] === execution[key])) fail('SESSION_IDENTITY')
     const inputs = events.flatMap(event => event.type === 'user/message' ? [{ seq: event.seq, source: event.data?.source }]
       : event.type === 'agent/inbox/spliced' ? (event.data?.inserted ?? []).map(message => ({ seq: event.seq, source: message.source })) : [])
-    const input = inputs.at(-1)
+    // Feedback/runtime messages do not replace the Host's versioned execution input.
+    // Keep every message below for activity checks and the complete native log digest.
+    const input = inputs.findLast(row => Object.hasOwn(row.source ?? {}, 'executionSession'))
     const binding = Object.fromEntries(['taskId', 'executionId', 'sessionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'inputDigest', 'leaseEpoch'].map(key => [key, execution[key]]))
     if (!input?.source?.executionSession || !['sessionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'inputDigest', 'leaseEpoch']
       .every(key => input.source.executionSession[key] === binding[key])) fail('INPUT_IDENTITY')
     const start = events.findLast(event => event.type === 'turn/start'), end = events.findLast(event => event.type === 'turn/end')
-    if (!start || !end || start.seq <= input.seq || end.seq <= start.seq || inputs.some(row => row.seq > end.seq)
+    // Native consumption appends user/message after turn/start, not before it.
+    if (!start || !end || end.seq <= input.seq || end.seq <= start.seq || inputs.some(row => row.seq > end.seq)
       || events.some(event => event.seq > end.seq && ['tool/call', 'job/registered'].includes(event.type))) fail('TERMINAL_MISSING')
     const current = { executionId: execution.executionId, binding, taskDigest: hash(task), executionDigest: hash(execution),
       nativeLogDigest: stored.digest, terminalSequence: end.seq, cancelResponse: response }

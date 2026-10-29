@@ -365,6 +365,59 @@ test('drain maintenance rejects changed controls, new commands and changed nativ
  assert.throws(()=>inspectCurrentControl(f.path,'online',process.pid,f.options),/EVIDENCE_CHANGED/)
 })
 
+test('drain maintenance binds the consumed execution input through feedback and inbox removal in a terminal native turn',async t=>{
+ const f=await drainMaintenanceFixture(t)
+ const executionSession={sessionId:'owner-a',inputVersion:4,inputDigest:'original-input',leaseEpoch:4,requirementRevision:2,controlRevision:1}
+ f.db.prepare('UPDATE dynamic_executions SET body=?').run(JSON.stringify({...f.execution,...executionSession}))
+ const input={role:'user',source:{kind:'coordinator',executionSession}}
+ const feedback={role:'user',source:{kind:'coordinator',executionFeedback:{executionId:'exec-a',messageId:'feedback-a'}}}
+ // Actual native order: enqueue, start, consume bound input, later feedback, remove inbox, terminal turn.
+ f.events.splice(2,Infinity,
+  {seq:1,type:'agent/inbox/spliced',data:{inserted:[input]}},
+  {seq:2,type:'turn/start'}, {seq:3,type:'step/start'},
+  {seq:4,type:'user/message',data:input},
+  {seq:5,type:'user/message',data:{role:'user',source:{kind:'runtime-context',form:'snapshot'}}},
+  {seq:12,type:'agent/inbox/spliced',data:{inserted:[feedback]}},
+  {seq:14,type:'agent/inbox/spliced',data:{removedCount:1,inserted:[]}},
+  {seq:15,type:'turn/end',data:{reason:{kind:'blocked'}}})
+ for(const consumed of [false,true]){
+  if(consumed)f.events.splice(-2,0,{seq:13,type:'user/message',data:feedback})
+  await f.save()
+  const original=await readFile(f.log),proposal=f.freeze(),options={workspace:f.root,proposal}
+  const proof=inspectCurrentControl(f.path,'online',process.pid,options)
+  assert.equal(proof.drained,false);assert.equal(proof.maintenanceReady,true)
+  assert.equal(proof.maintenance.retained[0].binding.inputDigest,executionSession.inputDigest)
+  assert.equal(proof.maintenance.retained[0].terminalSequence,15)
+  assert.equal(proof.maintenance.writes,0);assert.equal(proof.unknownOperations,1)
+  // Changing feedback (not just its execution input) still invalidates the frozen native evidence.
+  feedback.source.executionFeedback.messageId='changed-feedback'
+  await f.save();assert.throws(()=>inspectCurrentControl(f.path,'online',process.pid,options),/EVIDENCE_CHANGED/)
+  feedback.source.executionFeedback.messageId='feedback-a';await f.save()
+  assert.deepEqual(await readFile(f.log),original)
+ }
+})
+
+test('drain maintenance still rejects missing or changed bindings and all post-terminal input or work',async t=>{
+ const f=await drainMaintenanceFixture(t),original=structuredClone(f.events)
+ original.at(-1).seq=5
+ const feedback={role:'user',source:{kind:'coordinator',executionFeedback:{executionId:'exec-a',messageId:'feedback-a'}}}
+ for(const [name,mutate,error] of [
+  ['feedback without execution input',events=>{events[2].data=feedback},/INPUT_IDENTITY/],
+  ['later mismatched input',events=>events.splice(-1,0,{seq:4,type:'user/message',data:{source:{executionSession:{...f.execution,leaseEpoch:4}}}}),/INPUT_IDENTITY/],
+  ['malformed latest input',events=>events.splice(-1,0,{seq:4,type:'user/message',data:{source:{executionSession:null}}}),/INPUT_IDENTITY/],
+  ['late bound input',events=>events.push({seq:6,type:'user/message',data:{source:{executionSession:f.execution}}}),/TERMINAL_MISSING/],
+  ['late inbox input',events=>events.push({seq:6,type:'agent/inbox/spliced',data:{inserted:[{source:{executionSession:f.execution}}]}}),/TERMINAL_MISSING/],
+  ['late feedback',events=>events.push({seq:6,type:'user/message',data:feedback}),/TERMINAL_MISSING/],
+  ['late inbox feedback',events=>events.push({seq:6,type:'agent/inbox/spliced',data:{inserted:[feedback]}}),/TERMINAL_MISSING/],
+  ['late tool',events=>events.push({seq:6,type:'tool/call'}),/TERMINAL_MISSING/],
+  ['late job',events=>events.push({seq:6,type:'job/registered'}),/TERMINAL_MISSING/],
+  ['unfinished turn',events=>events.push({seq:6,type:'turn/start'}),/TERMINAL_MISSING/],
+ ]){
+  f.events.splice(0,Infinity,...structuredClone(original));mutate(f.events);await f.save()
+  assert.throws(f.freeze,error,name)
+ }
+})
+
 test('large maintenance ledger freezes under a 96 MiB heap and keeps complete control and unknown digests',async t=>{
  const f=await drainMaintenanceFixture(t)
  const payload=JSON.stringify({state:'unknown',data:'x'.repeat(256*1024)})
