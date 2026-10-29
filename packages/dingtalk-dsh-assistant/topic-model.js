@@ -19,6 +19,7 @@ export const topicDecisionSchema = z.object({
   progress: z.record(z.string(), z.unknown()).optional(),
 })
 export const topicSchema = z.object({
+  lastFactDecisionId: z.string().optional(),
   topicId: z.string().min(1), groupId: z.string().min(1), title: z.string().min(1), revision: z.number().int().nonnegative(), processedRevision: z.number().int().nonnegative(),
   mergedInto: z.string().min(1).optional(), mergeReceipt: z.object({ requestId: z.string().min(1), digest: z.string(), targetRevision: z.number().int().positive(), at: z.string() }).optional(),
   status: z.enum(['active', 'waiting', 'closed']), summary: z.string(), summaryRevision: z.number().int().nonnegative(), openQuestions: z.array(z.string()),
@@ -27,6 +28,26 @@ export const topicSchema = z.object({
 export const stableId = (prefix, value) => `${prefix}-${createHash('sha256').update(value).digest('hex').slice(0, 32)}`
 export const fingerprint = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export const isPendingDecision = record => !['completed', 'rejected'].includes(record.status)
+
+// Historical messages are usable only when their actual source ownership is unique.
+// A task's many historical topicRefs are not notification subscribers.
+export function canonicalReplyTopic(group, topicId) {
+  const seen = new Set()
+  while (topicId && !seen.has(topicId)) {
+    seen.add(topicId)
+    const topic = group?.topics.find(topic => topic.topicId === topicId)
+    if (!topic) return null
+    if (!topic.mergedInto) return topicId
+    topicId = topic.mergedInto
+  }
+  return null
+}
+export function replyTopicForMessage(group, message) {
+  if (message?.replyTopicId) return canonicalReplyTopic(group, message.replyTopicId)
+  const owners = group.topics.filter(topic => !topic.mergedInto && indexedTopicRefs(group, topic, topic.revision).some(([, entry]) => entry.messageId === message?.messageId
+    && entry.messageVersion === message.messageVersion && entry.effectOwner))
+  return owners.length === 1 ? owners[0].topicId : null
+}
 
 // Only durable pre-effect failures or an already applied outbound identity are safe to resume.
 export function topicDecisionRecovery(record) {

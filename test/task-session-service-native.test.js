@@ -303,6 +303,7 @@ test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保�
   const reviews = new Set()
   h = await fixture.host(async request => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    if (input.trigger === 'task-facts') return topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
       const calls = topicTaskCalls(request)
       if (topicId) for (const route of calls[0].args.routes) for (const unit of route.units)
@@ -1080,12 +1081,12 @@ test('native service reopens an unknown notification for readback without resend
   const fixture = await nativeCase(t, 'task-service-notification-')
   let sends = 0, canRead = false, readbacks = 0
   const notifications = {
-    async send(notification) { sends++; return { messageId: notification.kind === 'completion' ? 'durable-delivery-id' : 'durable-confirmation-id' } },
+    async send(notification) { sends++; return { messageId: notification.payload.coveredEventIds?.length ? 'durable-delivery-id' : 'durable-confirmation-id' } },
     async readback(notification) {
       readbacks++
-      const id = notification.kind === 'completion' ? 'durable-delivery-id' : 'durable-confirmation-id'
+      const id = notification.payload.coveredEventIds?.length ? 'durable-delivery-id' : 'durable-confirmation-id'
       assert.equal(notification.ack.messageId, id)
-      return notification.kind !== 'completion' || canRead ? { messageId: id, verified: true } : null
+      return !notification.payload.coveredEventIds?.length || canRead ? { messageId: id, verified: true } : null
     },
   }
   const first = await fixture.host(async request => {
@@ -1095,12 +1096,17 @@ test('native service reopens an unknown notification for readback without resend
     await first.service.ingest({ ...message, messageId: 'notification-request', text: '测试助手，核对已有记录并给出结论。' })
     await first.service.whenIdle()
     assert.equal((await first.query('task.list'))[0].status, 'completed')
-    assert.equal((await first.query('notification.list')).find(notification => notification.kind === 'completion').state, 'unknown')
+    const pending = (await first.query('notification.list')).find(notification => notification.payload.coveredEventIds?.length)
+    assert.equal(pending.state, 'starting', 'Topic 发件箱将 ACK 与送达回查分开记录')
+    assert.equal(pending.ack.messageId, 'durable-delivery-id')
+    assert.equal(pending.readbackAttemptCount, 1)
+    assert.ok(Date.parse(pending.nextAttemptAt) > Date.now())
     assert.equal(sends, 2)
   } finally { await first.close() }
   const readsBeforeRecovery = readbacks
   canRead = true
   const second = await fixture.host(() => { throw new Error('Completed task must not invoke the model during receipt recovery') }, { notifications, initialize: false })
+  assert.equal((await second.query('notification.list')).find(notification => notification.payload.coveredEventIds?.length).state, 'unknown')
   await second.service.recover(); await second.service.whenIdle()
   assert.equal(readbacks, readsBeforeRecovery, 'Restart must preserve the persisted observation cooldown')
   const retryAt = Math.max(...(await second.query('notification.list')).filter(notification => notification.state === 'unknown').map(notification => Date.parse(notification.nextAttemptAt)))

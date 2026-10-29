@@ -45,7 +45,7 @@ const replyDecisionSchema = z.strictObject({
 })
 export const groupDecisionSchema = z.union([
   replyDecisionSchema,
-  z.strictObject({ ...decisionBasis, actions: z.tuple([]), reason: z.string().min(1).describe('不回复且不执行任务动作的原因；不得同时填写 reply 或 replyReview。') }),
+  z.strictObject({ ...decisionBasis, actions: z.array(taskAction), reason: z.string().min(1).describe('不回复原因；只有来源明确由其他 Topic 统一回复时才可同时提交任务动作。不得同时填写 reply 或 replyReview。') }),
 ])
 
 const stringJsonSchema = { type: 'string' }
@@ -71,6 +71,7 @@ export const topicRouteSubmissionSchema = z.strictObject({
   requestId: z.string().min(1),
   routes: z.array(z.strictObject({
     messageId: z.string().min(1), messageVersion: z.number().int().positive(),
+    replyTopic: topicRouteOwnerSchema.optional(),
     ignoredRefs: z.array(z.strictObject({ quote: z.string().min(1), reason: z.string().trim().min(1) })).default([]),
     units: z.array(z.strictObject({
       unitKey: z.string().min(1), summary: z.string().trim().min(1),
@@ -113,6 +114,10 @@ export const topicRouteSubmissionJsonSchema = {
       type: 'object', additionalProperties: false,
       properties: {
         messageId: stringJsonSchema, messageVersion: { type: 'integer' },
+        replyTopic: { oneOf: [
+          { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
+          { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema }, required: ['newTopicKey'] },
+        ], description: '本消息跨多个业务 Topic 时必须从本条归属中选一个统一回复；单 Topic 自动使用它。不要新建回复专用 Topic。' },
         ignoredRefs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { quote: stringJsonSchema, reason: stringJsonSchema }, required: ['quote', 'reason'] } },
         units: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
           unitKey: stringJsonSchema, summary: stringJsonSchema,

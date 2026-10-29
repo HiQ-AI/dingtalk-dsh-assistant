@@ -17,7 +17,8 @@ export function withoutConfiguredReplySignature(text, signature) {
   const rows = text.split(/\r?\n/u)
   const isSignature = row => typeof row === 'string' && /^[-*•][ \t]+/u.test(row) && row.replace(/^[-*•][ \t]+/u, '').trim() === sign
   let fence
-  return rows.filter((row, index) => {
+  const removed = new Set()
+  rows.forEach((row, index) => {
     const marker = row.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u)
     if (marker) {
       if (!fence) fence = marker[1]
@@ -31,8 +32,9 @@ export function withoutConfiguredReplySignature(text, signature) {
     while (previous >= 0 && !rows[previous].trim()) previous--
     const previousIsSignature = isSignature(rows[previous])
     const listContext = !previousIsSignature && previous >= 0 && /^(?:[ \t]*[-*•][ \t]+|[ \t]*\d+[.)][ \t]+|>| {4}|\t)|[:：]\s*$/u.test(rows[previous])
-    return !(exact && standalone && !listContext)
-  }).join('\n').trim()
+    if (exact && standalone && !listContext) removed.add(index)
+  })
+  return rows.filter((row, index) => !removed.has(index) && !(removed.has(index - 1) && !row.trim())).join('\n').trim()
 }
 
 const required = (value, field) => {

@@ -100,6 +100,7 @@
     "task-topic-coordinator.js",
     "tool-schema.js",
     "topic-model.js",
+    "topic-facts.js",
     "topic-runtime.js",
     "version-check.js",
     "web-client.js",

@@ -147,6 +147,7 @@ export async function apply(ctx, config = {}) {
   runtime.observerGroupPage = tasks.observerGroupPage
   runtime.getTopicTasksPage=options=>tasks.boardTasks({...options,archived:'all'})
   runtime.listTaskView = tasks.boardTasks
+  runtime.hasPendingTopicFacts = tasks.hasPendingTopicFacts
   runtime.messageProcessingSources = tasks.messageProcessingSources
   runtime.messageProcessingRequests = tasks.messageProcessingRequests
   runtime.getTaskSessionDetail = tasks.taskDetail

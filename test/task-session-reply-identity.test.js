@@ -91,6 +91,11 @@ async function serviceFixture(t, replySignature, action = 'complete', legacyFoot
         return calls
       }
       if (names.includes('group_decision_submit')) {
+        if (input.trigger === 'task-facts') {
+          const calls = topicTaskCalls(request)
+          calls[0].args.decision.reply = input.facts.map(fact => fact.question || [fact.summary, ...fact.evidence.map(text => `- ${text}`), ...fact.limitations].join('\n\n')).join('\n\n')
+          return calls
+        }
         if (!input.messages.some(message => message.text.includes('状态'))) {
           const calls = topicTaskCalls(request, { title: '核对材料' })
           calls[0].args.decision.topicUpdate = { summary: '核对材料，等待真实任务结果。' }
@@ -111,7 +116,7 @@ async function serviceFixture(t, replySignature, action = 'complete', legacyFoot
             replyReview: { kind: 'substantive', reviewedOutboundIds: review.candidates.map(candidate => candidate.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } } }]
       }
       assert.ok(names.includes('task_session_submit'), 'Completion and questions must use the real native task owner')
-      assert.match(JSON.stringify(request.messages.filter(message => message.role === 'system')), /署名由Host按显式Agent配置在完整最终正文末尾统一附加一次/u)
+      assert.match(JSON.stringify(request.messages.filter(message => message.role === 'system')), /完成、阻塞和重要阶段进展只提交事实/u)
       assert.doesNotMatch(JSON.stringify(request.messages.filter(message => message.role === 'system')), /显式全局署名由Host统一附加/u)
       return [{ name: 'task_session_submit', args: { decision: { action, summary: legacyFooter ? `核验完成。\n\n- ${replySignature}\n\n• ${replySignature}` : '核验完成。', evidence: ['材料已核对。'], limitations: legacyFooter ? [`未部署。\n\n- ${replySignature}`] : [],
         ...(action === 'wait' ? { question: '请提供目标日期。', audience: 'requester' } : {}) } } }]
@@ -161,7 +166,7 @@ test('完成及状态末尾统一署名，引用和真实@不变', nativeOptions
   }
   const persisted = await f.service.store.query({ kind: 'notification.list' })
   assert.equal(persisted.filter(row => row.payload.kind !== 'topic-reply' || row.payload.replyKind === 'substantive').length, 4)
-  assert.equal(persisted.find(row => row.payload.kind === 'task-completed').payload.text, f.sent[0].payload.text, 'already prepared delivery remains immutable')
+  assert.equal(persisted.find(row => row.payload.coveredEventIds?.length).payload.text, f.sent[0].payload.text, 'already prepared delivery remains immutable')
 })
 
 test('任务提问使用显式Agent署名', nativeOptions, async t => {
@@ -180,7 +185,7 @@ test('任务提问使用显式Agent署名', nativeOptions, async t => {
       await f.service.recover()
       await f.service.whenIdle()
       const persisted = await f.service.store.query({ kind: 'notification.list' })
-      assert.equal(persisted.find(row => row.payload.kind === 'question').payload.text, payload.text)
+      assert.equal(persisted.find(row => row.payload.coveredEventIds?.length).payload.text, payload.text)
       assert.equal(f.sent.length, 1, 'Recovery must not send the question again')
     })
   }
@@ -193,7 +198,7 @@ test('真实完成出口将模型重复署名移到证据和限制后', nativeOp
   assert.equal(f.sent[0].payload.text, '核验完成。\n\n- 材料已核对。\n\n未部署。\n\n- Configured Agent')
 })
 
-for (const dialogueCase of [false, true]) test(`${dialogueCase ? 'Web对话' : '完成'}在入账前拒绝来源消息和人员标识，原轮订正保留业务编号与链接`, nativeOptions, async t => {
+for (const dialogueCase of [false, true]) test(`${dialogueCase ? 'Web对话' : 'Topic完成回复'}在公开入账前拒绝来源消息和人员标识，原轮订正保留业务编号与链接`, nativeOptions, async t => {
   const root = await mkdtemp(join(tmpdir(), 'reply-public-identity-'))
   const messageId = 'opaque-native-message-184', actorId = 'opaque-open-dingtalk-875'
   const businessText = '已核对 PR #253 与订单 SG18：https://example.com/orders/SG18'
@@ -202,11 +207,21 @@ for (const dialogueCase of [false, true]) test(`${dialogueCase ? 'Web对话' : '
   host = await nativeTaskHost(root, async (request, h) => {
     try {
       assert.ok(h.requests.length <= 30, 'Rejected public text must be corrected in the original native turn')
-      const routed = topicTaskCalls(request)
+      const incoming = latestInput(request), routed = topicTaskCalls(request)
+      if (incoming.trigger === 'task-facts') {
+        assert.equal((await h.query('task.get', { taskId: incoming.facts[0].taskId })).status, 'completed', '事实已完成，回复校验不能阻塞任务')
+        assert.equal((await h.query('notification.list')).filter(item => item.payload.coveredEventIds?.length).length, 0)
+        const step = ++steps
+        routed[0].args.decision.reply = step === 1 ? `已核对来源 ${messageId}` : step === 2 ? `已通知人员 ${actorId}` : `${businessText}\n\n- 结果已核对`
+        return routed
+      }
       if (routed) return routed
       const input = latestInput(request), current = await h.query('task.get', { taskId: input.task.taskId })
       const source = input.sources.find(item => item.messageId === messageId)
       assert.equal(source.actorId, actorId)
+      if (!dialogueCase) return [{ name: 'task_session_submit', args: { decision: {
+        action: 'complete', summary: `内部核查来源 ${source.messageId}`, evidence: [`内部人员 ${source.actorId}`], limitations: [],
+      } } }]
       if (dialogueCase && !input.dialogue) return [{ name: 'task_session_submit', args: { decision: {
         action: 'wait', summary: `等待内部核查来源 ${source.messageId}`, evidence: [], limitations: [],
       } } }]
@@ -242,12 +257,12 @@ for (const dialogueCase of [false, true]) test(`${dialogueCase ? 'Web对话' : '
     assert.equal(host.sent.filter(item => item.payload.kind === 'task-completed').length, 0)
   } else {
     assert.equal(task.status, 'completed')
-    const notices = host.sent.filter(item => item.payload.kind === 'task-completed')
+    const notices = host.sent.filter(item => item.payload.coveredEventIds?.length)
     assert.equal(notices.length, 1)
     assert.equal(notices[0].payload.text, `${businessText}\n\n- 结果已核对`)
     assert.equal(notices[0].payload.replyToMessageId, messageId)
     assert.deepEqual(notices[0].payload.atOpenDingTalkIds, [actorId])
   }
   assert.equal(steps, 3)
-  assert.equal(host.toolResults.filter(item => item.name === 'task_session_submit' && JSON.stringify(item.result).includes('GROUP_REPLY_INTERNAL_DETAILS')).length, 2)
+  assert.equal(host.toolResults.filter(item => item.name === (dialogueCase ? 'task_session_submit' : 'group_decision_submit') && JSON.stringify(item.result).includes('GROUP_REPLY_INTERNAL_DETAILS')).length, 2)
 })

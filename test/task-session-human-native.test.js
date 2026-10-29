@@ -46,6 +46,7 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
   const wait = summary => call('task_session_submit', { decision: { action: 'wait', summary, evidence: [], limitations: [] } })
   const h = await fixture(t, async request => {
     const incoming = latestInput(request)
+    if (incoming.trigger === 'task-facts') return topicTaskCalls(request)
     if (incoming.requestId?.startsWith('coord-title-')) return [call('group_topic_title_submit', { requestId: incoming.requestId, topicId: incoming.topicId, title: '核对编辑持久化方案' })]
     const names = request.tools.map(tool => tool.name), routed = topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
@@ -148,6 +149,11 @@ test('待实施批准期间事实追问立即引用回复，内部证据不外�
   const wait = summary => call('task_session_submit', { decision: { action: 'wait', summary, evidence: [], limitations: [] } })
   const h = await fixture(t, async request => {
     const incoming = latestInput(request), names = request.tools.map(tool => tool.name), routed = topicTaskCalls(request)
+    if (incoming.trigger === 'task-facts') {
+      const calls = topicTaskCalls(request)
+      calls[0].args.decision.reply = summary
+      return calls
+    }
     if (incoming.requestId?.startsWith('coord-title-')) return [call('group_topic_title_submit', { requestId: incoming.requestId, topicId: incoming.topicId, title: '核对编辑持久化方案' })]
     if (names.includes('group_topic_route_submit')) {
       for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId }]
@@ -181,9 +187,7 @@ test('待实施批准期间事实追问立即引用回复，内部证据不外�
     if (step === 1) return [call('model_content_read', { contentRef: modelToolValues(request).findLast(value => value.executionId === executionId && value.record?.contentRef).record.contentRef, path: '/result/payload/output/summary' })]
     assert.match(JSON.stringify(modelToolValues(request)), /此前 UPR 导入覆盖修复/)
     const decision = { action: 'wait', summary, replySourceId: source.sourceId, evidence: [`已读取原执行 ${executionId} 的结果`], limitations: [] }
-    if (step === 2) return [call('task_session_submit', { decision: { ...decision, summary: `${summary} ${incoming.task.taskId}` } })]
-    assert.match(JSON.stringify(request.messages), /GROUP_REPLY_INTERNAL_DETAILS/)
-    return [call('task_session_submit', { decision })]
+    return [call('task_session_submit', { decision: { ...decision, summary: `${summary} ${incoming.task.taskId}` } })]
   })
   const created = await h.service.createTask({ groupId: 'native-group', requestId: 'fact-followup', title: '编辑持久化核对', objective: '核对当前方案，实施需要另行确认' })
   await h.service.whenIdle()
@@ -199,7 +203,7 @@ test('待实施批准期间事实追问立即引用回复，内部证据不外�
   assert.equal(after.requirementRevision, original.requirementRevision)
   assert.equal(after.controlRevision, original.controlRevision)
   assert.equal(after.sessionId, original.sessionId)
-  const replies = h.sent.filter(item => item.id.startsWith('human-followup:'))
+  const replies = h.sent.filter(item => item.payload.coveredEventIds?.length)
   assert.equal(replies.length, 1)
   assert.equal(replies[0].payload.text, summary)
   assert.equal(replies[0].payload.replyToMessageId, 'fact-question')
@@ -218,7 +222,7 @@ test('待实施批准期间事实追问立即引用回复，内部证据不外�
   await h.service.ingest({ groupId: 'native-group', messageId: 'unrelated-followup', senderOpenDingTalkId: 'native-user',
     text: '测试助手，另外一件事下周再聊', occurredAt: new Date().toISOString() })
   await h.service.whenIdle()
-  assert.equal(h.sent.filter(item => item.id.startsWith('human-followup:')).length, 1, '无关来源只记录判断，不发送事实答复')
+  assert.equal(h.sent.filter(item => item.payload.coveredEventIds?.length).length, 1, '无关来源只记录判断，不发送事实答复')
   const count = h.requests.length
   await h.service.recover(); await h.service.whenIdle()
   assert.equal(h.requests.length, count, '完成的事实追问不反复处理')
@@ -250,7 +254,12 @@ for (const batched of [true, false]) test(`积压的两条事实追问均送达�
     await command('source.record', { sourceId, groupId: 'native-group', messageId: `message-${index}`, actorId: `member-${index}`,
       text: index < 2 ? `第 ${index + 1} 项目前已经实施了什么？` : '另一件事下周再聊', channel: 'im' }, `source-${index}`)
     await command('source.routed', { sourceId, receipt: [{ taskId: original.taskId }] }, `routed-${index}`)
+    await h.residentStore.ingest({ groupId: 'native-group', messageId: `message-${index}`, text: index < 2 ? `第 ${index + 1} 项目前已经实施了什么？` : '另一件事下周再聊', senderOpenDingTalkId: `member-${index}`, occurredAt: new Date().toISOString() })
+    await h.residentStore.routeMessages({ groupId: 'native-group', routeId: `batch-route-${index}`, routingRevision: h.residentStore.getGroup('native-group').routingRevision, routes: [{ messageId: `message-${index}`, messageVersion: 1, topics: [{ topicId: original.topicRefs[0].topicId }] }] })
   }
+  const topic = h.residentStore.getTopic('native-group', original.topicRefs[0].topicId)
+  await h.residentStore.acceptTopicDecision({ groupId: 'native-group', topicId: topic.topicId, revision: topic.revision, decisionId: 'batch-input', decision: { basisMessageIds: sourceIds.map((_, i) => `message-${i}`), actions: [], reason: '来源已补充原任务，等待只读复核', topicUpdate: { summary: '原问题待答，核对新增事实追问' } } })
+  await h.residentStore.completeTopicDecision({ groupId: 'native-group', topicId: topic.topicId, decisionId: 'batch-input' })
   for (const [index, refs] of (batched ? [sourceIds] : sourceIds.map((_, index) => sourceIds.slice(0, index + 1))).entries())
     await command('task.supplement', { taskId: original.taskId, expectedRequirementRevision: original.requirementRevision,
       expectedControlRevision: original.controlRevision, messageId: `batch-${index}`, text: '待答期间收到新来源',
@@ -262,7 +271,7 @@ for (const batched of [true, false]) test(`积压的两条事实追问均送达�
   assert.equal(after.humanRequests[0].requestId, original.humanRequests[0].requestId)
   assert.equal(after.sessionId, original.sessionId)
   assert.deepEqual(after.humanRequests[0].followupReplies.map(item => item.sourceId), sourceIds.slice(0, 2))
-  const replies = h.sent.filter(item => item.id.startsWith('human-followup:'))
+  const replies = h.sent.filter(item => item.payload.coveredEventIds?.length)
   assert.deepEqual(replies.map(item => item.payload.replyToMessageId), ['message-0', 'message-1'])
   assert.deepEqual(replies.map(item => item.payload.atOpenDingTalkIds), [['member-0'], ['member-1']])
   for (const reply of replies) assert.equal((await h.query('notification.get', { notificationId: reply.id })).state, 'delivered')
@@ -271,7 +280,7 @@ for (const batched of [true, false]) test(`积压的两条事实追问均送达�
   const count = h.requests.length
   await h.service.recover(); await h.service.whenIdle()
   assert.equal(h.requests.length, count)
-  assert.equal(h.sent.filter(item => item.id.startsWith('human-followup:')).length, 2)
+  assert.equal(h.sent.filter(item => item.payload.coveredEventIds?.length).length, 2)
 })
 
 for (const permission of [false, true]) test(`operator technical reply retains business sources and shared scope protocol in the same resumed execution permission=${permission}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
@@ -546,6 +555,7 @@ for (const changed of [false, true]) test(`original-group human input preserves 
   const replyText = '测试助手，本次只允许 UAT3 只读核对，保持现有执行，不得发布生产。'
   const h = await fixture(t, async request => {
     const names = request.tools.map(tool => tool.name)
+    if (latestInput(request).trigger === 'task-facts') return topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
       const calls = topicTaskCalls(request)
       for (const route of calls[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId: originalTopic }]
