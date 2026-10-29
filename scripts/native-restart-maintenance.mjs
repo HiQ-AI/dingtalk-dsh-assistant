@@ -106,3 +106,65 @@ export function inspectRetainedRestart({ tables, workspace, proposal, ownerPid, 
   return { schema: proposal.schema, operatorApproval: proposal.operatorApproval, proposalDigest: hash(proposal),
     preservedSessionIds: sessions, retained: observations, ledgerDigest: hash(tables), writes: 0 }
 }
+
+// A stopped-process boundary is not a successful drain or an operation settlement.
+// Freeze only cancelled native executions whose last input has a terminal turn.
+export function inspectDrainFailureMaintenance({ db, workspace, proposal, ownerPid, freeze = false, history = readNativeHistory }) {
+  const fail = reason => { throw Error('DEPLOY_DRAIN_MAINTENANCE_' + reason) }
+  const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value))
+  if (proposal?.schema !== 'native-drain-maintenance-v1' || proposal.expectedHost?.pid !== ownerPid
+    || !validTime(proposal.expectedHost?.creationDate) || !/^[a-f0-9]{64}$/u.test(proposal.expectedHost?.commandLineSha256 ?? '')
+    || proposal.operatorApproval?.kind !== 'explicit-stop-deploy-resume'
+    || !validTime(proposal.operatorApproval.authorizedAt) || !proposal.operatorApproval.sourceRef
+    || !Array.isArray(proposal.executions) || !proposal.executions.length || proposal.executions.length > 8
+    || new Set(proposal.executions.map(row => row.executionId)).size !== proposal.executions.length) fail('PROPOSAL_INVALID')
+  const tables = Object.fromEntries(['tasks', 'executions', 'groups', 'operations', 'notifications']
+    .map(name => [name, db.prepare(`SELECT body FROM dynamic_${name}`).all().map(row => JSON.parse(row.body))]))
+  if (tables.tasks.some(row => row.drained !== true) || tables.groups.some(row => row.drained !== true)
+    || tables.operations.some(row => row.state === 'starting') || tables.notifications.some(row => row.state === 'starting')) fail('ACTIVE_WORK')
+  const retained = tables.executions.filter(row => row.drained === false)
+  if (retained.length !== proposal.executions.length) fail('EXECUTION_SET_CHANGED')
+  // Include new inputs, command receipts and resource claims, not only execution rows.
+  const guards = {}
+  for (const name of ['dynamic_sources', 'dynamic_wakes', 'dynamic_receipts', 'dynamic_resource_locks']) {
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) {
+      guards[name] = db.prepare(`SELECT * FROM ${name}`).all().map(hash).sort()
+    }
+  }
+  guards.meta = db.prepare("SELECT key,value FROM dynamic_meta WHERE key<>'owner' ORDER BY key").all()
+  const controlDigest = hash({ tables: Object.fromEntries(Object.entries(tables).map(([name, rows]) => [name, rows.map(hash).sort()])), guards })
+  if (!freeze && proposal.controlDigest !== controlDigest) fail('CONTROL_CHANGED')
+  const executions = retained.map(execution => {
+    const item = proposal.executions.find(row => row.executionId === execution.executionId)
+    const task = tables.tasks.find(row => row.taskId === execution.taskId)
+    if (!item || !task || execution.cancelRequested !== true || execution.sessionBound !== true || !execution.sessionId
+      || !/^[\w][\w.-]*$/u.test(execution.taskId) || !['dsh', undefined].includes(execution.definition?.executionBackend)
+      || !['requirementRevision', 'controlRevision', 'inputVersion', 'leaseEpoch'].every(key => Number.isSafeInteger(execution[key]) && execution[key] > 0)
+      || !execution.inputDigest) fail('EXECUTION_IDENTITY')
+    const response = item.cancelResponse
+    if (![400, 500].includes(response?.statusCode) || !validTime(response.observedAt)
+      || !/execution_(?:process|session)_drain_failed/u.test(JSON.stringify(response.body))) fail('CANCEL_RECEIPT')
+    const stored = history(workspace, execution), events = stored.events
+    const identity = events.filter(event => event.type === 'plugin:dingtalk/execution-session')
+    if (identity.length !== 1 || !['taskId', 'executionId', 'sessionId'].every(key => identity[0].data?.identity?.[key] === execution[key])) fail('SESSION_IDENTITY')
+    const inputs = events.flatMap(event => event.type === 'user/message' ? [{ seq: event.seq, source: event.data?.source }]
+      : event.type === 'agent/inbox/spliced' ? (event.data?.inserted ?? []).map(message => ({ seq: event.seq, source: message.source })) : [])
+    const input = inputs.at(-1)
+    const binding = Object.fromEntries(['taskId', 'executionId', 'sessionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'inputDigest', 'leaseEpoch'].map(key => [key, execution[key]]))
+    if (!input?.source?.executionSession || !['sessionId', 'requirementRevision', 'controlRevision', 'inputVersion', 'inputDigest', 'leaseEpoch']
+      .every(key => input.source.executionSession[key] === binding[key])) fail('INPUT_IDENTITY')
+    const start = events.findLast(event => event.type === 'turn/start'), end = events.findLast(event => event.type === 'turn/end')
+    if (!start || !end || start.seq <= input.seq || end.seq <= start.seq || inputs.some(row => row.seq > end.seq)
+      || events.some(event => event.seq > end.seq && ['tool/call', 'job/registered'].includes(event.type))) fail('TERMINAL_MISSING')
+    const current = { executionId: execution.executionId, binding, taskDigest: hash(task), executionDigest: hash(execution),
+      nativeLogDigest: stored.digest, terminalSequence: end.seq, cancelResponse: response }
+    if (!freeze && hash(current) !== hash(item)) fail('EVIDENCE_CHANGED')
+    return current
+  })
+  const frozen = { ...proposal, controlDigest, executions }
+  return { schema: proposal.schema, proposalDigest: hash(frozen), ledgerDigest: controlDigest, operatorApproval: proposal.operatorApproval,
+    retained: executions.map(({ cancelResponse, ...row }) => ({ ...row, cancelResponseDigest: hash(cancelResponse), ledgerDrainedUnchanged: true })),
+    unknownOperations: tables.operations.filter(row => row.state === 'unknown').map(row => ({ operationId: row.operationId, digest: hash(row) })),
+    unknownNotifications: tables.notifications.filter(row => row.state === 'unknown').map(row => ({ notificationId: row.notificationId, digest: hash(row) })),
+    writes: 0, ...(freeze ? { proposal: frozen } : {}) }
+}

@@ -180,7 +180,7 @@ export function inspectLedger(dbPath, workspace, offline = false, expectedOwnerP
   } finally { db.close() }
 }
 // 普通换包只核对当前控制事实；历史日志完整性审计仍由 inspectLedger 承担。
-export function inspectCurrentControl(dbPath, mode, expectedOwnerPid) {
+export function inspectCurrentControl(dbPath, mode, expectedOwnerPid, maintenanceOptions) {
   if (!['online', 'offline'].includes(mode)) throw Error('DEPLOY_CONTROL_MODE_INVALID')
   if (!Number.isSafeInteger(expectedOwnerPid) || expectedOwnerPid < 1) throw Error('DEPLOY_EXPECTED_PID_REQUIRED')
   const db = new DatabaseSync(dbPath, { readOnly: true })
@@ -195,10 +195,16 @@ export function inspectCurrentControl(dbPath, mode, expectedOwnerPid) {
     if (mode === 'offline' && alive) throw Error('DEPLOY_OWNER_NOT_RELEASED')
     const count = (table, field, value) => db.prepare(`SELECT count(*) AS count FROM dynamic_${table} WHERE json_extract(body, '$.${field}') = ?`).get(value).count
     const pending = Object.fromEntries(['tasks', 'executions', 'groups'].map(table => [table, count(table, 'drained', 0)]))
-    if (Object.values(pending).some(Boolean)) throw Error('DEPLOY_NOT_DRAINED')
+    let maintenance
+    if (maintenanceOptions) {
+      if (maintenanceOptions.freeze && mode !== 'online') throw Error('DEPLOY_MAINTENANCE_FREEZE_REQUIRES_LIVE_OWNER')
+      maintenance = localRequire('../../../../scripts/native-restart-maintenance.mjs').inspectDrainFailureMaintenance({
+        db, ownerPid: expectedOwnerPid, ...maintenanceOptions })
+    } else if (Object.values(pending).some(Boolean)) throw Error('DEPLOY_NOT_DRAINED')
     const startingOperations = count('operations', 'state', 'starting'), startingNotifications = count('notifications', 'state', 'starting')
     if (startingOperations || startingNotifications) throw Error('DEPLOY_STARTING_EFFECT')
-    return { scope: 'current-control', quiescent: true, candidateOnly: mode === 'online', drained: true, pending,
+    return { scope: 'current-control', quiescent: maintenance ? !alive : true, candidateOnly: mode === 'online', drained: !Object.values(pending).some(Boolean), pending,
+      ...(maintenance ? { maintenanceReady: true, maintenance } : {}),
       ownerReleased: !owner, ownerProcessExited: !alive, staleOwner: !!owner && !alive,
       unknownOperations: count('operations', 'state', 'unknown'), unknownNotifications: count('notifications', 'state', 'unknown') }
   } finally { db.close() }
@@ -225,6 +231,15 @@ export function inspectStartup(dbPath) {
   } finally { db.close() }
 }
 if (process.argv[1]?.endsWith('inspect-quiescent-ledger.mjs')) {
-  try { console.log(JSON.stringify(process.argv[2] === 'current-control' ? inspectCurrentControl(process.argv[3], process.argv[4], Number(process.argv[5])) : process.argv[2] === 'startup' ? inspectStartup(process.argv[3]) : process.argv[2] === 'package' ? inspectPackage(...process.argv.slice(3)) : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline', process.argv[5] === undefined ? undefined : Number(process.argv[5]), process.argv[6] === undefined ? undefined : JSON.parse(readFileSync(process.argv[6], 'utf8'))))) }
+  try {
+    const readProposal = file => JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/u, ''))
+    const command = process.argv[2]
+    const result = command === 'freeze-drain-maintenance'
+      ? inspectCurrentControl(process.argv[3], 'online', Number(process.argv[5]), { workspace: process.argv[4], proposal: readProposal(process.argv[6]), freeze: true }).maintenance.proposal
+      : command === 'current-control' ? inspectCurrentControl(process.argv[3], process.argv[4], Number(process.argv[5]), process.argv[7] ? { workspace: process.argv[6], proposal: readProposal(process.argv[7]) } : undefined)
+      : command === 'startup' ? inspectStartup(process.argv[3]) : command === 'package' ? inspectPackage(...process.argv.slice(3))
+      : inspectLedger(process.argv[2], process.argv[3], process.argv[4] === 'offline', process.argv[5] === undefined ? undefined : Number(process.argv[5]), process.argv[6] === undefined ? undefined : readProposal(process.argv[6]))
+    console.log(JSON.stringify(result))
+  }
   catch (error) { console.error(error.message); process.exitCode = 1 }
 }

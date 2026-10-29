@@ -50,3 +50,28 @@ execution_restart_scope_probe({
 生产者范围按原 Host／原作业 PID 的进程树及已核验 DSH 提供者路径判定；业务写入者另按原 PID、相关数据目录和端口判定。单凭进程名或整机创建时间不能建立 DSH 归属，无关 Claude、其他项目编译或其他数据库实例不应阻断本实例维护。编码 PowerShell 命令先解码再作目录归属检查。
 
 因 Host 重启中断作业而在维护中取消的原任务，可通过原 Web reopen 入口重新打开：仅当全部阻塞均为精确绑定的 Host 重启原生未知作业、已请求取消且无其他未排空执行时具备资格。恢复后账本仍保留原 unknown，限定为针对这些操作的 DSH 只读调查，拒绝业务派发、跨操作调查及 Owner 原生写入；正式 operator 隔离审计生效后才恢复业务准入。普通 cancelled 任务不适用此例外。
+
+### 取消已记录但进程排空失败的维护换包
+
+原生 `execution_process_drain_failed` / `execution_session_drain_failed` 使取消接口失败，而账本已记录 `cancelRequested=true, drained=false` 时，可使用独立的 `-DrainFailureMaintenanceProposal`。它不冒用 `host_restart` 作业隔离，不改变原执行、unknown、原结果或日志，也不表示原工具已成功排空。该模式只允许 DSH 原生执行；全部 Owner/Group 必须已排空，没有 starting 操作/通知，所有未排空 Execution 必须逐一列出且原会话最后输入已有 turn/end。其他在途工作先沿正式控制入口暂停。
+
+在机器本地保存维护意图 JSON（仅示意结构，所有值必须取当前实际观察；不得把真实回执提交到仓库）：
+
+```json
+{
+  "schema": "native-drain-maintenance-v1",
+  "expectedHost": {"pid": 123, "creationDate": "2026-01-01T00:00:00Z", "commandLineSha256": "<实际命令行UTF-8字节SHA256>"},
+  "operatorApproval": {"kind": "explicit-stop-deploy-resume", "authorizedAt": "2026-01-01T00:01:00Z", "sourceRef": "<已批准维护的消息引用>"},
+  "executions": [{"executionId": "<原执行ID>", "cancelResponse": {"statusCode": 400, "observedAt": "2026-01-01T00:02:00Z", "body": {"error": "<保存的实际取消错误正文>"}}}]
+}
+```
+
+用仓库核验器冻结当前清单，输出 JSON 保存为新的本地文件：
+
+```powershell
+node docs/acceptance/task-session-runtime-repair/scripts/inspect-quiescent-ledger.mjs freeze-drain-maintenance <db> <agentWorkspace> <原HostPID> <intent.json> > <frozen.json>
+```
+
+冻结命令要求原 owner 仍存活，只读绑定任务/执行完整摘要、输入与租约、原会话终态日志、unknown、来源/唤醒/命令回执/资源声明；不运行模型或工具。沿原双包安装命令追加 `-DrainFailureMaintenanceProposal <frozen.json>`，先 `-Check`。安装器核对 CIM 的 PID、创建时间、命令摘要与既有端口/控制台归属，禁用已核验的自启任务，重读同一冻结清单，再执行原控制台 SIGINT。只有原 Host、捕获的后代身份全部退出、双端口释放、离线同一清单及安装前复核通过才换包。清单变化、任何新输入/写入、身份变化或后代残留都拒绝；不刷新摘要来掩盖变化，不强杀其他进程，不提供 skip 开关。不与其他维护/宿主补丁/ResumeNativeDispose 模式混用。
+
+证据目录保留冻结清单、实际取消回执、原子树、停止信号和只读维护证明；`maintenanceReady=true` 与 `drained=false` 同时保真。该脚本修复不改插件包内容，可以复用已验证且摘要相符的双包。换包后仍走正式 Host 恢复，旧实例遗失的原生 handle/scope 不会由该证明重建；未决效果仍须正式对账，不能承诺旧执行必然解除或自动重放。
