@@ -64,10 +64,11 @@ function withoutSourceQuote(text, sourceText) {
  * DWS owns the native quote and mention; do not duplicate either as display-name text.
  * Evidence and limitations must already be public, verified task-session statements.
  */
-export function formatTaskGroupReply({ source, summary, evidence, limitations, signature, includeSignature = true, internalIds = [] } = {}) {
+export function formatTaskGroupReply({ source, summary, evidence, limitations, signature, includeSignature = true, internalIds = [], allowUnrouted = false } = {}) {
   const groupId = required(source?.groupId, 'GROUP_ID')
-  const replyToMessageId = required(source?.messageId, 'SOURCE_MESSAGE_ID')
-  const replyToSenderOpenDingTalkId = required(source?.senderOpenDingTalkId, 'SOURCE_SENDER_ID')
+  const unrouted = allowUnrouted && !source?.messageId && !source?.senderOpenDingTalkId
+  const replyToMessageId = unrouted ? undefined : required(source?.messageId, 'SOURCE_MESSAGE_ID')
+  const replyToSenderOpenDingTalkId = unrouted ? undefined : required(source?.senderOpenDingTalkId, 'SOURCE_SENDER_ID')
   const clean = text => withoutConfiguredReplySignature(text, signature)
   const body = required(withoutSourceQuote(clean(required(summary, 'SUMMARY')), source.text), 'SUMMARY')
   const facts = lines(evidence, 'EVIDENCE').map(clean).filter(Boolean)
@@ -84,5 +85,5 @@ export function formatTaskGroupReply({ source, summary, evidence, limitations, s
   if (/通过AI发送|全部已读|(?:查看|见|打开)(?:\s*Agent)?\s*本地(?:任务)?详情|(?:调度|内部)(?:任务)?编号\s*[:：]?\s*SG\d+|(?:\/workspace\/|\/tmp\/|[A-Za-z]:\\Users\\)/iu.test(text)) {
     throw new Error('GROUP_REPLY_PRIVATE_OR_PLATFORM_TEXT')
   }
-  return { groupId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds: [replyToSenderOpenDingTalkId] }
+  return { groupId, text, ...(unrouted ? { atOpenDingTalkIds: [] } : { replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds: [replyToSenderOpenDingTalkId] }) }
 }

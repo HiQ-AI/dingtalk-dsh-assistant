@@ -251,10 +251,11 @@ export function topicTaskCalls(request, { title = '原消息交办', objective }
   if (names.includes('group_decision_submit')) {
     const basisUnitRefs = input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
     const text = objective ?? input.messages.map(message => message.text).join('\n')
+    const replyTarget = input.messages.findLast(message => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
     return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: {
       basisMessageIds: [...new Set(input.messages.map(message => message.messageId))], basisUnitRefs,
       actions: [{ kind: 'new-task', title, objective: text, acceptanceCriteria: ['完成原消息要求并核验证据'], topicRefs: [{ topicId: input.topicId, revision: input.revision }], basisUnitRefs,
-        dispatchAssessment: { businessObject: title, agentDeliverable: text, externalFollowup: [], sourceUnitRefs: basisUnitRefs, workflowRefs: [], workflowReason: '当前没有专用流程' } }], reply: '收到，已交办任务。', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
+        dispatchAssessment: { businessObject: title, agentDeliverable: text, externalFollowup: [], sourceUnitRefs: basisUnitRefs, workflowRefs: [], workflowReason: '当前没有专用流程' } }], reply: '收到，已交办任务。', ...(replyTarget ? { replyToMessageId: replyTarget.messageId } : {}), replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
     } } }]
   }
 }

@@ -19,7 +19,7 @@ test('Host exact recovery rejects unknown effects and queue-stale facts, then re
   const topic = h.residentStore.listTopics(groupId)[0], original = h.residentStore.getGroup(groupId).messages[0]
   const refs = original.activeUnitRefs, requestId = 'host-decision'
   await h.residentStore.acceptTopicDecision({ groupId, topicId: topic.topicId, revision: topic.revision, decisionId: requestId,
-    decision: { basisMessageIds: [messageId], basisUnitRefs: refs, reply: '已交回核对', replyReview: { kind: 'confirmation' },
+    decision: { basisMessageIds: [messageId], basisUnitRefs: refs, reply: '已交回核对', replyToMessageId: messageId, atOpenDingTalkIds: ['native-user'], replyReview: { kind: 'confirmation' },
       actions: [{ kind: 'new-task', title: '核对结果', objective: '核对结果', acceptanceCriteria: ['核对证据'], topicRefs: [{ topicId: topic.topicId, revision: topic.revision }], basisUnitRefs: refs }] } })
   const current = () => h.residentStore.getTopic(groupId, topic.topicId).decisions[0]
   const operation = current().operations[0]

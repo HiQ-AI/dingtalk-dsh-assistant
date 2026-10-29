@@ -39,6 +39,8 @@ const replyReviewSchema = z.strictObject({
 const replyDecisionSchema = z.strictObject({
   ...decisionBasis, actions: z.array(taskAction),
   reply: z.string().describe('群回复或任务确认；actions 为空时必须非空，提交任务动作时 Host 也要求非空确认。此分支不得填写 reason。'),
+  replyToMessageId: z.string().min(1).optional().describe('明确选择固定话题内真人消息作为回复目标；有真人参与者时非空回复必须填写。'),
+  atOpenDingTalkIds: z.array(z.string().min(1)).optional().describe('需提醒的固定话题参与者；省略或空数组默认提醒所选目标作者。'),
   replyReview: replyReviewSchema.optional().describe('有非空reply时Host要求提交本审阅，包括kind；即使候选为空也须声明kind及三个空ID列表。optional保留补答协议，并不表示可省略回复审阅；先阅读当前候选再填真实ID。'),
 }).superRefine((decision, ctx) => {
   if (decision.actions.length === 0 && decision.reply.length === 0) ctx.addIssue({ code: 'custom', path: ['reply'], message: 'actions 为空时 reply 必须非空；不回复请改用 actions: [] + reason 分支。' })
@@ -314,7 +316,7 @@ export function isDirectedToOtherParticipants(message, agentNames = []) {
 export function blockTaskDecisionForUnavailableMedia(decision, mediaUnavailable) {
   const unavailable = Array.isArray(mediaUnavailable) ? mediaUnavailable.map((item) => String(item).trim()).filter(Boolean) : []
   if (unavailable.length === 0 || !decision.actions.some((action) => ['new-task', 'task-context', 'task-reopen'].includes(action.kind))) return decision
-  return { basisMessageIds: decision.basisMessageIds, basisUnitRefs: decision.basisUnitRefs, actions: [], reply: `我没能获取到以下任务信息：${unavailable.join('；')}。请重新发送可访问的内容，信息补齐后我再开始处理。`, ...(decision.replyReview ? { replyReview: decision.replyReview } : {}) }
+  return { basisMessageIds: decision.basisMessageIds, basisUnitRefs: decision.basisUnitRefs, actions: [], reply: `我没能获取到以下任务信息：${unavailable.join('；')}。请重新发送可访问的内容，信息补齐后我再开始处理。`, ...(decision.replyToMessageId ? { replyToMessageId: decision.replyToMessageId } : {}), ...(decision.atOpenDingTalkIds ? { atOpenDingTalkIds: decision.atOpenDingTalkIds } : {}), ...(decision.replyReview ? { replyReview: decision.replyReview } : {}) }
 }
 
 // 仅查询固定输入与当前事实，聚合可独立判定的问题；任何 issue 都阻止提交。

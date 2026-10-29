@@ -176,7 +176,7 @@ for (const mode of ['missing', 'preserve', 'replan', 'cancel']) test(`real coord
       if (mode !== 'cancel' && mode !== 'missing') action.progressImpact = mode === 'replan' ? 'replan' : 'preserve'
       if (mode === 'replan') action.objective = '新的明确目标'
       return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [action], reply: '已核对本次输入语义',
+        decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [action], reply: '已核对本次输入语义', replyToMessageId: input.messages.at(-1).messageId,
           replyReview: { kind: 'substantive', reviewedOutboundIds: ids, sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
     }
     const topics = topicTaskCalls(request); if (topics) return topics
