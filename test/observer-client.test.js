@@ -26,6 +26,79 @@ test('the complete board renders its initial loading state before any collection
  assert.doesNotThrow(()=>client.ObserverContent({openSession:async()=>{}}))
 })
 
+async function topicHarness(name) {
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const fragment=source.slice(source.indexOf('    function useTopicRequest('),source.indexOf('    function TaskStepOutput('))
+ const states=[],refs=[],effects=[],requests=[];let stateIndex=0,refIndex=0,effectIndex=0,pendingEffects=[]
+ const component=runInNewContext(`${fragment};${name}`,{
+  useState:initial=>{const i=stateIndex++;if(!(i in states))states[i]=initial;return [states[i],v=>states[i]=typeof v==='function'?v(states[i]):v]},
+  useRef:initial=>{const i=refIndex++;return refs[i]??(refs[i]={current:initial})},
+  useEffect:(fn,deps)=>{const i=effectIndex++,old=effects[i];if(!old||deps.some((v,n)=>v!==old.deps[n]))pendingEffects.push(()=>{old?.cleanup?.();effects[i]={deps,cleanup:fn()}})},
+  get:(path,{signal})=>new Promise((resolve,reject)=>requests.push({path,signal,resolve,reject})),AbortController,URLSearchParams,
+  React:{createElement:(type,props,...children)=>({type,props,children}),Fragment:'fragment'},Button:'button',
+  ui:{textSm:12,textMd:14,space4:16},colors:{muted:'gray',border:'gray'},tableFrame:{},tableFooter:{},toolbar:{},
+  readout:(label,value)=>({type:'readout',children:[label,JSON.stringify(value)]}),fmt:value=>value,taskStateLabel:value=>value,
+  emptyState:text=>({type:'empty',children:[text]}),SelectMenu:'select',FixedTopicDetail:'fixed',
+ })
+ return {requests,render(props){stateIndex=refIndex=effectIndex=0;const tree=component(props);const batch=pendingEffects;pendingEffects=[];batch.forEach(fn=>fn());return tree},
+  dispose(){effects.forEach(effect=>effect?.cleanup?.())}}
+}
+const topicNodes=value=>value&&typeof value==='object'?[value,...(value.children??[]).flatMap(topicNodes)]:[]
+const flushTopics=async()=>{await Promise.resolve();await Promise.resolve();await Promise.resolve()}
+
+test('topic overview reuses slow polling reads, preserves content on refresh failure and loads history only on disclosure',async()=>{
+ const h=await topicHarness('TopicOverview'),selection={groupId:'g',topicId:'first',title:'第一话题'}
+ const render=updatedAt=>h.render({selection,updatedAt,onOpenTask(){}})
+ render(1);render(2);render(3);assert.equal(h.requests.length,1);assert.equal(h.requests[0].signal.aborted,false)
+ assert(h.requests[0].path.includes('view=overview'))
+ h.requests[0].resolve({topic:{...selection,summary:'当前摘要',status:'active'}});await flushTopics()
+ let tree=render(3);assert(JSON.stringify(tree).includes('当前摘要'))
+ assert(!topicNodes(tree).some(node=>node.type?.name==='TopicRecords'))
+ const disclosure=topicNodes(tree).find(node=>node.type==='details')
+ disclosure.props.onToggle({currentTarget:{open:true}});tree=render(3)
+ assert(topicNodes(tree).some(node=>node.type?.name==='TopicRecords'))
+ render(4);assert(JSON.stringify(render(5)).includes('当前摘要'));assert.equal(h.requests.length,2)
+ h.requests[1].reject(new Error('temporary'));await flushTopics();tree=render(5)
+ assert(JSON.stringify(tree).includes('当前摘要'))
+ const status=topicNodes(tree).find(node=>node.type?.name==='TopicPageStatus')
+ assert.equal(status.props.error,'temporary');status.props.onRetry();render(5);assert.equal(h.requests.length,3)
+ h.dispose();assert.equal(h.requests[2].signal.aborted,true)
+ h.requests[2].resolve({topic:{...selection,summary:'过期响应'}});await flushTopics()
+ assert(!JSON.stringify(render(5)).includes('过期响应'))
+})
+
+test('topic history pages use their own snapshot and survive unrelated overview updates',async()=>{
+ const h=await topicHarness('TopicRecords'),selection={groupId:'g',topicId:'topic',revision:4}
+ const render=()=>h.render({selection,kind:'messages'})
+ render();assert(h.requests[0].path.includes('revision=4'));h.requests[0].resolve({messages:[{messageId:'m1',text:'第一条'}],topic:{},revision:4,total:51,offset:0,limit:25});await flushTopics()
+ let tree=render();assert(JSON.stringify(tree).includes('第一条'))
+ const pager=topicNodes(tree).find(node=>node.type?.name==='TopicPager');pager.props.onChange(25);render()
+ assert(h.requests[1].path.includes('offset=25'));assert(h.requests[1].path.includes('revision=4'));assert.equal(h.requests[0].signal.aborted,true)
+ h.requests[1].reject(Object.assign(new Error('stale'),{status:409}));await flushTopics();render()
+ assert(h.requests[2].path.includes('offset=0'));assert(!h.requests[2].path.includes('revision=4'))
+ h.dispose()
+})
+
+test('topic list cancels old group reads, rejects stale responses and preserves the last good page on errors',async()=>{
+ const h=await topicHarness('TopicBrowser')
+ const render=updatedAt=>h.render({groups:[{groupId:'other',name:'其他群'}],updatedAt,onOpenTask(){}})
+ let tree=render(1);render(2);assert.equal(h.requests.length,2,'fixed registry and one list page only')
+ const listRequest=h.requests.find(request=>request.path.startsWith('/state/topics?'))
+ assert(listRequest.path.includes('limit=10'))
+ listRequest.resolve({topics:[{topicId:'a',groupId:'g',title:'第一话题'}],total:11,offset:0,limit:10,nextOffset:10});await flushTopics()
+ tree=render(2);assert(JSON.stringify(tree).includes('第一话题'))
+ render(3);const pending=h.requests.at(-1)
+ const filter=topicNodes(tree).find(node=>node.type==='select');filter.props.onChange('other');tree=render(3)
+ assert.equal(pending.signal.aborted,true);assert(!JSON.stringify(tree).includes('第一话题'))
+ pending.resolve({topics:[{topicId:'old',title:'旧群迟到'}],total:1});await flushTopics()
+ assert(!JSON.stringify(render(3)).includes('旧群迟到'))
+ const next=h.requests.at(-1);assert(next.path.includes('groupId=other'))
+ next.resolve({topics:[{topicId:'b',groupId:'other',title:'其他话题'}],total:1,offset:0,limit:10,nextOffset:null});await flushTopics();render(3)
+ render(4);h.requests.at(-1).reject(new Error('offline'));await flushTopics()
+ tree=render(4);assert(JSON.stringify(tree).includes('其他话题'));assert(JSON.stringify(tree).includes('offline'))
+ h.dispose()
+})
+
 test('成果时间记录仅混排真实巡查决定，保留无动作wait、按身份去重和时间排序', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   const code = source.slice(source.indexOf('    const taskOutcomeRecords ='), source.indexOf('    function TaskOutcomeRecords('))
@@ -81,19 +154,11 @@ test('消息与话题详情只展示有绑定的会话并支持分页', async ()
   const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
   assert.match(source, /message\.runId \? React\.createElement\(Button[\s\S]*'处理过程'/)
   assert.match(source, /\/state\/workflows\/\$\{encodeURIComponent\(runId\)\}\/trace/)
-  const topicContextRequest = source.slice(source.indexOf("        setContextLoading(true); setContextError('')"), source.indexOf('      const selectTopic ='))
-  assert.match(topicContextRequest, /new URLSearchParams\(\{ groupId: selection\.groupId \}\)/)
-  assert.match(topicContextRequest, /get\(`\/state\/topics\/\$\{encodeURIComponent\(selection\.topicId\)\}\/context\?\$\{params\}`\)/)
-  assert.match(topicContextRequest, /params\.set\('cursor', contextCursor\)/)
-  assert.match(topicContextRequest, /params\.set\('intentCursor', intentCursor\)/)
-  assert.match(topicContextRequest, /params\.set\('revision', String\(contextRevision\)\)/)
-  assert.doesNotMatch(topicContextRequest, /\/state\/workflows\/topics\//)
   assert.match(source, /nativeSession && session\?\.sessionId && session\.sessionBound !== false \? React\.createElement\(Button/)
   assert.match(source, /setCursorHistory\(\(items\) => \[\.\.\.items, cursor\]\)/)
-  assert.match(source, /intentNextCursor/)
-  assert.match(source, /判断批次分页/)
-  assert.match(source, /查看本次判断/)
-  assert.match(source, /重新读取当前上下文/)
+  assert.match(source, /TopicPager/)
+  assert.match(source, /判断记录分页/)
+  assert.match(source, /判断依据与执行记录/)
 })
 
 test('精简判断轨迹不包含技术详情，并展示容量受阻原因', async () => {
@@ -163,7 +228,7 @@ test('运行看板提供统一视觉尺度、响应式布局和可见键盘焦�
   assert.match(source, /:focus-visible/u)
   assert.match(source, /observer-task-board/u)
   assert.match(source, /observer-topics-layout/u)
-  assert.match(source, /actionLabel: '重新读取'/u)
+  assert.match(source, /onRetry:.*setRetry/u)
 })
 
 test('发件状态按实际投递环节展示，pending不会伪装为已回读', async () => {
@@ -659,28 +724,6 @@ test('详情慢查询跨刷新复用，切换任务不接受旧响应', async ()
   environment.selectedTaskId = 'two'; effect(); assert.equal(requests.length, 2)
   requests[0].resolve({ taskId: 'one' }); requests[1].resolve({ taskId: 'two' }); await settle()
   assert.deepEqual(details.map(value => value.taskId), ['two'])
-})
-
-test('已选话题新版本刷新详情并重置旧分页，同版本及其他话题不打断阅读', async () => {
-  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
-  const start = source.indexOf('        const current = listing?.topics.find')
-  const end = source.indexOf('      }, [listing, selection])', start)
-  const code = `(()=>{${source.slice(start, end)}})()`
-  const changes = []
-  const selection = { topicId: 'selected', groupId: 'g', revision: 2, summaryRevision: 3, updatedAt: 'old' }
-  const env = { selection, listing: { topics: [{ ...selection }] } }
-  for (const name of ['setSelection', 'setMessageOffset', 'setContextCursor', 'setContextCursorHistory', 'setIntentCursor', 'setIntentCursorHistory', 'setSelectedIntentRun', 'setContextRevision', 'setMessagePageRevision', 'setContext', 'setTopicContext']) env[name] = value => changes.push([name, value])
-  runInNewContext(code, env)
-  assert.equal(changes.length, 0)
-  env.listing.topics = [{ ...selection, topicId: 'other', revision: 4 }]
-  runInNewContext(code, env)
-  assert.equal(changes.length, 0)
-  env.listing.topics = [{ ...selection, summaryRevision: 4, updatedAt: 'new' }]
-  runInNewContext(code, env)
-  assert.equal(changes.find(([name]) => name === 'setSelection')[1].summaryRevision, 4)
-  assert.equal(changes.find(([name]) => name === 'setContextRevision')[1], undefined)
-  assert.equal(changes.find(([name]) => name === 'setMessageOffset')[1], 0)
-  assert.equal(changes.find(([name]) => name === 'setTopicContext')[1], undefined)
 })
 
 test('unlinked retired confirmation explicitly requires manual verification instead of promising an owner wake', async () => {
