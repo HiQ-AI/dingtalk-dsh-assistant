@@ -1396,7 +1396,10 @@ for (const scenario of [
   ] }
   const sessions = { async run(args) {
     calls.push(args); await args.onSessionBound()
-    if (args.recoveryContext && scenario.accepts) { await args.onResult({ cases: ['configured-scenario'] }); return { status: 'submitted' } }
+    if (args.recoveryContext && scenario.accepts) {
+      await args.onResult({ cases: [{ criterionId: 'criterion-1', scenarioId: 'configured-scenario', steps: ['Verify withdrawal outbox'], expected: 'Original objective is satisfied' }] })
+      return { status: 'submitted' }
+    }
     return { status: 'no_submission', reason: 'execution_no_submission' }
   }, async cancel() {}, async assertDrained() {}, async close() {} }
   const controller = createExecutionController({ store, artifacts, workflows: [definition], sessions })
