@@ -16,14 +16,16 @@ const digest = text => createHash('sha256').update(text).digest('hex')
 const skip = process.platform !== 'win32' ? 'Windows native pwsh required' : !available ? reason : false
 
 // 全部保留物均为新建夹具；运行的只是生产只读探针，不启动 PostgreSQL / Maven，不读取历史业务账本。
-async function fixturePlan(root) {
+async function fixturePlan(root, observedExit = false) {
  const startedAt = Date.now() - 60000, dshHome = join(root, 'synthetic-host')
  const source = join(root, 'retained-source'), hostLogPath = join(root, 'host.oom.log')
  await mkdir(source, { recursive: true })
  await writeFile(join(source, 'postmaster.pid'), `900002\n${source}\n0\n25429\n`)
- const log = '[900001:0] FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory'
+ const log = observedExit ? 'Host started; no exit cause was recorded.' : '[900001:0] FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory'
  await writeFile(hostLogPath, log)
+ if (observedExit) await utimes(hostLogPath, new Date(startedAt - 10000), new Date(startedAt - 10000))
  const scopeEvidence = { hostPid: 900001, hostLogPath, hostLogSha256: digest(log),
+  ...(observedExit ? { hostExit: { observedAt: new Date().toISOString(), evidenceRef: 'fixture-original-host-exit-observation' } } : {}),
   producerScopeReviewed: true, localEffectsOnlyConfirmed: true, excludeOriginalSourcesConfirmed: true }
  const binding = { operationId: 'original-operation', operationDigest: 'a'.repeat(64), taskId: 'probe-task', executionId: 'original',
   sessionId: 'original-session', jobId: 'original-job', startedAt, callId: 'original-call', argumentsDigest: 'b'.repeat(64) }
@@ -40,9 +42,9 @@ async function fixturePlan(root) {
  return { plan, scopeEvidence, operation: { operationId: binding.operationId, taskId: binding.taskId, job: { startedAt } } }
 }
 
-test('managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader', { skip, timeout: 60000 }, async t => {
+for (const observedExit of [false, true]) test(`managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader: ${observedExit ? 'observed exit' : 'OOM'}`, { skip, timeout: 60000 }, async t => {
  const root = await mkdtemp(join(tmpdir(), 'native-scope-runner-'))
- const { plan, scopeEvidence, operation } = await fixturePlan(root)
+ const { plan, scopeEvidence, operation } = await fixturePlan(root, observedExit)
  const args = { expectedOperationDigest: plan.spec.binding.operationDigest, expectedScriptDigest: plan.scriptDigest, scopeEvidence }
  let step = 0
  const h = await nativeTaskHost(root, async () => ++step === 1 ? [{ name: restartScopeProbeToolName, args }]

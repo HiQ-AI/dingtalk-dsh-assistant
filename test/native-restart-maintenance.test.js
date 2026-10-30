@@ -27,6 +27,15 @@ for (const acknowledged of [false, true]) test('maintenance preserves original l
  assert.equal(first.ledgerDigest, second.ledgerDigest)
  assert.equal(JSON.stringify(f.tables), before); assert.equal(JSON.stringify(f.original), log)
 })
+test('maintenance accepts reviewed non-OOM exit only with full original-scope exclusion', () => {
+ const f = fixture(), before = JSON.stringify(f.tables)
+ f.proposal.operations[0].scopeEvidence.hostExit = { observedAt: '2026-10-27T07:32:20Z', evidenceRef: 'retained-exit-observation' }
+ Object.assign(f.observation, { hostFatal: false, hostFatalTime: '2026-10-27T07:00:00Z', hostLogVerified: true, hostExitObservedAt: '2026-10-27T07:32:20Z' })
+ assert.equal(inspectRetainedRestart(f.args).writes, 0)
+ assert.equal(JSON.stringify(f.tables), before)
+ f.observation.legacySourceCount = 1
+ assert.throws(() => inspectRetainedRestart(f.args), /DEPLOY_RESTART_ISOLATION_UNPROVEN/)
+})
 for (const [name, mutate] of [
  ['no explicit approval', f => { delete f.proposal.operatorApproval }],
  ['wrong current Host', f => { f.args.ownerPid++ }],

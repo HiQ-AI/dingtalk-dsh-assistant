@@ -33,7 +33,11 @@ execution_restart_scope_probe({
 
 执行结束并完成原效果只读核验后，使用该执行的 executionId 和工具返回的 probeCallId 填回 scopeEvidence，再调用正式 check。ready=true 后使用返回的 expectedIsolationDigest 确认，账本将确认、审计和原人类答复原子持久化。原文 command 仍作为审计计划返回；已有完整的原生直接调用证据继续精确核验，不将手抄执行作为常规路径。重复确认只能复用同一正文。
 
-内置 Windows 核验仅识别限定的本地 PostgreSQL 启动和离线 Maven 编译配方。它核对 OOM 原日志及提供者文件摘要、Host 和其残存子进程、启动时间窗口内具有 DSH 提供者路径归属的生产者，以及命令特有的 PID、端口和保留目录。历史 Windows Job 身份不可恢复时明确记录 unavailable，不能声称已证明其退出码。任何权限拒绝、遗留生产者、未完成调查、跨任务绑定、陈旧摘要或保留物丢失均拒绝确认。operator 还必须审查该配方只影响本地且排除原生产来源。
+内置 Windows 核验仅识别限定的本地 PostgreSQL 启动和离线 Maven 编译配方。默认仍核对 OOM 原日志。原 Host 已退出而原因未知、保留日志只有启动信息时，operator 可在同一 `scopeEvidence` 增加 `hostExit: { observedAt, evidenceRef }`：时间必须是原作业启动后实际观察到原 Host 退出的时间，引用指向保留的启动器/系统及进程身份核验记录。`producerScopeReviewed` 包括审查该记录与 `hostPid`、原 Host 日志和原调用的对应关系，不能只填一个当前不存在的 PID。该分支明确审计为 operator 观察、退出原因 unknown，不伪造 OOM、原生终态或退出码。
+
+两条分支都核对原日志摘要及提供者文件摘要、Host 和其残存子进程、启动时间窗口内具有 DSH 提供者路径归属的生产者，以及命令特有的 PID、端口和保留目录。非 OOM 分支的生产者窗口延伸到实际退出观察时间，不能用过早的启动日志修改时间代替；日志变化或比退出观察更新仍拒绝。历史 Windows Job 身份不可恢复时明确记录 unavailable。任何权限拒绝、遗留生产者、未完成调查、跨任务绑定、陈旧摘要或保留物丢失均拒绝确认。operator 还必须审查该配方只影响本地且排除原生产来源。
+
+`DYNAMIC_SCOPED_ISOLATION_EVIDENCE_REQUIRED` 表示请求没有 `scopeEvidence` 且 Host 没有受信的隔离能力，不表示已运行探针。`expectedOperationDigest` 必须是完整原 operation 的摘要，不能传 `specDigest` 或 `scriptDigest`；以本次 check 返回的受管参数继续调查。补充或更改退出证据后需重新取计划，旧探针摘要不能通用。
 
 确认后，恢复排空使用同一审计引用，保留缺结果的历史调用。Host 拒绝重新派发同一命令摘要，并拒绝复用被保留的 PostgreSQL 数据目录。该约束覆盖本 Host 的受管操作，不是系统级 ACL；不得以该审计自动重放原命令、重启数据库或清理目录。部署必须先通过正式排空预检；若旧版预检因中断记录拒绝，不得手工改账本绕过。
 

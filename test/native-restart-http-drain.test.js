@@ -10,6 +10,7 @@ import { createExecutionSessions } from '../packages/dingtalk-dsh-assistant/exec
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { isolationDigest as hash, isolationBinding, readAuditedRestartDrain } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 import { restartFixture } from './fixtures/native-restart-isolation.js'
+import { restartScopeProbePlan } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
 
 const pg = String.raw`& D:\soft\PostgreSQL\16\bin\postgres.exe -D D:\agent\artifacts\isolated-pg -h 127.0.0.1 -p 25428`
 const noop = async () => {}
@@ -114,4 +115,38 @@ test('formal check prepares the existing native read-only probe without requirin
  assert.match(response.body.requiredScopeProbes[0].command, /Get-NetTCPConnection -ErrorAction Stop/)
  assert.notEqual((await f.post('', f.body)).status, 200)
  assert.deepEqual(await f.query('operation.get', { operationId: 'operation' }), f.operation)
+ const hostExit = { observedAt: new Date().toISOString(), evidenceRef: 'retained-original-host-exit-observation' }
+ f.body.nativeRestartResolutions[0].scopeEvidence.hostExit = hostExit
+ const observedExit = await f.post('/check', f.body)
+ assert.equal(observedExit.status, 200, JSON.stringify(observedExit.body)); assert.equal(observedExit.body.ready, false)
+ const probe = observedExit.body.requiredScopeProbes[0]
+ assert.deepEqual(probe.managedCall.arguments.scopeEvidence.hostExit, hostExit, 'the managed call must retain the exact reviewed exit evidence')
+ assert.notEqual(probe.scriptDigest, response.body.requiredScopeProbes[0].scriptDigest)
+ assert.deepEqual(await f.query('operation.get', { operationId: 'operation' }), f.operation)
+ const evidence = f.body.nativeRestartResolutions[0].scopeEvidence
+ const plan = restartScopeProbePlan({ command: pg, binding: isolationBinding(f.operation, 'original-call'), evidence })
+ assert.equal(plan.command, probe.command)
+ const observation = { schema: plan.spec.schema, specDigest: plan.specDigest, observedAt: new Date().toISOString(),
+  hostFatal: false, hostLogVerified: true, hostExitObservedAt: hostExit.observedAt, providerContractVerified: true,
+  originalHostCount: 0, originalHostChildCount: 0, legacySourceCount: 0, sourceWriterCount: 0, listeningCount: 0, originalArtifactsPreserved: true }
+ const startedAt = Date.now(), original = JSON.stringify(f.facts.original)
+ f.facts.reads.push(
+  { seq: 4, type: 'tool/call', data: { callId: 'scope-probe', name: 'pwsh', arguments: JSON.stringify({ command: plan.command }) } },
+  { seq: 5, type: 'job/registered', data: { jobId: 'scope-job', owner: f.facts.readback.sessionId, kind: 'pwsh', label: plan.command, startedAt, toolCall: { callId: 'scope-probe' } } },
+  { seq: 6, type: 'job/settled', data: { jobId: 'scope-job', owner: f.facts.readback.sessionId, startedAt, status: 'completed', producerReported: true, detail: 'exit code: 0' } },
+  { seq: 7, type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'scope-probe', isError: false, content: [{ type: 'text', text: JSON.stringify(observation) }] } } })
+ Object.assign(evidence, { probeExecutionId: f.facts.readback.executionId, probeCallId: 'scope-probe' })
+ const checked = await f.post('/check', f.body)
+ assert.equal(checked.status, 200, JSON.stringify(checked.body)); assert.equal(checked.body.ready, true)
+ f.body.nativeRestartResolutions[0].expectedIsolationDigest = checked.body.restartResolutions[0].isolationDigest
+ const applied = await f.post('', f.body)
+ assert.equal(applied.status, 200, JSON.stringify(applied.body))
+ assert.equal((await f.post('', f.body)).status, 200)
+ const audited = await f.query('operation.get', { operationId: 'operation' })
+ assert.equal(audited.state, 'unknown'); assert.equal(audited.job.status, 'running'); assert.equal(audited.result, undefined)
+ assert.equal(audited.recoverySettlement.noReplay, true); assert.equal(audited.recoverySettlement.partialEffectsPossible, true)
+ assert.equal(audited.recoverySettlement.proof.isolation.provenance.hostExit.cause, 'unknown')
+ assert.equal(JSON.stringify(f.facts.original), original)
+ f.body.nativeRestartResolutions[0].scopeEvidence.hostExit.observedAt = 'not-a-date'
+ assert.equal((await f.post('/check', f.body)).status, 400)
 })
