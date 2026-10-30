@@ -280,13 +280,16 @@ for (const audience of ['all', 'members']) test(`native due ${audience} report s
   const root = await mkdtemp(join(tmpdir(), 'platform-scheduled-ledger-'))
   let h, originalTurns = 0, dueTurns = 0, initialize = true, filesReadable = false
   const dwsCalls = [], adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => { dwsCalls.push(args); return { exitCode: 0, stdout: '{"success":true}' } } } })
-  const sends = [], errors = [], scheduleInput = { title: '工作汇报', prompt: '汇报本群今天完成情况', at: new Date(Date.now() + 2500).toISOString() }
+  const sends = [], errors = [], scheduleInput = { title: '工作汇报', prompt: '汇报本群今天完成情况' }
   const route = fixedReplyModel('agent-platform')
   const boot = async () => {
     h = await nativeTaskHost(root, request => {
       if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) return route(request)
       if (request.tools.some(tool => tool.name === 'platform_schedule_submit')) {
-        if (originalTurns++ === 0) return [{ name: 'platform_schedule_submit', args: scheduleInput }]
+        if (originalTurns++ === 0) {
+          scheduleInput.at = new Date(Date.now() + 2500).toISOString()
+          return [{ name: 'platform_schedule_submit', args: scheduleInput }]
+        }
         return [{ name: 'platform_reply_submit', args: { atOpenDingTalkIds: ['native-user'], text: '已安排本次工作汇报。' } }]
       }
       if (!request.tools.some(tool => tool.name === 'platform_task_query')) return []
@@ -334,6 +337,7 @@ for (const audience of ['all', 'members']) test(`native due ${audience} report s
   await h.close(); await boot()
   await waitUntil(() => h.residentStore.getPlatformSchedule(record.sessionId)?.outcome === 'replied', 'scheduled report prepared after native cold restore')
     .catch(error => { t.diagnostic(JSON.stringify({ tools: h.toolResults.slice(-4), errors: errors.map(value => value.message) })); throw error })
+  await waitUntil(async () => (await h.ctx.schedule.catalog()).find(item => item.id === record.id)?.status === 'inactive', 'original native report commits its delivery')
   await h.service.whenIdle()
   await waitUntil(async () => (await h.query('notification.list')).some(item => item.payload.artifact && item.ack && item.readbackAttemptCount > 0), 'first attachment has its original ACK and unconfirmed readback')
     .catch(async error => { t.diagnostic(JSON.stringify({ recovery: await h.service.recover(), errors: errors.map(value => value.stack) })); throw error })

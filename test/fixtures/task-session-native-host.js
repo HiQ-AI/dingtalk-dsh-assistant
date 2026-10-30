@@ -10,22 +10,26 @@ import { openTaskSessionService } from '../../packages/dingtalk-dsh-assistant/ta
 // Use one installed native composition, including its real preset and process providers.
 // No manager, agent, persistence, filesystem, shell, or control-store implementation is mocked.
 export const nativeShell = process.platform === 'win32' ? 'pwsh' : 'bash'
-let profile, native, Context, Loader, LlmAdapter, profileError
-try {
-  profile = createRequire(pathToFileURL(resolve(process.env.DSH_NATIVE_TEST_PROFILE ?? '.dsh/profiles/resident/package.json')))
-  native = createRequire(profile.resolve('@deepseek-ai/dsh-base'))
-  Context = profile('@deepseek-ai/cordis').Context
-  Loader = profile('@deepseek-ai/cordis-plugin-loader').default
-  LlmAdapter = native('@deepseek-ai/dsh-llm').LlmAdapter
-  for (const name of ['agent-preset-registry', 'workspace', 'fs-local', 'tool-fs', 'tool-' + nativeShell, nativeShell + '-local', 'subprocess-local']) native.resolve('@deepseek-ai/dsh-' + name)
-} catch (error) { profileError = error }
-export const available = !profileError
-export const reason = profileError ? 'Full native profile required: install the resident profile or set DSH_NATIVE_TEST_PROFILE to its package.json; ' + profileError.message.split('\n')[0] : undefined
-const modulePath = name => pathToFileURL(native.resolve('@deepseek-ai/dsh-' + name)).href
-const row = (name, config) => ({ name: modulePath(name), ...(config ? { config } : {}) })
+export function loadNativeTestProfile(path) {
+  try {
+    const profile = createRequire(pathToFileURL(resolve(path)))
+    const native = createRequire(profile.resolve('@deepseek-ai/dsh-base'))
+    const Context = profile('@deepseek-ai/cordis').Context
+    const Loader = profile('@deepseek-ai/cordis-plugin-loader').default
+    const LlmAdapter = native('@deepseek-ai/dsh-llm').LlmAdapter
+    for (const name of ['agent-preset-registry', 'workspace', 'fs-local', 'tool-fs', 'tool-' + nativeShell, nativeShell + '-local', 'subprocess-local']) native.resolve('@deepseek-ai/dsh-' + name)
+    return { profile, native, Context, Loader, LlmAdapter, available: true }
+  } catch (error) {
+    return { available: false, reason: 'Full native profile required: ' + path + '; ' + error.message.split('\n')[0] }
+  }
+}
+const defaultProfile = loadNativeTestProfile(process.env.DSH_NATIVE_TEST_PROFILE ?? '.dsh/profiles/resident/package.json')
+export const { available, reason } = defaultProfile
 
 export async function nativeTaskHost(root, decide, options = {}) {
+  const { profile, native, Context, Loader, LlmAdapter, available, reason } = options.nativeProfile ?? defaultProfile
   if (!available) throw new Error(reason)
+  const row = (name, config) => ({ name: pathToFileURL(native.resolve('@deepseek-ai/dsh-' + name)).href, ...(config ? { config } : {}) })
   const ctx = new Context(), requests = [], auxiliaryRequests = [], sent = [], readbacks = [], toolResults = []
   const h = { ctx, requests, auxiliaryRequests, sent, readbacks, toolResults, root }
   let closing
