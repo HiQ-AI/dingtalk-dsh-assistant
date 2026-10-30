@@ -6,8 +6,6 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { freezeCoordinationMembers } from '../packages/dingtalk-dsh-assistant/coordination-task-commands.js'
-import { coordinationProposalSchema } from '../packages/dingtalk-dsh-assistant/independent-coordination-planner.js'
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'task-archive-'))
@@ -127,32 +125,24 @@ test('archive transaction rollback leaves the original task and history usable',
   assert.ok((await f.query('task.get', { taskId: 'A' })).archivedAt)
 })
 
-test('archived prerequisite keeps its original completion receipt and event available to coordination after restart', async t => {
+test('archived prerequisite keeps its formal completion proof readable without automatically releasing another Task', async t => {
   const f = await fixture(t)
   for (const taskId of ['A', 'B']) await f.command('task.create', { taskId, groupId: 'g', ownerActorId: 'u', request: `Synthetic outcome ${taskId}` })
-  const source = (await f.command('coordination.reserve', { unitId: 'source', revision: 1, groupId: 'g', actorId: 'u', original: 'Continue B after A is accepted' })).result.source
-  const tasks = new Map((await f.query('task.list')).map(task => [task.taskId, task]))
-  const proposal = coordinationProposalSchema.parse({ kind: 'arrangement', members: [
-    { action: 'task-observe', taskId: 'A', inputVersion: 1, runSequence: 1 },
-    { action: 'task-continue', taskId: 'B', inputVersion: 1, runSequence: 1, progressImpact: 'preserve', impactReason: 'Continue original result', context: 'A accepted', afterTaskIds: ['A'] },
-  ] })
-  const members = freezeCoordinationMembers({ coordinationId: 'c', proposal, tasks, source: { ...source, sourceId: source.id, unitRevision: source.revision, actorId: 'u' } })
-  await f.command('coordination.accept', { coordinationId: 'c', sourceId: source.id, fence: source.fence, members })
+  const otherTask = await f.query('task.get', { taskId: 'B' }), otherWakes = await f.query('wake.list', { taskId: 'B' })
   const completed = await f.finish('A')
+  const events = (await f.query('task.events')).events
   await f.command('task.archive', { taskId: 'A', actorId: 'operator' })
   await f.restart()
-  await f.command('coordination.observe.reconcile', { coordinationId: 'c' })
-  const state = await f.query('coordination.get', { coordinationId: 'c' })
-  const observed = state.members.find(member => member.observation)
-  assert.equal(observed.state, 'fulfilled')
-  assert.equal(observed.completionProof.taskDecisionReceiptId, completed.id)
-  assert.notEqual(state.members.find(member => member.taskId === 'B').waitingReason?.code, 'waiting_dependency')
-  const occurrenceArgs = { coordinationId: 'c', trigger: { triggerKind: 'business-event', eventSource: 'task-decision-receipt', eventId: `task-decision:${completed.id}`, actionId: members[1].instructionId },
-    action: { kind: 'task-command', instructionIds: [members[1].instructionId] }, target: { conversationId: 'g', recipientIds: [], summaryOnly: true } }
-  await f.command('coordination.occurrence.accept', occurrenceArgs)
+  const proof = await f.query('receipt.get', { id: completed.id })
+  assert.deepEqual(proof.taskDecision, completed.receipt.taskDecision)
+  assert.deepEqual(proof.completionEvent, completed.receipt.completionEvent)
+  assert.equal(events[0].taskDecisionReceiptId, completed.id)
+  assert.deepEqual((await f.query('task.events')).events, events)
+  assert.equal((await f.command('task.complete', completed.args, completed.id)).replayed, true)
   await f.restart()
-  await f.command('coordination.occurrence.accept', occurrenceArgs)
-  assert.equal((await f.query('coordination.occurrence.list')).length, 1)
+  assert.deepEqual((await f.query('task.events')).events, events)
+  assert.deepEqual(await f.query('task.get', { taskId: 'B' }), otherTask)
+  assert.deepEqual(await f.query('wake.list', { taskId: 'B' }), otherWakes)
   assert.equal((await f.query('task.get', { taskId: 'A' })).status, 'completed')
 })
 
@@ -196,12 +186,18 @@ test('archived receipt headers never replay or paginate as missing full history'
  await assert.rejects(f.query('task.decisions',{taskId:'A'}),{code:'DYNAMIC_ARCHIVE_RECEIPT_MISSING'})
 })
 
-test('unchanged maintenance does not grow receipts or rewrite the database',async t=>{
+test('read-only historical inspections do not grow receipts or rewrite the database',async t=>{
  const f=await fixture(t),reader=new DatabaseSync(join(f.root,'tasks.sqlite'),{readOnly:true})
  try{
   const before=reader.prepare('PRAGMA data_version').get().data_version
   const count=reader.prepare('SELECT count(*) n FROM dynamic_receipts').get().n
-  for(let n=0;n<25;n++)await f.store.maintain({kind:'coordination.schedule.scan'})
+  for(let n=0;n<25;n++) {
+   await f.query('coordination.list')
+   await f.query('coordination.schedule.list')
+   await f.query('coordination.job.list')
+   await f.query('task.events')
+  }
+  await assert.rejects(f.store.maintain({kind:'coordination.schedule.scan'}),{code:'INDEPENDENT_COORDINATION_RETIRED'})
   assert.equal(reader.prepare('SELECT count(*) n FROM dynamic_receipts').get().n,count)
   assert.equal(reader.prepare('PRAGMA data_version').get().data_version,before)
  }finally{reader.close()}
