@@ -23,7 +23,7 @@ const dispatchAssessmentSchema = z.strictObject({
   workflowRefs: z.array(z.strictObject({ id: z.string().min(1), revision: z.number().int().positive() })),
   workflowReason: z.string().trim().min(1),
 })
-const newTask = z.strictObject({ kind: z.literal('new-task').describe('独立新交付；已有任务的后续核查或修订应按状态使用 task-context/task-reopen，批量跟进分别操作原任务。'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: acceptanceCriteriaSchema, stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
+const newTask = z.strictObject({ kind: z.literal('new-task').describe('查无适配任务的新交付；同一事项的多个功能和验收项可属于一个Task，不逐功能点创建。已有任务新增要求、截图交付或后续核查按状态使用 task-context/task-reopen；确有独立执行交付边界才拆任务，批量跟进分别操作原任务。'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: acceptanceCriteriaSchema, stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
 const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...taskContextImpactFields, ...runPlan, ...taskSources })
   .superRefine((value, ctx) => { const message = taskContextSemanticsProblem(value); if (message) ctx.addIssue({ code: 'custom', path: ['progressImpact'], message }) })
 const taskReopen = z.strictObject({ kind: z.literal('task-reopen').describe('向已完成的原任务追加核查、修订或重新提测要求；复用原 Task 和会话，不重做已完成步骤。批量跟进在 actions 中为每个原任务分别提交。'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
@@ -39,8 +39,8 @@ const replyReviewSchema = z.strictObject({
 const replyDecisionSchema = z.strictObject({
   ...decisionBasis, actions: z.array(taskAction),
   reply: z.string().describe('群回复或任务确认；actions 为空时必须非空，提交任务动作时 Host 也要求非空确认。此分支不得填写 reason。'),
-  replyToMessageId: z.string().min(1).optional().describe('明确选择固定话题内真人消息作为回复目标；有真人参与者时非空回复必须填写。'),
-  atOpenDingTalkIds: z.array(z.string().min(1)).optional().describe('需提醒的固定话题参与者；省略或空数组默认提醒所选目标作者。'),
+  replyToMessageId: z.string().min(1).optional().describe('确需引用时选择固定话题内真人消息，引用作者必须属于本次收件人；无合适引用或需避免隐式提及叠加时可省略，但须显式填写收件人集合。'),
+  atOpenDingTalkIds: z.array(z.string().min(1)).optional().describe('本次应通知的受信话题参与者集合，按ID去重；引用作者也必须计入。引用时省略或空数组默认提醒目标作者，无引用时必须显式填写。'),
   replyReview: replyReviewSchema.optional().describe('有非空reply时Host要求提交本审阅，包括kind；即使候选为空也须声明kind及三个空ID列表。optional保留补答协议，并不表示可省略回复审阅；先阅读当前候选再填真实ID。'),
 }).superRefine((decision, ctx) => {
   if (decision.actions.length === 0 && decision.reply.length === 0) ctx.addIssue({ code: 'custom', path: ['reply'], message: 'actions 为空时 reply 必须非空；不回复请改用 actions: [] + reason 分支。' })

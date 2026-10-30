@@ -6,6 +6,7 @@ import {observerWorkMetadata} from '../packages/dingtalk-dsh-assistant/observer-
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync, constants } from 'node:sqlite'
+import { dirname, join } from 'node:path'
 import { installObserverPagination, installObserverArchivePagination, observerPage, observerGroupQuery } from '../packages/dingtalk-dsh-assistant/observer-pagination.js'
 
 function fixture(t,{archives=false}={}) {
@@ -16,6 +17,52 @@ function fixture(t,{archives=false}={}) {
  installObserverPagination(db,{migrate:true})
  return {db,put,page:q=>observerPage(db,q,'test')}
 }
+test('task page joins only selected topic names once per group/id without reading topic history', async t => {
+ const {put,page}=fixture(t)
+ const refs=[{topicId:'shared',revision:2},{groupId:'other',topicId:'shared',revision:4},{topicId:'missing',revision:1}]
+ for(let i=0;i<3;i++)put('tasks',`t${i}`,{taskId:`t${i}`,groupId:'web:g',sourceGroupId:'g',status:'active',control:'active',drained:true,updatedAt:'same',topicRefs:i<2?refs:[{topicId:'off-page',revision:1}]})
+ const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/task-session-service.js',import.meta.url),'utf8')
+ const projection=source.slice(source.indexOf('  const taskTopicRefs ='),source.indexOf('  const taskDTO ='))
+ const method=source.slice(source.indexOf('    async boardTasks(options)'),source.indexOf('    async taskDecisions('))
+ const lookups=[],queries=[]
+ const board=runInNewContext(`(()=>{${projection};return ({${method}}).boardTasks})()`,{Map,dirname,root:'/fixture',taskFilePath:(...args)=>join(...args),taskSessionLogRoot:()=>'/log',
+  residentStore:{getTopic(groupId,topicId){lookups.push([groupId,topicId]);return topicId==='missing'?undefined:{title:groupId==='g'?'事项甲':'事项乙',get messages(){throw new Error('topic history must not be projected')}}}},
+  query:async(kind,args)=>{queries.push(kind);assert.equal(kind,'observer.page');return page(args)}})
+ const result=await board({offset:0,limit:2,state:'waiting'})
+ assert.equal(result.total,3);assert.equal(result.items.length,2)
+ assert.deepEqual(lookups,[['g','shared'],['other','shared'],['g','missing']])
+ assert.deepEqual(queries,['observer.page'])
+ for(const task of result.items){assert.deepEqual(Array.from(task.topicRefs,ref=>ref.title),['事项甲','事项乙',null]);assert.equal(task.topicRefs[1].revision,4);assert.equal(task.topicRefs[1].groupId,'other');assert.equal(task.topicRefs[0].messages,undefined)}
+ assert.equal(page({collection:'tasks',offset:0,limit:1}).items[0].topicRefs[0].title,undefined,'名称仅做读取投影，不回写任务引用')
+})
+test('history task pages skip execution counts and session navigation while details stay paged', async t => {
+ const {db,put,page}=fixture(t,{archives:true})
+ for(let i=0;i<3;i++) {
+  put('tasks',`history-${i}`,{taskId:`history-${i}`,status:'completed',drained:true,archivedAt:'time',updatedAt:'same',title:'历史事项'})
+  put('executions',`execution-${i}`,{executionId:`execution-${i}`,taskId:`history-${i}`,status:'succeeded',drained:true,input:{title:'既有执行'}})
+ }
+ db.exec('INSERT INTO dynamic_archived_tasks SELECT id,rowid,body FROM dynamic_tasks; DELETE FROM dynamic_tasks;')
+ let executionReads=0
+ db.setAuthorizer((action,table)=>{if(action===constants.SQLITE_READ&&['observer_execution_index','dynamic_executions','dynamic_archived_executions'].includes(table)){executionReads++;return constants.SQLITE_DENY}return constants.SQLITE_OK})
+ try {
+  const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/task-session-service.js',import.meta.url),'utf8')
+  const projection=source.slice(source.indexOf('  const taskTopicRefs ='),source.indexOf('  const taskDTO ='))
+  const method=source.slice(source.indexOf('    async boardTasks(options)'),source.indexOf('    async taskDecisions('))
+  const board=runInNewContext(`(()=>{${projection};return ({${method}}).boardTasks})()`,{Map,query:async(kind,args)=>{assert.equal(kind,'observer.page');return page(args)},
+   dirname,root:'/fixture',taskFilePath(){throw new Error('history list must not build execution navigation')},taskSessionLogRoot(){throw new Error('history list must not build log paths')}})
+  const first=await board({archived:true,limit:2}),last=await board({archived:true,offset:first.nextOffset,limit:2,revision:first.revision})
+  assert.equal(first.total,3);assert.equal(first.items.length,2);assert.equal(last.items.length,1);assert.equal(last.nextOffset,null)
+  for(const task of [...first.items,...last.items])for(const field of ['executionCount','completedExecutionCount','session'])assert.equal(Object.hasOwn(task,field),false,field)
+  assert.equal(executionReads,0)
+ } finally {db.setAuthorizer(null)}
+ put('tasks','current',{taskId:'current',status:'active',control:'active',drained:true,updatedAt:'same'})
+ put('executions','current-execution',{executionId:'current-execution',taskId:'current',status:'succeeded',drained:true})
+ const mixed=page({collection:'tasks',archived:'all'})
+ assert.equal(mixed.items.find(task=>task.taskId==='current').completedExecutionCount,1)
+ assert(mixed.items.filter(task=>task.archivedAt).every(task=>!Object.hasOwn(task,'executionCount')))
+ const detail=page({collection:'executions',taskId:'history-0',summary:true,limit:1})
+ assert.equal(detail.total,1);assert.equal(detail.items[0].executionId,'execution-0')
+})
 test('page materialization is bounded, ordered and count uses metadata, not historical bodies',t=>{
  const {db,put}=fixture(t)
  db.exec('BEGIN')
@@ -148,7 +195,7 @@ test('archived execution summaries and exact authorization notice remain readabl
  const authorization=page({collection:'authorizations',taskId:'task',requestId:'request',limit:1}).items[0]
  assert.equal(authorization.observerNotice.payload.text,'full notice')
  assert.equal(authorization.humanRequests[0].question,'full question '.repeat(100))
- assert.equal(page({collection:'tasks',archived:true,limit:1}).items[0].executionCount,23)
+ assert.equal(Object.hasOwn(page({collection:'tasks',archived:true,limit:1}).items[0],'executionCount'),false)
  assert.equal(observerGroupQuery(db,{kind:'observer.message-contexts',groupId:'g',messageIds:['message']}).notifications[0].payload.text,'full notice')
  db.exec("DELETE FROM dynamic_archived_tasks WHERE id='task'");assert.equal(page({collection:'tasks',archived:true,limit:1}).total,0)
  db.exec("INSERT INTO observer_task_index VALUES('missing',NULL,'completed',1,'same')")
@@ -221,7 +268,8 @@ test('task state refresh and counts never read historical execution bodies after
  installObserverPagination(db,{migrate:true})
  put('tasks','task',{taskId:'task',status:'completed',drained:true,archivedAt:'archive'})
  db.exec('INSERT INTO dynamic_archived_tasks SELECT id,rowid,body FROM dynamic_tasks; DELETE FROM dynamic_tasks;')
- assert.equal(page({collection:'tasks',archived:true,limit:1}).items[0].executionCount,101)
+ assert.equal(Object.hasOwn(page({collection:'tasks',archived:true,limit:1}).items[0],'executionCount'),false)
+ assert.equal(page({collection:'executions',taskId:'task',summary:true,limit:1}).total,101)
 })
 
 test('legacy execution index stays readable without DDL and explicit migration adds control metadata',t=>{

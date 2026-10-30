@@ -1557,6 +1557,9 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const notification = get('dynamic_notifications', a.notificationId)
       if (kind === 'notification.start') {
         if (notification.state !== 'prepared') return changed({ notification })
+        if (notification.payload.afterNotificationId
+          && get('dynamic_notifications', notification.payload.afterNotificationId, true)?.state !== 'delivered')
+          return { result: { notification }, dispatchEligible: false }
         if (notification.kind === 'coordination') fail('INDEPENDENT_COORDINATION_RETIRED')
         if (notification.kind === 'topic-reply' && notification.payload.humanRequests?.some(ref => {
           const task = get('dynamic_tasks', ref.taskId, true)

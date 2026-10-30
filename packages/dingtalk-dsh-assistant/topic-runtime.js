@@ -305,9 +305,10 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const participants = messages.filter((message) => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
     const target = participants.find((message) => message.messageId === replyToMessageId)
     const recipients = atOpenDingTalkIds?.length ? atOpenDingTalkIds : target ? [target.senderOpenDingTalkId] : []
-    if (participants.length && !target) throw new Error('group_reply_routing_required')
+    if (participants.length && !target && !recipients.length) throw new Error('group_reply_routing_required')
     if (replyToMessageId && !target) throw new Error('group_reply_target_not_in_topic')
     if (new Set(recipients).size !== recipients.length || recipients.some((id) => !participants.some((message) => message.senderOpenDingTalkId === id))) throw new Error('group_reply_recipient_not_in_topic')
+    if (target && !recipients.includes(target.senderOpenDingTalkId)) throw new Error('group_reply_quote_author_not_in_recipients')
     return { target, recipients }
   }
   function reviewRequestIdentity(kind, task, value) {
@@ -541,7 +542,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     envelope.omittedDeltaCount = request.inlineDelta ? 0 : deltaMessages.length
     const workflowAssessment = workflowPromptsEnabled ? '和适用流程 ID/版本及选择原因' : ''
     const workflowReading = workflowPromptsEnabled ? '流程索引为 promptIndex，按本请求 requestId 用 group_task_prompt_get 一次读取候选流程正文；不要猜测 section。' : ''
-    const instruction = `按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit${workflowAssessment}；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。首包内联的 messages 和其他正文可直接使用，无需重复读取；仅遇到 section 指针时，用 group_decision_context_get 按 nextOffset 续读完整内容。${workflowReading}group_decision_context_get 只接受 contextSections 列出的 section。查询已有 Task 用 group_task_list 和 group_task_context_get；需要历史时用 group_topic_context_get。`
+    const instruction = `按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。Unit用于引用来源，不是逐项建Task的指令；同一业务事项的多个需求项或Unit可共同支撑一个Task，优先补充适配的原任务。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit${workflowAssessment}；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。首包内联的 messages 和其他正文可直接使用，无需重复读取；仅遇到 section 指针时，用 group_decision_context_get 按 nextOffset 续读完整内容。${workflowReading}group_decision_context_get 只接受 contextSections 列出的 section。查询已有 Task 用 group_task_list 和 group_task_context_get；需要历史时用 group_topic_context_get。`
     const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n${instruction}`
     if (Buffer.byteLength(body, 'utf8') > DECISION_OUTPUT_MAX_BYTES) throw new Error('decision_context_budget_exceeded')
     const dispatch = () => {
@@ -612,12 +613,18 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const relatedTopics = boundedItems(allRelatedTopics, 3_000, 20)
     const quotedReminderOnly = messages.length > 0 && quotedReminders.size === messages.length && allRelatedTopics.length === 0
     const topics = quotedReminderOnly ? [] : boundedItems(topicIndex(allTopics).map(({ processedRevision: _processed, ...item }) => item), 5_000, 100)
+    // Fixed-category continuations have no business Topic history to recall.
+    // A small preceding window supplies context for short replies without adding a model turn.
+    const firstSequence = Math.min(...messages.map(message => message.sequence))
+    const recentMessages = strictlyBoundedItems(group.messages.filter(message => message.sequence < firstSequence).slice(-8).reverse()
+      .map(({ messageId, senderName, text, sourceKind, messageAiSendFlag }) => ({ messageId, senderName,
+        text: text.slice(0, 600), ...(text.length > 600 ? { textTruncated: true } : {}), sourceKind, messageAiSendFlag })), 4_000, 8).reverse()
     const visibleMessages = []
     const personAliases = referencedPersonAliases(group, messages)
     const peopleContext = personAliases.length ? { personAliases, personAliasGuide: personAliasInstructions } : {}
     for (const message of messages) {
       const base = { ...message, ...(quotedReminders.has(message.messageId) ? { quotedReminder: quotedReminders.get(message.messageId) } : {}), text: '' }
-      const remaining = ROUTE_CONTEXT_MAX_CHARS - JSON.stringify({ requestId: request.requestId, ...peopleContext, messages: [...visibleMessages, base], topics, relatedTopics }).length
+      const remaining = ROUTE_CONTEXT_MAX_CHARS - JSON.stringify({ requestId: request.requestId, ...peopleContext, messages: [...visibleMessages, base], topics, relatedTopics, recentMessages }).length
       const size = Math.max(0, Math.min(message.text.length, remaining - 256))
       if (size === 0 && message.text.length) {
         visibleMessages.push({ messageId: message.messageId, messageVersion: message.messageVersion, text: '', textOffset: 0, textTotal: message.text.length, textHasMore: true })
@@ -629,9 +636,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       request.readOffsets.set(message.messageId, size)
       if (!complete) continue
     }
-    const envelope = { ...peopleContext, ...(fixedTopicsEnabled ? { fixedTopics: FIXED_TOPICS } : {}), requestId: request.requestId, messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length || visibleMessages.some((message) => message.textHasMore), topics, relatedTopics, totalRelatedTopics: allRelatedTopics.length, hasMoreRelatedTopics: relatedTopics.length < allRelatedTopics.length, nextRelatedTopicOffset: relatedTopics.length, totalTopics: allTopics.length, hasMoreTopics: topics.length < allTopics.length, nextTopicOffset: topics.length, ...(reason ? { reason } : {}) }
+    const envelope = { ...peopleContext, ...(fixedTopicsEnabled ? { fixedTopics: FIXED_TOPICS } : {}), requestId: request.requestId, messages: visibleMessages, recentMessages, totalMessages: messages.length, hasMoreMessages: visibleMessages.length < messages.length || visibleMessages.some((message) => message.textHasMore), topics, relatedTopics, totalRelatedTopics: allRelatedTopics.length, hasMoreRelatedTopics: relatedTopics.length < allRelatedTopics.length, nextRelatedTopicOffset: relatedTopics.length, totalTopics: allTopics.length, hasMoreTopics: topics.length < allTopics.length, nextTopicOffset: topics.length, ...(reason ? { reason } : {}) }
     if (quotedReminders.size) envelope.quotedReminderGuide = 'quotedReminder 是 Host 按原生引用和已送达回执核验的原提醒，仅为关联背景，不代表本条消息必然订正。只改变原提醒的事项可交 coordination；新增或混合事项仍逐项判断，必要时用 group_topic_list 省略 requestId 查询完整话题目录。首屏省略目录不表示没有旧话题，不得自动把同人新要求归入旧提醒。'
-    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\n${fixedTopicsEnabled ? fixedTopicInstructions + '\n' : ''}Topic 请求：${JSON.stringify(envelope)}\n目录按 group_topic_list 相同顺序分页，nextTopicOffset 是下一页 offset；relatedTopics 是引用命中事项的首包；hasMoreRelatedTopics 时必须用 group_topic_list 携带本 requestId 和 nextRelatedTopicOffset 继续读取全部关系。无法判断旧事项归属时先检索或分页读取目录，不能因首包无候选直接新建。先判断当前消息是否涉及具体事项或任务。日常寒暄、随口聊天、没有具体事项对象的情绪表达或泛泛感谢，不新建 Topic，也不为了归档闲聊强行关联已有 Topic；将这些原文放入 ignoredRefs 并说明“日常闲聊，无具体事项”，纯闲聊提交 units=[]。消息混有闲聊和具体事项时，仅将事项拆为 units，闲聊部分放入 ignoredRefs，完整覆盖原文。明确涉及具体问题、需求、调查、执行、结果、验收或后续跟进时，才将可独立补充、取消、验收或反馈的事项归入已有 Topic 或新 Topic；优先复用确属同一事项的已有 Topic，只有独立新事项才新建。${fixedTopicsEnabled ? '话题归属与助手动作分开判断：职责内具体事项无论交给谁处理，都保留在对应业务 Topic；他人负责、状态通知或同事信息引用不是转入职责外话题或丢弃原文的理由。是否需要本助手动作或回复由 Topic Decision 再判断，不把归属或状态通知当成新授权。' : '不要用是否出现“任务”等关键词或是否要求助手执行判断事项：群成员讨论具体问题也可形成话题；“谢谢，那个问题修好了”、引用任务后的“收到”“继续”等需结合引用和上下文归入原事项，不能当作闲聊丢掉。'}四个验收项可属于同一回归事项，两个独立需求必须分别建事项；共同业务领域不是合并理由。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；不执行任务、不回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
+    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\n${fixedTopicsEnabled ? fixedTopicInstructions + '\n' : ''}Topic 请求：${JSON.stringify(envelope)}\n目录按 group_topic_list 相同顺序分页，nextTopicOffset 是下一页 offset；relatedTopics 是引用命中事项的首包；hasMoreRelatedTopics 时必须用 group_topic_list 携带本 requestId 和 nextRelatedTopicOffset 继续读取全部关系。无法判断旧事项归属时先检索或分页读取目录，不能因首包无候选直接新建。先判断当前消息是否涉及具体事项或任务。日常寒暄、随口聊天、没有具体事项对象的情绪表达或泛泛感谢，不新建 Topic，也不为了归档闲聊强行关联已有 Topic；将这些原文放入 ignoredRefs 并说明“日常闲聊，无具体事项”，纯闲聊提交 units=[]。消息混有闲聊和具体事项时，仅将事项拆为 units，闲聊部分放入 ignoredRefs，完整覆盖原文。明确涉及具体问题、需求、调查、执行、结果、验收或后续跟进时，按共同业务事项和目标聚合Topic，不逐功能点拆分。同次交办、共享上下文且适合整体交付的多个需求项保持在同一Topic；不能仅因可独立验收、补充或实现就拆开。结合本批原文、引用、候选的目标/需求摘要判断；需要消解“这个也是”等承接时再按现有readCall读取相关近期原文，不读取全执行历史。在符合本群职责的业务事项内优先复用同一事项的已有Topic，后续截图、验收和交付要求沿原事项补充。${fixedTopicsEnabled ? '话题归属与助手动作分开判断：职责内具体事项无论交给谁处理，都保留在对应业务 Topic；他人负责、状态通知或同事信息引用不是转入职责外话题或丢弃原文的理由。是否需要本助手动作或回复由 Topic Decision 再判断，不把归属或状态通知当成新授权。' : '不要用是否出现“任务”等关键词或是否要求助手执行判断事项：群成员讨论具体问题也可形成话题；“谢谢，那个问题修好了”、引用任务后的“收到”“继续”等需结合引用和上下文归入原事项，不能当作闲聊丢掉。'}同一页面或截图只是上下文线索，不是强制合并边界；确有不同业务目标或独立交付约定时可分Topic，共同领域也不能替代目标判断。先定事项归属再划分units；同一事项的多个需求项可用一个unit完整引用，也可按来源需要保留多个unit归同一Topic。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；不执行任务、不回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
     monitor(agent, request, routes)
     return envelope
   }
@@ -713,7 +720,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
               topicRefs: [{ topicId: topic.topicId, revision: topic.revision }] }
             decisions.set(requestId, request)
             const envelope = { requestId, topicId: topic.topicId, revision: topic.revision, trigger: 'task-facts', ...context.input }
-            const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n本轮是任务事实，不是用户新请求。结合最新补充、相关任务和已发/待发回复，决定直接回复、合并这些结果或沉默。actions 必须为空；不创建、补充、重开或取消任务。提交 group_decision_submit：decision 包含 actions:[]、topicUpdate.summary、reason，可选 reply；reason 解释回复或沉默的理由。不使用 basisMessageIds/replyReview。不得把任务事实当新授权。通常无需额外读取；确需完整事实可用 group_decision_context_get 的 facts section。`
+            const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n本轮是任务事实，不是用户新请求。完成事实中的files是Host已冻结的最终附件；结合最新上下文说明完成范围、实际部署环境和验收结果。非空最终回复之后，Host将连续发送该批附件并逐件记录回执，自动附上文件名与验收对应说明，不必另派任务或让执行单独群发。文件存在、业务完成和通知送达分别表述，不提前宣称附件已经送达；已送历史仅引用原记录，不重复发送。结合最新补充、相关任务和已发/待发回复，决定直接回复、合并这些结果或沉默。actions 必须为空；不创建、补充、重开或取消任务。提交 group_decision_submit：decision 包含 actions:[]、topicUpdate.summary、reason，可选 reply。有reply时显式选择atOpenDingTalkIds。最终事实通知固定使用普通Markdown群消息与所选多人原生提及，不使用原生引用，避免引用隐式提及和显式提及叠加；省略replyToMessageId。保留事实中已核验的PR及产物完整链接，用Markdown链接和清晰段落列表组织，不降为只有编号，不按编号猜URL；配置签名由Host添加。旧决策中的上下文来源仍会校验并留档，但不会转换成发送引用，不因来源作者改变通知集合。结合原始需求、验收反馈、明确交付或知会约定选择本次结果的收件人集合，可多人。sources是任务事实的触发来源，不是默认收件人；最近补充者、恢复条件提供者或截图要求者不自动替换原需求人和验收人。originMessages、recentMessages提供本话题原文及受信ID；不足时沿readCall读取相关话题原文，不读取全执行历史。按ID区分同名/近似名，不猜ID，不自动@所有历史参与者，身份不确定时不伪装通知。正文不要用@姓名代替原生提及；Host校验并冻结所选身份，经现有通知路径投递。reason解释回复或沉默及收件人选择依据。不使用 basisMessageIds/replyReview。不得把任务事实当新授权。通常无需额外读取；确需完整事实可用 group_decision_context_get 的 facts section。`
             context.metrics.inputBytes = Buffer.byteLength(body, 'utf8')
             taskFacts.observe?.(context.metrics)
             monitor(send(groupId, body, [], request), request, decisions)
@@ -1108,7 +1115,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       return page
     })
     const currentTopic = scope && coordinationRole(scope) === 'decision' ? { topicId: scope.topicId, revision: scope.revision } : null
-    tool('group_topic_context_get', `按需读取本群 Topic 固定版本及消息原文；摘要足以排除不同业务目标时直接路由，不因词面接近强读全文。返回不超过字符预算，按 nextOffset/nextTextOffset 连续读取完整历史。${currentTopic ? '本会话唯一当前Topic与revision由Host绑定，{}直接读取当前固定版本；显式topicId可读取本群其他历史。' : '当前会话没有唯一Topic；确需历史时从输入topics或group_topic_list选择对应候选，原样复制其readCall.arguments（含topicId/revision），不可传{}。'}`, { type: 'object', properties: { topicId: { type: 'string', description: '从明确候选readCall.arguments.topicId复制，不从标题猜ID。' }, revision: { type: 'integer', description: '固定Topic版本，整数1..当前Topic revision；当前决策省略使用Host绑定版本，其他Topic省略使用当前版本。续读同一历史须保留原revision。' }, offset: { type: 'integer', description: '消息条目偏移，非负整数，默认0；续页使用返回的nextOffset。' }, limit: { type: 'integer', description: '请求的消息条数，非字符数，整数1..500，默认10；字符预算可能提前截断，按nextOffset/nextTextOffset续读。' }, textOffset: { type: 'integer', description: '本页首条消息的UTF-16字符偏移，非负整数且不超过该消息原文长度，默认0；仅按返回的nextTextOffset续读。' } }, required: currentTopic ? [] : ['topicId'], additionalProperties: false }, (args) => {
+    tool('group_topic_context_get', `按需读取本群 Topic 固定版本及消息原文；摘要足以排除不同业务目标时直接路由，不因词面接近强读全文。返回不超过字符预算，按需用 nextOffset/nextTextOffset 续读相关原文；不为路由候选判断默认读取全部历史。${currentTopic ? '本会话唯一当前Topic与revision由Host绑定，{}直接读取当前固定版本；显式topicId可读取本群其他历史。' : '当前会话没有唯一Topic；确需历史时从输入topics或group_topic_list选择对应候选，原样复制其readCall.arguments（含topicId/revision），不可传{}。'}`, { type: 'object', properties: { topicId: { type: 'string', description: '从明确候选readCall.arguments.topicId复制，不从标题猜ID。' }, revision: { type: 'integer', description: '固定Topic版本，整数1..当前Topic revision；当前决策省略使用Host绑定版本，其他Topic省略使用当前版本。续读同一历史须保留原revision。' }, offset: { type: 'integer', description: '消息条目偏移，非负整数，默认0；续页使用返回的nextOffset。' }, limit: { type: 'integer', description: '请求的消息条数，非字符数，整数1..500，默认10；字符预算可能提前截断，按nextOffset/nextTextOffset续读。' }, textOffset: { type: 'integer', description: '本页首条消息的UTF-16字符偏移，非负整数且不超过该消息原文长度，默认0；仅按返回的nextTextOffset续读。' } }, required: currentTopic ? [] : ['topicId'], additionalProperties: false }, (args) => {
       const bound = currentTopic && (args.topicId === undefined || args.topicId === currentTopic.topicId)
       if (bound && (!decisions.has(scope.requestId) || store.getTopic(groupId, currentTopic.topicId)?.revision !== currentTopic.revision
         || args.revision !== undefined && args.revision !== currentTopic.revision)) throw new Error('decision_context_topic_stale')
@@ -1225,7 +1232,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const outbound = { groupId, outboundId: request.outboundId ?? `reply-${args.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.task.result), text: args.reply.trim(), taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence, topicRefs: task.topicRefs,
         matterSourceMessageIds: [...new Set(request.messages.map((message) => message.messageId))], matterUnitRefs: request.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })),
         replyKind: replyReview?.kind, replacesOutboundIds: replyReview?.replaceOutboundIds,
-        ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: recipients } : {}) }
+        ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients }
       // 对外调用在短状态提交之后；独立通知的失败不消费其他 Topic 请求。
       const persisted = await appendOutbox({ ...outbound, preflight })
       if (persisted?.status) { await schedule(groupId); return persisted }
@@ -1312,7 +1319,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     return { groupId: task.groupId, outboundId: `reply-${request.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.value), text: draft.reply.trim(), taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence, topicRefs: task.topicRefs,
       matterSourceMessageIds: [...new Set(sources.map((message) => message.messageId))], matterUnitRefs: sources.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })),
       replyKind: replyReview.kind, replacesOutboundIds: replyReview.replaceOutboundIds,
-      ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: recipients } : {}) }
+      ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients }
   }
   function notificationFence(request) {
     return { observedTopics: request.observedTopics, outboxFingerprint: fingerprint(store.getGroup(request.groupId)?.outbox ?? []) }
@@ -1348,7 +1355,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const context = { topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', ...(kind === 'completion' ? { replyReviewCandidateCount: request.candidates.length } : {}) }
     const originalContext = `\n${kind === 'completion' ? '通知上下文' : '任务原始上下文'}：${JSON.stringify(context)}`
     const instruction = kind === 'completion'
-      ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。当前 Agent 的交付及必要自验证完成即可通过；他人后续检查不构成完成条件。可以同时准备群通知，notification为可选且独立校验；通知草稿缺失或不合法不影响业务验收，通过后Host会单独恢复通知；存在真实群参与人时必须从通知上下文选择 replyToMessageId，省略 atOpenDingTalkIds 时默认 @ 被引用消息的发送人；需要通知其他参与人时显式填写。存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界。"
+      ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。当前 Agent 的交付及必要自验证完成即可通过；他人后续检查不构成完成条件。可以同时准备群通知，notification为可选且独立校验；通知草稿缺失或不合法不影响业务验收，通过后Host会单独恢复通知；按通知上下文选择收件人；确需引用时选择 replyToMessageId，并把作者计入收件人，省略 atOpenDingTalkIds 时默认提醒作者。没有合适引用或需避免隐式提及叠加时可不引用，显式填写 atOpenDingTalkIds。存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界。"
       : kind === 'waiting'
         ? "等待审阅：真实必要依赖用 {decision:'approve-wait',reason:string}；可自行继续用 {decision:'continue',reason:string}；已完成自身工作、仅等他人后续检查时用 {decision:'revise-scope',reason:string,basisMessageIds:string[],affectedStageIds:string[],title:string,objective:string,acceptanceCriteria:string[],stageTasks:string[]}。revise-scope 必须以原始消息明确的本 Agent 交付重写完整目标、验收和剩余阶段，并用 affectedStageIds 指明旧阶段中从哪一项起受影响，保留之前有效的证据；不要把实际未完成的本职工作删去。只有 blockedItems 中确有当前 Agent 尚未完成的交付，且所列依赖必要，才可 approve-wait。先核对仍可独立完成的阶段、已尝试的取证入口及失败证据，不能从一个入口不可用推断所有入口不可用；不得把排查方法扩大成原始要求。审阅不代替业务完成，也不得因为没有 blockedItems 批准等待。"
         : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`

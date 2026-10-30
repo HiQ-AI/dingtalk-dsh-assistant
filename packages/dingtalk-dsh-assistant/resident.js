@@ -14,6 +14,7 @@ import { closeExecutionResources } from './resource-close.js'
 import { readTaskNotificationDelivery, readOperatorNotificationDelivery, recallOperatorNotification } from './task-notification-readback.js'
 import { openTaskSessionService } from './task-session-service.js'
 import { sendWorkflowNotification } from './group-message.js'
+import { readTaskFileDelivery } from './task-final-delivery.js'
 import { join, resolve } from 'node:path'
 
 export const name = 'dingtalk-dsh-assistant'
@@ -126,6 +127,14 @@ export async function apply(ctx, config = {}) {
         ? dwsAdapter.sendSelfIntent({ userId: notification.payload.recipientUserId, text: notification.payload.text, idempotencyKey: notification.id,
           taskId: notification.taskId, humanRequestId: notification.payload.humanRequestId })
         : sendWorkflowNotification(dwsAdapter, notification),
+      sendFile: (notification, file) => createDwsAdapter({ enabled: dwsConfig.enabled === true, writesAuthorized: dwsConfig.writesAuthorized === true,
+        profile: dwsConfig.profile, runner: createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: file.directory }) })
+        .sendGroupFile({ groupId: notification.payload.conversationId, fileName: file.fileName, idempotencyKey: notification.id }),
+      readbackFile: notification => readTaskFileDelivery(dwsAdapter, notification),
+      querySendStatus: (openTaskId, original) => original && Object.hasOwn(original, 'profile')
+        ? createDwsAdapter({ enabled: dwsConfig.enabled === true, profile: original.profile ?? undefined,
+          runner: createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws' }) }).querySendStatus(openTaskId)
+        : dwsAdapter.querySendStatus(openTaskId),
       recall: notification => recallOperatorNotification(dwsAdapter, notification),
       readback: notification => notification.payload.audience === 'operator'
         ? readOperatorNotificationDelivery(dwsAdapter, notification)
