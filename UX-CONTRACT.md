@@ -90,5 +90,6 @@ Observer 依执行记录的 executionBackend 决定会话入口，缺失按历�
 同排序时间以稳定 ID 决胜；混合旧主题列表保留原列表的同时间次序。页版本发生变化时返回 409 并回第一页，加载、空、失败分别显示。旧 workflow provider 必须提供窄 topicIndex + 单主题读取，不能在分页 GET 中调用旧全量 topics 作为 fallback；不具备新能力明确返回 503。动态 topic context 必须提供 intentTotal 以及 task page provider，禁止 HTTP 再切 intent 或读取全任务列表。无索引的历史持久库由显式离线迁移处理，GET 不建索引。
 
 合成 React 宿主浏览器验证只能证明页面请求和交互；真实 DSH 宿主、安装版本及真实库性能须另验。逐入口实现、读取边界与限制见 docs/spec/observer-pagination-coverage.md。
+任务卡片执行会话加载只占轻量状态行并保持面板高度；刷新保留现有结果，同一摘要请求未结束时不并发重复读取。切换任务中止旧请求，迟到响应不能显示在新任务上。错误保留原内容和重试入口。
 
 Coordinator trace 的 unit 有独立unitCursor/pageRevision和总数/完整性，SQL先排除superseded再取页。超过100个有效unit必须显示续读控件，不能借trace事件nextCursor=null暗示证据完整；跨消息/事件和409重置独立游标。

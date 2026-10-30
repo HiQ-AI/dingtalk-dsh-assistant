@@ -1545,9 +1545,9 @@ window.__ModuleLoader__.load({
       },[task.taskId,offset,updatedAt,retry])
       const visiblePage = page?.key === pageKey ? page : undefined
       const sessions = visiblePage?.executions || [], session = taskSession(task)
-      return React.createElement(React.Fragment,null,
-        error ? React.createElement('p',{role:'alert'},`读取执行记录失败：${error}`, React.createElement(Button,{type:'button',variant:'outline',size:'sm',onClick:()=>setRetry(value=>value+1)},'重试')) : !visiblePage ? React.createElement('p',{role:'status'},'正在读取执行记录…') : null,
-        visiblePage && !sessions.length ? React.createElement('p',{role:'status'},'暂无执行记录') : null,
+      return React.createElement('div', { 'aria-busy': !visiblePage && !error, style: { minHeight: Math.max(1, Math.min(10, Number(task.executionCount) || sessions.length)) * 28, fontSize: 11 } },
+        error ? React.createElement('p',{role:'alert',style:{margin:'6px 0',color:colors.danger}},`读取执行记录失败：${error}`, React.createElement(Button,{type:'button',variant:'outline',size:'sm',onClick:()=>setRetry(value=>value+1)},'重试')) : !visiblePage ? React.createElement('span',{role:'status','aria-label':'正在加载执行会话',style:{display:'inline-flex',alignItems:'center',gap:6,minHeight:28,color:colors.muted,fontSize:11}},React.createElement(StateDot,{state:'ongoing',size:7}),'加载中') : null,
+        visiblePage && !sessions.length ? React.createElement('p',{role:'status',style:{margin:'6px 0',color:colors.muted}},'暂无执行记录') : null,
         React.createElement('div', { style: { display: 'grid', gap: 2, paddingTop: 6 } }, ...sessions.map(execution => {
               const done = ['succeeded', 'completed'].includes(execution.status)
               const running = execution.status === 'running'

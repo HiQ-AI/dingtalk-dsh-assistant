@@ -34,6 +34,27 @@ function harness(componentName, initialProps = {}) {
 const button = (tree, label) => elements(tree).find(item => item.type === 'button' && text(item) === label)
 const input = (tree, label) => elements(tree).find(item => item.type === 'label' && item.children[0] === label)?.children.find(item => typeof item === 'object')
 
+test('execution card keeps a compact loading state and preserves visible records during slow refreshes', async () => {
+  const props = { task: { taskId: 'task', executionCount: 2 }, updatedAt: 'one', navigate() {} }
+  const h = harness('CardExecutionPage', props)
+  let tree = h.render()
+  const loading = elements(tree).find(item => item.props.role === 'status')
+  assert.equal(loading.props.style.fontSize, 11); assert.equal(loading.props['aria-label'], '正在加载执行会话')
+  assert.equal(tree.props.style.minHeight, 56); assert.doesNotMatch(text(tree), /正在读取执行记录/)
+  h.render({ ...props, updatedAt: 'two' }); h.render({ ...props, updatedAt: 'three' })
+  assert.equal(h.requests.length, 1, 'Updates share the in-flight summary request')
+  h.requests[0].resolve({ executions: [{ executionId: 'e', sessionId: 's', title: '验收记录', status: 'succeeded' }], total: 1, nextOffset: null }); await settle()
+  tree = h.render({ ...props, updatedAt: 'four' })
+  assert.match(text(tree), /验收记录/); assert.equal(h.requests.length, 2)
+  assert.equal(elements(tree).filter(item => item.props.role === 'status').length, 0, 'A refresh keeps the loaded content')
+  h.render({ ...props, task: { taskId: 'other', executionCount: 1 }, updatedAt: 'four' })
+  assert.equal(h.requests[1].options.signal.aborted, true)
+  h.requests[1].resolve({ executions: [{ title: '迟到的旧任务' }], total: 1 }); await settle()
+  tree = h.render({ ...props, task: { taskId: 'other', executionCount: 1 }, updatedAt: 'four' })
+  assert.doesNotMatch(text(tree), /迟到的旧任务|验收记录/)
+  h.unmount()
+})
+
 const workFixture = (id, overrides = {}) => ({ id, kind: 'schedule', groupId: 'g', title: `安排 ${id}`, updatedAt: '2026-10-25T00:00:00Z', result: { code: 'delivery_failed', label: '提醒发送失败', tone: 'danger' }, plan: { label: '单次计划已启用', state: 'active', rule: { kind: 'once', at: '2026-10-25T00:00:00Z' }, timezone: 'Asia/Shanghai' }, nextStep: { label: '无后续触发安排；无重试安排', triggerAt: null, sendRetryAt: null, readbackAt: null }, ...overrides })
 const detailFixture = (work, overrides = {}) => ({ work, members: [], history: { sources: [], changes: [], occurrences: [], jobs: [] }, observedAt: '2026-10-25T00:00:00Z', ...overrides })
 const relationFixture = (overrides = {}) => ({ id: 'relation-b', instructionId: 'i-b', coordinationId: 'coord', condition: 'all', target: { taskId: 'task-b', title: '后续任务' }, prerequisites: [{ instructionId: 'i-a', taskId: 'task-a', title: '前置任务', fulfilled: false, state: 'observing', reason: '等待前置正式完成' }], state: 'waiting', dispatch: { status: 'waiting', receipt: 'absent', reason: '前置尚未满足', nextStep: '等待前置任务完成后调度后续任务' }, trigger: null, ...overrides })
