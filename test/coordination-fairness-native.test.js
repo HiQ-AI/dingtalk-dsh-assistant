@@ -6,7 +6,8 @@ import { retiredCoordinationHost } from './fixtures/retired-coordination-native.
 // Old schedule/job fairness is no longer an active feature. Its retained safety
 // guarantee is that paused/dependent historical work cannot block current Owners.
 for (const blockedBy of ['occurrence-pause', 'schedule-pause', 'dependency']) test('retired ' + blockedBy + ' preserves history without blocking ready cross-group Task Owners',
-  { timeout: 60000, skip: !available ? reason : false }, async t => {
+  { timeout: 60000 }, async t => {
+    assert.ok(available, reason)
     const rows = { coordination: [], coordination_schedules: [], coordination_occurrences: [], coordination_jobs: [], coordination_members: [] }
     for (const [id, groupId, count] of [['paused', 'native-group', 3], ['later', 'native-group', 2], ['other', 'other-group', 1]]) {
       rows.coordination.push({ id, groupId, state: 'active', revision: 1, memberIds: [id + '-member'] })
