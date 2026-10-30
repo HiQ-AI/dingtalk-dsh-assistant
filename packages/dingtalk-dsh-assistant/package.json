@@ -101,7 +101,10 @@
     "fixed-topic-correction.js",
     "fixed-topic-handler.js",
     "group-person-aliases.js",
-    "coordination-retirement.js"
+    "coordination-retirement.js",
+    "artifact-json.js",
+    "task-artifact-files.js",
+    "task-final-delivery.js"
   ],
   "exports": {
     ".": "./index.js",

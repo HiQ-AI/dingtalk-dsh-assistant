@@ -57,6 +57,40 @@ async function fixture(t) {
     async reopen() { await ledger.close(); ledger = await openDynamicTaskStore(config) } }
 }
 
+test('最终文字与附件同批冻结，逐件有序发送，重启只核对未知项且不重发已送项', async t => {
+  const f = await fixture(t), binding = await f.task('delivery-task')
+  const artifactFiles = [1, 2].map(index => ({ artifact: { artifactId: String(index).repeat(64), taskId: 'delivery-task', requirementRevision: 1,
+    fileName: `acceptance-${index}.png`, size: 8, sha256: 'a'.repeat(64) }, caption: `验收项${index}` }))
+  await f.commit('task.complete', { binding, summary: 'UAT验收通过', result: { summary: 'UAT验收通过', evidence: [], limitations: [], artifactFiles }, topicFacts: true })
+  assert.equal((await f.query('notification.list')).length, 0, '执行和Task完成不提前群发截图')
+  const ctx = await f.context()
+  assert.equal(ctx.input.facts[0].files.length, 2)
+  await f.submit(f.submission(ctx, 'final-result', '已完成页面调整，UAT验收通过，截图对应两个验收项。'))
+  const notices = await f.query('notification.list')
+  assert.equal(notices.length, 3)
+  const [summary, first, second] = notices
+  assert.match(summary.payload.text, /acceptance-1.png：验收项1/)
+  assert.equal(first.payload.deliveryId, summary.id); assert.equal(first.payload.afterNotificationId, summary.id)
+  assert.equal(second.payload.afterNotificationId, first.id)
+  assert.equal(first.payload.sourceMessageId, undefined, '文件不另引用或重复@')
+  assert.equal((await f.commit('notification.start', { notificationId: first.id })).dispatchEligible, false)
+  const sends = new Map(); let firstReadable = false
+  const notifications = {
+    send: async n => { sends.set(n.id, (sends.get(n.id) ?? 0) + 1); return { openTaskId: `send-${n.id}` } },
+    readback: async n => n.id === first.id && !firstReadable ? undefined : { messageId: `message-${n.id}`, conversationId: 'group' },
+  }
+  const deliver = async id => deliverTaskNotification({ notification: await f.query('notification.get', { notificationId: id }), notifications, command: f.commit })
+  await deliver(summary.id); await deliver(first.id)
+  assert.equal((await f.query('notification.get', { notificationId: first.id })).state, 'unknown')
+  assert.equal((await f.commit('notification.start', { notificationId: second.id })).dispatchEligible, false)
+  await f.reopen(); firstReadable = true
+  await f.commit('notification.diagnostic', { notificationId: first.id, nextAttemptAt: '2000-01-01T00:00:00Z' })
+  await deliver(summary.id); await deliver(first.id); await deliver(second.id)
+  assert.deepEqual([...sends.values()], [1, 1, 1])
+  assert.ok((await f.query('notification.list')).every(n => n.state === 'delivered' && n.receipt.messageId))
+  assert.equal((await f.query('topic.fact.pending', { groupId: 'group', topicId: f.topicId })).length, 0)
+})
+
 test('完成与事实同事务，回复失败不影响完成；重启复用结论、沉默也消费事件', async t => {
   const f = await fixture(t), a = await f.task('alpha'), b = await f.task('beta')
   await assert.rejects(f.commit('task.complete', { binding: a, summary: 'invalid', topicFacts: true,

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, realpath, mkdir, open, link, unlink } from 'node:fs/promises'
 import { isAbsolute, resolve, join, relative, dirname, sep, extname } from 'node:path'
-import { canonicalExecutionJson, executionDigest, executionError } from './execution-artifacts.js'
+import { canonicalExecutionJson, executionDigest, executionError } from './artifact-json.js'
 
 const fail = code => { throw executionError(`TASK_ARTIFACT_${code}`) }
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')

@@ -21,6 +21,7 @@
   "publishedBoundary": {
     "roots": [
       "index.js",
+      "packages/dingtalk-dsh-assistant/artifact-json.js",
       "packages/dingtalk-dsh-assistant/claude-execution-session.js",
       "packages/dingtalk-dsh-assistant/coordination-context.js",
       "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -80,9 +81,11 @@
       "packages/dingtalk-dsh-assistant/startup-metrics.js",
       "packages/dingtalk-dsh-assistant/store.js",
       "packages/dingtalk-dsh-assistant/task-archive.js",
+      "packages/dingtalk-dsh-assistant/task-artifact-files.js",
       "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
       "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
       "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+      "packages/dingtalk-dsh-assistant/task-final-delivery.js",
       "packages/dingtalk-dsh-assistant/task-input-contract.js",
       "packages/dingtalk-dsh-assistant/task-input-revision.js",
       "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -112,6 +115,7 @@
     ],
     "staticLocalClosure": [
       "index.js",
+      "packages/dingtalk-dsh-assistant/artifact-json.js",
       "packages/dingtalk-dsh-assistant/claude-execution-session.js",
       "packages/dingtalk-dsh-assistant/coordination-context.js",
       "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -171,9 +175,11 @@
       "packages/dingtalk-dsh-assistant/startup-metrics.js",
       "packages/dingtalk-dsh-assistant/store.js",
       "packages/dingtalk-dsh-assistant/task-archive.js",
+      "packages/dingtalk-dsh-assistant/task-artifact-files.js",
       "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
       "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
       "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+      "packages/dingtalk-dsh-assistant/task-final-delivery.js",
       "packages/dingtalk-dsh-assistant/task-input-contract.js",
       "packages/dingtalk-dsh-assistant/task-input-revision.js",
       "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -210,6 +216,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -239,6 +246,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -261,6 +269,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -290,6 +299,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -323,6 +333,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -359,6 +370,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
@@ -393,6 +405,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -477,6 +490,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -508,6 +522,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -528,6 +543,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -551,6 +567,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -738,6 +755,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -784,9 +802,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -857,6 +877,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -903,9 +924,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -1093,6 +1116,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -1139,9 +1163,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -1230,6 +1256,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -1276,9 +1303,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -1343,6 +1372,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -1390,9 +1420,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -1425,6 +1457,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -1471,9 +1504,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -1502,6 +1537,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -1548,9 +1584,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -1594,6 +1632,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -1640,9 +1679,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -1808,6 +1849,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -1854,9 +1896,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -1886,6 +1930,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -1922,6 +1967,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -1985,6 +2031,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -2040,6 +2087,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -2093,9 +2141,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -2141,6 +2191,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -2188,6 +2239,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
         "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
@@ -2304,6 +2356,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
         "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
@@ -2391,6 +2444,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -2428,6 +2482,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -2449,6 +2504,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -2475,6 +2531,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -2523,7 +2580,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -2563,6 +2619,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -2586,6 +2643,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -2622,6 +2680,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -2659,6 +2718,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -2685,6 +2745,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -2733,7 +2794,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -2773,6 +2833,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -2820,6 +2881,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
@@ -2842,6 +2904,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -2888,6 +2951,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -2935,6 +2999,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -2982,6 +3047,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3029,6 +3095,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3065,6 +3132,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -3089,6 +3157,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3136,6 +3205,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3174,6 +3244,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3211,6 +3282,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -3231,6 +3303,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
         "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
@@ -3286,6 +3359,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -3337,6 +3411,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3376,6 +3451,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3414,6 +3490,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -3447,6 +3524,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -3473,6 +3551,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -3521,7 +3600,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -3561,6 +3639,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3598,6 +3677,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -3619,6 +3699,7 @@
       "category": "compat",
       "release": false,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -3640,6 +3721,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -3661,6 +3743,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3698,6 +3781,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -3753,6 +3837,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
         "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
@@ -3806,6 +3891,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
         "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
@@ -3858,6 +3944,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
         "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
@@ -3910,6 +3997,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -3938,6 +4026,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -3990,6 +4079,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -4014,6 +4104,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -4051,6 +4142,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -4088,6 +4180,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -4110,6 +4203,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -4136,6 +4230,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -4184,7 +4279,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -4242,6 +4336,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
@@ -4298,6 +4393,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -4385,6 +4481,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -4431,9 +4528,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -4515,6 +4614,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -4562,9 +4662,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -4639,6 +4741,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -4665,6 +4768,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -4713,7 +4817,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -4753,6 +4856,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -4801,6 +4905,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -4932,6 +5037,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
         "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
@@ -4987,6 +5093,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -5008,6 +5115,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -5034,6 +5142,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -5082,7 +5191,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -5122,6 +5230,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -5159,6 +5268,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -5205,6 +5315,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -5228,6 +5339,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -5325,6 +5437,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -5371,9 +5484,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -5424,6 +5539,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -5471,9 +5587,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -5554,6 +5672,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -5600,9 +5719,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -5631,6 +5752,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -5654,6 +5776,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -5700,9 +5823,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -5731,6 +5856,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -5793,6 +5919,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -5846,6 +5973,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -5873,6 +6001,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -5922,7 +6051,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -5962,6 +6090,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-bindings.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
@@ -6003,6 +6132,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/observer-legacy-execution-pages.js",
@@ -6087,6 +6217,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -6113,6 +6244,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -6161,7 +6293,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -6212,6 +6343,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6255,6 +6387,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -6276,6 +6409,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -6297,6 +6431,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
@@ -6381,6 +6516,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -6438,6 +6574,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -6468,6 +6605,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -6535,6 +6673,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -6557,6 +6696,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -6583,6 +6723,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6636,6 +6777,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -6718,6 +6860,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -6768,6 +6911,7 @@
       "category": "compat",
       "release": false,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
@@ -6822,6 +6966,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -6843,6 +6988,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
@@ -6939,6 +7085,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -6969,6 +7116,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
@@ -7091,6 +7239,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -7137,9 +7286,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -7200,23 +7351,14 @@
     },
     {
       "file": "test/task-artifact-files.test.js",
-      "lane": "compat-2",
-      "category": "compat",
+      "lane": "unit",
+      "category": "unit",
       "release": true,
       "publishedImports": [
-        "packages/dingtalk-dsh-assistant/group-message.js",
-        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js"
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js"
       ],
-      "retainedCompatibilityImports": [
-        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
-        "packages/dingtalk-dsh-assistant/execution-candidate.js",
-        "packages/dingtalk-dsh-assistant/execution-check-job.js",
-        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/node-output-readout.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
-        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
-      ],
+      "retainedCompatibilityImports": [],
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
@@ -7225,6 +7367,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -7271,9 +7414,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -7310,13 +7455,15 @@
     },
     {
       "file": "test/task-artifact-write.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js"
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js"
       ],
       "retainedCompatibilityImports": [
         "packages/dingtalk-dsh-assistant/execution-artifacts.js",
@@ -7324,7 +7471,6 @@
         "packages/dingtalk-dsh-assistant/execution-check-job.js",
         "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-general-workflow.js",
         "packages/dingtalk-dsh-assistant/workflow-notifications.js"
@@ -7337,6 +7483,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -7383,9 +7530,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -7411,7 +7560,7 @@
     },
     {
       "file": "test/task-checks.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7430,6 +7579,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -7476,9 +7626,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -7503,10 +7655,11 @@
     },
     {
       "file": "test/task-completion-context.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -7537,10 +7690,11 @@
     },
     {
       "file": "test/task-completion-notification.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -7558,14 +7712,16 @@
     },
     {
       "file": "test/task-delivery-manifest.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js"
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js"
       ],
       "retainedCompatibilityImports": [
         "packages/dingtalk-dsh-assistant/agent-work.js",
@@ -7574,7 +7730,6 @@
         "packages/dingtalk-dsh-assistant/execution-check-job.js",
         "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
         "packages/dingtalk-dsh-assistant/task-owner-context.js",
         "packages/dingtalk-dsh-assistant/task-owner-controller.js",
@@ -7587,10 +7742,11 @@
     },
     {
       "file": "test/task-delivery-project-evidence.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -7608,10 +7764,11 @@
     },
     {
       "file": "test/task-delivery-review.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
@@ -7641,6 +7798,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -7687,9 +7845,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -7714,10 +7874,11 @@
     },
     {
       "file": "test/task-discovery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -7761,10 +7922,11 @@
     },
     {
       "file": "test/task-execution-backends.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -7811,9 +7973,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -7842,6 +8006,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -7888,9 +8053,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -7915,10 +8082,11 @@
     },
     {
       "file": "test/task-execution-timeline.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -7966,9 +8134,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -7994,10 +8164,11 @@
     },
     {
       "file": "test/task-file-storage.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
         "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
@@ -8014,6 +8185,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js"
       ],
@@ -8034,7 +8206,6 @@
         "packages/dingtalk-dsh-assistant/execution-workspace.js",
         "packages/dingtalk-dsh-assistant/execution.js",
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
         "packages/dingtalk-dsh-assistant/task-markdown-file.js",
         "packages/dingtalk-dsh-assistant/task-owner-context.js",
@@ -8053,6 +8224,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -8099,9 +8271,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -8125,15 +8299,31 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
+      "file": "test/task-final-delivery.test.js",
+      "lane": "unit",
+      "category": "unit",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js"
+      ],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
       "file": "test/task-general-workflow.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js"
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js"
       ],
       "retainedCompatibilityImports": [
         "packages/dingtalk-dsh-assistant/agent-query-resources.js",
@@ -8151,7 +8341,6 @@
         "packages/dingtalk-dsh-assistant/execution-store.js",
         "packages/dingtalk-dsh-assistant/execution-workspace.js",
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-general-workflow.js",
         "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
@@ -8168,10 +8357,11 @@
     },
     {
       "file": "test/task-group-file-delivery.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -8198,6 +8388,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -8246,7 +8437,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -8282,7 +8472,7 @@
     },
     {
       "file": "test/task-group-file-runtime.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -8291,7 +8481,7 @@
     },
     {
       "file": "test/task-ingress-epoch.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8336,7 +8526,7 @@
     },
     {
       "file": "test/task-installed-profile-entry.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -8345,10 +8535,11 @@
     },
     {
       "file": "test/task-maintenance-constraint.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
@@ -8374,7 +8565,7 @@
     },
     {
       "file": "test/task-message-projections.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8439,6 +8630,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -8485,9 +8677,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -8516,6 +8710,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -8562,9 +8757,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -8589,7 +8786,7 @@
     },
     {
       "file": "test/task-notification-delivery.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8622,7 +8819,7 @@
     },
     {
       "file": "test/task-notification-readback.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8641,6 +8838,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -8687,9 +8885,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -8714,7 +8914,7 @@
     },
     {
       "file": "test/task-operator-notification-recall.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8733,6 +8933,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -8779,9 +8980,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -8806,10 +9009,11 @@
     },
     {
       "file": "test/task-owner-context.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -8830,10 +9034,11 @@
     },
     {
       "file": "test/task-owner-delivery-manifest.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -8867,10 +9072,11 @@
     },
     {
       "file": "test/task-owner-paused-delivery-review.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -8905,10 +9111,11 @@
     },
     {
       "file": "test/task-owner-recovery.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -8942,10 +9149,11 @@
     },
     {
       "file": "test/task-owner-store.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -8979,7 +9187,7 @@
     },
     {
       "file": "test/task-permits.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9019,10 +9227,11 @@
     },
     {
       "file": "test/task-purge-start.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -9060,10 +9269,11 @@
     },
     {
       "file": "test/task-readonly-workflows.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -9090,6 +9300,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -9138,7 +9349,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -9174,10 +9384,11 @@
     },
     {
       "file": "test/task-release-workflows.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -9213,7 +9424,7 @@
     },
     {
       "file": "test/task-reports.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9228,10 +9439,11 @@
     },
     {
       "file": "test/task-requirement-notifications.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
         "packages/dingtalk-dsh-assistant/dws-bridge.js",
@@ -9280,6 +9492,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -9332,9 +9545,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -9362,10 +9577,11 @@
     },
     {
       "file": "test/task-session-control-host-admission.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -9399,10 +9615,11 @@
     },
     {
       "file": "test/task-session-control-six-scenarios.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -9436,10 +9653,11 @@
     },
     {
       "file": "test/task-session-control.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -9477,6 +9695,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -9523,9 +9742,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -9554,6 +9775,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -9600,9 +9822,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -9627,10 +9851,11 @@
     },
     {
       "file": "test/task-session-http-integration.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -9678,9 +9903,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -9710,6 +9937,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -9757,9 +9985,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -9789,6 +10019,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -9836,9 +10067,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -9868,6 +10101,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -9914,9 +10148,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -9945,6 +10181,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -9992,9 +10229,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10031,6 +10270,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10077,9 +10317,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10108,6 +10350,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10154,9 +10397,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10212,6 +10457,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10258,9 +10504,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10285,7 +10533,7 @@
     },
     {
       "file": "test/task-session-persistence-native.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -10302,6 +10550,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10348,9 +10597,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10379,6 +10630,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10425,9 +10677,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10452,10 +10706,11 @@
     },
     {
       "file": "test/task-session-real-model-isolated.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -10493,6 +10748,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10540,9 +10796,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10573,6 +10831,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10625,9 +10884,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10659,6 +10920,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10705,9 +10967,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10736,6 +11000,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10782,9 +11047,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -10809,10 +11076,11 @@
     },
     {
       "file": "test/task-stage-contracts.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -10839,6 +11107,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -10887,7 +11156,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -10927,6 +11195,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -10973,9 +11242,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -11000,10 +11271,11 @@
     },
     {
       "file": "test/task-stage-target.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -11088,6 +11360,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -11135,9 +11408,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -11167,6 +11442,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -11213,9 +11489,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -11240,10 +11518,11 @@
     },
     {
       "file": "test/task-workflow-contracts.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -11270,6 +11549,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -11318,7 +11598,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -11354,10 +11633,11 @@
     },
     {
       "file": "test/task-workflow.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -11384,6 +11664,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -11432,7 +11713,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -11468,7 +11748,7 @@
     },
     {
       "file": "test/task-worktree-archive.test.js",
-      "lane": "compat-0",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -11479,7 +11759,7 @@
     },
     {
       "file": "test/test-suite-contracts.test.js",
-      "lane": "compat-1",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11492,10 +11772,11 @@
     },
     {
       "file": "test/tool-schema.test.js",
-      "lane": "compat-2",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
@@ -11530,8 +11811,8 @@
     },
     {
       "file": "test/topic-facts.test.js",
-      "lane": "unit",
-      "category": "unit",
+      "lane": "compat-2",
+      "category": "compat",
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/coordination-context.js",
@@ -11539,6 +11820,8 @@
         "packages/dingtalk-dsh-assistant/coordination-retirement.js",
         "packages/dingtalk-dsh-assistant/coordination-sessions.js",
         "packages/dingtalk-dsh-assistant/decision.js",
+        "packages/dingtalk-dsh-assistant/dws-adapter.js",
+        "packages/dingtalk-dsh-assistant/dws-bridge.js",
         "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
         "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
         "packages/dingtalk-dsh-assistant/execution-context.js",
@@ -11563,6 +11846,7 @@
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
         "packages/dingtalk-dsh-assistant/task-model-config.js",
+        "packages/dingtalk-dsh-assistant/task-notification-readback.js",
         "packages/dingtalk-dsh-assistant/task-plan.js",
         "packages/dingtalk-dsh-assistant/task-progress.js",
         "packages/dingtalk-dsh-assistant/task-report-step-gate.js",
@@ -11667,6 +11951,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -11691,6 +11976,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -11757,6 +12043,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -11783,6 +12070,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -11831,7 +12119,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -11871,6 +12158,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -11894,6 +12182,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -11916,6 +12205,7 @@
       "category": "native",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -11968,9 +12258,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -12004,6 +12296,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -12047,6 +12340,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -12110,6 +12404,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -12147,6 +12442,7 @@
       "category": "compat",
       "release": false,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -12194,6 +12490,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -12241,6 +12538,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/claude-execution-session.js",
         "packages/dingtalk-dsh-assistant/coordination-context.js",
         "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
@@ -12294,9 +12592,11 @@
         "packages/dingtalk-dsh-assistant/startup-metrics.js",
         "packages/dingtalk-dsh-assistant/store.js",
         "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
         "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -12340,6 +12640,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -12366,6 +12667,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -12414,7 +12716,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -12454,6 +12755,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -12480,6 +12782,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -12528,7 +12831,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -12597,6 +12899,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -12618,6 +12921,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -12643,6 +12947,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -12667,6 +12972,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -12689,6 +12995,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -12710,6 +13017,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -12736,6 +13044,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -12784,7 +13093,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -12824,6 +13132,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js"
@@ -12867,6 +13176,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -12920,6 +13230,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -12973,6 +13284,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -12999,6 +13311,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -13047,7 +13360,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",
@@ -13093,6 +13405,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -13148,6 +13461,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -13201,6 +13515,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -13254,6 +13569,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
@@ -13319,6 +13635,7 @@
       "category": "compat",
       "release": true,
       "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
         "packages/dingtalk-dsh-assistant/coordination-resources.js",
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/dws-adapter.js",
@@ -13349,6 +13666,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-source-instructions.js",
@@ -13398,7 +13716,6 @@
         "packages/dingtalk-dsh-assistant/node-output-readout.js",
         "packages/dingtalk-dsh-assistant/notification-retirement.js",
         "packages/dingtalk-dsh-assistant/runtime-startup-observation.js",
-        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-artifact-write.js",
         "packages/dingtalk-dsh-assistant/task-completion-notification.js",
         "packages/dingtalk-dsh-assistant/task-delivery-review.js",

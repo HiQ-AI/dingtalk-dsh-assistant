@@ -110,6 +110,32 @@ const call = (name, args) => ({ name, args })
 const test = (name, options, run) => testRunner(name, { ...options, ...(!available ? { skip: reason } : {}) }, run)
 const decision = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: ['实际文件和进程输出已核验'], limitations: [] } })
 
+test('native completion freezes reported acceptance files for Topic delivery', { timeout: 20000 }, async t => {
+  const fixture = await nativeCase(t, 'native-final-files-')
+  let delegated = false, step = 0
+  const h = await fixture.host(async (request, host) => {
+    const topic = topicTaskCalls(request); if (topic) return topic
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'task_delegate')) {
+      if (!delegated) { delegated = true; return [call('task_delegate', { key: 'acceptance', objective: '生成本地验收产物并报告，不自行外发' }), decision('wait', '等待验收产物')] }
+      const [execution] = await host.query('execution.list', { taskId: input.task.taskId })
+      if (!execution?.drained || execution.status !== 'succeeded') return [decision('wait', '等待产物完成')]
+      return [call('task_session_submit', { decision: { action: 'complete', summary: '本地验收结果已核对', evidence: ['acceptance.txt'], limitations: [],
+        deliveryFiles: [{ executionId: execution.executionId, path: 'acceptance.txt', caption: '本地验收结果' }] } })]
+    }
+    if (step++ === 0) return [call('write', { file_path: 'acceptance.txt', content: 'accepted original bytes' })]
+    return [call('execution_submit', { output: { status: 'completed', summary: '本地验收文件已生成', evidence: ['acceptance.txt'], limitations: [], artifacts: ['acceptance.txt'] } })]
+  }, { notifications: { send: async () => ({ messageId: 'summary' }), readback: async () => undefined,
+    sendFile: async () => assert.fail('Files must wait for the final explanation receipt'), readbackFile: async () => undefined } })
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'final-file', objective: '生成并核验本地文件，随最终结果交付' })
+  await h.service.whenIdle()
+  const task = await h.query('task.get', { taskId: created.taskId })
+  assert.equal(task.status, 'completed', JSON.stringify(h.toolResults.filter(item => item.result.isError)))
+  assert.equal(task.completion.result.artifactFiles.length, 1)
+  assert.equal(task.completion.result.artifactFiles[0].artifact.taskId, created.taskId)
+  assert.equal(task.completion.result.artifactFiles[0].caption, '本地验收结果')
+})
+
 test('running reminder and coordinator clarification preserve one native shell job with received and consumed receipts', { timeout: 20000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'native-running-feedback-'))
   const team = nativeVerificationTeam({ filePath: 'effect.txt', expected: 'once' })

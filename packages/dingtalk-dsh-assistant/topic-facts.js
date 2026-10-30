@@ -79,6 +79,7 @@ export function topicFactLedger({ db, get, put }) {
       (SELECT json_group_array(value) FROM (SELECT value FROM json_each(dynamic_topic_facts.body,'$.sourceIds') ORDER BY key DESC LIMIT 8)) sourceIds,
       substr(json_extract(body,'$.result.summary'),1,1200) summary,
       json_extract(body,'$.result.audience') audience,
+      json_extract(body,'$.result.artifactFiles') artifactFiles,
       (SELECT json_group_array(substr(value,1,200)) FROM (SELECT value FROM json_each(dynamic_topic_facts.body,'$.result.evidence') LIMIT 4)) evidence,
       (SELECT json_group_array(substr(value,1,200)) FROM (SELECT value FROM json_each(dynamic_topic_facts.body,'$.result.limitations') LIMIT 4)) limitations,
       CASE WHEN json_extract(body,'$.result.audience')='operator' THEN NULL ELSE substr(json_extract(body,'$.result.question'),1,800) END question
@@ -87,8 +88,8 @@ export function topicFactLedger({ db, get, put }) {
         AND coalesce(json_extract(body,'$.audienceKey'),'')=(SELECT coalesce(json_extract(body,'$.audienceKey'),'')
           FROM dynamic_topic_facts WHERE json_extract(body,'$.groupId')=? AND json_extract(body,'$.topicId')=?
           AND json_extract(body,'$.state')='pending' ORDER BY rowid LIMIT 1)
-      ORDER BY rowid LIMIT 4`).all(q.groupId, q.topicId, q.groupId, q.topicId).map(({ sourceIds, summary, audience, evidence, limitations, question, ...row }) => ({ ...row,
-        sourceIds: JSON.parse(sourceIds).reverse(), result: { summary, audience, evidence: JSON.parse(evidence), limitations: JSON.parse(limitations), question } }))
+      ORDER BY rowid LIMIT 4`).all(q.groupId, q.topicId, q.groupId, q.topicId).map(({ sourceIds, summary, audience, artifactFiles, evidence, limitations, question, ...row }) => ({ ...row,
+        sourceIds: JSON.parse(sourceIds).reverse(), result: { summary, audience, artifactFiles: JSON.parse(artifactFiles ?? '[]'), evidence: JSON.parse(evidence), limitations: JSON.parse(limitations), question } }))
     if (q.kind === 'topic.fact.groups') return db.prepare(`SELECT DISTINCT json_extract(body,'$.groupId') groupId
       FROM dynamic_topic_facts WHERE json_extract(body,'$.state')='pending'`).all().map(row => row.groupId)
     if (q.kind === 'topic.fact.unsettled') return !!db.prepare(`SELECT 1 FROM dynamic_topic_facts
@@ -156,6 +157,7 @@ export function topicFactLedger({ db, get, put }) {
       const decision = factDecisionSchema.parse(a.submission).decision
       const stamp = new Date().toISOString()
       let notification = null
+      const notifications = []
       if (decision.reply) {
         const source = decision.replyToMessageId ? get('dynamic_sources', a.sourceId) : null
         // Topic membership is checked against the frozen resident revision by the Host.
@@ -174,13 +176,28 @@ export function topicFactLedger({ db, get, put }) {
             humanRequests: facts.filter(fact => fact.humanRequestId && currentRequest(fact)).map(fact => ({ taskId: fact.taskId, requestId: fact.humanRequestId })),
             fact: { taskIds: [...new Set(facts.map(f => f.taskId))], eventIds: a.factIds } } }
         notification.notificationId = notification.id
+        const files = [...new Map(facts.filter(fact => fact.kind === 'completed').flatMap(fact => fact.result.artifactFiles ?? [])
+          .map(file => [file.artifact.artifactId, file])).values()]
+        if (files.length) notification.payload.deliveryId = notification.id
         put('dynamic_notifications', notification)
+        notifications.push(notification)
+        for (const file of files) {
+          const id = `${notification.id}:file:${file.artifact.artifactId}`
+          const part = { id, notificationId: id, kind: 'topic-reply', taskId: file.artifact.taskId,
+            requirementRevision: file.artifact.requirementRevision, state: 'prepared', createdAt: stamp, updatedAt: stamp,
+            payload: { conversationId: a.groupId, replyTopicId: a.topicId, topicRefs: notification.payload.topicRefs,
+              taskIds: notification.payload.taskIds, coveredEventIds: a.factIds, replyKind: 'substantive',
+              deliveryId: notification.id, afterNotificationId: notifications.at(-1).id,
+              text: `${file.artifact.fileName}：${file.caption}`, artifact: file.artifact,
+              fact: notification.payload.fact } }
+          put('dynamic_notifications', part); notifications.push(part)
+        }
       }
       for (const [index, fact] of facts.entries()) put('dynamic_topic_facts', { ...fact, state: 'accepted', processedAt: stamp,
         decisionId: a.submission.requestId, notificationId: notification?.id ?? null,
         ...(index === 0 ? { decision: { ...a.submission, groupId: a.groupId, expectedSummary: a.expectedSummary, recordedAt: stamp,
           factIds: a.factIds, notificationId: notification?.id ?? null } } : {}) })
-      return { facts: a.factIds, notification, decision }
+      return { facts: a.factIds, notification, notifications, decision }
     }
     if (kind === 'topic.fact.projected') {
       const fact = get('dynamic_topic_facts', a.factId)
@@ -217,6 +234,8 @@ export function factContextProjection(facts, tasks = []) {
     summary: String(fact.result.summary ?? '').slice(0, 2400),
     evidence: (fact.result.evidence ?? []).slice(0, 6).map(value => String(value).slice(0, 400)),
     limitations: (fact.result.limitations ?? []).slice(0, 6).map(value => String(value).slice(0, 400)),
+    files: (fact.result.artifactFiles ?? []).slice(0, 8).map(file => ({ fileName: file.artifact.fileName, caption: file.caption })),
+    fileCount: fact.result.artifactFiles?.length ?? 0,
     audience: fact.result.audience,
     ...(fact.humanRequestId && !tasks.some(task => task.taskId === fact.taskId && task.pendingRequests?.some(request => request.requestId === fact.humanRequestId))
       ? { questionState: 'resolved', question: undefined } : { question: fact.result.audience === 'operator' ? undefined : fact.result.question }),
@@ -274,10 +293,13 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
         for (const item of [...input.facts, ...input.sources, ...input.originMessages, ...input.tasks, ...input.replies]) {
           for (const key of ['text', 'summary', 'question']) if (typeof item[key] === 'string') item[key] = item[key].slice(0, 240)
           for (const key of ['evidence', 'limitations']) if (Array.isArray(item[key])) item[key] = item[key].map(text => text.slice(0, 100))
+          if (item.files) item.files = item.files.slice(0, 3).map(file => ({ fileName: file.fileName, caption: file.caption.slice(0, 80) }))
         }
       }
       if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 22 * 1024) fail('TOPIC_FACT_CONTEXT_BUDGET')
       return { eventIds: facts.map(fact => fact.id), generation: hash(facts.map(fact => [fact.id, fact.lastSupersededNotificationId])), expectedSummary: topic.summary,
+        artifactFiles: [...new Map(facts.filter(fact => fact.kind === 'completed').flatMap(fact => fact.result.artifactFiles ?? [])
+          .map(file => [file.artifact.artifactId, file])).values()],
         replySnapshot, taskSnapshot, taskIds, sourceIdentities, input,
         metrics: { trigger: 'task-facts', queryCount: 4, factCount: facts.length, sourceCount: sources.length,
           recentCount: recent.length, taskCount: tasks.length, replyCount: replies.length,
@@ -305,8 +327,10 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
           sourceId = source.sourceId
         }
         submission = { ...submission, decision: { ...submission.decision, atOpenDingTalkIds: recipients } }
+        const attachments = context.artifactFiles?.length ? '\n\n附件与验收对应：\n' + context.artifactFiles
+          .map((file, index) => `${index + 1}. ${file.artifact.fileName}：${file.caption}`).join('\n') : ''
         reply = formatTaskGroupReply({ source: { ...target, groupId: request.groupId }, allowUnrouted: !target,
-          summary: submission.decision.reply, evidence: [], limitations: [], signature: signature(),
+          summary: submission.decision.reply + attachments, evidence: [], limitations: [], signature: signature(),
           internalIds: [request.groupId, request.topicId, request.requestId, sourceId, target?.messageId, ...recipients,
             ...context.eventIds, ...context.input.tasks.map(task => task.taskId), ...context.sourceIdentities],
         })
@@ -323,6 +347,7 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
         try {
           await project({ id: context.eventIds[0], decision: { ...submission, groupId: request.groupId,
             expectedSummary: context.expectedSummary, notificationId: result.receipt.result.notification?.id } })
+          for (const notification of result.receipt.result.notifications?.slice(1) ?? []) await onNotification?.(notification)
         } catch (error) { error.factDecisionCommitted = true; throw error }
       }
       return { status: result.status, eventIds: context.eventIds }
