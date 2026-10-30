@@ -318,6 +318,7 @@ function settleCompletedMessageDeliveries(messages, topics, sourceDispatchOwners
 }
 
 function recoverWebSkippedTopicInputs(group) {
+  if (!group.topics?.length) return group
   const messages = new Map(group.messages.map(message => [message.messageId, message]))
   const topics = group.topics.map(topic => {
     if (topic.mergedInto) return topic
