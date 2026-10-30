@@ -1,6 +1,7 @@
 import { win32 } from 'node:path'
 import { isolationDigest as hash } from './native-restart-isolation.js'
-import { inspectSession } from './session-persistence.js'
+import { inspectSession, executionInputFor } from './session-persistence.js'
+import { postgresWrapperScope, postgresWrapperSchema, postgresWrapperInspection } from './native-postgres-wrapper.js'
 
 // These are the reviewed, deployed rc.2 Windows Job owner implementations, not an
 // inference that every shell provider has the same containment semantics.
@@ -58,12 +59,13 @@ function Get-RestartRelatedProducer($Processes, $Spec, $WindowStart, $WindowEnd,
 }
 `
 
-export function restartScopeProbePlan({ command, binding, evidence, dshHome = process.env.DSH_HOME }) {
- const scope = localRestartScope(command)
+export function restartScopeProbePlan({ command, binding, evidence, workspaceRoot, dshHome = process.env.DSH_HOME }) {
+ const scope = evidence?.postgresWrapper ? postgresWrapperScope(command, evidence.postgresWrapper, binding, workspaceRoot) : localRestartScope(command)
  if (!scope || !safePath(dshHome) || !safePath(evidence?.hostLogPath) || !/^[a-f0-9]{64}$/u.test(evidence.hostLogSha256 ?? '')
   || !Number.isSafeInteger(evidence.hostPid) || evidence.hostPid < 1
   || evidence.producerScopeReviewed !== true || evidence.localEffectsOnlyConfirmed !== true || evidence.excludeOriginalSourcesConfirmed !== true) return null
  const hostExit = evidence.hostExit
+ const pgWrapper = scope.kind === 'local-postgres' && scope.wrapper
  if (hostExit !== undefined && (!hostExit || Object.keys(hostExit).some(key => !['observedAt', 'evidenceRef'].includes(key))
   || typeof hostExit.observedAt !== 'string' || !Number.isFinite(Date.parse(hostExit.observedAt)) || Date.parse(hostExit.observedAt) < binding.startedAt || Date.parse(hostExit.observedAt) > Date.now()
   || typeof hostExit.evidenceRef !== 'string' || !hostExit.evidenceRef.trim() || hostExit.evidenceRef.length > 2000)) return null
@@ -71,7 +73,7 @@ export function restartScopeProbePlan({ command, binding, evidence, dshHome = pr
   hostLogSha256: evidence.hostLogSha256, managedProviderRoot: win32.join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai'), providerFiles: providerFiles.map(([path, sha256]) => ({ path: win32.join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai', path), sha256 })) }
  const encoded = Buffer.from(JSON.stringify(spec)).toString('base64')
  const probe = `$ErrorActionPreference = 'Stop'
-${restartProducerFilter}
+${restartProducerFilter}${pgWrapper ? '\n' + postgresWrapperInspection : ''}
 $s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')) | ConvertFrom-Json${hostExit ? `
 $s.hostExit.observedAt = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(hostExit.observedAt).toString('base64')}'))` : ''}
 $log = Get-Item -LiteralPath $s.hostLogPath -ErrorAction Stop
@@ -90,12 +92,12 @@ $hostChildren = @($all | Where-Object { $_.ParentProcessId -eq $s.hostPid }).Cou
 $windowStart = [DateTimeOffset]::FromUnixTimeMilliseconds($s.binding.startedAt - 5000).UtcDateTime
 $windowEnd = ${hostExit ? "[DateTimeOffset]::Parse($s.hostExit.observedAt).UtcDateTime" : '$log.LastWriteTimeUtc'}
 $portCount = 0; $preserved = $false; $sourceProcessId = 0; $artifactState = $null
-if ($s.scope.kind -eq 'local-postgres') {
+if ($s.scope.kind -eq 'local-postgres') {${pgWrapper ? '\n Assert-PgWrapperEvidence $s.scope' : ''}
  $sourcePidFile = Join-Path $s.scope.directory 'postmaster.pid'
  $sourcePidLines = @([IO.File]::ReadAllLines($sourcePidFile)); $sourceProcessId = [int]$sourcePidLines[0]
  $preserved = $sourcePidLines.Count -ge 4 -and [IO.Path]::GetFullPath($sourcePidLines[1]) -eq [IO.Path]::GetFullPath($s.scope.directory) -and [int]$sourcePidLines[3] -eq $s.scope.port
  $portCount = @(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.LocalPort -eq $s.scope.port }).Count
- $writers = @($all | Where-Object { $_.ProcessId -eq $sourceProcessId -or ((Get-RestartSourceText $_).IndexOf($s.scope.directory.Replace('/','\\'),[StringComparison]::OrdinalIgnoreCase) -ge 0) }).Count
+ $writers = @($all | Where-Object { $_.ProcessId -eq $sourceProcessId -or ((Get-RestartSourceText $_).IndexOf($s.scope.directory.Replace('/','\\'),[StringComparison]::OrdinalIgnoreCase) -ge 0)${pgWrapper ? " -or ((Get-RestartSourceText $_).IndexOf($s.scope.wrapper.script.Replace('/','\\'),[StringComparison]::OrdinalIgnoreCase) -ge 0)" : ''} }).Count
  $artifactState = 'retained-unverified-database'
 } else {
  $record = [IO.File]::ReadAllText($s.scope.evidenceFile) | ConvertFrom-Json
@@ -137,6 +139,7 @@ export function registerRestartScopeProbe({ agentCtx, agent, current, readPlan, 
    scopeEvidence: { type: 'object', properties: {
     hostPid: { type: 'integer', minimum: 1 }, hostLogPath: { type: 'string', minLength: 1 }, hostLogSha256: digestSchema,
     hostExit: observedHostExitSchema,
+    postgresWrapper: postgresWrapperSchema,
     producerScopeReviewed: { const: true }, localEffectsOnlyConfirmed: { const: true }, excludeOriginalSourcesConfirmed: { const: true },
    }, required: ['hostPid', 'hostLogPath', 'hostLogSha256', 'producerScopeReviewed', 'localEffectsOnlyConfirmed', 'excludeOriginalSourcesConfirmed'], additionalProperties: false },
   }, required: ['expectedOperationDigest', 'expectedScriptDigest', 'scopeEvidence'], additionalProperties: false },
@@ -213,9 +216,7 @@ export async function readRestartScopeProbe({ ctx, plan, evidence, operation, ex
  const { events } = await inspectSession(ctx.sessionPersistence, readback.sessionId)
  const identity = events.some(event => event.type === 'plugin:dingtalk/execution-session' && event.data.identity?.taskId === operation.taskId
   && event.data.identity.executionId === readback.executionId && event.data.identity.sessionId === readback.sessionId)
- const input = events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession?.sessionId === readback.sessionId
-  && event.data.source.executionSession.inputVersion === readback.inputVersion && event.data.source.executionSession.inputDigest === readback.inputDigest
-  && event.data.source.executionSession.leaseEpoch === readback.leaseEpoch)
+ const input = executionInputFor(events, readback)
  if (!identity || !input) return null
  const direct = events.filter(event => event.seq > input.seq && event.type === 'tool/call' && event.data.callId === evidence.probeCallId && event.data.name === 'pwsh')
  const managed = readManagedRestartProbeCall(events, input, evidence.probeCallId)

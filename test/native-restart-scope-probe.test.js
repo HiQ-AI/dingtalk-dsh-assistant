@@ -1,6 +1,11 @@
 import test from 'node:test'
 import { execFileSync, spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { postgresWrapperScope, postgresWrapperInspection, referencesIsolatedPostgres } from '../packages/dingtalk-dsh-assistant/native-postgres-wrapper.js'
 import { restartFixture } from './fixtures/native-restart-isolation.js'
 import { restartScopeProbePlan, localRestartScope, restartProducerFilter } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
 import { inspectIsolatedHostRestart, prepareRestartScopeProbe } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
@@ -12,10 +17,12 @@ const evidence = () => ({ hostPid: 900, hostLogPath: 'D:\\approved\\host.oom.log
  producerScopeReviewed: true, localEffectsOnlyConfirmed: true, excludeOriginalSourcesConfirmed: true,
  probeExecutionId: 'investigation', probeCallId: 'scope-probe' })
 
-function probeFixture(command, acknowledged, hostExit) {
+function probeFixture(command, acknowledged, hostExit, postgresWrapper) {
  const f = restartFixture(acknowledged, command), scopeEvidence = evidence()
  if (hostExit) scopeEvidence.hostExit = hostExit
- const plan = restartScopeProbePlan({ command, binding: isolationBinding(f.operation, 'original-call'), evidence: scopeEvidence, dshHome: 'D:\\host' })
+ if (postgresWrapper) scopeEvidence.postgresWrapper = postgresWrapper
+ const workspaceRoot = 'D:\\agent'
+ const plan = restartScopeProbePlan({ command, binding: isolationBinding(f.operation, 'original-call'), evidence: scopeEvidence, dshHome: 'D:\\host', workspaceRoot })
  assert.ok(plan)
  const readInput = f.reads[1]
  const observation = { schema: plan.spec.schema, specDigest: plan.specDigest, observedAt: '2026-10-27T08:31:00Z', hostFatalTime: '2026-10-27T07:32:20Z',
@@ -32,8 +39,104 @@ function probeFixture(command, acknowledged, hostExit) {
  f.reads[1] = readInput
  const originalGet = f.ctx.get
  f.ctx.get = name => name === 'nativeJobRecovery' ? undefined : originalGet(name)
- return { ...f, scopeEvidence, plan, observation, updateOutput() { f.reads[5].data.message.content[0].text = JSON.stringify(observation) + '\n[exit code: 0]' } }
+ return { ...f, scopeEvidence, plan, observation, workspaceRoot, updateOutput() { f.reads[5].data.message.content[0].text = JSON.stringify(observation) + '\n[exit code: 0]' } }
 }
+
+const wrapperScript = readFileSync(new URL('./fixtures/restart-postgres-wrapper.ps1', import.meta.url), 'utf8')
+const wrapperCommand = 'pwsh -NoProfile -File "D:\\agent\\tasks\\task\\work\\run-postgres.ps1" -Action serve'
+const wrapperEvidence = { scriptSha256: createHash('sha256').update(wrapperScript).digest('hex'), historicalEvidenceRef: 'original-template-read-and-copy-proof',
+ pgBin: 'D:\\soft\\PostgreSQL\\16\\bin', port: 25428, ownerText: 'synthetic-task-owner' }
+
+test('wrapper isolation binds the original command and task; identity and arbitrary pwsh remain unsupported', async () => {
+ const oldHome = process.env.DSH_HOME; process.env.DSH_HOME = 'D:\\host'
+ try {
+  const f = probeFixture(wrapperCommand, true, { observedAt: '2026-10-27T07:32:20Z', evidenceRef: 'original-host-exit' }, wrapperEvidence)
+  for (const list of [f.original, f.reads]) {
+   const input = list[1]; list[1] = { ...input, type: 'agent/inbox/spliced', data: { inserted: [{ role: 'user', source: { kind: 'coordinator', executionSession: input.data.source.executionSession } }] } }
+   list.push({ seq: 100, type: 'agent/inbox/spliced', data: { inserted: [{ role: 'user', source: { executionFeedback: { messageId: 'feedback' } } }] } })
+  }
+  const planned = await inspectIsolatedHostRestart({ ...f, planOnly: true })
+  assert.deepEqual(planned.probe, f.plan)
+  const proof = await inspectIsolatedHostRestart(f)
+  assert.equal(proof.commandDigest, isolationDigest(wrapperCommand), 'retain wrapper command digest, not an expanded launch')
+  assert.equal(proof.noReplay, true); assert.equal(proof.exitStatus, 'unknown')
+  assert.equal(proof.isolation.provenance.scope.wrapper.scriptSha256, wrapperEvidence.scriptSha256)
+  assert.equal(f.operation.state, 'unknown'); assert.equal(f.operation.result, null)
+  const scope = f.plan.spec.scope
+  assert.equal(scope.directory, 'D:\\agent\\tasks\\task\\work\\postgres\\data')
+  assert.ok(referencesIsolatedPostgres('pwsh -File work/run-postgres.ps1 -Action identity', scope, 'D:\\agent\\tasks\\task'))
+  for (const command of [String.raw`& .\work\run-postgres.ps1 -Action identity`, String.raw`.\work\run-postgres.ps1 -Action serve`, `. './work/run-postgres.ps1' -Action cleanup`]) {
+   assert.ok(referencesIsolatedPostgres(command, scope, 'D:\\agent\\tasks\\task'))
+  }
+  assert.ok(referencesIsolatedPostgres('pwsh -NoProfile -File "D:/agent/tasks/task/work/../work/run-postgres.ps1" -Action serve', scope, 'D:\\agent\\tasks\\task'))
+  assert.equal(referencesIsolatedPostgres('pwsh -File work/run-postgres.ps1 -Action serve', scope, 'D:\\agent\\tasks\\another'), false)
+  assert.match(f.plan.command, /Assert-PgWrapperEvidence \$s.scope/)
+  const investigation = { ...f.readback, status: 'running', drained: false }
+  assert.deepEqual(await prepareRestartScopeProbe({ ...f, investigation, binding: investigation, executions: [f.execution, investigation],
+   args: { scopeEvidence: f.scopeEvidence, expectedOperationDigest: isolationDigest(f.operation), expectedScriptDigest: f.plan.scriptDigest } }), f.plan)
+  const resolve = (command, evidence = wrapperEvidence, taskId = 'task') => postgresWrapperScope(command, evidence, { taskId }, f.workspaceRoot)
+  assert.ok(resolve(wrapperCommand.replace('-NoProfile', '-NonInteractive -NoLogo -NoProfile')))
+  for (const value of [wrapperCommand.replace('serve', 'identity'), wrapperCommand + '; Write-Output fake', wrapperCommand + ' -Port 3',
+   wrapperCommand.replace('tasks\\task\\', 'tasks\\other\\'), wrapperCommand.replace('tasks\\task\\', 'tasks\\task\\..\\other\\'),
+   wrapperCommand.replace('run-postgres.ps1', 'arbitrary.ps1')]) assert.equal(resolve(value), null)
+  assert.equal(resolve(wrapperCommand, { ...wrapperEvidence, scriptSha256: 'bad' }), null)
+  assert.equal(resolve(wrapperCommand, { ...wrapperEvidence, historicalEvidenceRef: '' }), null)
+  f.reads.push({ seq: 101, type: 'agent/inbox/spliced', data: { inserted: [{ role: 'user', source: { executionSession: { ...f.readback, inputVersion: 50 } } }] } })
+  assert.equal(await inspectIsolatedHostRestart(f), null, 'new mismatched binding cannot fall back to old input')
+ } finally { if (oldHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = oldHome }
+})
+
+test('actual PowerShell AST verifies serve preamble without executing database identity or prepare', () => {
+ const scope = postgresWrapperScope(wrapperCommand, wrapperEvidence, { taskId: 'task' }, 'D:\\agent')
+ const cases = [
+  [wrapperScript, true], [wrapperScript.replaceAll('\n', '\r\n'), true],
+  [wrapperScript.replace("$pgBin =", "Write-Output unsafe\n$pgBin ="), false],
+  [wrapperScript.replace("$Action -eq 'prepare'", "$Action -ne 'prepare'"), false],
+  [wrapperScript.replace("[string]$Action", "[string]$Action = $(Write-Output unsafe)"), false],
+  [wrapperScript.replace('    exit $LASTEXITCODE\n}', '    Write-Output unsafe\n}'), false],
+  [wrapperScript.replace("$ownerText = 'synthetic-task-owner'", "$ownerText = 'foreign'"), false],
+  [wrapperScript.replace("-h 127.0.0.1", "-h 0.0.0.0"), false],
+ ]
+ const encoded = Buffer.from(JSON.stringify({ scope, cases })).toString('base64')
+ const script = postgresWrapperInspection + `\n$fixture=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))|ConvertFrom-Json\n@($fixture.cases|ForEach-Object { try { Assert-PgServeScript $_[0] $fixture.scope; $true } catch { $false } })|ConvertTo-Json -Compress`
+ const output = execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' })
+ assert.deepEqual(JSON.parse(output), cases.map(row => row[1]))
+})
+
+test('actual read-only PowerShell verifies wrapper bytes, ownership, opts and config without invoking any database program', t => {
+ const root = mkdtempSync(join(tmpdir(), 'pg-wrapper-evidence-'))
+ t.after(() => rmSync(root, { recursive: true, force: true }))
+ const scope = postgresWrapperScope(wrapperCommand, wrapperEvidence, { taskId: 'task' }, 'D:\\agent')
+ scope.directory = join(root, 'data'); scope.wrapper.script = join(root, 'run-postgres.ps1'); scope.wrapper.ownerFile = join(root, 'owner.txt')
+ mkdirSync(scope.directory); writeFileSync(scope.wrapper.script, wrapperScript); writeFileSync(scope.wrapper.ownerFile, scope.wrapper.ownerText)
+ writeFileSync(join(scope.directory, 'postmaster.pid'), '900002\n' + scope.directory + '\n0\n' + scope.port)
+ const opts = `"${scope.executable}" "-p" "${scope.port}" "-D" "${scope.directory}" "-c" "logging_collector=off" "-h" "127.0.0.1"`
+ writeFileSync(join(scope.directory, 'postmaster.opts'), opts)
+ writeFileSync(join(scope.directory, 'postgresql.conf'), "# include 'ignored'\nmax_connections = 100\n")
+ writeFileSync(join(scope.directory, 'postgresql.auto.conf'), '# No active overrides\n')
+ const encoded = Buffer.from(JSON.stringify(scope)).toString('base64')
+ const script = postgresWrapperInspection + `
+$ErrorActionPreference='Stop'
+$scope=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))|ConvertFrom-Json
+Assert-PgWrapperEvidence $scope
+$cases = @(
+ @{path=$scope.wrapper.script;text='throw "must never execute"'},
+ @{path=$scope.wrapper.ownerFile;text='foreign'},
+ @{path=(Join-Path $scope.directory 'postmaster.opts');text='"foreign-postgres" -D "other"'},
+ @{path=(Join-Path $scope.directory 'postgresql.conf');text="include = 'external.conf'"},
+ @{path=(Join-Path $scope.directory 'postgresql.conf');text="shared_preload_libraries = 'foreign'"},
+ @{path=(Join-Path $scope.directory 'postgresql.auto.conf');text='port = 5432'}
+)
+@($cases|ForEach-Object {
+ $old=[IO.File]::ReadAllBytes($_.path)
+ try { [IO.File]::WriteAllText($_.path,$_.text); Assert-PgWrapperEvidence $scope; 'unexpected-success' }
+ catch { $_.Exception.Message }
+ finally { [IO.File]::WriteAllBytes($_.path,$old) }
+})|ConvertTo-Json -Compress
+`
+ const output = execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' })
+ assert.deepEqual(JSON.parse(output), ['PG_WRAPPER_HASH_MISMATCH', 'PG_OWNER_MISMATCH', 'PG_OPTS_MISMATCH', 'PG_EXTERNAL_DEPENDENCY_UNREVIEWED', 'PG_EXTERNAL_DEPENDENCY_UNREVIEWED', 'PG_EXTERNAL_DEPENDENCY_UNREVIEWED'])
+})
 
 test('only the two bounded local launch recipes are supported; arbitrary shell extensions reject', () => {
  assert.equal(localRestartScope(pg).kind, 'local-postgres')

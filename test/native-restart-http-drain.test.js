@@ -17,8 +17,9 @@ import { maintenanceEvidenceFixture } from './fixtures/native-maintenance-drain.
 
 const pg = String.raw`& D:\soft\PostgreSQL\16\bin\postgres.exe -D D:\agent\artifacts\isolated-pg -h 127.0.0.1 -p 25428`
 const noop = async () => {}
-async function fixture(t, mode) {
+async function fixture(t, mode, wrapped = false) {
  const root = await mkdtemp(join(tmpdir(), 'restart-http-')), dbPath = join(root, 'control.sqlite')
+ const pg = wrapped ? `pwsh -NoProfile -File "${join(root, 'tasks', 'task', 'work', 'run-postgres.ps1')}" -Action serve` : String.raw`& D:\soft\PostgreSQL\16\bin\postgres.exe -D D:\agent\artifacts\isolated-pg -h 127.0.0.1 -p 25428`
  const options = { dbPath, instanceId: 'restart-http', webActorId: 'operator' }
  let store = await openDynamicTaskStore({ ...options, initialize: true }), sequence = 0
  const command = (kind, args, id = `fixture-${++sequence}`) => store.command({ id, kind, args })
@@ -104,7 +105,7 @@ async function fixture(t, mode) {
  t.after(async () => { await new Promise(resolve => server.close(resolve)); await service.close(); await resident?.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
  const body = { requestId: 'operator-isolation', reply: 'Confirm bounded source isolation; retain unknown and partial effects; no replay',
   expectedRequirementRevision: 1, expectedControlRevision: 1, nativeRestartResolutions: [{ operationId: 'operation', expectedOperationDigest: hash(operation) }] }
- return { root, store, service, facts, driver, audit, resident, binding: currentBinding, operation, command, query, post, postPath, body }
+ return { root, store, service, facts, driver, audit, resident, binding: currentBinding, operation, command, query, post, postPath, body, pg }
 }
 
 for (const mode of ['succeeded', 'scope-missing']) test('maintenance reopen through HTTP creates a current reconciliation request without replay: ' + mode, async t => {
@@ -184,12 +185,15 @@ test('real HTTP/service/ledger check is zero-write; reply is digest-bound/idempo
  audited = await f.query('operation.get', { operationId: 'operation' }); assert.equal(audited.state, 'unknown'); assert.equal(audited.job.status, 'running')
 })
 
-test('formal check prepares the existing native read-only probe without requiring a new service or claiming ready', async t => {
- const f = await fixture(t), oldHome = process.env.DSH_HOME; process.env.DSH_HOME = 'D:\\host'
+for (const wrapped of [false, true]) test('formal check/probe/reply preserves unknown and original arguments: ' + (wrapped ? 'PG wrapper' : 'direct launch'), { skip: wrapped && process.platform !== 'win32' ? 'Windows task workspace required' : false }, async t => {
+ const f = await fixture(t, undefined, wrapped), oldHome = process.env.DSH_HOME; process.env.DSH_HOME = 'D:\\host'
  t.after(() => { if (oldHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = oldHome })
  const get = f.facts.ctx.get; f.facts.ctx.get = name => name === 'nativeJobRecovery' ? undefined : get(name)
  f.body.nativeRestartResolutions[0].scopeEvidence = { hostPid: 96580, hostLogPath: 'D:\\approved\\host.oom.log', hostLogSha256: 'a'.repeat(64),
   producerScopeReviewed: true, localEffectsOnlyConfirmed: true, excludeOriginalSourcesConfirmed: true }
+ if (wrapped) f.body.nativeRestartResolutions[0].scopeEvidence.postgresWrapper = {
+  scriptSha256: 'b'.repeat(64), historicalEvidenceRef: 'retained-template-read-and-copy', pgBin: 'D:\\soft\\PostgreSQL\\16\\bin', port: 25428, ownerText: 'synthetic-task-owner',
+ }
  const response = await f.post('/check', f.body)
  assert.equal(response.status, 200, JSON.stringify(response.body)); assert.equal(response.body.writes, 0); assert.equal(response.body.ready, false)
  assert.equal(response.body.requiredScopeProbes.length, 1)
@@ -203,10 +207,11 @@ test('formal check prepares the existing native read-only probe without requirin
  assert.equal(observedExit.status, 200, JSON.stringify(observedExit.body)); assert.equal(observedExit.body.ready, false)
  const probe = observedExit.body.requiredScopeProbes[0]
  assert.deepEqual(probe.managedCall.arguments.scopeEvidence.hostExit, hostExit, 'the managed call must retain the exact reviewed exit evidence')
+ if (wrapped) assert.deepEqual(probe.managedCall.arguments.scopeEvidence.postgresWrapper, f.body.nativeRestartResolutions[0].scopeEvidence.postgresWrapper)
  assert.notEqual(probe.scriptDigest, response.body.requiredScopeProbes[0].scriptDigest)
  assert.deepEqual(await f.query('operation.get', { operationId: 'operation' }), f.operation)
  const evidence = f.body.nativeRestartResolutions[0].scopeEvidence
- const plan = restartScopeProbePlan({ command: pg, binding: isolationBinding(f.operation, 'original-call'), evidence })
+ const plan = restartScopeProbePlan({ command: f.pg, binding: isolationBinding(f.operation, 'original-call'), evidence, workspaceRoot: f.root })
  assert.equal(plan.command, probe.command)
  const observation = { schema: plan.spec.schema, specDigest: plan.specDigest, observedAt: new Date().toISOString(),
   hostFatal: false, hostLogVerified: true, hostExitObservedAt: hostExit.observedAt, providerContractVerified: true,

@@ -16,20 +16,28 @@ const digest = text => createHash('sha256').update(text).digest('hex')
 const skip = process.platform !== 'win32' ? 'Windows native pwsh required' : !available ? reason : false
 
 // 全部保留物均为新建夹具；运行的只是生产只读探针，不启动 PostgreSQL / Maven，不读取历史业务账本。
-async function fixturePlan(root, observedExit = false) {
+async function fixturePlan(root, observedExit = false, wrapper = false) {
  const startedAt = Date.now() - 60000, dshHome = join(root, 'synthetic-host')
- const source = join(root, 'retained-source'), hostLogPath = join(root, 'host.oom.log')
+ const script = join(root, 'tasks', 'probe-task', 'work', 'run-postgres.ps1')
+ const source = wrapper ? join(dirname(script), 'postgres', 'data') : join(root, 'retained-source'), hostLogPath = join(root, 'host.oom.log')
  await mkdir(source, { recursive: true })
- await writeFile(join(source, 'postmaster.pid'), `900002\n${source}\n0\n25429\n`)
+ await writeFile(join(source, 'postmaster.pid'), `900002\n${source}\n0\n${wrapper ? 25428 : 25429}\n`)
  const log = observedExit ? 'Host started; no exit cause was recorded.' : '[900001:0] FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory'
  await writeFile(hostLogPath, log)
  if (observedExit) await utimes(hostLogPath, new Date(startedAt - 10000), new Date(startedAt - 10000))
  const scopeEvidence = { hostPid: 900001, hostLogPath, hostLogSha256: digest(log),
   ...(observedExit ? { hostExit: { observedAt: new Date().toISOString(), evidenceRef: 'fixture-original-host-exit-observation' } } : {}),
   producerScopeReviewed: true, localEffectsOnlyConfirmed: true, excludeOriginalSourcesConfirmed: true }
+ if (wrapper) {
+  const content = await readFile(new URL('./fixtures/restart-postgres-wrapper.ps1', import.meta.url))
+  await writeFile(script, content); await writeFile(join(dirname(source), 'owner.txt'), 'synthetic-task-owner')
+  await writeFile(join(source, 'postmaster.opts'), `"D:/soft/PostgreSQL/16/bin/postgres.exe" "-D" "${source}" "-h" "127.0.0.1" "-p" "25428" "-c" "logging_collector=off"`)
+  await writeFile(join(source, 'postgresql.conf'), '# no external dependencies\n'); await writeFile(join(source, 'postgresql.auto.conf'), '# no overrides\n')
+  scopeEvidence.postgresWrapper = { scriptSha256: digest(content), historicalEvidenceRef: 'fixture-retained-original-script', pgBin: 'D:\\soft\\PostgreSQL\\16\\bin', port: 25428, ownerText: 'synthetic-task-owner' }
+ }
  const binding = { operationId: 'original-operation', operationDigest: 'a'.repeat(64), taskId: 'probe-task', executionId: 'original',
   sessionId: 'original-session', jobId: 'original-job', startedAt, callId: 'original-call', argumentsDigest: 'b'.repeat(64) }
- const plan = restartScopeProbePlan({ command: `& D:\\fixture\\postgres.exe -D ${source} -h 127.0.0.1 -p 25429`, binding, evidence: scopeEvidence, dshHome })
+ const plan = restartScopeProbePlan({ command: wrapper ? `pwsh -NoProfile -File "${script}" -Action serve` : `& D:\\fixture\\postgres.exe -D ${source} -h 127.0.0.1 -p 25429`, binding, evidence: scopeEvidence, dshHome, workspaceRoot: root })
  assert.ok(plan)
  const profileRoot = dirname(resolve(process.env.DSH_NATIVE_TEST_PROFILE ?? 'D:/dsh_home/profiles/web/package.json'))
  for (const file of plan.spec.providerFiles) {
@@ -42,9 +50,9 @@ async function fixturePlan(root, observedExit = false) {
  return { plan, scopeEvidence, operation: { operationId: binding.operationId, taskId: binding.taskId, job: { startedAt } } }
 }
 
-for (const observedExit of [false, true]) test(`managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader: ${observedExit ? 'observed exit' : 'OOM'}`, { skip, timeout: 60000 }, async t => {
+for (const [observedExit, wrapper] of [[false, false], [true, false], [true, true]]) test(`managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader: ${wrapper ? 'retained PG wrapper' : observedExit ? 'observed exit' : 'OOM'}`, { skip, timeout: 60000 }, async t => {
  const root = await mkdtemp(join(tmpdir(), 'native-scope-runner-'))
- const { plan, scopeEvidence, operation } = await fixturePlan(root, observedExit)
+ const { plan, scopeEvidence, operation } = await fixturePlan(root, observedExit, wrapper)
  const args = { expectedOperationDigest: plan.spec.binding.operationDigest, expectedScriptDigest: plan.scriptDigest, scopeEvidence }
  let step = 0
  const h = await nativeTaskHost(root, async () => ++step === 1 ? [{ name: restartScopeProbeToolName, args }]

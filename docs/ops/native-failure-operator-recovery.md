@@ -41,6 +41,14 @@ execution_restart_scope_probe({
 
 确认后，恢复排空使用同一审计引用，保留缺结果的历史调用。Host 拒绝重新派发同一命令摘要，并拒绝复用被保留的 PostgreSQL 数据目录。该约束覆盖本 Host 的受管操作，不是系统级 ACL；不得以该审计自动重放原命令、重启数据库或清理目录。部署必须先通过正式排空预检；若旧版预检因中断记录拒绝，不得手工改账本绕过。
 
+### 保留的 PostgreSQL 前台包装脚本
+
+原调用为当前任务工作区内的 `pwsh -File .../run-postgres.ps1 -Action serve` 时，在同一 `scopeEvidence` 增加 `postgresWrapper: { scriptSha256, historicalEvidenceRef, pgBin, port, ownerText }`。这些值来自已经核对的原脚本及历史读取/复制证据；`scriptSha256` 是原始文件字节 SHA256，不能填脱敏副本摘要。历史引用由 operator 审查，当前文件摘要本身不证明历史内容。无需改写原命令或再启动本地数据库。
+
+Host 按原调用路径及实际任务工作区绑定脚本，派发固定只读探针：解析 AST 验证参数、公共前置语句、所属标记检查及 `serve` 的前台启动/退出路径；核对脚本摘要、owner.txt、postmaster.opts、postmaster.pid、配置依赖及当前进程/端口。探针不调用包装脚本或数据库程序，尤其不执行可能建库的 `identity`。未知脚本、其他任务目录、重解析路径、配置外部依赖、身份矛盾或残留写入者继续拒绝。
+
+后续仍是既有 check → 原调查的 managedCall → 调查成功排空 → check → 带 isolationDigest 的 reply。`user/message` 和原生 inbox 输入都核执行绑定，后续 feedback 不替换输入。结算保留原 commandDigest、unknown 和 partialEffectsPossible/noReplay，并禁止从本 Host 再使用原数据目录或包装脚本（包括同任务下的相对路径）。这仅结清历史执行阻塞，不证明原实例成功，不授权复用、重启或清理；业务验证可直接使用已授权 UAT 环境。
+
 ## 安全维护切换
 
 正式双包部署工具支持可选 RestartMaintenanceProposal。缺省路径仍使用原排空门禁；维护提案不是运行态核销，也不改旧 execution 的 drained、operation/job 状态或原生日志。
