@@ -29,7 +29,13 @@ test('fixed baseline registrations, variants and helper bodies survive the physi
     assert.deepEqual(group.cases.filter(c => c.contract !== 'historical').map(c => c.originalId), keep[index])
     let helpers = baseline
     for (const node of [...original].reverse()) helpers = helpers.slice(0, node.start) + helpers.slice(node.end)
-    let actual = await readFile(join(root, group.fixture.file), 'utf8')
+    // Reviewed changes retain the original baseline and classification. Compare
+    // the pre-review helper with the split source, then check today's bytes via
+    // the independently reviewed digest in checkedContracts below.
+    let actual = group.fixture.review
+      ? execFileSync('git', ['show', `${group.fixture.review.basisCommit}:${group.fixture.file}`], { cwd: root, encoding: 'utf8' })
+      : await readFile(join(root, group.fixture.file), 'utf8')
+    assert.equal(digest(actual), group.fixture.sha256)
     const ast = parse(actual, { ecmaVersion: 'latest', sourceType: 'module' })
     const exported = ast.body.at(-1)
     assert.equal(exported.type, 'ExportNamedDeclaration')
@@ -75,6 +81,21 @@ test('import changes and new historical helper statements require review', async
   await writeFile(join(f.directory, file), "import './unreviewed-helper.js'\n" + await readFile(join(f.directory, file), 'utf8'))
   await assert.rejects(checkedContracts(f.directory), /mixed_destination_changed/)
   assert.throws(() => registrations("import test from 'node:test'; const unreviewed = 1", { strict: true }), /unreviewed_mixed/)
+})
+
+test('an explicit re-review retains original identities and rejects incomplete or mismatched evidence', async t => {
+  for (const mutation of ['wrong-origin', 'empty-reason', 'empty-evidence', 'wrong-current-digest', 'changed-classification']) await t.test(mutation, async t => {
+    const f = await fixture(t)
+    const reviewed = f.contracts.groups.flatMap(group => group.cases).find(item => item.review)
+    assert.ok(reviewed, 'release recovery must keep an explicit review of the changed input fixture')
+    if (mutation === 'wrong-origin') reviewed.review.fromSha256 = '0'.repeat(64)
+    if (mutation === 'empty-reason') reviewed.review.reason = ''
+    if (mutation === 'empty-evidence') reviewed.review.evidence = []
+    if (mutation === 'wrong-current-digest') reviewed.review.sha256 = '0'.repeat(64)
+    if (mutation === 'changed-classification') reviewed.contract = 'historical'
+    await f.save()
+    await assert.rejects(checkedContracts(f.directory), /mixed_/)
+  })
 })
 
 test('a classified destination cannot disappear from the runnable discovery set', async t => {
