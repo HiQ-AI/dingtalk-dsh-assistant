@@ -108,18 +108,27 @@ test('原生HTTP精确退役历史纯观察协调，check不发送且工作终�
 test('即时进度询问经原生路由与query工具一次答复四项任务，恢复不唤醒或重发',
   { skip: !available ? reason : false, timeout: 30000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'instant-task-progress-'))
-    let host, ownerCalls = 0
+    let host, ownerCalls = 0, queryTurns = 0, modelSteps = 0
     const taskIds = []
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
     host = await nativeTaskHost(root, request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      assert.ok(++modelSteps <= 40, JSON.stringify({ error: 'unexpected progress setup loop', tools: host.toolResults.slice(-2) }))
+      if (input.trigger === 'task-facts' || input.requestId?.startsWith('coord-summary-')) return topicTaskCalls(request)
       if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
         routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
           units: [{ unitKey: 'progress', summary: '查询导入事项进度', sourceRefs: [{ quote: message.text }],
-            dispatchOwner: 'coordination', topics: [], reason: '多个现有任务即时只读查询' }] })) } }]
-      if (names.includes('coordination_submit')) {
-        assert.equal(input.tasks.length, 4)
-        return [{ name: 'coordination_submit', args: { kind: 'query', taskIds } }]
+            topics: [{ newTopicKey: 'progress', title: '导入事项进度查询' }], reason: '多个现有任务即时只读查询' }] })) } }]
+      if (names.includes('group_decision_submit') && input.messages?.some(message => message.messageId === 'progress')) {
+        assert.ok(++queryTurns <= 12, JSON.stringify({ error: 'unexpected query model loop', tools: host.toolResults.slice(-2) }))
+        const page = modelToolValues(request).find(value => value.tasks?.length === taskIds.length)
+        if (!page) return [{ name: 'group_task_context_get', args: { taskIds } }]
+        assert.deepEqual(page.tasks.map(task => task.taskId).sort(), [...taskIds].sort())
+        return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+          decision: { basisMessageIds: ['progress'], basisUnitRefs: input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })),
+            actions: [], reply: page.tasks.map(task => `${task.title}：${task.state}`).join('\n'),
+            replyToMessageId: 'progress', atOpenDingTalkIds: ['native-user'],
+            replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } } }]
       }
       const topic = topicTaskCalls(request); if (topic) return topic
       if (names.includes('task_session_submit')) {
@@ -137,8 +146,8 @@ test('即时进度询问经原生路由与query工具一次答复四项任务，
     await host.service.whenIdle()
     assert.equal(host.sent.length, 1)
     for (const task of tasks) assert.ok(host.sent[0].payload.text.includes(task.title))
-    const arrangement = (await host.query('coordination.list'))[0]
-    assert.deepEqual((await host.query('coordination.get', { coordinationId: arrangement.id })).members, [])
+    assert.deepEqual(await host.query('coordination.list'), [])
+    assert.equal(host.residentStore.getGroup('native-group').outbox[0].status, 'sent')
     assert.deepEqual(await host.query('task.list'), tasks)
     assert.deepEqual(await host.query('wake.list'), wakes)
     assert.equal(ownerCalls, calls)
@@ -370,29 +379,37 @@ const stageCases = [
 for (const stageCase of stageCases) for (const existing of [false, true]) test(`one delivery preserves arbitrary user stages: ${stageCase.name}, existing=${existing}`,
   { skip: !available ? reason : false, timeout: 20000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'single-task-stages-'))
-    let host, admitted = false, delegated = false, ownerInput
-    const prompts = { route: '', planner: '', owner: '' }
+    let host, admitted = false, delegated = false, ownerInput, stageTurns = 0
+    const prompts = { route: '', decision: '', owner: '' }
     const { objective, requirements } = stageCase
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
     host = await nativeTaskHost(root, request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      assert.ok(++stageTurns <= 24, JSON.stringify({ error: 'unexpected stage model loop', tools: host.toolResults.slice(-2) }))
+      if (input.trigger === 'task-facts' || input.requestId?.startsWith('coord-summary-')) return topicTaskCalls(request)
       if (names.includes('group_topic_route_submit')) {
         prompts.route = JSON.stringify(request)
         return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
           routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion,
             ignoredRefs: [], units: [{ unitKey: 'delivery', summary: objective, sourceRefs: [{ quote: message.text }],
-              dispatchOwner: 'coordination', topics: [], reason: '一个完整交付目标' }] })) } }]
+              topics: [{ newTopicKey: 'delivery', title: '完整阶段交付' }], reason: '一个完整交付目标' }] })) } }]
       }
-      if (names.includes('coordination_submit')) {
-        prompts.planner = JSON.stringify(request)
-        const full = modelToolValues(request).find(value => value.taskContexts?.some(task => task.taskId === 'original'))
-        if (existing && !full) return [{ name: 'coordination_context_get', args: { taskIds: ['original'] } }]
-        const task = full?.taskContexts.find(task => task.taskId === 'original')
+      if (names.includes('group_decision_submit')) {
+        prompts.decision = JSON.stringify(request)
+        const full = modelToolValues(request).find(value => value.tasks?.some(task => task.taskId === 'original'))
+        if (existing && !full) return [{ name: 'group_task_context_get', args: { taskIds: ['original'] } }]
+        const task = full?.tasks.find(task => task.taskId === 'original')
+        const topicRefs = [{ topicId: input.topicId, revision: input.revision }]
+        const basisUnitRefs = input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
         admitted = true
-        return [{ name: 'coordination_submit', args: { kind: 'arrangement', members: [existing
-          ? { action: 'task-context', taskId: task.taskId, inputVersion: task.requirementRevision, runSequence: task.runSequence,
-              progressImpact: 'replan', impactReason: '明确补齐后续交付范围', context: objective, objective, requirements }
-          : { action: 'new-task', creationKey: 'delivery-X', title: '需求X交付', objective, requirements }] } }]
+        return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: {
+          basisMessageIds: ['stages'], basisUnitRefs, actions: [existing
+            ? { kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
+                progressImpact: 'replan', context: objective, objective, acceptanceCriteria: requirements, topicRefs, basisUnitRefs }
+            : { kind: 'new-task', title: '完整阶段交付', objective, acceptanceCriteria: requirements, topicRefs, basisUnitRefs }],
+          reply: '已将全部指定阶段交给同一任务继续处理。', replyToMessageId: 'stages', atOpenDingTalkIds: ['native-user'],
+          replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
+        } } }]
       }
       const topic = topicTaskCalls(request); if (topic) return topic
       if (names.includes('task_session_submit')) {
@@ -410,7 +427,7 @@ for (const stageCase of stageCases) for (const existing of [false, true]) test(`
       if (names.includes('execution_submit')) return [{ name: 'execution_submit', args: { output: {
         status: 'completed', summary: requirements[0], evidence: ['synthetic-first-stage'], limitations: requirements.slice(1), artifacts: [] } } }]
       return []
-    }, { config: { coordination: model } })
+    })
     if (existing) await host.service.store.command({ id: 'original-create', kind: 'task.create',
       args: { taskId: 'original', groupId: 'native-group', ownerActorId: 'native-user', request: requirements[0] } })
     if (existing) { await host.service.recover(); await host.service.whenIdle() }
@@ -419,8 +436,8 @@ for (const stageCase of stageCases) for (const existing of [false, true]) test(`
     await host.service.whenIdle()
     const tasks = await host.query('task.list')
     assert.match(prompts.route, /任意用户指定阶段/)
-    assert.match(prompts.planner, /不按内部阶段分别生成new-task/)
-    assert.match(prompts.planner, /不得套用默认阶段模板/)
+    assert.match(prompts.decision, /不按内部阶段分别生成new-task/)
+    assert.match(prompts.decision, /不得套用默认阶段模板/)
     assert.match(prompts.owner, /阶段执行结果仅为证据/)
     assert.equal(tasks.length, 1, JSON.stringify(host.service.listAlerts()))
     const task = tasks[0]

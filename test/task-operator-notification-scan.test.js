@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { available, reason, nativeTaskHost, latestInput, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
 
 for (const scenario of ['stale-snapshot', 'late-readback-error', 'recall-error']) test(`已送达通知收敛且保留撤回失败: ${scenario}`, { timeout: 5000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'notification-delivered-scan-'))
@@ -130,30 +130,57 @@ for (const scenario of ['recalled', 'not-due', 'no-adapter', 'due', 'expired-cla
   assert.equal(taskReads, ['due', 'expired-claim'].includes(scenario) ? 1 : 0, 'ineligible recalls must not perform task reads or occupy transport slots')
 })
 
-test('协调通知提交后即可发送，不等待同群下一条慢规划或恢复轮询', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+test('话题通知提交后即可发送，不等待同群另一独立事项的慢决策或恢复轮询', { skip: !available ? reason : false, timeout: 20000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'notification-plan-wake-'))
-  const slowRelease = Promise.withResolvers()
-  let host, slowFinished = false, slowStarted = false
-  t.after(async () => { slowRelease.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
+  const slowRelease = Promise.withResolvers(), sendRelease = Promise.withResolvers(), sent = []
+  let host, slowFinished = false, slowStarted = false, decisionTurns = 0
+  t.after(async () => { sendRelease.resolve(); slowRelease.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
   host = await nativeTaskHost(root, async request => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
     if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
       routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
-        units: ['测试助手，第一条；', '第二条'].map(quote => ({ unitKey: quote, summary: quote, sourceRefs: [{ quote }], dispatchOwner: 'coordination', topics: [], reason: '独立安排' })) })) } }]
-    if (names.includes('coordination_submit')) {
-      if (input.source.unitText.includes('第二条')) { slowStarted = true; await slowRelease.promise; slowFinished = true }
-      return [{ name: 'coordination_submit', args: { kind: 'clarify', question: `${input.source.unitText}需要的内容`, candidates: [] } }]
+        units: [{ unitKey: message.messageId, summary: message.text, sourceRefs: [{ quote: message.text }],
+          topics: [{ newTopicKey: message.messageId, title: message.text }], reason: '不同业务对象，各自需要明确材料' }] })) } }]
+    if (names.includes('group_decision_submit')) {
+      assert.ok(++decisionTurns <= 12, JSON.stringify({ error: 'unexpected decision model loop', tools: host.toolResults.slice(-2) }))
+      const second = input.messages.some(message => message.unitText?.includes('第二件') || message.text?.includes('第二件'))
+      if (second) { slowStarted = true; await slowRelease.promise; slowFinished = true }
+      const review = modelToolValues(request).find(value => Array.isArray(value.candidates))
+      if (input.replyReviewCandidateCount && !review) return [{ name: 'group_reply_review_get', args: {} }]
+      return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+        decision: { basisMessageIds: [...new Set(input.messages.map(message => message.messageId))],
+          basisUnitRefs: input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), actions: [],
+          reply: second ? '第二件事项请补充对应材料。' : '第一件事项请补充对应材料。',
+          replyToMessageId: input.messages.at(-1).messageId, atOpenDingTalkIds: ['native-user'],
+          replyReview: { kind: 'substantive', reviewedOutboundIds: review?.candidates.map(item => item.outboundId) ?? [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } } }]
     }
     return topicTaskCalls(request) ?? []
-  }, { config: { coordination: { enabled: true, provider: 'native-task-test', model: 'controlled' } } })
-  await host.service.ingest({ groupId: 'native-group', messageId: 'source', senderOpenDingTalkId: 'native-user',
-    text: '测试助手，第一条；第二条', timestamp: new Date().toISOString() })
-  await waitUntil(() => slowStarted, '下一条规划已挂起', 4000).catch(error => { throw new Error(`${error.message}: ${JSON.stringify(host.service.listAlerts())}`) })
+  }, { notifications: {
+    async send(notification) {
+      sent.push(structuredClone(notification))
+      if (sent.length === 1) await sendRelease.promise
+      return { messageId: 'actual-topic-notice-' + sent.length }
+    },
+    async readback(notification) { return { visible: true, messageId: notification.ack.messageId } },
+  } })
+  const ingest = (messageId, text) => host.service.ingest({ groupId: 'native-group', messageId,
+    senderOpenDingTalkId: 'native-user', text, timestamp: new Date().toISOString() })
+  await ingest('first-matter', '测试助手，第一件独立事项')
+  await waitUntil(() => sent.length === 1, '第一条回复已准备并取得发送许可', 4000)
+  await ingest('second-matter', '测试助手，第二件独立事项')
+  await waitUntil(() => slowStarted, '另一独立事项的决策已挂起', 4000).catch(error => { throw new Error(`${error.message}: ${JSON.stringify(host.service.listAlerts())}`) })
+  sendRelease.resolve()
   await waitUntil(async () => (await host.query('notification.list')).some(item => item.state === 'delivered'), '第一条通知独立送达', 2000)
+    .catch(error => { throw new Error(JSON.stringify({ error: error.message, tools: host.toolResults.slice(-5), notifications: sent, alerts: host.service.listAlerts() })) })
   assert.equal(slowFinished, false)
-  assert.equal(host.sent.length, 1)
+  assert.equal(sent.length, 1)
   slowRelease.resolve()
   await host.service.whenIdle()
+  assert.equal(sent.length, 2)
+  assert.deepEqual(await host.query('task.list'), [])
+  assert.equal((await host.query('notification.list')).every(item => item.kind === 'topic-reply' && item.state === 'delivered'), true)
+  await host.service.recover(); await host.service.whenIdle()
+  assert.equal(sent.length, 2, '恢复不能重发已送达的独立事项回复')
 })
 
 for (const firstOutcome of ['delivered', 'unknown', 'rate-limited']) test(`通知释放串行槽后自动递进并保留发送边界: ${firstOutcome}`,
