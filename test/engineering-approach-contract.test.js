@@ -46,7 +46,9 @@ test('真实 Git add/checkout 在两种 autocrlf 设置下保留发行字节',as
   await writeFile(file,await readFile(join(workspace,sourcePath)))
   git('add','--','.gitattributes',sourcePath);await unlink(file);git('checkout','--',sourcePath)
   // 只复制真实导入依赖；摘要仅约束本次冻结合同，不固定其它实现。
-  for(const name of ['execution-artifacts.js','session-workspaces.js'])await writeFile(join(dirname(file),name),await readFile(join(workspace,'packages/dingtalk-dsh-assistant',name)))
+  for(const name of ['execution-artifacts.js','session-workspaces.js','observer-artifact-pages.js','artifact-json.js',
+   'node-output-readout.js','workflow-notifications.js','group-message.js','execution-check-job.js','execution-candidate.js','execution-local-acceptance.js'])
+   await writeFile(join(dirname(file),name),await readFile(join(workspace,'packages/dingtalk-dsh-assistant',name)))
   assert.deepEqual(hashes(await readFile(file),await import(pathToFileURL(file))),releaseHashes)
  })
 })

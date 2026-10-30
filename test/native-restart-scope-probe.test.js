@@ -86,7 +86,7 @@ test('wrapper isolation binds the original command and task; identity and arbitr
  } finally { if (oldHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = oldHome }
 })
 
-test('actual PowerShell AST verifies serve preamble without executing database identity or prepare', () => {
+test('actual PowerShell AST verifies serve preamble without executing database identity or prepare', t => {
  const scope = postgresWrapperScope(wrapperCommand, wrapperEvidence, { taskId: 'task' }, 'D:\\agent')
  const cases = [
   [wrapperScript, true], [wrapperScript.replaceAll('\n', '\r\n'), true],
@@ -99,7 +99,11 @@ test('actual PowerShell AST verifies serve preamble without executing database i
  ]
  const encoded = Buffer.from(JSON.stringify({ scope, cases })).toString('base64')
  const script = postgresWrapperInspection + `\n$fixture=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))|ConvertFrom-Json\n@($fixture.cases|ForEach-Object { try { Assert-PgServeScript $_[0] $fixture.scope; $true } catch { $false } })|ConvertTo-Json -Compress`
- const output = execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' })
+ const root = mkdtempSync(join(tmpdir(), 'pg-wrapper-ast-'))
+ t.after(() => rmSync(root, { recursive: true, force: true }))
+ const scriptPath = join(root, 'verify.ps1')
+ writeFileSync(scriptPath, script)
+ const output = execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', scriptPath], { encoding: 'utf8' })
  assert.deepEqual(JSON.parse(output), cases.map(row => row[1]))
 })
 
