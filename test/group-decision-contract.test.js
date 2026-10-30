@@ -33,6 +33,7 @@ test('决策公开契约保留 reply / reason 互斥，原生 DSH 与 Zod 均接
   const decisions = [
     { ...basis, actions: [], reply: '收到，我会核对。' },
     { ...basis, actions: [], reason: '该消息无需代理回复或动作。' },
+    { ...basis, actions: [actions[1]], reason: '本来源由另一 Topic 统一确认；Host 仍核验回复归属。' },
     ...actions.map((action) => ({ ...basis, actions: [action], reply: '' })),
     { ...basis, actions: [actions[1]], reply: '我会排查原因。', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } },
   ]
@@ -74,7 +75,6 @@ test('DSH 不支持的长度关系仍由 Zod 严格执行并指明空回复问�
   for (const decision of [
     { ...basis, actions: [], reply: '' },
     { ...basis, actions: [], reason: '' },
-    { ...basis, actions: [actions[1]], reason: '不得带任务动作' },
   ]) assert.equal(groupDecisionSchema.safeParse(decision).success, false)
   const result = groupDecisionSchema.safeParse({ ...basis, actions: [], reply: '' })
   assert.deepEqual(result.error.issues[0].path, ['reply'])

@@ -31,7 +31,10 @@ export function messageProcessingProjection(message, topics, source, requests, s
   })
   const issues = [], recovery = []
   const issue = (phase, code, status, requestId, attempt, retryAt, cause) => {
-    if (!issues.some(item => item.phase === phase && item.requestId === requestId)) issues.push({ phase, code, status, requestId, attempt: attempt ?? 0, retryAt: retryAt ?? null, ...(cause ? { cause } : {}) })
+    // Only the two public recovery hints need a specific Host cause. Keep raw
+    // diagnostics in the decision ledger, not the message-list projection.
+    const publicCause = ['DYNAMIC_TASK_NOT_ACTIVE', 'DYNAMIC_OPERATION_UNRESOLVED'].includes(cause) ? cause : null
+    if (!issues.some(item => item.phase === phase && item.requestId === requestId)) issues.push({ phase, code, status, requestId, attempt: attempt ?? 0, retryAt: retryAt ?? null, ...(publicCause ? { cause: publicCause } : {}) })
   }
   // Only current, unfinished owners can fail a message; group delivery errors are not ownership evidence.
   for (const request of requests) {

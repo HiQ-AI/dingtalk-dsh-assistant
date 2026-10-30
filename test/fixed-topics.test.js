@@ -266,7 +266,13 @@ for (const mentionedAgent of [true, false, undefined]) test('out-of-scope fixed 
   f.handler.schedule('g'); await f.handler.whenIdle()
   assert.equal(f.created.length, 0)
   assert.equal(f.replies.length, mentionedAgent === true ? 1 : 0)
-  if (mentionedAgent) { assert.equal(f.replies[0].text, '这个不是我负责哦'); assert.equal(f.replies[0].replyToMessageId, 'm'); assert.equal(f.replies[0].replyToSenderOpenDingTalkId, 'actor') }
+  if (mentionedAgent) {
+    assert.equal(f.replies[0].text, '这个不是我负责哦')
+    assert.deepEqual(f.replies[0].sourceRef, { messageId: 'm', actorId: 'actor', messageVersion: 1 })
+    assert.deepEqual(f.replies[0].atOpenDingTalkIds, ['actor'])
+    assert.equal(f.replies[0].replyToMessageId, undefined)
+    assert.equal(f.replies[0].replyToSenderOpenDingTalkId, undefined)
+  }
   assert.equal(f.store.getGroup('g').topics.length, 0)
   assert.equal(f.store.getGroup('g').messages[0].agentDeliveryStatus, 'delivered')
   assert.deepEqual(f.errors, [])
@@ -295,7 +301,7 @@ for (const state of ['running', 'completed']) test('platform full-access session
       if (state === 'completed') { assert.equal(page.range.localDate, '2026-10-27'); assert.equal(page.range.endExclusive, '2026-10-28 00:00:00') }
       args = page.nextCall?.arguments
     } while (args)
-    await tools.get('platform_reply_submit').execute({ text: `本群有${seen}项。` }, exec)
+    await tools.get('platform_reply_submit').execute({ text: `本群有${seen}项。`, atOpenDingTalkIds: ['actor'] }, exec)
   } })
   await f.route('现在有哪些任务', [unit('platform', '现在有哪些任务', 'agent-platform')])
   f.handler.schedule('g'); await f.handler.whenIdle(); f.handler.schedule('g'); await f.handler.whenIdle()
@@ -309,7 +315,7 @@ test('platform empty list uses host permissions and needs no business task', asy
     const page = tools.get('platform_task_query').execute({ state: 'running' }, exec)
     assert.equal(page.total, 0); assert.equal(page.hasMore, false); assert.equal(page.complete, true)
     await assert.rejects(tools.get('platform_reply_submit').execute({ text: '' }, exec), /platform_reply_empty/)
-    await tools.get('platform_reply_submit').execute({ text: '当前没有执行中任务。' }, exec)
+    await tools.get('platform_reply_submit').execute({ text: '当前没有执行中任务。', atOpenDingTalkIds: ['actor'] }, exec)
   } })
   await f.route('告诉我运行列表', [unit('platform', '告诉我运行列表', 'agent-platform')])
   f.handler.schedule('g'); await f.handler.whenIdle()
@@ -325,7 +331,7 @@ for (const expiredReminder of [false, true]) test('platform overdue request expl
     assert.equal(input.asOf, '2026-10-28T00:30:00.000Z')
     assert.equal(input.timezone, 'Asia/Shanghai')
     if (!expiredReminder) tools.get('platform_task_query').execute({ state: 'completed', day: 'today' }, exec)
-    const result = await tools.get('platform_reply_submit').execute({ text: expiredReminder ? null : '现于 08:30 补报，较约定延迟 20 分钟：当前范围没有完成记录。' }, exec)
+    const result = await tools.get('platform_reply_submit').execute({ text: expiredReminder ? null : '现于 08:30 补报，较约定延迟 20 分钟：当前范围没有完成记录。', atOpenDingTalkIds: ['actor'] }, exec)
     assert.equal(result.status, expiredReminder ? 'expired' : 'accepted')
   } })
   await f.route(text, [unit('timed', text, 'agent-platform')])
@@ -340,7 +346,7 @@ for (const expiredReminder of [false, true]) test('platform overdue request expl
 })
 
 test('mixed source units keep business topic pending while fixed units finish', async t => {
-  const f = await fixture(t, { decide: async ({ tools, exec }) => tools.get('platform_reply_submit').execute({ text: '本群列表暂无记录。' }, exec) })
+  const f = await fixture(t, { decide: async ({ tools, exec }) => tools.get('platform_reply_submit').execute({ text: '本群列表暂无记录。', atOpenDingTalkIds: ['actor'] }, exec) })
   await f.route('查任务；买咖啡；修复UPR', [unit('platform', '查任务；', 'agent-platform'), unit('outside', '买咖啡；', 'out-of-scope'),
     { unitKey: 'business', summary: '修复UPR', sourceRefs: [{ quote: '修复UPR' }], topics: [{ newTopicKey: 'upr', title: 'UPR修复' }] }])
   f.handler.schedule('g'); await f.handler.whenIdle()

@@ -429,12 +429,12 @@ test('多依据普通回复应指向语义接收人而非最后解释者', async
   assert.deepEqual(replies[0].atOpenDingTalkIds, ['user-a'])
 })
 
-test('普通回复只接受固定Topic真人来源及唯一参与者收件人', async t => {
+test('普通回复只接受固定Topic真人来源及受信参与者收件人', async t => {
   for (const [label, routing, error] of [
     ['缺少目标', { replyToMessageId: undefined }, /group_reply_routing_required/],
     ['目标不在话题', { replyToMessageId: 'other-group-message' }, /group_reply_routing_required|group_reply_target_not_in_topic/],
     ['收件人不在话题', { replyToMessageId: 'source-a', atOpenDingTalkIds: ['other-group-user'] }, /group_reply_recipient_not_in_topic/],
-    ['重复收件人', { replyToMessageId: 'source-a', atOpenDingTalkIds: ['user-a', 'user-a'] }, /group_reply_recipient_not_in_topic/],
+    ['引用作者不在收件集合', { replyToMessageId: 'source-a', atOpenDingTalkIds: [] }, /group_reply_quote_author_not_in_recipients/],
   ]) {
     await t.test(label, async t => {
       const h = await setup(t)
@@ -448,19 +448,20 @@ test('普通回复只接受固定Topic真人来源及唯一参与者收件人', 
   }
 })
 
-test('普通回复省略或明确空收件人时默认提及目标作者', async t => {
-  for (const [label, recipients] of [['省略', undefined], ['空数组', []]]) {
+test('引用默认通知作者、重复身份去重，明确空收件人仅普通消息可用', async t => {
+  for (const [label, recipients, quoted, expected] of [['省略', undefined, true, ['user-a']],
+    ['重复身份', ['user-a', 'user-a'], true, ['user-a']], ['空数组普通消息', [], false, []]]) {
     await t.test(label, async t => {
       const h = await setup(t)
       await ingest(h, 'source-a', { senderOpenDingTalkId: 'user-a' })
       await ingest(h, 'source-b', { senderOpenDingTalkId: 'user-b' })
       const choices = { 'source-a': { newTopicKey: 'same', title: '核对' }, 'source-b': { newTopicKey: 'same', title: '核对' } }
       const request = (await route(h, choices)).pendingDecisions[0]
-      const result = await h.call('group_decision_submit', submission(request, { basisMessageIds: ['source-a', 'source-b'], reply: '收到。', replyToMessageId: 'source-a', atOpenDingTalkIds: recipients }))
+      const result = await h.call('group_decision_submit', submission(request, { basisMessageIds: ['source-a', 'source-b'], reply: '收到。', replyToMessageId: quoted ? 'source-a' : undefined, atOpenDingTalkIds: recipients }))
       assert.equal(result.status, 'accepted')
       await h.coordinator.drain('g')
-      assert.equal(h.store.getGroup('g').outbox[0].replyToMessageId, 'source-a')
-      assert.deepEqual(h.store.getGroup('g').outbox[0].atOpenDingTalkIds, ['user-a'])
+      assert.equal(h.store.getGroup('g').outbox[0].replyToMessageId, quoted ? 'source-a' : undefined)
+      assert.deepEqual(h.store.getGroup('g').outbox[0].atOpenDingTalkIds ?? [], expected)
     })
   }
 })
@@ -2476,7 +2477,7 @@ test('结构校验一次返回全部引用歧义及字段位置，整批零副�
 })
 
 async function quotedReminderRouting(t, quotedReminderContext) {
-  const h = await setup(t, { quotedReminderContext })
+  const h = await setup(t, { quotedReminderContext, fixedTopicsEnabled: true })
   await ingest(h, 'reminder-catalog-seed')
   const topics = Array.from({ length: 34 }, (_, index) => ({ newTopicKey: `history-${index}`, title: `历史事项${index}`, relationship: 'affected', reason: '历史关系' }))
   await h.store.routeMessages({ groupId: 'g', routeId: 'reminder-seed', routingRevision: 0,
@@ -2509,12 +2510,13 @@ test('引用提醒内的新业务仍可按需查目录并拆成独立事项，�
   assert.deepEqual(request.topics, [])
   assert.equal((await h.call('group_topic_list', { query: '登录失败' })).topics.length, 0)
   const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'quoted-mixed', messageVersion: 1, ignoredRefs: [], units: [
-    { unitKey: 'reminder-change', summary: '提醒提前三分钟', sourceRefs: [{ quote: '提前三分钟。' }], dispatchOwner: 'coordination', topics: [], reason: '独立提醒订正' },
+    { unitKey: 'reminder-change', summary: '提醒提前三分钟', sourceRefs: [{ quote: '提前三分钟。' }], fixedTopic: 'agent-platform', topics: [], reason: '平台提醒变更请求独立处理' },
     { unitKey: 'login-investigation', summary: '登录失败排查', sourceRefs: [{ quote: '另外查一下登录失败。' }], topics: [{ newTopicKey: 'login', title: '登录失败排查' }] },
   ] }] })
   assert.equal(result.status, 'accepted', JSON.stringify(result))
-  const ownership = h.store.listSourceDispatchOwnership('g').filter(item => item.sourceSnapshot.messageId === 'quoted-mixed')
-  assert.equal(ownership.filter(item => item.dispatchOwner === 'coordination').length, 1)
+  const units = h.store.getGroup('g').messages.find(item => item.messageId === 'quoted-mixed').units
+  assert.equal(units.filter(item => item.fixedTopic === 'agent-platform').length, 1)
+  assert.equal(units.filter(item => item.dispatchOwner === 'coordination').length, 0)
   assert.equal(h.store.getGroup('g').topics.length, 35)
 })
 
@@ -2570,7 +2572,7 @@ test('引用关联等待期间版本变化只重建原批次，新增消息不�
   assert.deepEqual(request.messages.map(item => [item.messageId, item.messageVersion]), [['quoted-enrichment', 2]])
   const accepted = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'quoted-enrichment', messageVersion: 2,
     ignoredRefs: [], units: [{ unitKey: 'change', summary: '提醒提前三分钟', sourceRefs: [{ quote: original.text }],
-      dispatchOwner: 'coordination', topics: [], reason: '提醒订正' }] }] })
+      fixedTopic: 'agent-platform', topics: [], reason: '平台提醒变更请求' }] }] })
   assert.equal(accepted.status, 'accepted')
   assert.deepEqual(h.envelope('[GROUP_TOPIC_ROUTE]').messages.map(item => item.messageId), ['later-independent'])
   assert.equal(h.errors.length, 0)

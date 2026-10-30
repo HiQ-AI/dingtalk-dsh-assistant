@@ -97,8 +97,8 @@ test('收发恢复HTTP要求本机身份、严格版本及CAS，拒绝伪造路�
     assert.equal(calls.length, 0)
     assert.equal((await post(path, input)).status, 200)
     assert.deepEqual(calls.pop(), { ...input, groupId: 'g/a', messageId: 'm+b' })
-    assert.equal((await post(path, { ...input, phase: 'coordination-context' })).status, 200)
-    assert.deepEqual(calls.pop(), { ...input, phase: 'coordination-context', groupId: 'g/a', messageId: 'm+b' })
+    assert.equal((await post(path, { ...input, phase: 'coordination-context' })).status, 400)
+    assert.equal(calls.length, 0, 'retired source recovery cannot dispatch through the current retry endpoint')
     assert.equal((await post(notice, { expectedToken: token })).status, 200)
     assert.deepEqual(calls.pop(), { expectedToken: token, groupId: 'g/a', notificationId: 'n+b' })
     for (const code of ['MESSAGE_RETRY_STALE', 'MESSAGE_RETRY_IN_PROGRESS', 'TASK_NOTIFICATION_RECOVERY_FORBIDDEN', 'DYNAMIC_NOTIFICATION_RECOVERY_STALE']) {
@@ -142,6 +142,13 @@ test('当前精确请求耗尽与Host阻塞失败，不把共享群故障、旧�
     topic.decisions = [{ decisionId: 'host', revision: 3, status: 'blocked', attempt: 3, error: 'sensitive-private-text', decision: { basisUnitRefs: [ref] } }]
     result = await read(); assert.equal(result.processingState, 'failed'); assert.equal(result.processingFacts.issues[0].phase, 'host')
     assert.equal(JSON.stringify(result.processingFacts).includes('sensitive-private-text'), false)
+    assert.equal(result.processingFailureCode, null)
+    for (const code of ['DYNAMIC_TASK_NOT_ACTIVE', 'DYNAMIC_OPERATION_UNRESOLVED']) {
+      topic.decisions[0].error = code
+      const projected = await read()
+      assert.equal(projected.processingFailureCode, code)
+      assert.equal(projected.processingFacts.issues[0].cause, code)
+    }
     topic.decisions[0].status = 'failed'; topic.decisions[0].nextRetryAt = '2026-10-26T00:11:00Z'
     result = await read(); assert.equal(result.processingState, 'processing'); assert.equal(result.processingFacts.issues[0].status, 'retrying')
     topic.decisions[0].status = 'completed'; topic.decisions[0].updatedAt = '2026-10-26T00:12:00Z'; topic.processedRevision = 3
@@ -156,62 +163,72 @@ test('当前精确请求耗尽与Host阻塞失败，不把共享群故障、旧�
   }, { overrides: { listGroups: () => [group], listTopics: () => topics, messageProcessingRequests: () => requests } })
 })
 
-test('协调来源耗尽只影响当前事项，恢复成功与通知失败各自独立', async () => {
+test('Topic来源耗尽只影响当前事项，退役协调记录和通知失败不污染恢复', async () => {
   const ref = { unitId: 'u', unitRevision: 2 }
-  const message = { messageId: 'm', messageVersion: 2, routingStatus: 'routed', activeUnitRefs: [ref], units: [{ ...ref, dispatchOwner: 'coordination' }] }
+  const message = { messageId: 'm', messageVersion: 2, routingStatus: 'routed', activeUnitRefs: [ref], units: [{ ...ref, dispatchOwner: 'legacy-topic' }] }
   const coordination = { ...ref, reservationId: 'r', generation: 1, state: 'reserved', attempt: 3, nextRetryAt: null }
   const source = { groupId: 'g', messageId: 'm', version: 2, sourceId: 's', routed: false, coordination: [coordination], notifications: [{ notificationId: 'n', state: 'failed' }] }
+  const entry = { ...ref, messageId: 'm', messageVersion: 2, revision: 1, action: 'add' }
+  const topic = { topicId: 't', revision: 1, processedRevision: 0, entries: [entry], decisions: [] }
+  const request = { requestId: 'current', groupId: 'g', topicId: 't', revision: 1, status: 'exhausted', attempt: 3, messages: [{ messageId: 'm', messageVersion: 2, ...ref }] }
   await withServer(false, async base => {
     const read = async () => (await (await fetch(base + '/state/groups')).json())[0].messages[0]
     assert.equal((await read()).processingState, 'failed')
-    coordination.attempt = 1; coordination.nextRetryAt = '2026-10-26T00:01:00Z'
+    request.status = 'pending'; request.attempt = 1; request.nextRetryAt = '2026-10-26T00:01:00Z'
     assert.equal((await read()).processingState, 'processing')
-    coordination.attempt = 3; coordination.nextRetryAt = null; coordination.state = 'accepted'
+    request.status = 'completed'; delete request.nextRetryAt
     assert.equal((await read()).processingState, 'processing', 'accepted does not create a semantic timestamp')
     coordination.state = 'reserved'; coordination.resolved = true; assert.equal((await read()).processingState, 'processing')
     coordination.resolved = false; coordination.unitRevision = 1; assert.equal((await read()).processingState, 'processing')
-    coordination.unitRevision = 2; source.processingCompleted = { at: '2026-10-26T00:02:00Z', activeUnitRefs: [ref] }
+    coordination.unitRevision = 2
+    topic.processedRevision = 1
+    topic.decisions = [{ decisionId: 'done', revision: 1, status: 'completed', completedAt: '2026-10-26T00:02:00Z', decision: { basisUnitRefs: [ref], reason: '已核对，无需任务' } }]
+    source.processingCompleted = { at: '2026-10-26T00:02:00Z', activeUnitRefs: [ref] }
     let result = await read(); assert.equal(result.processingState, 'processed'); assert.deepEqual(result.processingFacts.issues, [])
     assert.equal(result.processingFacts.notificationState, 'unconfirmed')
-    source.version = 1; result = await read(); assert.equal(result.processingState, 'processing'); assert.deepEqual(result.processingFacts.issues, [])
-  }, { overrides: { listGroups: () => [{ groupId: 'g', messages: [message] }], messageProcessingSources: async () => [source] } })
+    source.version = 1; topic.decisions = []; topic.processedRevision = 0
+    result = await read(); assert.equal(result.processingState, 'processing'); assert.deepEqual(result.processingFacts.issues, [])
+    assert.equal(result.processingFacts.sourceId, null, 'old source completion cannot settle a current unfinished topic')
+  }, { overrides: { listGroups: () => [{ groupId: 'g', messages: [message] }], listTopics: () => [topic], messageProcessingSources: async () => [source], messageProcessingRequests: () => [request] } })
 })
 
-test('待澄清展示真实问题并保留本轮语义耗时，混合待办和旧版本不能冒充当前完成', async () => {
+test('Topic澄清保留真实问题及本轮语义耗时，混合待办和旧版本不能冒充当前完成', async () => {
   const ref = { unitId: 'deploy', unitRevision: 1 }, other = { unitId: 'other', unitRevision: 1 }
   const message = { messageId: 'm', messageVersion: 1, routingStatus: 'routed', text: '部署到UAT2', occurredAt: '2026-10-27T04:15:53.180Z',
-    activeUnitRefs: [ref], units: [{ ...ref, dispatchOwner: 'coordination' }] }
-  const coordination = { ...ref, state: 'needs_clarification', semanticState: 'needs_clarification', conclusion: '要将哪项改动部署到UAT2？' }
+    activeUnitRefs: [ref], units: [{ ...ref, dispatchOwner: 'legacy-topic' }] }
+  const decision = { basisUnitRefs: [ref], reply: '要将哪项改动部署到UAT2？', actions: [] }
+  const entry = { ...ref, messageId: 'm', messageVersion: 1, revision: 1, action: 'add' }
+  const topic = { topicId: 't', revision: 1, processedRevision: 1, entries: [entry], decisions: [{ decisionId: 'question', revision: 1, status: 'completed', completedAt: '2026-10-27T04:17:24.539Z', decision }] }
   const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 1, routed: false,
-    processingCompleted: { at: '2026-10-27T04:17:24.539Z', activeUnitRefs: [ref] }, coordination: [coordination] }
+    processingCompleted: { at: '2026-10-27T04:17:24.539Z', activeUnitRefs: [ref] } }
   await withServer(false, async base => {
     const read = async () => (await (await fetch(base + '/state/groups')).json())[0].messages[0]
     let row = await read()
-    assert.equal(row.processingState, 'needs_clarification'); assert.equal(row.processingConclusion, coordination.conclusion)
+    assert.equal(row.processingState, 'processed'); assert.equal(row.processingConclusion, decision.reply)
     assert.equal(row.processingFacts.semantic.durationMs, 91359); assert.equal(row.processingFacts.sourceState, 'unsettled')
-    coordination.reservationId = 'original-reservation'; coordination.contextRecoveryToken = 'c'.repeat(64)
-    assert.deepEqual((await read()).processingFacts.recovery, [{ phase: 'coordination-context', requestId: 'original-reservation', token: 'c'.repeat(64) }])
-    delete coordination.contextRecoveryToken
+    source.coordination = [{ ...ref, reservationId: 'old', contextRecoveryToken: 'c'.repeat(64), state: 'needs_clarification', conclusion: 'obsolete question' }]
+    assert.deepEqual((await read()).processingFacts.recovery, [], 'retired coordination recovery cannot be offered for the current Topic')
     const done = row.processingCompletedAt
     const semanticStamp = source.processingCompleted
     source.processingCompleted = null
-    row = await read(); assert.equal(row.processingState, 'needs_clarification'); assert.equal(row.processingConclusion, coordination.conclusion)
+    row = await read(); assert.equal(row.processingState, 'processed'); assert.equal(row.processingConclusion, decision.reply)
     assert.equal(row.processingCompletedAt, null); assert.equal(row.processingFacts.semantic.quality, 'missing')
     source.processingCompleted = semanticStamp
     source.notifications = [{ state: 'delivered', versionMatched: true, deliveredAt: '2026-10-27T04:20:09.644Z' }]
     assert.equal((await read()).processingCompletedAt, done, '送达不能改变语义耗时')
-    message.activeUnitRefs.push(other); message.units.push({ ...other, dispatchOwner: 'coordination' })
-    row = await read(); assert.equal(row.processingState, 'processing'); assert.equal(row.processingConclusion, coordination.conclusion)
-    assert.equal(row.processingCompletedAt, null, '其他事项尚未判断，不能冒充整条语义完成')
-    message.activeUnitRefs = [ref]; message.units = [{ ...ref, dispatchOwner: 'coordination' }]
-    coordination.unitRevision = 2
-    row = await read(); assert.equal(row.processingState, 'processed'); assert.equal(row.processingConclusion, null, '过期协调不能污染当前结论')
-    coordination.unitRevision = 1; coordination.semanticState = 'accepted'; coordination.conclusion = '已接纳安排，执行结果另行核验'
-    row = await read(); assert.equal(row.processingState, 'processed'); assert.equal(row.processingConclusion, coordination.conclusion)
-    assert.equal(row.processingCompletedAt, done)
-    source.version = 2
+    message.activeUnitRefs.push(other); message.units.push({ ...other, dispatchOwner: 'legacy-topic' })
+    topic.entries.push({ ...entry, ...other, revision: 2 }); topic.revision = 2
     row = await read(); assert.equal(row.processingState, 'processing'); assert.equal(row.processingConclusion, null)
-  }, { overrides: { listGroups: () => [{ groupId: 'g', messages: [message] }], messageProcessingSources: async () => [source] } })
+    assert.equal(row.processingCompletedAt, null, '其他事项尚未判断，不能冒充整条语义完成')
+    message.activeUnitRefs = [ref]; message.units = [{ ...ref, dispatchOwner: 'legacy-topic' }]
+    entry.unitRevision = 2
+    row = await read(); assert.equal(row.processingState, 'processed'); assert.equal(row.processingConclusion, null, '旧unit不能污染当前结论')
+    entry.unitRevision = 1; decision.reply = '已问明事项范围，执行结果另行核验'
+    row = await read(); assert.equal(row.processingState, 'processed'); assert.equal(row.processingConclusion, decision.reply)
+    assert.equal(row.processingCompletedAt, done)
+    source.version = 2; topic.decisions = []; topic.processedRevision = 0
+    row = await read(); assert.equal(row.processingState, 'processing'); assert.equal(row.processingConclusion, null)
+  }, { overrides: { listGroups: () => [{ groupId: 'g', messages: [message] }], listTopics: () => [topic], messageProcessingSources: async () => [source] } })
 })
 
 test('旧话题关联修复入口全部410，预检、执行与身份变体均不能恢复旧服务', async () => {
@@ -385,20 +402,15 @@ test('来源读取失败返回503，不泄漏细节或将故障当空来源成�
   }, { overrides: { listGroups: () => [{ groupId: 'g', messages: [] }], messageProcessingSources: async () => { throw new Error('private path and body') } } })
 })
 
-test('协调工作只读路由透传筛选与编码身份，隐藏后端诊断', async () => {
+test('退役协调路由不因筛选、编码身份或后端故障重新进入旧服务', async () => {
   const calls = []
   await withServer(false, async base => {
-    const list = await fetch(base + '/state/coordination-sources?groupId=g&offset=2&limit=10')
-    assert.equal(list.status, 200)
-    assert.deepEqual(calls[0], { groupId: 'g', offset: 2, limit: 10 })
-    assert.equal((await fetch(base + '/state/coordination-sources/source%2Fone')).status, 200)
-    assert.equal(calls[1], 'source/one')
-    assert.equal((await fetch(base + '/state/coordination-sources/missing')).status, 404)
-    for (const suffix of ['', '/error']) {
-      const response = await fetch(base + '/state/coordination-sources' + suffix + (suffix ? '' : '?groupId=error'))
-      assert.equal(response.status, 503)
-      assert.deepEqual(await response.json(), { error: 'coordination_observer_unavailable' })
+    for (const suffix of ['?groupId=g&offset=2&limit=10', '/source%2Fone', '/missing', '?groupId=error', '/error']) {
+      const response = await fetch(base + '/state/coordination-sources' + suffix)
+      assert.equal(response.status, 410)
+      assert.deepEqual(await response.json(), { error: 'INDEPENDENT_COORDINATION_RETIRED' })
     }
+    assert.deepEqual(calls, [], 'old sources and their private diagnostics remain unreachable')
   }, { overrides: {
     coordinationSources: async options => { calls.push(options); if (options.groupId === 'error') throw new Error('private-path-secret'); return { sources: [], total: 0, ...options } },
     coordinationSourceDetail: async id => { calls.push(id); if (id === 'error') throw new Error('private-path-secret'); return id === 'missing' ? null : { source: { id } } },
@@ -626,7 +638,7 @@ test('Topic 查询有界分页且群摘要不泄漏内部决策、归类和预�
     const { processingState, processingBasis, processingFacts, ...existing } = projected.messages[0]
     assert.equal(processingState, 'routing'); assert.equal(processingBasis, 'unknown')
     assert.equal(processingFacts.sourceState, 'unknown'); assert.equal(processingFacts.semantic.quality, 'missing')
-    assert.deepEqual(existing, { ...group.messages[0], processingConclusion: null, processingCompletedAt: null, processingSentAt: null, topicRefs: [{ topicId: 'topic-0', revision: 3, title: '话题 0' }] })
+    assert.deepEqual(existing, { ...group.messages[0], processingConclusion: null, processingFailureCode: null, processingCompletedAt: null, processingSentAt: null, topicRefs: [{ topicId: 'topic-0', revision: 3, title: '话题 0' }] })
     assert.deepEqual(projected.topicProgress, { total: 102, pending: 102, pendingRevisions: 204, pendingUnits: 0, unroutedMessages: 1 })
     const detail = await (await fetch(`${baseUrl}/state/topics/topic-0?groupId=g&revision=2&offset=1&limit=3`)).json()
     assert.deepEqual(request, { groupId: 'g', topicId: 'topic-0', revision: 2, offset: 1, limit: 3, includeTaskRefs:false })
