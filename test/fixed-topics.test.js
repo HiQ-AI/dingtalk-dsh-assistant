@@ -285,7 +285,7 @@ for (const state of ['running', 'completed']) test('platform full-access session
   tasks.push({ taskId: 'secret', title: '其他群不可见', groupId: 'other', state })
   let seen = 0
   const f = await fixture(t, { tasks, decide: async ({ tools, exec }) => {
-    assert.deepEqual([...tools.keys()].sort(), ['platform_reply_submit', 'platform_task_query'])
+    assert.deepEqual([...tools.keys()].sort(), ['platform_reply_submit', 'platform_schedule_submit', 'platform_task_query'])
     let args = { state, ...(state === 'completed' ? { day: 'yesterday' } : {}), limit: 40 }
     do {
       const page = tools.get('platform_task_query').execute(args, exec)

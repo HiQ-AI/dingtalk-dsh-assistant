@@ -100,6 +100,7 @@
     "fixed-topics.js",
     "fixed-topic-correction.js",
     "fixed-topic-handler.js",
+    "platform-schedule.js",
     "group-person-aliases.js",
     "coordination-retirement.js",
     "artifact-json.js",

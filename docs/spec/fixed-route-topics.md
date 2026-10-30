@@ -22,7 +22,13 @@ mentions 读取兼容标准 `result.conversationMessagesList[].messages`（`open
 
 时间型请求同时提供原消息 `messageTime`、执行快照 `asOf` 和群时区。判断结合用户明确时区和实际执行时刻重新核对目标，不把过去时间照原值安排，也不擅自顺延明天。仍有价值的状态汇报补报一次并说明实际时间与延迟；已失去意义的定点提醒可通过 `platform_reply_submit({text:null})` 静默结清。空字符串仍拒绝，普通自然语言输出仍不发送。未来请求只能使用宿主实际提供的 schedule 能力，真实创建成功后才确认已安排；确认不等于定时汇报已经完成。
 
-当前生命周期仍为插件拥有的子会话（`origin=subagent`、`delegationDepth=1`），答复后释放。DSH `0.2.1-rc.2` 的原生 `schedule_create` 虽可见，但会对该身份返回 `subagent_session`；因此本修复不声称已支持未来定时交付，不能承诺已安排，也不能用立即汇报冒充未来汇报。未修改宿主的子会话准入或新增调度架构。未来定时交付还需要正式独立会话恢复及查询/回复工具的恢复绑定。
+即时平台会话仍为插件拥有的子会话（`origin=subagent`、`delegationDepth=1`），答复后释放。DSH `0.2.1-rc.2` 的原生 `schedule_create` 对该身份返回 `subagent_session`，这个宿主限制保留。一次未来事项改用 `platform_schedule_submit({title,prompt,at})` 提交意图，`at` 必须包含完整日期和时区偏移；Host 从当前来源固定原群、原消息版本、unit 和接收者，不接受模型指定目标会话或群。Host 创建新的普通持久平台会话，经正式 `ScheduleService.create(sessionId, request)` 创建原生 `at` 记录；不篡改原子会话身份或伪装 parent。新会话使用同一可信 preset 和会话级完全权限，其他会话权限保持。
+
+原生 schedule 服务继续负责唯一的定时器、持久化、自动化列表和到期会话恢复。本插件只在现有 Resident `scheduler` 表增加可选的来源绑定及交付结果，按稳定来源 ID 复用接收会话。原生 create 已提交而本地回执未保存时，回读同会话原生记录再确认；并发重复提交只创建一个记录，删除后重试不重建。到期恢复重新注册平台查询/回复工具，读取当时的新事实，稳定交付 ID 沿原群现有 outbox/notification 发送；准备成功不冒称实际送达。原生入站提醒可能在崩溃后重复，已有 outbox 或交付结果阻止重复模型处理和重复发送。
+
+即时确认沿原固定回复 ID；到期汇报使用同来源的独立 `-scheduled-delivery` ID，避免覆盖确认或重复补报。到期通知仍是 `fixed-topic-reply`，Host 必须从已保存绑定解析出实际原生 `scheduleId` 和 `scheduledAt`，并核对来源与到期时间；模型不能提供或伪造此通知绑定。两条通知分别沿真实通知账本、ACK 和回读结清。
+
+若原生调度器先于 Resident 恢复会话，提醒正文要求工具未就绪时等待；Resident 根据原生的真实入站回执，在原会话空闲且尚未结清时恢复一次，不建立第二套定时器，也不增加普通成功路径的模型调用。原始消息版本或 unit 失效时结清为 superseded，不再交付旧要求。已经过期的新增意图返回 expired，不创建过去时间或明天的记录；停机跨过已安排时间时，沿原记录补报或判断过期静默。当前桥接范围为一次事项，不扩展周期调度或替代原生任务管理。
 
 时区依次采用群 timezone、用户 Agent 配置 timezone、宿主默认 IANA 时区。可通过现有群配置/Agent 配置 API 设置 timezone，值按 Intl 校验。today/yesterday 以查询快照时刻的本地日期计算，返回包含左闭右开日期范围、时区及 asOf；按完成记录 at 过滤，不用更新时间冒充完成时间。
 
@@ -32,4 +38,4 @@ mentions 读取兼容标准 `result.conversationMessagesList[].messages`（`open
 
 原生集成回归经过 `openTaskSessionService`、真实 SQLite 通知账本和原生平台工具，覆盖两类固定回复、业务 Topic 校验、非法来源拒绝及冻结 outbox 跨重启恢复。仅最后的外部发送/回读适配器为合成实现，未发送真实群消息。
 
-验证覆盖真实 DomainFacility 的持久化/重启、固定类别分页与失败/沉默/回复状态、mentions 契约和静默人工纠正；浏览器使用合成 React 宿主验证键盘、空态、分页、409/503 与窄屏。相关原生回归使用 native profile 与确定性模型；`fixed-topics-native.test.js` 实际调用宿主注册的查询、回复及文件工具，检查会话权限隔离，并在提供 rc2 schedule 包时验证真实调度拒绝。时间指导断言与脚本化过期分支不等于真实模型语义验证。真实 DingTalk、生产库上的纠正和实际模型判断由部署后的独立验证负责，不能用隔离测试代替。
+验证覆盖真实 DomainFacility 的持久化/重启、固定类别分页与失败/沉默/回复状态、mentions 契约和静默人工纠正；浏览器使用合成 React 宿主验证键盘、空态、分页、409/503 与窄屏。相关原生回归使用 native profile 与确定性模型；`fixed-topics-native.test.js` 实际调用宿主注册的查询、回复及文件工具，检查会话权限隔离，并在提供 rc2 schedule 包时验证子会话拒绝、宿主一次调度、真实到期、重启、新事实查询、先于桥接恢复、原生记录及入站回执、交付去重和过期不误排。用 `DSH_NATIVE_TEST_PROFILE` 指向已安装 `@deepseek-ai/dsh-base`、`dsh-schedule`、`dsh-tool-schedule`、`dsh-api-session-controller` 的 rc2 profile 运行；缺少调度包的旧 profile 会明确跳过这些集成用例。时间指导断言与脚本化过期分支不等于真实模型语义验证。真实 DingTalk、生产库上的纠正和实际模型判断由部署后的独立验证负责，不能用隔离测试代替。

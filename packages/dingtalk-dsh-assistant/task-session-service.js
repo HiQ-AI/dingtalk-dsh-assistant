@@ -22,7 +22,7 @@ import { createStartupMetrics } from './startup-metrics.js'
 import { createExecutionSessions } from './execution-session.js'
 import { createClaudeExecutionSessions, claudeExecutionLogPath } from './claude-execution-session.js'
 import { createTaskSessionObservability } from './task-session-observability.js'
-import { activeFixedUnits, fixedTopicIds, fixedUnitRequestId } from './fixed-topics.js'
+import { activeFixedUnits, fixedTopicIds, fixedUnitRequestId, platformScheduleSessionId, platformScheduleOutboundId } from './fixed-topics.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { resolveTaskArtifactScope } from './task-artifact-scope.js'
 import { resolveTopicMessages, stableId, replyTopicForMessage, canonicalReplyTopic, topicDecisionCoversEntry } from './topic-model.js'
@@ -763,11 +763,21 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const message = residentStore.getGroup(args.groupId)?.messages.find(item => item.messageId === args.replyToMessageId && item.messageVersion === args.sourceVersion)
     const ref = args.matterUnitRefs?.length === 1 && args.matterUnitRefs[0]
     const unit = message?.units?.find(item => item.unitId === ref?.unitId && item.unitRevision === ref?.unitRevision && item.fixedTopic === args.fixedTopic)
+    const requestId = unit && fixedUnitRequestId(args.groupId, message, unit)
+    const scheduled = args.outboundId === platformScheduleOutboundId(requestId)
     if (!fixedTopicIds.includes(args.fixedTopic) || !unit || args.topicRefs?.length || args.taskIds?.length
       || !message.activeUnitRefs?.some(item => item.unitId === unit.unitId && item.unitRevision === unit.unitRevision)
       || args.replyToSenderOpenDingTalkId !== message.senderOpenDingTalkId
-      || args.outboundId !== fixedUnitRequestId(args.groupId, message, unit)) fail('fixed_topic_reply_source_invalid')
-    return { fixedTopic: unit.fixedTopic, unitId: unit.unitId, unitRevision: unit.unitRevision }
+      || !scheduled && args.outboundId !== requestId) fail('fixed_topic_reply_source_invalid')
+    const fact = { fixedTopic: unit.fixedTopic, unitId: unit.unitId, unitRevision: unit.unitRevision }
+    if (scheduled) {
+      const binding = residentStore.getPlatformSchedule(platformScheduleSessionId(requestId))
+      if (unit.fixedTopic !== 'agent-platform' || binding?.requestId !== requestId || !binding.scheduleId
+        || binding.groupId !== args.groupId || binding.messageId !== message.messageId || binding.messageVersion !== message.messageVersion
+        || binding.unitId !== unit.unitId || binding.unitRevision !== unit.unitRevision || Date.parse(binding.at) > Date.now()) fail('fixed_topic_reply_source_invalid')
+      fact.scheduleId = binding.scheduleId; fact.scheduledAt = binding.at
+    }
+    return fact
   }
   const frozenReply = async ({ groupId, topicRefs, decisionId, outboundId, taskIds, resultFingerprint, taskInputVersion, taskRunSequence, fixedTopic, sourceVersion, matterUnitRefs, replyToMessageId, replyToSenderOpenDingTalkId }) => {
     const fact = fixedTopic ? fixedReplyFact({ groupId, topicRefs, outboundId, taskIds, fixedTopic, sourceVersion, matterUnitRefs, replyToMessageId, replyToSenderOpenDingTalkId }) : null

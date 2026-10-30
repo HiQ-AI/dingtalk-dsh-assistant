@@ -144,6 +144,7 @@ export function latestInput(request) {
     for (const part of message.content ?? []) {
       if (part.type !== 'text') continue
       if (part.text.startsWith('[AGENT_PLATFORM_QUERY]\n')) return JSON.parse(part.text.slice('[AGENT_PLATFORM_QUERY]\n'.length))
+      if (part.text.startsWith('[SCHEDULE REMINDER]')) return { schedule: part.text }
       try { const parsed = JSON.parse(part.text); if (parsed.task || parsed.sources || parsed.contextReadRequired || parsed.reservationId && parsed.source) return resolveContextInput(request, inline(parsed)) } catch (error) { if (error.contextReads) throw error }
       const topicLine = part.text.split('\n').find(line => line.startsWith('Topic 请求：'))
       if (topicLine) return JSON.parse(topicLine.slice('Topic 请求：'.length))
