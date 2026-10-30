@@ -362,7 +362,7 @@ test('notification service refuses manual replay of historical coordination with
   assert.deepEqual(await f.read(old.id), old)
 })
 
-test('manual recovery releases the serial slot and drains a notification prepared during its readback', { timeout: 5000 }, async t => {
+test('manual readback does not block a new send and both notifications settle without replay', { timeout: 5000 }, async t => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers()
   t.after(() => release.resolve())
   const sends = [], reads = []
@@ -376,11 +376,12 @@ test('manual recovery releases the serial slot and drains a notification prepare
   await entered.promise
   await f.prepare('queued')
   await f.service.recover()
-  assert.equal((await f.read('queued')).state, 'prepared')
-  release.resolve(); await pending
   const deadline = Date.now() + 700
   while ((await f.read('queued')).state !== 'delivered' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
-  assert.equal((await f.read('queued')).state, 'delivered', 'slot release must wake the existing automatic drain without recover/whenIdle')
+  assert.equal((await f.read('queued')).state, 'delivered', 'Independent send/readback lanes must drain new work while the manual readback is waiting')
+  assert.equal((await f.read('manual')).state, 'unknown')
+  release.resolve(); await pending
+  assert.equal((await f.read('manual')).state, 'delivered')
   assert.deepEqual(sends, ['queued']); assert.deepEqual(reads, ['manual', 'queued'])
 })
 
