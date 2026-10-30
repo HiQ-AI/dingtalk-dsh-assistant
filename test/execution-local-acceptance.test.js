@@ -16,8 +16,18 @@ test('任务验收拒绝tmp和evidence祖先junction，外部零写入且无执�
 
 test('新任务验收runner及依赖跨LF/CRLF打包身份一致，真实源码变化仍改变身份', async t => {
  const { pathToFileURL } = await import('node:url')
- const fixture = await setup(t), identities = []
- const files = ['execution-task-local-acceptance.js', 'execution-local-acceptance.js', 'execution-artifacts.js', 'execution-candidate.js', 'session-workspaces.js']
+ // Identity construction is platform-neutral; it must not prepare or run a
+ // Windows acceptance process merely to compare source bytes.
+ const directoryRoot = await mkdtemp(join(tmpdir(), 'local-acceptance-identity-')), identities = []
+ t.after(() => rm(directoryRoot, { recursive: true, force: true }))
+ const command = { executable: process.execPath, args: ['fixture.mjs'] }
+ const fixture = { directory: directoryRoot, options: { root: join(directoryRoot, 'runs'), config: {
+  version: 'identity-fixture', sharedDataProfilePath: join(directoryRoot, 'profile.json'), prepareSteps: [command],
+  service: { ...command, args: ['fixture.mjs', '127.0.0.1', '{port}'], readyPath: '/ready' },
+  scenarios: [{ ...command, id: 'fixture', description: 'source identity only' }], cleanup: command, verifyCleanup: command,
+ } } }
+ const files = ['execution-task-local-acceptance.js', 'execution-local-acceptance.js', 'execution-artifacts.js', 'execution-candidate.js', 'session-workspaces.js',
+  'observer-artifact-pages.js', 'artifact-json.js', 'node-output-readout.js', 'workflow-notifications.js', 'group-message.js', 'execution-check-job.js']
  for (const style of ['lf', 'crlf', 'changed']) {
   const directory = join(fixture.directory, style); await mkdir(directory)
   await writeFile(join(directory, 'package.json'), '{"type":"module"}')
