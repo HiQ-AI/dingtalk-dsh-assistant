@@ -522,7 +522,8 @@ test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保�
         actions: [{ kind: 'task-reopen', taskId: original.taskId, inputVersion: original.requirementRevision,
           runSequence: original.runSequence, context: '部署原修复到UAT2', objective: '部署原修复到UAT2',
           acceptanceCriteria: ['核验实际运行版本'], topicRefs: [{ topicId, revision: input.revision }], basisUnitRefs }],
-        reply: '沿原任务部署UAT2。', replyReview: { kind: 'substantive', reviewedOutboundIds, sameMatterOutboundIds: [], replaceOutboundIds: [] },
+        reply: '沿原任务部署UAT2。', replyToMessageId: 'deploy-followup', atOpenDingTalkIds: ['colleague'],
+        replyReview: { kind: 'substantive', reviewedOutboundIds, sameMatterOutboundIds: [], replaceOutboundIds: [] },
       } })]
     }
     const calls = topicTaskCalls(request)
@@ -574,6 +575,7 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
   const model = async request => {
     assert.ok(h.requests.length < 12, JSON.stringify(h.toolResults.slice(-2)))
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    if (input.trigger === 'task-facts') return topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
       const calls = topicTaskCalls(request)
       if (topicId) for (const route of calls[0].args.routes) for (const unit of route.units)
@@ -593,7 +595,8 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
         actions: [{ kind: 'task-context', taskId: originalTask.taskId, inputVersion: originalTask.requirementRevision,
           runSequence: originalTask.runSequence, context: '先核对正确开发分支，这不是批准例外', progressImpact: 'preserve',
           topicRefs: [{ topicId, revision: input.revision }], basisUnitRefs }],
-        reply: '已补入原任务，先核对正确分支。', replyReview: { kind: 'substantive', reviewedOutboundIds, sameMatterOutboundIds: [], replaceOutboundIds: [] },
+        reply: '已补入原任务，先核对正确分支。', replyToMessageId: 'manual-followup', atOpenDingTalkIds: [followupActor],
+        replyReview: { kind: 'substantive', reviewedOutboundIds, sameMatterOutboundIds: [], replaceOutboundIds: [] },
       } })]
     }
     const calls = topicTaskCalls(request)
@@ -637,11 +640,11 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
     // 模拟旧版先回复再失败，投影后的来源身份已改变。
     const notificationId = blocked.outboundId, topicRefs = [{ topicId, revision: blocked.revision }]
     await h.residentStore.appendOutbox({ groupId: message.groupId, outboundId: notificationId, decisionId: blocked.decisionId,
-      sourceMessageId: `topic-decision:${blocked.decisionId}`, text: blocked.decision.reply,
-      replyToMessageId: 'manual-followup', replyToSenderOpenDingTalkId: 'native-user' })
+      sourceMessageId: `topic-decision:${blocked.decisionId}`, text: blocked.decision.reply, topicRefs, taskIds: [originalTask.taskId],
+      replyToMessageId: 'manual-followup', replyToSenderOpenDingTalkId: 'native-user', atOpenDingTalkIds: ['native-user'] })
     await h.service.store.command({ id: `prepare-notification:${notificationId}`, kind: 'notification.prepare', args: {
       notificationId, taskId: originalTask.taskId, requirementRevision: 1, kind: 'topic-reply', payload: {
-        text: blocked.decision.reply, topicRefs, replyKind: 'substantive', conversationId: message.groupId,
+        text: blocked.decision.reply, topicRefs, taskIds: [originalTask.taskId], replyKind: 'substantive', conversationId: message.groupId,
         sourceMessageId: 'manual-followup', actorId: 'native-user', replyToMessageId: 'manual-followup',
         replyToSenderOpenDingTalkId: 'native-user', atOpenDingTalkIds: ['native-user'], fact: { topicRefs }, kind: 'topic-reply',
       },
@@ -662,15 +665,19 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
     h = await fixture.host(model, { initialize: false, config: { assistantActorId: 'native-user' } })
     h.sent.unshift(...sentHistory) // Preserve the diagnostic recorder across the two real instances.
     const append = h.residentStore.appendOutbox
+    let duplicateAppends = 0
     h.residentStore.appendOutbox = args => {
-      if (args.outboundId === notificationId) throw new Error('outbox_identity_duplicate')
+      if (args.outboundId === notificationId) { duplicateAppends++; throw new Error('outbox_identity_duplicate') }
       return append(args)
     }
     await h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' }); await h.service.whenIdle()
     h.residentStore.appendOutbox = append
-    const replyBlocked = h.residentStore.getTopic(message.groupId, topicId).decisions.at(-1)
-    assert.equal(replyBlocked.error, 'outbox_identity_duplicate')
-    assert.ok(replyBlocked.operations.every(operation => operation.status === 'applied'))
+    const recoveredReply = h.residentStore.getTopic(message.groupId, topicId).decisions.at(-1)
+    assert.equal(duplicateAppends, 0, 'The frozen delivered notification is reused without appending its identity again')
+    assert.equal(recoveredReply.error, undefined)
+    assert.equal(recoveredReply.status, 'completed')
+    assert.equal(recoveredReply.decisionId, blocked.decisionId)
+    assert.ok(recoveredReply.operations.every(operation => operation.status === 'applied'))
     await h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' }); await h.service.whenIdle()
     assert.equal((await h.query('task.list'))[0].status, 'active', JSON.stringify(h.service.listAlerts()))
     assert.equal((await h.query('task.list'))[0].humanRequests[0].status, 'waiting-reply')

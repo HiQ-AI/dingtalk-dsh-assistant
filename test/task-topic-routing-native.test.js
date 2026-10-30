@@ -655,10 +655,15 @@ testRunner('native Topic handoff keeps the explicit requester as task and comple
     pending: await h.query('topic.fact.pending', { groupId: task.groupId, topicId: task.replyBindings?.[0]?.topicId }),
     errors: h.toolResults.filter(item => item.result?.isError).map(item => ({ name: item.name, result: item.result })) }))
   assert.ok(completion, 'Topic must consume the completed fact and prepare its reply')
-  assert.equal(completion.payload.sourceMessageId, 'explicit-handoff')
-  assert.equal(completion.payload.actorId, 'native-user')
-  assert.equal(completion.payload.replyToMessageId, 'explicit-handoff')
-  assert.ok(h.sent.some(item => item.payload.coveredEventIds?.length && item.payload.sourceMessageId === 'explicit-handoff'))
+  assert.equal(completion.payload.sourceMessageId, undefined, 'Context provenance is not a transport quote or implicit recipient')
+  assert.equal(completion.payload.actorId, undefined)
+  assert.equal(completion.payload.replyToMessageId, undefined)
+  assert.equal(completion.payload.replyToSenderOpenDingTalkId, undefined)
+  assert.deepEqual(completion.payload.atOpenDingTalkIds, ['native-user'])
+  const fact = await h.query('topic.fact.get', { factId: completion.payload.coveredEventIds[0] })
+  assert.equal(fact.decision.decision.replyToMessageId, 'explicit-handoff')
+  assert.ok(fact.sourceIds.includes(handoff.sourceId), 'The authenticated handoff remains linked to the completion fact')
+  assert.ok(h.sent.some(item => item.id === completion.id && item.payload.atOpenDingTalkIds.includes('native-user')))
 })
 
 for (const committed of [false, true]) testRunner(`replan fences an execution claim ${committed ? 'after commit' : 'before commit'}`, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {

@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as resident from '../packages/dingtalk-dsh-assistant/resident.js'
 import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task-resident-runtime.js'
-import { residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
+import { openResidentStore, residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
+import { FIXED_TOPICS } from '../packages/dingtalk-dsh-assistant/fixed-topics.js'
 import { startDwsBridge } from '../packages/dingtalk-dsh-assistant/dws-bridge.js'
 import { available, reason, nativeTaskHost, waitUntil } from './fixtures/task-session-native-host.js'
 
@@ -143,7 +144,17 @@ test('real resident starts a clean explicit ledger without reading old workflow 
     for (const table of ['dynamic_tasks', 'dynamic_executions', 'dynamic_notifications', 'dynamic_legacy_blockers']) assert.equal(db.prepare(`SELECT count(*) AS count FROM ${table}`).get().count, 0, table)
     assert.equal(JSON.parse(await readFile(dbPath + '.initialized', 'utf8')).ingressEpoch, '2026-10-13T00:00:00.000Z')
   } finally { db.close() }
-  assert.deepEqual(await readFile(storagePath), before, 'Clean startup must not rewrite archived resident records')
+  const initialized = JSON.parse(await readFile(storagePath, 'utf8')), expected = JSON.parse(before)
+  const fixedTopics = initialized.tables.groups.g.fixedTopics
+  assert.deepEqual(fixedTopics.map(({ createdAt, ...topic }) => topic), FIXED_TOPICS.map(topic => ({ ...topic, fixed: true })))
+  assert.ok(fixedTopics.every(topic => Number.isFinite(Date.parse(topic.createdAt))))
+  // The subscribed group remains active configuration: its fixed-category registry
+  // is initialized on upgrade. All archived records and original fields stay exact.
+  expected.tables.groups.g.fixedTopics = fixedTopics
+  expected.tables.groups.g.sourceDispatchOwnership ??= []
+  for (const message of expected.tables.groups.g.messages) message.facts ??= []
+  assert.deepEqual(initialized, expected, 'Only the fixed-category registry and existing empty ownership/message-facts defaults may be persisted')
+  assert.deepEqual(initialized.tables.groups.g.topics, [], 'Fixed categories are not imported business Topics')
   const created = await new Promise((resolve, reject) => {
     const req = httpRequest(`http://127.0.0.1:${port}/tasks`, { agent: false, method: 'POST', headers: { 'content-type': 'application/json' } }, response => {
       let body = ''; response.on('data', chunk => { body += chunk }); response.on('end', () => { try { resolve({ status: response.statusCode, body: JSON.parse(body) }) } catch (error) { reject(error) } })
@@ -177,6 +188,10 @@ test('real resident starts a clean explicit ledger without reading old workflow 
     assert.equal(topic.decisions[0].status, 'completed')
     assert.equal(topic.decisions[0].operations[0].taskId, created.body.taskId)
   } finally { await preserved.close() }
+  const stabilized = await readFile(storagePath)
+  const reopened = await openResidentStore(host.ctx.storageDomain)
+  await reopened.close()
+  assert.deepEqual(await readFile(storagePath), stabilized, 'Reopening must not rewrite initialized fixed categories or archived records again')
   const active = new DatabaseSync(dbPath, { readOnly: true })
   try {
     assert.equal(active.prepare('SELECT count(*) AS count FROM dynamic_tasks').get().count, 1)

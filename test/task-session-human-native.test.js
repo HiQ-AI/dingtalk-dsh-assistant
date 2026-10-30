@@ -143,7 +143,7 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
   assert.ok(reviewLeases.length >= 2)
 })
 
-test('待实施批准期间事实追问立即引用回复，内部证据不外发且不恢复旧执行', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+test('待实施批准期间事实追问保留来源并明确通知，内部证据不外发且不恢复旧执行', { skip: !available ? reason : false, timeout: 30000 }, async t => {
   let original, topicId, reviewStep = 0
   const summary = '此前完成了 UPR 导入覆盖修复；当前点击编辑持久化只有方案，仍等你确认。'
   const wait = summary => call('task_session_submit', { decision: { action: 'wait', summary, evidence: [], limitations: [] } })
@@ -206,7 +206,10 @@ test('待实施批准期间事实追问立即引用回复，内部证据不外�
   const replies = h.sent.filter(item => item.payload.coveredEventIds?.length)
   assert.equal(replies.length, 1)
   assert.equal(replies[0].payload.text, summary)
-  assert.equal(replies[0].payload.replyToMessageId, 'fact-question')
+  assert.equal(replies[0].payload.replyToMessageId, undefined, 'Final factual replies avoid implicit quote mentions')
+  const fact = await h.query('topic.fact.get', { factId: replies[0].payload.coveredEventIds[0] })
+  assert.equal(fact.decision.decision.replyToMessageId, 'fact-question')
+  assert.ok((await Promise.all(fact.sourceIds.map(sourceId => h.query('source.get', { sourceId })))).some(source => source.messageId === 'fact-question'))
   assert.deepEqual(replies[0].payload.atOpenDingTalkIds, ['native-user'])
   assert.ok(h.readbacks.some(item => item.id === replies[0].id))
   assert.equal((await h.query('notification.get', { notificationId: replies[0].id })).state, 'delivered')
@@ -272,7 +275,10 @@ for (const batched of [true, false]) test(`积压的两条事实追问均送达�
   assert.equal(after.sessionId, original.sessionId)
   assert.deepEqual(after.humanRequests[0].followupReplies.map(item => item.sourceId), sourceIds.slice(0, 2))
   const replies = h.sent.filter(item => item.payload.coveredEventIds?.length)
-  assert.deepEqual(replies.map(item => item.payload.replyToMessageId), ['message-0', 'message-1'])
+  assert.ok(replies.every(item => item.payload.replyToMessageId === undefined && item.payload.replyToSenderOpenDingTalkId === undefined))
+  const facts = await Promise.all(replies.map(item => h.query('topic.fact.get', { factId: item.payload.coveredEventIds[0] })))
+  assert.deepEqual(facts.map(fact => fact.decision.decision.replyToMessageId), ['message-0', 'message-1'])
+  assert.deepEqual(facts.map(fact => fact.sourceIds), sourceIds.slice(0, 2).map(sourceId => [sourceId]))
   assert.deepEqual(replies.map(item => item.payload.atOpenDingTalkIds), [['member-0'], ['member-1']])
   for (const reply of replies) assert.equal((await h.query('notification.get', { notificationId: reply.id })).state, 'delivered')
   assert.equal((await h.query('execution.list')).length, 0)

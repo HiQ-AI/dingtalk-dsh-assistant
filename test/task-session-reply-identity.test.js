@@ -72,6 +72,15 @@ function jsonValues(value) {
 }
 
 const nativeOptions = { timeout: 30000, ...(!available ? { skip: reason } : {}) }
+async function assertFinalReplySource(host, notification, messageId, actorId) {
+  assert.equal(notification.payload.replyToMessageId, undefined, 'Final results use ordinary Markdown, not an implicit quote mention')
+  assert.equal(notification.payload.replyToSenderOpenDingTalkId, undefined)
+  assert.deepEqual(notification.payload.atOpenDingTalkIds, [actorId])
+  const fact = await host.query('topic.fact.get', { factId: notification.payload.coveredEventIds[0] })
+  assert.equal(fact.decision.decision.replyToMessageId, messageId, 'The selected context remains in the durable decision')
+  const sources = await Promise.all(fact.sourceIds.map(sourceId => host.query('source.get', { sourceId })))
+  assert.ok(sources.some(source => source.messageId === messageId && source.actorId === actorId && source.groupId === notification.payload.conversationId))
+}
 async function serviceFixture(t, replySignature, action = 'complete', legacyFooter = false) {
   const root = await mkdtemp(join(tmpdir(), 'reply-service-'))
   const config = { agentNames: ['测试助手'], replySignature }
@@ -145,13 +154,11 @@ async function serviceFixture(t, replySignature, action = 'complete', legacyFoot
   return { service: host.service, config, host, get sent() { return host.sent.filter(notification => notification.payload.kind !== 'topic-reply' || notification.payload.replyKind === 'substantive') }, ingest }
 }
 
-test('完成及状态末尾统一署名，引用和真实@不变', nativeOptions, async t => {
+test('完成及状态末尾统一署名，保留来源和真实@且最终结果不隐式引用', nativeOptions, async t => {
   const f = await serviceFixture(t, '资料助理代回')
   await f.ingest('original', '核对材料')
   assert.equal(f.sent.length, 1)
-  assert.equal(f.sent[0].payload.replyToMessageId, 'original')
-  assert.equal(f.sent[0].payload.replyToSenderOpenDingTalkId, 'owner')
-  assert.deepEqual(f.sent[0].payload.atOpenDingTalkIds, ['owner'])
+  await assertFinalReplySource(f.host, f.sent[0], 'original', 'owner')
   assert.equal(f.sent[0].payload.text, '核验完成。\n\n- 材料已核对。\n\n- 资料助理代回')
   assert.ok(f.host.sent.filter(row => row.payload.replyKind === 'confirmation').every(row => !row.payload.text.includes('资料助理代回')))
   for (const [messageId, signature] of [['renamed', 'Ada Support'], ['cleared', ''], ['unset', undefined]]) {
@@ -177,9 +184,7 @@ test('任务提问使用显式Agent署名', nativeOptions, async t => {
       assert.equal(f.sent.length, 1)
       const payload = f.sent[0].payload
       assert.equal(payload.text, `请提供目标日期。${signature ? `\n\n- ${signature}` : ''}`)
-      assert.equal(payload.replyToMessageId, 'question-source')
-      assert.equal(payload.replyToSenderOpenDingTalkId, 'owner')
-      assert.deepEqual(payload.atOpenDingTalkIds, ['owner'])
+      await assertFinalReplySource(f.host, f.sent[0], 'question-source', 'owner')
       assert.doesNotMatch(payload.text, /资料助理|Ada|旧职责助理/u)
       f.config.replySignature = 'Changed Agent'
       await f.service.recover()
@@ -260,8 +265,7 @@ for (const dialogueCase of [false, true]) test(`${dialogueCase ? 'Web对话' : '
     const notices = host.sent.filter(item => item.payload.coveredEventIds?.length)
     assert.equal(notices.length, 1)
     assert.equal(notices[0].payload.text, `${businessText}\n\n- 结果已核对`)
-    assert.equal(notices[0].payload.replyToMessageId, messageId)
-    assert.deepEqual(notices[0].payload.atOpenDingTalkIds, [actorId])
+    await assertFinalReplySource(host, notices[0], messageId, actorId)
   }
   assert.equal(steps, 3)
   assert.equal(host.toolResults.filter(item => item.name === (dialogueCase ? 'task_session_submit' : 'group_decision_submit') && JSON.stringify(item.result).includes('GROUP_REPLY_INTERNAL_DETAILS')).length, 2)
