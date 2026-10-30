@@ -40,6 +40,20 @@ test('native quote and mention must be verified independently of text', () => {
   for (const change of [{quotedMessage: undefined}, {quotedMessage:{messageId:'other',conversationId:'g'}}, {quotedMessage:{messageId:'s',conversationId:'other'}}, {atOpenDingTalkIds:undefined}, {atOpenDingTalkIds:['other']}, {conversationId:'other'}]) assert.equal(verify({...observed,...change}),undefined)
 })
 
+test('无引用通知的未知发送按原身份、正文和完整接收集合核验，不接受隐式带入其他作者', () => {
+  const plain = { id: 'plain-notice', payload: { conversationId: 'g', text: '核验完成。', atOpenDingTalkIds: ['author', 'reviewer'] } }
+  const delivered = { messageId: 'plain-result', conversationId: 'g', senderOpenDingTalkId: 'bot', text: '核验完成。',
+    atOpenDingTalkIds: ['author', 'reviewer'], uuid: plain.id }
+  const verify = value => verifyTaskNotificationReadback(plain, value, { senderActorId: 'bot' })
+  assert.equal(verify(delivered).mentionVerification, 'verified')
+  assert.equal(verify(delivered).quoteMessageId, undefined)
+  for (const patch of [{ quotedMessage: { messageId: 'unrelated-source', conversationId: 'g' } },
+    { atOpenDingTalkIds: ['author', 'reviewer', 'unrelated-author'] }, { atOpenDingTalkIds: ['author'] },
+    { senderOpenDingTalkId: 'other' }, { text: '其他结论。' }, { atOpenDingTalkIds: undefined, text: '@测试成员 核验完成。' }]) {
+    assert.equal(verify({ ...delivered, ...patch }), undefined)
+  }
+})
+
 test('普通提醒已传原生@仍以精确SUCCESS确认送达，不把缺失元数据伪称提及已核验', async () => {
   const commands = [], pending = { id: 'reminder-notice', payload: { conversationId: 'group-id', text: '提醒查看进度。', atOpenDingTalkIds: ['open-person-a'] } }
   const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {

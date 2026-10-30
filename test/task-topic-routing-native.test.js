@@ -347,7 +347,8 @@ testRunner('native batch followup reopens each original completed task and sessi
   assert.deepEqual((await h.query('task.list')).map(task => [task.taskId, task.requirementRevision, task.runSequence]), after.map(task => [task.taskId, task.requirementRevision, task.runSequence]))
 })
 
-testRunner('普通回复显式多收件人贯穿原生通知格式化', { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+for (const quoted of [true, false]) testRunner('普通回复显式多收件人贯穿原生通知格式化 quoted=' + quoted, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+  let rejectedQuote = false
   const h = await extraHost(t, 'topic-recipients-', async request => {
     const names = request.tools.map(tool => tool.name)
     if (names.includes('group_topic_route_submit')) {
@@ -363,8 +364,13 @@ testRunner('普通回复显式多收件人贯穿原生通知格式化', { timeou
       const current = input.messages.at(-1)
       const decision = current.messageId === 'recipient-a'
         ? { basisMessageIds: ['recipient-a'], actions: [], reason: '等待补充' }
-        : { basisMessageIds: ['recipient-a', 'recipient-b'], actions: [], reply: '已收到资料。', replyToMessageId: 'recipient-a',
+        : { basisMessageIds: ['recipient-a', 'recipient-b'], actions: [], reply: '已收到资料。', ...(quoted ? { replyToMessageId: 'recipient-a' } : {}),
           atOpenDingTalkIds: ['user-a', 'user-b'], replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }
+      if (!quoted && current.messageId === 'recipient-b' && !rejectedQuote) {
+        rejectedQuote = true
+        decision.replyToMessageId = 'recipient-b'
+        decision.atOpenDingTalkIds = ['user-a']
+      }
       return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision })]
     }
     return []
@@ -374,9 +380,10 @@ testRunner('普通回复显式多收件人贯穿原生通知格式化', { timeou
   await h.service.ingest({ ...message('recipient-b', '资料已准备。'), senderOpenDingTalkId: 'user-b' })
   await h.service.whenIdle()
   assert.equal(h.sent.length, 1)
-  assert.equal(h.sent[0].payload.replyToMessageId, 'recipient-a')
+  assert.equal(h.sent[0].payload.replyToMessageId, quoted ? 'recipient-a' : undefined)
   assert.deepEqual(h.sent[0].payload.atOpenDingTalkIds, ['user-a', 'user-b'])
-  assert.equal(h.residentStore.getGroup('native-group').outbox[0].replyToMessageId, 'recipient-a')
+  assert.equal(h.residentStore.getGroup('native-group').outbox[0].replyToMessageId, quoted ? 'recipient-a' : undefined)
+  if (!quoted) assert.ok(h.toolResults.some(result => JSON.stringify(result).includes('group_reply_quote_author_not_in_recipients')))
   await h.service.recover(); await h.service.whenIdle()
   assert.equal(h.sent.length, 1)
 })

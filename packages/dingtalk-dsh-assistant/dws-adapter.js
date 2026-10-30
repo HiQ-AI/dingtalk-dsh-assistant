@@ -199,7 +199,8 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     compileGroupReply({ groupId, text, idempotencyKey, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds = [] }) {
       const args = ['chat', 'message', 'reply', '--group', assertStableId(groupId, 'group_id'), '--ref-msg-id', assertStableId(replyToMessageId, 'reply_message_id'), '--ref-sender', assertStableId(replyToSenderOpenDingTalkId, 'reply_sender_id'), '--content', assertStableId(text, 'text'), '--uuid', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       // DWS v1.0.63's reply contract separates ref-sender from atOpenDingTalkIds.
-      // Keep the selected author once: unlike the client UI, no automatic mention is guaranteed.
+      // Topic selection includes the quote author in the audience. When implicit + explicit
+      // mention rendering is uncertain, Topic can use unquoted send instead of quoting an unrelated author.
       // https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/issues/845
       const mentions = nativeMentionIds(atOpenDingTalkIds)
       if (mentions) args.push('--at-open-dingtalk-ids', mentions)

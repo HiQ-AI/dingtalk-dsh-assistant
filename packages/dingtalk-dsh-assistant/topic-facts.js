@@ -12,13 +12,13 @@ export const factDecisionSchema = z.strictObject({
   decision: z.strictObject({ actions: z.tuple([]),
     topicUpdate: z.strictObject({ summary: z.string().trim().min(1).max(4000), openQuestions: z.array(z.string().max(500)).max(12).optional() }),
     reply: z.string().trim().min(1).max(6000).optional(), reason: z.string().trim().min(1).max(1000),
-    replyToMessageId: z.string().min(1).optional().describe('结合Topic原始需求、验收反馈及明确交付对象，选择本话题内真人消息作为引用目标；不是默认最后一个来源。'),
+    replyToMessageId: z.string().min(1).optional().describe('确需引用时，按Topic上下文选择本话题内真人消息；作者必须属于本次收件人集合，因为引用可能自动提及作者。没有合适引用或需避免叠加提及时省略，直接发送普通群消息，不默认引用最后来源。'),
     atOpenDingTalkIds: z.array(z.string().min(1)).min(1).optional().describe('本次结果应通知的受信群成员ID集合，可多人；从话题原文身份选择，不按姓名猜ID，不自动包含全部参与者。回复时显式填写，正文@姓名不能替代原生提及。'),
   }),
 }).superRefine(({ decision }, ctx) => {
   if (!decision.reply) return
-  for (const field of ['replyToMessageId', 'atOpenDingTalkIds']) if (!decision[field]) {
-    ctx.addIssue({ code: 'custom', path: ['decision', field], message: '非空回复必须明确选择话题内引用目标和收件人；身份不确定时不猜测。' })
+  if (!decision.atOpenDingTalkIds) {
+    ctx.addIssue({ code: 'custom', path: ['decision', 'atOpenDingTalkIds'], message: '非空回复必须明确选择受信收件人；引用可省略，身份不确定时不猜测。' })
   }
 })
 export const factDecisionJsonSchema = toToolJsonSchema(factDecisionSchema)
@@ -157,17 +157,19 @@ export function topicFactLedger({ db, get, put }) {
       const stamp = new Date().toISOString()
       let notification = null
       if (decision.reply) {
-        const source = get('dynamic_sources', a.sourceId)
+        const source = decision.replyToMessageId ? get('dynamic_sources', a.sourceId) : null
         // Topic membership is checked against the frozen resident revision by the Host.
         // A recipient can be the original requester or reviewer, outside this fact's trigger sources.
-        if (!source || source.groupId !== a.groupId || source.messageId !== decision.replyToMessageId
-          || a.reply.replyToMessageId !== source.messageId || a.reply.replyToSenderOpenDingTalkId !== source.actorId
-          || JSON.stringify(a.reply.atOpenDingTalkIds) !== JSON.stringify(decision.atOpenDingTalkIds)) fail('TOPIC_REPLY_SOURCE_INVALID')
+        if (JSON.stringify(a.reply.atOpenDingTalkIds) !== JSON.stringify(decision.atOpenDingTalkIds)
+          || (decision.replyToMessageId ? !source || source.groupId !== a.groupId || source.messageId !== decision.replyToMessageId
+            || a.reply.replyToMessageId !== source.messageId || a.reply.replyToSenderOpenDingTalkId !== source.actorId
+            || !decision.atOpenDingTalkIds.includes(source.actorId)
+            : a.sourceId || a.reply.replyToMessageId || a.reply.replyToSenderOpenDingTalkId)) fail('TOPIC_REPLY_SOURCE_INVALID')
         notification = { id: `fact-reply:${hash([a.submission.requestId, a.factIds])}`, kind: 'topic-reply', taskId: facts[0].taskId,
           requirementRevision: facts[0].requirementRevision, state: 'prepared', createdAt: stamp, updatedAt: stamp,
           payload: { ...a.reply, text: a.reply.text, conversationId: a.groupId, replyTopicId: a.topicId,
             topicRefs: [{ topicId: a.topicId, revision: a.submission.revision }], taskIds: [...new Set(facts.map(f => f.taskId))],
-            sourceMessageId: source.messageId, sourceId: source.sourceId, sourceVersion: source.version, actorId: source.actorId,
+            ...(source ? { sourceMessageId: source.messageId, sourceId: source.sourceId, sourceVersion: source.version, actorId: source.actorId } : {}),
             coveredEventIds: a.factIds, replyKind: 'substantive', kind: 'topic-reply',
             humanRequests: facts.filter(fact => fact.humanRequestId && currentRequest(fact)).map(fact => ({ taskId: fact.taskId, requestId: fact.humanRequestId })),
             fact: { taskIds: [...new Set(facts.map(f => f.taskId))], eventIds: a.factIds } } }
@@ -292,17 +294,20 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
         const participants = topicMessages(group, topic, request.revision)
           .filter(message => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
         const target = participants.find(message => message.messageId === submission.decision.replyToMessageId)
-        if (!target) fail('group_reply_target_not_in_topic')
+        if (submission.decision.replyToMessageId && !target) fail('group_reply_target_not_in_topic')
         const recipients = [...new Set(submission.decision.atOpenDingTalkIds)]
         if (recipients.some(id => !participants.some(message => message.senderOpenDingTalkId === id))) fail('group_reply_recipient_not_in_topic')
-        const source = await query('topic.fact.reply-source', { groupId: request.groupId, messageId: target.messageId,
-          actorId: target.senderOpenDingTalkId, version: target.messageVersion })
-        if (!source) fail('TOPIC_REPLY_SOURCE_INVALID')
-        sourceId = source.sourceId
+        if (target) {
+          if (!recipients.includes(target.senderOpenDingTalkId)) fail('group_reply_quote_author_not_in_recipients')
+          const source = await query('topic.fact.reply-source', { groupId: request.groupId, messageId: target.messageId,
+            actorId: target.senderOpenDingTalkId, version: target.messageVersion })
+          if (!source) fail('TOPIC_REPLY_SOURCE_INVALID')
+          sourceId = source.sourceId
+        }
         submission = { ...submission, decision: { ...submission.decision, atOpenDingTalkIds: recipients } }
-        reply = formatTaskGroupReply({ source: { ...target, groupId: request.groupId },
+        reply = formatTaskGroupReply({ source: { ...target, groupId: request.groupId }, allowUnrouted: !target,
           summary: submission.decision.reply, evidence: [], limitations: [], signature: signature(),
-          internalIds: [request.groupId, request.topicId, request.requestId, sourceId, target.messageId, ...recipients,
+          internalIds: [request.groupId, request.topicId, request.requestId, sourceId, target?.messageId, ...recipients,
             ...context.eventIds, ...context.input.tasks.map(task => task.taskId), ...context.sourceIdentities],
         })
         reply.atOpenDingTalkIds = recipients
@@ -311,7 +316,7 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
         revision: request.revision, expectedSummary: context.expectedSummary, commit: async () => {
           const receipt = await commit('topic.fact.accept', { groupId: request.groupId, topicId: request.topicId,
             taskIds: context.taskIds, taskSnapshot: context.taskSnapshot, replySnapshot: context.replySnapshot,
-            factIds: context.eventIds, expectedSummary: context.expectedSummary, submission, ...(reply ? { reply, sourceId } : {}) }, `fact-decision:${request.requestId}`)
+            factIds: context.eventIds, expectedSummary: context.expectedSummary, submission, ...(reply ? { reply, ...(sourceId ? { sourceId } : {}) } : {}) }, `fact-decision:${request.requestId}`)
           return { status: receipt.result.status ?? 'accepted', receipt }
         } })
       if (result.status === 'accepted') {

@@ -102,7 +102,7 @@ test('完成与事实同事务，回复失败不影响完成；重启复用结�
   assert.equal((await f.query('notification.list')).length, 1)
 })
 
-test('事实回复按Topic选择原需求人和验收人，多人原生提及冻结后经过真实发送适配器', async t => {
+for (const quoted of [true, false]) test('事实回复按Topic选择原需求人和验收人，多人原生提及冻结后经过真实发送适配器 quoted=' + quoted, async t => {
   const f = await fixture(t)
   const additions = [{ messageId: 'review', actorId: 'open-reviewer', senderName: '测试成员甲', text: '我来验收，请把核验结果也同步给我。' },
     ...Array.from({ length: 10 }, (_, i) => ({ messageId: `progress-${i}`, actorId: 'open-helper', senderName: '测试成员甲一',
@@ -130,16 +130,17 @@ test('事实回复按Topic选择原需求人和验收人，多人原生提及冻
   const sub = f.submission(ctx, 'selected-audience', '核验已完成，结果和截图已整理。')
   sub.decision.reason = '原需求人接收交付，验收人明确要求同步；后续材料提供者不自动替换或加入收件人。'
   sub.decision.atOpenDingTalkIds = ['user', 'open-reviewer', 'user']
-  for (const patch of [{ replyToMessageId: undefined }, { atOpenDingTalkIds: undefined, reply: '@测试成员甲 核验完成。' },
+  if (!quoted) delete sub.decision.replyToMessageId
+  for (const patch of [{ replyToMessageId: 'progress-9' }, { atOpenDingTalkIds: undefined, reply: '@测试成员甲 核验完成。' },
     { atOpenDingTalkIds: ['测试成员甲'] }, { atOpenDingTalkIds: ['untrusted-id'] }, { replyToMessageId: 'unresolved' }]) {
     await assert.rejects(f.submit({ ...sub, decision: { ...sub.decision, ...patch } }))
     assert.equal((await f.query('notification.list')).length, 0)
   }
   await f.submit(sub)
   const [notice] = await f.query('notification.list')
-  assert.equal(notice.payload.sourceId, 'source')
-  assert.equal(notice.payload.sourceMessageId, 'origin')
-  assert.equal(notice.payload.actorId, 'user')
+  assert.equal(notice.payload.sourceId, quoted ? 'source' : undefined)
+  assert.equal(notice.payload.sourceMessageId, quoted ? 'origin' : undefined)
+  assert.equal(notice.payload.actorId, quoted ? 'user' : undefined)
   assert.deepEqual(notice.payload.atOpenDingTalkIds, ['user', 'open-reviewer'])
   await f.reopen(); await f.handler.recover()
   const persisted = await f.query('notification.get', { notificationId: notice.id })
@@ -149,7 +150,8 @@ test('事实回复按Topic选择原需求人和验收人，多人原生提及冻
     commands.push(args); return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'send-operation' } }) }
   } } })
   const observed = { messageId: 'sent-result', conversationId: 'group', text: notice.payload.text,
-    quotedMessage: { messageId: 'origin', conversationId: 'group' }, atOpenDingTalkIds: ['user', 'open-reviewer'] }
+    ...(quoted ? { quotedMessage: { messageId: 'origin', conversationId: 'group' } } : {}), atOpenDingTalkIds: ['user', 'open-reviewer'] }
+  assert.equal(verifyTaskNotificationReadback(persisted, { ...observed, atOpenDingTalkIds: ['user', 'open-reviewer', 'open-helper'] }, { acknowledgedMessageId: 'sent-result' }), undefined)
   assert.equal(verifyTaskNotificationReadback(persisted, { ...observed, atOpenDingTalkIds: undefined, text: '@测试成员甲 ' + observed.text }, { acknowledgedMessageId: 'sent-result' }), undefined)
   await deliverTaskNotification({ notification: persisted, command: f.commit, notifications: {
     send: notification => sendWorkflowNotification(adapter, notification),
@@ -158,10 +160,17 @@ test('事实回复按Topic选择原需求人和验收人，多人原生提及冻
   assert.equal(commands.length, 1)
   const args = commands[0], argument = key => args[args.indexOf(key) + 1]
   assert.equal(argument('--group'), 'group')
-  assert.equal(argument('--ref-msg-id'), 'origin')
-  assert.equal(argument('--ref-sender'), 'user')
+  assert.equal(args.includes('--ref-msg-id'), quoted)
+  assert.equal(args.includes('--ref-sender'), quoted)
+  if (quoted) {
+    assert.equal(argument('--ref-msg-id'), 'origin')
+    assert.equal(argument('--ref-sender'), 'user')
+  } else {
+    assert.ok(args.includes('+messages-send'))
+    assert.equal(argument('--as'), 'user')
+  }
   assert.equal(argument('--at-open-dingtalk-ids'), 'user,open-reviewer')
-  assert.equal(argument('--content'), notice.payload.text)
+  assert.equal(argument(quoted ? '--content' : '--text'), quoted ? notice.payload.text : '<@user> <@open-reviewer> ' + notice.payload.text)
   assert.equal(args.includes('--at-all'), false)
   assert.equal(args.includes('--at-user-ids'), false)
   const delivered = await f.query('notification.get', { notificationId: notice.id })
@@ -169,7 +178,7 @@ test('事实回复按Topic选择原需求人和验收人，多人原生提及冻
   assert.equal(delivered.receipt.mentionVerification, 'verified')
   await projectTaskNotification({ residentStore: f.resident, notification: delivered })
   const outbound = f.resident.getGroup('group').outbox[0]
-  assert.equal(outbound.replyToMessageId, 'origin')
+  assert.equal(outbound.replyToMessageId, quoted ? 'origin' : undefined)
   assert.deepEqual(outbound.atOpenDingTalkIds, ['user', 'open-reviewer'])
 })
 

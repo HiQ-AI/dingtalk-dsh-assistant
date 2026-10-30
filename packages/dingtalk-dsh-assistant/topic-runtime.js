@@ -305,9 +305,10 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const participants = messages.filter((message) => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
     const target = participants.find((message) => message.messageId === replyToMessageId)
     const recipients = atOpenDingTalkIds?.length ? atOpenDingTalkIds : target ? [target.senderOpenDingTalkId] : []
-    if (participants.length && !target) throw new Error('group_reply_routing_required')
+    if (participants.length && !target && !recipients.length) throw new Error('group_reply_routing_required')
     if (replyToMessageId && !target) throw new Error('group_reply_target_not_in_topic')
     if (new Set(recipients).size !== recipients.length || recipients.some((id) => !participants.some((message) => message.senderOpenDingTalkId === id))) throw new Error('group_reply_recipient_not_in_topic')
+    if (target && !recipients.includes(target.senderOpenDingTalkId)) throw new Error('group_reply_quote_author_not_in_recipients')
     return { target, recipients }
   }
   function reviewRequestIdentity(kind, task, value) {
@@ -719,7 +720,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
               topicRefs: [{ topicId: topic.topicId, revision: topic.revision }] }
             decisions.set(requestId, request)
             const envelope = { requestId, topicId: topic.topicId, revision: topic.revision, trigger: 'task-facts', ...context.input }
-            const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n本轮是任务事实，不是用户新请求。结合最新补充、相关任务和已发/待发回复，决定直接回复、合并这些结果或沉默。actions 必须为空；不创建、补充、重开或取消任务。提交 group_decision_submit：decision 包含 actions:[]、topicUpdate.summary、reason，可选 reply。有reply时显式选择replyToMessageId和atOpenDingTalkIds；结合原始需求、验收反馈、明确交付或知会约定选择本次结果的收件人集合，可多人。sources是任务事实的触发来源，不是默认收件人；最近补充者、恢复条件提供者或截图要求者不自动替换原需求人和验收人。originMessages、recentMessages提供本话题原文及受信ID；不足时沿readCall读取相关话题原文，不读取全执行历史。按ID区分同名/近似名，不猜ID，不自动@所有历史参与者，身份不确定时不伪装通知。正文不要用@姓名代替原生提及；Host校验并冻结所选身份，经现有通知路径投递。reason解释回复或沉默及收件人选择依据。不使用 basisMessageIds/replyReview。不得把任务事实当新授权。通常无需额外读取；确需完整事实可用 group_decision_context_get 的 facts section。`
+            const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n本轮是任务事实，不是用户新请求。结合最新补充、相关任务和已发/待发回复，决定直接回复、合并这些结果或沉默。actions 必须为空；不创建、补充、重开或取消任务。提交 group_decision_submit：decision 包含 actions:[]、topicUpdate.summary、reason，可选 reply。有reply时显式选择atOpenDingTalkIds。结果通知优先省略replyToMessageId，直接发普通群消息，避免仅为引用最新来源而额外提醒其作者。确需引用时按Topic上下文选择相关消息，并把引用作者计入最终收件人；引用可能自动@作者，不能只修改显式列表却继续引用不相关人。没有合适引用或要避免隐式与显式提及叠加时不引用。结合原始需求、验收反馈、明确交付或知会约定选择本次结果的收件人集合，可多人。sources是任务事实的触发来源，不是默认收件人；最近补充者、恢复条件提供者或截图要求者不自动替换原需求人和验收人。originMessages、recentMessages提供本话题原文及受信ID；不足时沿readCall读取相关话题原文，不读取全执行历史。按ID区分同名/近似名，不猜ID，不自动@所有历史参与者，身份不确定时不伪装通知。正文不要用@姓名代替原生提及；Host校验并冻结所选身份，经现有通知路径投递。reason解释回复或沉默及收件人选择依据。不使用 basisMessageIds/replyReview。不得把任务事实当新授权。通常无需额外读取；确需完整事实可用 group_decision_context_get 的 facts section。`
             context.metrics.inputBytes = Buffer.byteLength(body, 'utf8')
             taskFacts.observe?.(context.metrics)
             monitor(send(groupId, body, [], request), request, decisions)
@@ -1231,7 +1232,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const outbound = { groupId, outboundId: request.outboundId ?? `reply-${args.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.task.result), text: args.reply.trim(), taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence, topicRefs: task.topicRefs,
         matterSourceMessageIds: [...new Set(request.messages.map((message) => message.messageId))], matterUnitRefs: request.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })),
         replyKind: replyReview?.kind, replacesOutboundIds: replyReview?.replaceOutboundIds,
-        ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: recipients } : {}) }
+        ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients }
       // 对外调用在短状态提交之后；独立通知的失败不消费其他 Topic 请求。
       const persisted = await appendOutbox({ ...outbound, preflight })
       if (persisted?.status) { await schedule(groupId); return persisted }
@@ -1318,7 +1319,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     return { groupId: task.groupId, outboundId: `reply-${request.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.value), text: draft.reply.trim(), taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence, topicRefs: task.topicRefs,
       matterSourceMessageIds: [...new Set(sources.map((message) => message.messageId))], matterUnitRefs: sources.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })),
       replyKind: replyReview.kind, replacesOutboundIds: replyReview.replaceOutboundIds,
-      ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId, atOpenDingTalkIds: recipients } : {}) }
+      ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients }
   }
   function notificationFence(request) {
     return { observedTopics: request.observedTopics, outboxFingerprint: fingerprint(store.getGroup(request.groupId)?.outbox ?? []) }
@@ -1354,7 +1355,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const context = { topicRefs: inline('topicRefs', task.topicRefs), messages: visibleMessages, totalMessages: messages.length, hasMoreMessages: messageContext.hasMoreMessages, messagesSection: 'messages', ...(kind === 'completion' ? { replyReviewCandidateCount: request.candidates.length } : {}) }
     const originalContext = `\n${kind === 'completion' ? '通知上下文' : '任务原始上下文'}：${JSON.stringify(context)}`
     const instruction = kind === 'completion'
-      ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。当前 Agent 的交付及必要自验证完成即可通过；他人后续检查不构成完成条件。可以同时准备群通知，notification为可选且独立校验；通知草稿缺失或不合法不影响业务验收，通过后Host会单独恢复通知；存在真实群参与人时必须从通知上下文选择 replyToMessageId，省略 atOpenDingTalkIds 时默认 @ 被引用消息的发送人；需要通知其他参与人时显式填写。存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界。"
+      ? "完成审阅拒绝：{accepted:false,reason:string}。完成审阅通过：{accepted:true,reason:string,notification:{reply:string,replyReview:{kind,reviewedOutboundIds,sameMatterOutboundIds,replaceOutboundIds},replyToMessageId?:string,atOpenDingTalkIds?:string[]}}。当前 Agent 的交付及必要自验证完成即可通过；他人后续检查不构成完成条件。可以同时准备群通知，notification为可选且独立校验；通知草稿缺失或不合法不影响业务验收，通过后Host会单独恢复通知；按通知上下文选择收件人；确需引用时选择 replyToMessageId，并把作者计入收件人，省略 atOpenDingTalkIds 时默认提醒作者。没有合适引用或需避免隐式提及叠加时可不引用，显式填写 atOpenDingTalkIds。存在历史回复候选时先用 group_reply_review_get 读取当前请求。通知保留实际完成内容、交付状态和未验证边界。"
       : kind === 'waiting'
         ? "等待审阅：真实必要依赖用 {decision:'approve-wait',reason:string}；可自行继续用 {decision:'continue',reason:string}；已完成自身工作、仅等他人后续检查时用 {decision:'revise-scope',reason:string,basisMessageIds:string[],affectedStageIds:string[],title:string,objective:string,acceptanceCriteria:string[],stageTasks:string[]}。revise-scope 必须以原始消息明确的本 Agent 交付重写完整目标、验收和剩余阶段，并用 affectedStageIds 指明旧阶段中从哪一项起受影响，保留之前有效的证据；不要把实际未完成的本职工作删去。只有 blockedItems 中确有当前 Agent 尚未完成的交付，且所列依赖必要，才可 approve-wait。先核对仍可独立完成的阶段、已尝试的取证入口及失败证据，不能从一个入口不可用推断所有入口不可用；不得把排查方法扩大成原始要求。审阅不代替业务完成，也不得因为没有 blockedItems 批准等待。"
         : `检查点审阅：{decision:'acknowledge'|'guidance'|'reject',reason:string,guidance?:string}。计划与原始消息或任务流程冲突时必须 reject；只有原始消息明确支持的 workflowAssessment.exceptions 才能覆盖流程。`
