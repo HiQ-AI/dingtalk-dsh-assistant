@@ -86,7 +86,7 @@ Windows 专用临时测试目录须向当前执行用户继承授予 FullControl
 
 仍有效的看板测试补齐真实 `ExecutionSessionDuration` 定义，检查三种状态的可访问语义而非过时的 SVG 总数；模型上下文测试使用 `node:path.relative` 核对目录内路径，继续读回全部原内容。未修改产品源码或降低字节预算。
 
-完整原生材料测试要求 `test/fixtures/task-session-native-host.js` 声明的完整组合。CI/Release 通过 `DSH_NATIVE_TEST_PROFILE` 显式指向 private 合成 workspace `test/fixtures/native-profile/package.json`，冻结安装后预检 37 个真实原生模块；夹具不包含用户 bundle、provider 配置或凭据。锁文件新增完整组合并改变若干 Assistant 依赖的 peer 上下文，原有包版本未升级，不能据此声称依赖解析完全不变。未设置变量的本地测试仍默认使用 resident profile；不得删除有效材料权限测试或把缺环境改成通过。
+完整原生材料测试要求 `test/fixtures/task-session-native-host.js` 声明的完整组合。CI/Release 通过 `DSH_NATIVE_TEST_PROFILE` 显式指向 private 合成 workspace `test/fixtures/native-profile/package.json`，冻结安装后预检 39 个真实原生模块，包括平台定时测试实际使用的 `dsh-schedule` 和 `dsh-tool-schedule`；夹具不包含用户 bundle、provider 配置或凭据。两项定时依赖与其余合成 Host 保持相同的 `0.2.1-alpha.2` 版本，只加入私有测试 profile；产品依赖不随之升级。此前锁文件新增完整组合并改变若干 Assistant 依赖的 peer 上下文，原有包版本未升级，不能据此声称依赖解析完全不变。未设置变量的本地测试仍默认使用 resident profile；不得删除有效材料权限测试或把缺环境改成通过。
 
 固定摘要属于 `runtime-contracts-archive.md` 明确保留的历史字节完整性保证。`3601f29` 的两个 v4 函数与上次绿 CI `88181c2` 语义相同，但换行从 LF 变为 CRLF；原 LF 摘要仍匹配原测试常量。本轮已恢复 `88181c2` 的原始混合换行字节，Git blob `9af03f7ec38b8ff2fe0105038aa1ce1aee0bc613` 完全相同；规范化内容不变，原断言及期望摘要未改，两项定向回归通过。归档文件不进入当前正式包。群协调公平续行的重试计数断言也保留。基线最小用例的 1 次重试实际来自旧模型夹具未处理的摘要迁移请求，原、新话题决策均为 0 次。夹具现按真实 `group_topic_summary_submit` 协议处理摘要，并仅用 decision 角色更新决策指针；9 次非法纠正、10 次原请求调用、新任务先行以及全部请求 0 重试断言不变，定向回归通过。
 隔离原生材料回归中发现合成模型误将 `coord-summary-*` 请求提交为路由，已补齐真实摘要协议分支，未改生产代码。材料文件本机 15 项中 13 项通过；两项创建符号链接被 Windows 返回 EPERM，保留原断言交由托管 CI 实测，未变更系统权限。
