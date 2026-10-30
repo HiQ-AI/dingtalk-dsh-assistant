@@ -18,10 +18,14 @@ Task-session 的 Route 保留普通业务 Topic，同时提供两个稳定类别
 
 mentions 读取兼容标准 `result.conversationMessagesList[].messages`（`openMessageId`/`messageId`）及原有 `items`，按会话与消息身份精确核对，并复用 `hasMore`/`nextCursor` 续页。百部 DWS v1.0.63 的 [同版本分页实现](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/blob/4cd5d05393a8748e89d9265eb9f7ec85745a0331/internal/helpers/paged_command.go#L259) 和 [空末页测试](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/blob/4cd5d05393a8748e89d9265eb9f7ec85745a0331/internal/helpers/paged_command_test.go#L401) 明确允许会话列表在末页省略；适配器仅在成功且 `hasMore=false` 时接受此形式。非末页缺列表、显式损坏的列表、失败响应、解密失败、部分结果、缺少或停滞的续页游标仍报错。
 
-平台整体问询使用独立原生 session。只暴露 platform_task_query 与 platform_reply_submit，没有文件、shell、创建、唤醒、取消、完成等权限。工具读取本群真实任务（包括同库归档），按状态和本地完成日期查询；列表分页返回 nextCall，提交前检查已发起查询的所有页读完。平台会话只准备答复，不创建业务 Task；修改管理请求只能说明只读能力边界。具体业务进展如“UPR导入修好了吗”仍归业务 Topic；混合消息逐 unit 分流。
+平台整体问询使用独立原生 session，沿宿主正式接口 `permissionPresets.set(session, 'danger-full-access')` 选择完全权限模式。仅该会话类型移除插件的工具白名单和 guard，继承所选可信 preset 与宿主实际提供的工具，仍受宿主强制策略和用户授权约束，不修改其他会话或全局权限。`platform_task_query` 与 `platform_reply_submit` 在会话作用域真实注册；不能把这些局部工具放进只接受继承工具名的 `tools.restrict`。查询工具读取本群真实任务（包括同库归档），按状态和本地完成日期查询；列表分页返回 nextCall，提交前检查已发起查询的所有页读完。平台问询或汇报不创建业务 Task；具体业务进展如“导入修好了吗”仍归业务 Topic，混合消息逐 unit 分流。
+
+时间型请求同时提供原消息 `messageTime`、执行快照 `asOf` 和群时区。判断结合用户明确时区和实际执行时刻重新核对目标，不把过去时间照原值安排，也不擅自顺延明天。仍有价值的状态汇报补报一次并说明实际时间与延迟；已失去意义的定点提醒可通过 `platform_reply_submit({text:null})` 静默结清。空字符串仍拒绝，普通自然语言输出仍不发送。未来请求只能使用宿主实际提供的 schedule 能力，真实创建成功后才确认已安排；确认不等于定时汇报已经完成。
+
+当前生命周期仍为插件拥有的子会话（`origin=subagent`、`delegationDepth=1`），答复后释放。DSH `0.2.1-rc.2` 的原生 `schedule_create` 虽可见，但会对该身份返回 `subagent_session`；因此本修复不声称已支持未来定时交付，不能承诺已安排，也不能用立即汇报冒充未来汇报。未修改宿主的子会话准入或新增调度架构。未来定时交付还需要正式独立会话恢复及查询/回复工具的恢复绑定。
 
 时区依次采用群 timezone、用户 Agent 配置 timezone、宿主默认 IANA 时区。可通过现有群配置/Agent 配置 API 设置 timezone，值按 Intl 校验。today/yesterday 以查询快照时刻的本地日期计算，返回包含左闭右开日期范围、时区及 asOf；按完成记录 at 过滤，不用更新时间冒充完成时间。
 
 处理完成时间保存在现有 source unit 的可选 fixedTopicHandledAt 中；入站只有全部固定 unit 与业务 unit 结算后才完成。稳定原消息/版本/unit 身份生成同一个回复 ID，复用 outbox 和 notification 幂等、ACK、回读及重启恢复；已有冻结答复优先恢复，不重新生成。没有数据库 schema 迁移或新的 outbox/任务编排状态机，也不恢复 #288 暂停的 coordination 接纳链。
 
-验证覆盖真实 DomainFacility 的持久化/重启、固定类别分页与失败/沉默/回复状态、mentions 契约和静默人工纠正；浏览器使用合成 React 宿主验证键盘、空态、分页、409/503 与窄屏。相关原生回归使用仓库 native profile 与确定性模型。真实 DingTalk、百部生产库上的纠正和实际模型判断由部署后的独立验证负责，不能用隔离测试代替。
+验证覆盖真实 DomainFacility 的持久化/重启、固定类别分页与失败/沉默/回复状态、mentions 契约和静默人工纠正；浏览器使用合成 React 宿主验证键盘、空态、分页、409/503 与窄屏。相关原生回归使用 native profile 与确定性模型；`fixed-topics-native.test.js` 实际调用宿主注册的查询、回复及文件工具，检查会话权限隔离，并在提供 rc2 schedule 包时验证真实调度拒绝。时间指导断言与脚本化过期分支不等于真实模型语义验证。真实 DingTalk、生产库上的纠正和实际模型判断由部署后的独立验证负责，不能用隔离测试代替。
