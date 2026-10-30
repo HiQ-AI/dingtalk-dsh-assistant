@@ -1,8 +1,50 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { inspectRetainedRestart } from '../scripts/native-restart-maintenance.mjs'
+import { readMaintenanceDrainProof } from '../packages/dingtalk-dsh-assistant/native-maintenance-drain.js'
+import { maintenanceEvidenceFixture } from './fixtures/native-maintenance-drain.js'
 import { restartFixture } from './fixtures/native-restart-isolation.js'
 import { isolationDigest as hash, isolationBinding, hasRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
+
+test('retained maintenance audit binds the native input, feedback, terminal history and original process identities', async t => {
+ const root = await mkdtemp(join(tmpdir(), 'maintenance-proof-')); t.after(() => rm(root, { recursive: true, force: true }))
+ const f = restartFixture(false)
+ Object.assign(f.operation.dispatchBinding, { requirementRevision: 2, controlRevision: 3 })
+ const binding = f.operation.dispatchBinding
+ f.original.splice(1, 0, { type: 'turn/start', data: {} })
+ f.original.push({ type: 'agent/inbox/spliced', data: { inserted: [{ role: 'user', source: { kind: 'coordinator', executionFeedback: { executionId: binding.executionId, messageId: 'feedback' } } }] } },
+  { type: 'agent/inbox/spliced', data: { inserted: [], removedCount: 1 } }, { type: 'turn/end', data: { reason: { kind: 'blocked' } } })
+ f.original.forEach((event, seq) => { event.seq = seq })
+ const encoded = structuredClone(f.original)
+ encoded.at(-1).sourceEventSeqs = [[0, 2], 4]
+ f.original.at(-1).sourceEventSeqs = [0, 1, 2, 4]
+ const audit = await maintenanceEvidenceFixture(root, binding, encoded), operations = [f.operation]
+ const args = { workspace: root, binding, events: f.original, calls: f.original.filter(event => event.type === 'tool/call'), operations, evidence: audit.evidence, observeProcesses: async () => [] }
+ const before = JSON.stringify(operations)
+ const proof = await readMaintenanceDrainProof(args)
+ assert.equal(proof.noReplay, true); assert.equal(proof.partialEffectsPossible, true); assert.equal(proof.capturedProcessCount, 2)
+ assert.equal(proof.pendingOperations[0].operationDigest, hash(f.operation)); assert.equal(JSON.stringify(operations), before)
+ const parent = audit.artifacts['captured-descendants']
+ audit.artifacts['captured-descendants'] = [parent, { ProcessId: 414, ParentProcessId: 413, CreationDate: '2026-01-01T00:00:02Z' }]
+ await audit.save(); assert.equal((await readMaintenanceDrainProof(args)).capturedProcessCount, 3)
+ await assert.rejects(readMaintenanceDrainProof({ ...args, observeProcesses: async () => [parent] }), /PROCESS_REMAINS/)
+ assert.equal((await readMaintenanceDrainProof({ ...args, observeProcesses: async () => [{ ...parent, CreationDate: '2026-01-01T01:00:00Z' }] })).processesExited, true, 'PID reuse is not the original child')
+ audit.artifacts['captured-descendants'][1].CreationDate = '2025-12-31T23:00:00Z'; await audit.save()
+ await assert.rejects(readMaintenanceDrainProof(args), /PROCESS_TREE_INVALID/)
+ await writeFile(join(audit.evidence.directory, 'captured-descendants.json'), '')
+ assert.equal((await readMaintenanceDrainProof(args)).capturedProcessCount, 1, 'old installer writes an empty file for zero descendants')
+ await assert.rejects(readMaintenanceDrainProof({ ...args, binding: { ...binding, leaseEpoch: binding.leaseEpoch + 1 } }), /BINDING_STALE/)
+ await assert.rejects(readMaintenanceDrainProof({ ...args, operations: [] }), /CALL_UNBOUND/)
+ await writeFile(audit.logFile, audit.text + JSON.stringify({ seq: 99, type: 'tool/call', data: {} }) + '\n')
+ await assert.rejects(readMaintenanceDrainProof(args), /NATIVE_HISTORY_CHANGED/)
+ await writeFile(audit.logFile, audit.text)
+ audit.artifacts.quiescent.runtimePortClosed = false; await audit.save()
+ await assert.rejects(readMaintenanceDrainProof(args), /CUTOVER_UNPROVEN/)
+ assert.equal(JSON.stringify(operations), before)
+})
 function fixture(acknowledged = false) {
  const f = restartFixture(acknowledged, '& D:\\pg\\bin\\postgres.exe -D D:\\agent\\artifacts\\retained -h 127.0.0.1 -p 25428')
  f.execution.sessionBound = true; f.execution.cancelRequested = true

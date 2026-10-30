@@ -30,8 +30,8 @@ export function messageProcessingProjection(message, topics, source, requests, s
     return !unit || unit.fixedTopic && !unit.fixedTopicHandledAt || unit.dispatchOwner === 'coordination' && !retired(ref) && !sourceDone
   })
   const issues = [], recovery = []
-  const issue = (phase, code, status, requestId, attempt, retryAt) => {
-    if (!issues.some(item => item.phase === phase && item.requestId === requestId)) issues.push({ phase, code, status, requestId, attempt: attempt ?? 0, retryAt: retryAt ?? null })
+  const issue = (phase, code, status, requestId, attempt, retryAt, cause) => {
+    if (!issues.some(item => item.phase === phase && item.requestId === requestId)) issues.push({ phase, code, status, requestId, attempt: attempt ?? 0, retryAt: retryAt ?? null, ...(cause ? { cause } : {}) })
   }
   // Only current, unfinished owners can fail a message; group delivery errors are not ownership evidence.
   for (const request of requests) {
@@ -53,7 +53,7 @@ export function messageProcessingProjection(message, topics, source, requests, s
     const hostRecovery = topicDecisionRecovery(record)
     if (hostRecovery && record.revision === topic.revision) recovery.push({ requestId: record.decisionId, token: hostRecovery.token, phase: 'host' })
     if (record.status === 'blocked' || record.status === 'failed') issue('host', record.status === 'blocked' ? 'decision-blocked' : 'decision-retry',
-      record.status === 'blocked' ? 'failed' : 'retrying', record.decisionId, record.attempt, record.nextRetryAt)
+      record.status === 'blocked' ? 'failed' : 'retrying', record.decisionId, record.attempt, record.nextRetryAt, record.error)
   }
   if (message.routingStatus === 'failed' && !issues.some(item => item.phase === 'routing')) issue('routing', 'routing-failed', 'failed', null, 0, null)
   let state = 'unknown', basis = 'unknown', completedAt = null, conclusion = null
@@ -92,14 +92,15 @@ export function messageProcessingProjection(message, topics, source, requests, s
   conclusion = [...new Set([conclusion, ...(topicPending ? [] : records.map(record => record?.decision?.reason ?? record?.decision?.reply)),
     ...(['processed', 'needs_clarification'].includes(state) ? reasons : [])]
     .filter(text => typeof text === 'string' && text.trim()))].join('；') || null
-  if (!details) return { processingState: state, processingConclusion: conclusion,
+  const processingFailureCode = issues.find(item => item.status === 'failed')?.cause ?? null
+  if (!details) return { processingState: state, processingConclusion: conclusion, processingFailureCode,
     processingSentAt: message.occurredAt ?? null, processingCompletedAt: completedAt,
     processingRecovery: recovery[0] ?? null, processingRetrying: issues.some(item => item.status === 'retrying') }
   const notices = source?.notifications ?? []
   const noticeTimes = notices.map(notice => notice.deliveredAt)
   const deliveredAt = notices.length && notices.every(notice => notice.versionMatched === true && notice.state === 'delivered') && noticeTimes.every(time => Number.isFinite(instant(time)))
     ? new Date(Math.max(...noticeTimes.map(instant))).toISOString() : null
-  return { processingState: state, processingBasis: basis, processingConclusion: conclusion,
+  return { processingState: state, processingBasis: basis, processingConclusion: conclusion, processingFailureCode,
     processingSentAt: message.occurredAt ?? null, processingCompletedAt: completedAt,
     processingFacts: {
       sourceId: source?.sourceId ?? null, messageVersion: message.messageVersion ?? null,

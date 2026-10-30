@@ -1,32 +1,9 @@
-import { readFileSync, readdirSync, lstatSync } from 'node:fs'
-import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { zstdDecompressSync } from 'node:zlib'
 import { isolationDigest as hash, isolationBinding, hasRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 import { restartScopeProbePlan, validRestartScopeObservation } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
-
-export function readNativeHistory(workspace, row) {
-  const matches = []
-  function walk(directory) {
-    if (lstatSync(directory).isSymbolicLink()) throw Error('DEPLOY_LOG_REPARSE_POINT')
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const file = join(directory, entry.name)
-      if (entry.isSymbolicLink()) throw Error('DEPLOY_LOG_REPARSE_POINT')
-      if (entry.isDirectory()) walk(file)
-      else if (/^session\.v4\.jsonl(?:\.zst)?$/u.test(entry.name)) {
-        let bytes = readFileSync(file)
-        if (file.endsWith('.zst')) bytes = zstdDecompressSync(bytes)
-        const text = bytes.toString('utf8')
-        const events = text.trim().split(/\r?\n/u).map(line => JSON.parse(line))
-        if (events[0]?.id === row.sessionId) matches.push({ events, digest: hash({ text }) })
-      }
-    }
-  }
-  walk(join(workspace, 'tasks', row.taskId, '.dsh', 'sessions'))
-  if (matches.length !== 1) throw Error('DEPLOY_NATIVE_LOG_IDENTITY')
-  return matches[0]
-}
+import { readNativeHistory } from '../packages/dingtalk-dsh-assistant/native-maintenance-drain.js'
+export { readNativeHistory }
 
 function runFixedProbe(plan) {
   if (process.platform !== 'win32') throw Error('DEPLOY_RESTART_WINDOWS_REQUIRED')

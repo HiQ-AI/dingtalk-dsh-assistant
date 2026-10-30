@@ -528,8 +528,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       totalMessages: messages.length, historyAvailable: messages.length > deltaMessages.length,
       ownedDeltaUnitRefs: ownership.ownedDeltaUnitRefs, ownedDeltaMessageIds: ownership.ownedDeltaMessageIds,
       messages: projected, quotedMessages, sourceMessages, summary: topic.summary, openQuestions: topic.openQuestions,
-      removedUnitRefs, removedMessageIds, ...(rejected.length ? { rejectedDecisions: rejected.map(record => ({ decisionId: record.decisionId, error: record.error })),
-        recoveryInstruction: '此前决策被拒绝，Task 动作未执行；先读取当前 Task 的 stagePlan，以真实 stageId 重新判断未处理输入。已发送回复仍须审阅，不重复确认。' } : {}) }
+      removedUnitRefs, removedMessageIds, ...(rejected.length ? { rejectedDecisions: rejected.map(record => ({ decisionId: record.decisionId, error: record.error, recoveryReason: record.recoveryReason })),
+        recoveryInstruction: '此前决策被拒绝，Task 动作未执行；先读取当前 Task 的版本与上下文，按当前合同重新判断全部未处理输入。涉及阶段时使用真实 stageId。已发送回复仍须审阅，不重复确认。' } : {}) }
     const sectionFields = { promptIndex: ['promptIndex'], summary: ['summary', 'openQuestions'], quotedMessages: ['quotedMessages'], sourceMessages: ['sourceMessages'],
       removedUnitRefs: ['removedUnitRefs'], rejectedDecisions: ['rejectedDecisions'], ownership: ['ownedDeltaUnitRefs', 'ownedDeltaMessageIds'], messages: ['messages'] }
     // Optional Task snapshots must not displace the new source/authorization facts.

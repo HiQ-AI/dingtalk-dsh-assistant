@@ -11,16 +11,37 @@ import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { isolationDigest as hash, isolationBinding, readAuditedRestartDrain } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 import { restartFixture } from './fixtures/native-restart-isolation.js'
 import { restartScopeProbePlan } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
+import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
+import { readMaintenanceDrainProof } from '../packages/dingtalk-dsh-assistant/native-maintenance-drain.js'
+import { maintenanceEvidenceFixture } from './fixtures/native-maintenance-drain.js'
 
 const pg = String.raw`& D:\soft\PostgreSQL\16\bin\postgres.exe -D D:\agent\artifacts\isolated-pg -h 127.0.0.1 -p 25428`
 const noop = async () => {}
-async function fixture(t) {
+async function fixture(t, mode) {
  const root = await mkdtemp(join(tmpdir(), 'restart-http-')), dbPath = join(root, 'control.sqlite')
  const options = { dbPath, instanceId: 'restart-http', webActorId: 'operator' }
  let store = await openDynamicTaskStore({ ...options, initialize: true }), sequence = 0
  const command = (kind, args, id = `fixture-${++sequence}`) => store.command({ id, kind, args })
  const query = (kind, args = {}) => store.query({ kind, ...args })
- await command('task.create', { taskId: 'task', groupId: 'g', ownerActorId: 'operator', request: 'Continue the original task' })
+ let resident, topicRefs = []
+ if (mode) {
+  const tables = new Map()
+  resident = await openResidentStore({ open: async () => ({ table(name) {
+   if (!tables.has(name)) tables.set(name, new Map()); const rows = tables.get(name)
+   return { get: id => rows.get(id), entries: () => [...rows], put: async (id, row) => rows.set(id, row), delete: async id => rows.delete(id),
+    update: async (id, fn) => { const row = fn(rows.get(id)); rows.set(id, row); return row } }
+  }, close: noop }) })
+  await resident.subscribe({ groupId: 'g' })
+  await resident.ingest({ groupId: 'g', messageId: 'original-message', text: 'Continue the original task', occurredAt: '2026-01-01T00:00:00Z' })
+  const routed = await resident.routeMessages({ groupId: 'g', routeId: 'route', routingRevision: 0,
+   routes: [{ messageId: 'original-message', messageVersion: 1, topics: [{ newTopicKey: 'original', title: 'Original business' }] }] })
+  const topicId = routed.topicIdsByKey.original, revision = resident.getTopic('g', topicId).revision
+  await resident.acceptTopicDecision({ groupId: 'g', topicId, revision, decisionId: 'initial', decision: { basisMessageIds: ['original-message'], actions: [], reason: 'Retain context' } })
+  await resident.completeTopicDecision({ groupId: 'g', topicId, decisionId: 'initial' })
+  topicRefs = [{ topicId, revision }]
+  await command('source.record', { sourceId: 'initial-source', groupId: 'g', messageId: 'original-message', actorId: 'operator', text: 'Continue the original task', channel: 'web' })
+ }
+ await command('task.create', { taskId: 'task', groupId: 'g', ownerActorId: 'operator', title: '原业务修复', request: 'Continue the original task', topicRefs })
  const owner = (await command('task.claim', { taskId: 'task' })).result.binding
  const execution = (await command('execution.dispatch', { binding: owner, executionId: 'original', key: 'original', prompt: 'Original local operation', input: {} })).result.execution
  const binding = (await command('execution.claim', { executionId: execution.executionId })).result.binding
@@ -33,10 +54,16 @@ async function fixture(t) {
   definition: { recoveryReadOnly: true }, input: { readbackOperationId: 'operation' } })).result.execution
  const readBinding = (await command('execution.claim', { executionId: investigated.executionId })).result.binding
  await command('execution.result', { binding: readBinding, output: { inspected: true } }); await command('execution.drained', { binding: readBinding })
- await command('execution.cancel', { binding })
+ if (mode) await command('execution.result', { binding, output: { originalResult: 'retained' } })
+ if (mode === 'succeeded') await command('execution.drained', { binding })
+ else {
+  if (mode === 'scope-missing') await command('execution.drainFailed', { binding, error: { code: 'execution_session_drain_failed', cause: { code: 'execution_process_drain_failed', phase: 'waitForExit', message: 'Windows Job runner exited before proving managed range empty' } } })
+  await command('execution.cancel', { binding })
+ }
  await command('task.wait', { binding: owner, action: 'blocked', summary: 'Unknown original result', question: 'Confirm bounded isolation',
   humanRequest: { requestId: 'human', audience: 'operator', reason: 'Host restart', attemptedActions: ['Original effects inspected'] } })
  await command('task.drained', { binding: owner })
+ if (mode) await command('task.control', { taskId: 'task', control: 'cancelled', expectedControlRevision: 1 })
  await store.close(); store = await openDynamicTaskStore(options)
  const operation = await query('operation.get', { operationId: 'operation' }), currentBinding = await query('execution.binding', { executionId: 'original' })
  const original = await query('execution.get', { executionId: 'original' }), readback = await query('execution.get', { executionId: 'investigation' })
@@ -47,26 +74,81 @@ async function fixture(t) {
  Object.keys(facts.readback).forEach(key => delete facts.readback[key]); Object.assign(facts.readback, readback)
  facts.readback.kind = 'task-execution'
  facts.original[3].data = { ...operation.job, kind: 'pwsh', label: pg, toolCall: { callId: 'original-call', rootCallId: 'original-call' } }
+ if (mode) {
+  facts.original.splice(1, 0, { type: 'turn/start', data: {} })
+  facts.original.push({ type: 'agent/inbox/spliced', data: { inserted: [{ role: 'user', source: { kind: 'coordinator', executionFeedback: { executionId: 'original', messageId: 'feedback' } } }] } },
+   { type: 'agent/inbox/spliced', data: { inserted: [], removedCount: 1 } }, { type: 'turn/end', data: { reason: { kind: 'blocked' } } })
+  facts.original.forEach((event, seq) => { event.seq = seq })
+ }
+ const audit = mode === 'scope-missing' ? await maintenanceEvidenceFixture(root, currentBinding, facts.original) : undefined
  facts.receipt.binding = isolationBinding(operation, 'original-call'); facts.receipt.observedAt = new Date().toISOString()
  const ctx = facts.ctx
- const driver = createExecutionSessions({ ctx, isCurrent: async () => true, readRestartDrainProof: args => readAuditedRestartDrain({ ctx, query, ...args }) })
+ const driver = createExecutionSessions({ ctx, isCurrent: async () => true, isRecoveryCurrent: b => query('execution.recovery-current', { binding: b }),
+  readRestartDrainProof: args => readAuditedRestartDrain({ ctx, query, ...args }),
+  readMaintenanceDrainProof: async args => readMaintenanceDrainProof({ workspace: root, ...args, operations: await query('operation.list'), observeProcesses: async () => [] }) })
  const service = await openTaskSessionService({ ctx, store, config: { ...options, workspaceDir: root, webActorId: 'operator' },
-  legacy: { getGroup: () => undefined, getAgentConfig: () => ({ workspaceDir: root }) },
-  residentStore: { listGroups: () => [], listTopics: () => [], getGroup: () => undefined }, persistence: { register: noop, close: noop },
-  taskSessions: { close: noop, cancel: noop, run: async ({ submit }) => { await submit({ action: 'wait', summary: 'Unknown results retained', evidence: [], limitations: ['No replay'] }); return { status: 'submitted' } } },
+  legacy: { getGroup: id => resident?.getGroup(id), getAgentConfig: () => ({ workspaceDir: root }) },
+  residentStore: resident ?? { listGroups: () => [], listTopics: () => [], getGroup: () => undefined }, persistence: { register: noop, close: noop },
+  taskSessions: { close: noop, cancel: noop, run: async ({ submit }) => { await submit({ action: 'wait', summary: 'Unknown results retained', evidence: [], limitations: ['No replay'],
+   ...(mode ? { question: '请确认原进程范围已隔离，保留未知效果且不重放。', audience: 'operator', attemptedActions: ['已核对原效果'] } : {}) }); return { status: 'submitted' } } },
   executionSessions: driver, notifications: { canDisclose: () => false } })
- const server = createServer((request, response) => handleRequest(request, response, { respondTaskHumanRequest: args => service.respondHumanRequest(args) }))
+ const server = createServer((request, response) => handleRequest(request, response, { isTaskSessionMode: () => true,
+  reopenTask: args => service.reopenTask(args), respondTaskHumanRequest: args => service.respondHumanRequest(args) }))
  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
- const url = `http://127.0.0.1:${server.address().port}/tasks/task/human-requests/human/reply`
- const post = async (suffix, body, extraHeaders = {}) => {
-  const response = await fetch(url + suffix, { method: 'POST', headers: { 'content-type': 'application/json', ...extraHeaders }, body: JSON.stringify(body) })
+ const url = `http://127.0.0.1:${server.address().port}`
+ const postPath = async (path, body, extraHeaders = {}) => {
+  const response = await fetch(url + path, { method: 'POST', headers: { 'content-type': 'application/json', ...extraHeaders }, body: JSON.stringify(body) })
   return { status: response.status, body: await response.json() }
  }
- t.after(async () => { await new Promise(resolve => server.close(resolve)); await service.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+ const post = (suffix, body, headers) => postPath('/tasks/task/human-requests/human/reply' + suffix, body, headers)
+ t.after(async () => { await new Promise(resolve => server.close(resolve)); await service.close(); await resident?.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
  const body = { requestId: 'operator-isolation', reply: 'Confirm bounded source isolation; retain unknown and partial effects; no replay',
   expectedRequirementRevision: 1, expectedControlRevision: 1, nativeRestartResolutions: [{ operationId: 'operation', expectedOperationDigest: hash(operation) }] }
- return { root, store, service, facts, driver, binding: currentBinding, operation, command, query, post, body }
+ return { root, store, service, facts, driver, audit, resident, binding: currentBinding, operation, command, query, post, postPath, body }
 }
+
+for (const mode of ['succeeded', 'scope-missing']) test('maintenance reopen through HTTP creates a current reconciliation request without replay: ' + mode, async t => {
+ const f = await fixture(t, mode), original = await f.query('execution.get', { executionId: 'original' })
+ const before = await f.query('task.get', { taskId: 'task' }), oldRequest = structuredClone(before.humanRequests[0])
+ assert.equal(oldRequest.status, 'superseded')
+ if (mode === 'succeeded') { assert.equal(original.status, 'succeeded'); assert.equal(original.drained, true); assert.equal(original.cancelRequested, false) }
+ else await assert.rejects(f.driver.recoverDrained({ binding: f.binding, drainFailure: original.drainFailure }), { code: 'execution_recovery_process_scope_missing' })
+ const body = { requestId: 'resume-after-maintenance', context: 'Resume original task; reconcile unknown effects without replay',
+  expectedRequirementRevision: before.requirementRevision, expectedControlRevision: before.controlRevision,
+  ...(f.audit ? { maintenanceEvidence: f.audit.evidence } : {}) }
+ if (f.audit) {
+  const refused = await f.postPath('/tasks/task/reopen', { ...body, maintenanceEvidence: { ...f.audit.evidence, expectedProposalDigest: 'f'.repeat(64) } })
+  assert.equal(refused.status, 400); assert.equal((await f.query('execution.get', { executionId: 'original' })).drained, false)
+ }
+ const reopened = await f.postPath('/tasks/task/reopen', body)
+ assert.equal(reopened.status, 200, JSON.stringify(reopened.body))
+ await f.service.whenIdle()
+ assert.equal((await f.postPath('/tasks/task/reopen', body)).status, 200)
+ const task = await f.query('task.get', { taskId: 'task' }), execution = await f.query('execution.get', { executionId: 'original' })
+ assert.equal(task.status, 'active'); assert.equal(task.runSequence, 2)
+ assert.deepEqual(task.humanRequests[0], oldRequest)
+ assert.deepEqual(task.restartRecoveryOperations, ['operation'])
+ assert.deepEqual(await f.query('operation.get', { operationId: 'operation' }), f.operation)
+ assert.deepEqual(execution.result, original.result)
+ if (f.audit) {
+  assert.equal(execution.drained, true); assert.equal(execution.recovering, false)
+  assert.equal(execution.recoveryDrainAudit.noReplay, true); assert.equal(execution.recoveryDrainAudit.pendingOperations.length, 1)
+  assert.ok(execution.drainFailure.recoveredAt); assert.deepEqual(execution.drainFailure.error, original.drainFailure.error)
+ } else assert.deepEqual(execution, original)
+ Object.assign(f.facts.execution, execution)
+ const request = task.humanRequests.find(row => row.status === 'waiting-reply')
+ assert.ok(request, JSON.stringify(f.service.listAlerts())); assert.notEqual(request.requestId, oldRequest.requestId)
+ const reply = { ...f.body, expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision }
+ assert.equal((await f.post('/check', reply)).status, 409, 'superseded request stays unusable')
+ const path = `/tasks/task/human-requests/${request.requestId}/reply`
+ const check = await f.postPath(path + '/check', reply)
+ assert.equal(check.status, 200, JSON.stringify(check.body)); assert.equal(check.body.ready, true)
+ reply.nativeRestartResolutions[0].expectedIsolationDigest = check.body.restartResolutions[0].isolationDigest
+ assert.equal((await f.postPath(path, reply)).status, 200)
+ const operation = await f.query('operation.get', { operationId: 'operation' })
+ assert.equal(operation.state, 'unknown'); assert.equal(operation.recoverySettlement.noReplay, true)
+ assert.equal((await f.query('execution.list')).length, 2, 'reopen/reconcile never relaunch the original operation')
+})
 
 test('real HTTP/service/ledger check is zero-write; reply is digest-bound/idempotent; missing-result drain uses the same audit', async t => {
  const f = await fixture(t), before = structuredClone(f.facts.original)
