@@ -1,5 +1,5 @@
 import test from 'node:test'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import { restartFixture } from './fixtures/native-restart-isolation.js'
 import { restartScopeProbePlan, localRestartScope, restartProducerFilter } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
@@ -77,6 +77,18 @@ test('observed non-OOM Host exit preserves unknown effects and requires full bou
    assert.equal(restartScopeProbePlan({ command: pg, binding: f.plan.spec.binding, evidence: { ...f.scopeEvidence, hostExit } }), null)
   }
  } finally { if (oldHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = oldHome }
+})
+
+test('actual PowerShell preserves observed-exit milliseconds and timezone through JSON decoding', { skip: spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0']).error ? 'PowerShell required' : false }, () => {
+ for (const observedAt of ['2026-10-27T07:32:20.000Z', '2026-10-27T15:32:20.123+08:00']) {
+  const f = probeFixture(pg, true, { observedAt, evidenceRef: 'retained-exit-observation' })
+  // Run the generated spec decoder and window expression unchanged; no OS calls.
+  const prefix = f.plan.command.slice(0, f.plan.command.indexOf('$log = Get-Item'))
+  const window = f.plan.command.split('\n').find(line => line.startsWith('$windowEnd ='))
+  const script = prefix + window + '\n[ordered]@{observedAt=$s.hostExit.observedAt;epoch=([DateTimeOffset]$windowEnd).ToUnixTimeMilliseconds()}|ConvertTo-Json -Compress'
+  const output = execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true })
+  assert.deepEqual(JSON.parse(output), { observedAt, epoch: Date.parse(observedAt) })
+ }
 })
 
 for (const [command, acknowledged] of [[pg, true], [maven, false]]) test(`existing native probe proves bounded isolation without a new service: ${acknowledged ? 'PG' : 'Maven'}`, async () => {

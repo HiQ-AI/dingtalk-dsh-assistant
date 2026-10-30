@@ -65,14 +65,15 @@ export function restartScopeProbePlan({ command, binding, evidence, dshHome = pr
   || evidence.producerScopeReviewed !== true || evidence.localEffectsOnlyConfirmed !== true || evidence.excludeOriginalSourcesConfirmed !== true) return null
  const hostExit = evidence.hostExit
  if (hostExit !== undefined && (!hostExit || Object.keys(hostExit).some(key => !['observedAt', 'evidenceRef'].includes(key))
-  || !Number.isFinite(Date.parse(hostExit.observedAt)) || Date.parse(hostExit.observedAt) < binding.startedAt || Date.parse(hostExit.observedAt) > Date.now()
+  || typeof hostExit.observedAt !== 'string' || !Number.isFinite(Date.parse(hostExit.observedAt)) || Date.parse(hostExit.observedAt) < binding.startedAt || Date.parse(hostExit.observedAt) > Date.now()
   || typeof hostExit.evidenceRef !== 'string' || !hostExit.evidenceRef.trim() || hostExit.evidenceRef.length > 2000)) return null
  const spec = { schema: hostExit ? 'native-restart-scope-v2' : 'native-restart-scope-v1', ...(hostExit ? { hostExit } : {}), binding, scope, hostPid: evidence.hostPid, hostLogPath: evidence.hostLogPath,
   hostLogSha256: evidence.hostLogSha256, managedProviderRoot: win32.join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai'), providerFiles: providerFiles.map(([path, sha256]) => ({ path: win32.join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai', path), sha256 })) }
  const encoded = Buffer.from(JSON.stringify(spec)).toString('base64')
  const probe = `$ErrorActionPreference = 'Stop'
 ${restartProducerFilter}
-$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')) | ConvertFrom-Json
+$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')) | ConvertFrom-Json${hostExit ? `
+$s.hostExit.observedAt = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(hostExit.observedAt).toString('base64')}'))` : ''}
 $log = Get-Item -LiteralPath $s.hostLogPath -ErrorAction Stop
 if ($log.PSIsContainer -or ($log.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'HOST_LOG_NOT_REGULAR' }
 $logHash = (Get-FileHash -LiteralPath $s.hostLogPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
