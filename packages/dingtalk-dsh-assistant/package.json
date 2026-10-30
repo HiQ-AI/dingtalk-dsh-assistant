@@ -104,7 +104,8 @@
     "coordination-retirement.js",
     "artifact-json.js",
     "task-artifact-files.js",
-    "task-final-delivery.js"
+    "task-final-delivery.js",
+    "native-dws-send.js"
   ],
   "exports": {
     ".": "./index.js",

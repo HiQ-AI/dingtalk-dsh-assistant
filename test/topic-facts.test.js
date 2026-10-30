@@ -136,7 +136,7 @@ test('完成与事实同事务，回复失败不影响完成；重启复用结�
   assert.equal((await f.query('notification.list')).length, 1)
 })
 
-for (const quoted of [true, false]) test('事实回复按Topic选择原需求人和验收人，多人原生提及冻结后经过真实发送适配器 quoted=' + quoted, async t => {
+for (const contextReference of [true, false]) test('事实回复保留多人原生提及并在冻结时消除引用叠加 contextReference=' + contextReference, async t => {
   const f = await fixture(t)
   const additions = [{ messageId: 'review', actorId: 'open-reviewer', senderName: '测试成员甲', text: '我来验收，请把核验结果也同步给我。' },
     ...Array.from({ length: 10 }, (_, i) => ({ messageId: `progress-${i}`, actorId: 'open-helper', senderName: '测试成员甲一',
@@ -164,17 +164,18 @@ for (const quoted of [true, false]) test('事实回复按Topic选择原需求人
   const sub = f.submission(ctx, 'selected-audience', '核验已完成，结果和截图已整理。')
   sub.decision.reason = '原需求人接收交付，验收人明确要求同步；后续材料提供者不自动替换或加入收件人。'
   sub.decision.atOpenDingTalkIds = ['user', 'open-reviewer', 'user']
-  if (!quoted) delete sub.decision.replyToMessageId
-  for (const patch of [{ replyToMessageId: 'progress-9' }, { atOpenDingTalkIds: undefined, reply: '@测试成员甲 核验完成。' },
+  if (contextReference) sub.decision.replyToMessageId = 'progress-9'
+  else delete sub.decision.replyToMessageId
+  for (const patch of [{ atOpenDingTalkIds: undefined, reply: '@测试成员甲 核验完成。' },
     { atOpenDingTalkIds: ['测试成员甲'] }, { atOpenDingTalkIds: ['untrusted-id'] }, { replyToMessageId: 'unresolved' }]) {
     await assert.rejects(f.submit({ ...sub, decision: { ...sub.decision, ...patch } }))
     assert.equal((await f.query('notification.list')).length, 0)
   }
   await f.submit(sub)
   const [notice] = await f.query('notification.list')
-  assert.equal(notice.payload.sourceId, quoted ? 'source' : undefined)
-  assert.equal(notice.payload.sourceMessageId, quoted ? 'origin' : undefined)
-  assert.equal(notice.payload.actorId, quoted ? 'user' : undefined)
+  assert.equal(notice.payload.sourceId, undefined)
+  assert.equal(notice.payload.sourceMessageId, undefined)
+  assert.equal(notice.payload.actorId, undefined)
   assert.deepEqual(notice.payload.atOpenDingTalkIds, ['user', 'open-reviewer'])
   await f.reopen(); await f.handler.recover()
   const persisted = await f.query('notification.get', { notificationId: notice.id })
@@ -184,7 +185,7 @@ for (const quoted of [true, false]) test('事实回复按Topic选择原需求人
     commands.push(args); return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'send-operation' } }) }
   } } })
   const observed = { messageId: 'sent-result', conversationId: 'group', text: notice.payload.text,
-    ...(quoted ? { quotedMessage: { messageId: 'origin', conversationId: 'group' } } : {}), atOpenDingTalkIds: ['user', 'open-reviewer'] }
+    atOpenDingTalkIds: ['user', 'open-reviewer'] }
   assert.equal(verifyTaskNotificationReadback(persisted, { ...observed, atOpenDingTalkIds: ['user', 'open-reviewer', 'open-helper'] }, { acknowledgedMessageId: 'sent-result' }), undefined)
   assert.equal(verifyTaskNotificationReadback(persisted, { ...observed, atOpenDingTalkIds: undefined, text: '@测试成员甲 ' + observed.text }, { acknowledgedMessageId: 'sent-result' }), undefined)
   await deliverTaskNotification({ notification: persisted, command: f.commit, notifications: {
@@ -194,17 +195,12 @@ for (const quoted of [true, false]) test('事实回复按Topic选择原需求人
   assert.equal(commands.length, 1)
   const args = commands[0], argument = key => args[args.indexOf(key) + 1]
   assert.equal(argument('--group'), 'group')
-  assert.equal(args.includes('--ref-msg-id'), quoted)
-  assert.equal(args.includes('--ref-sender'), quoted)
-  if (quoted) {
-    assert.equal(argument('--ref-msg-id'), 'origin')
-    assert.equal(argument('--ref-sender'), 'user')
-  } else {
-    assert.ok(args.includes('+messages-send'))
-    assert.equal(argument('--as'), 'user')
-  }
+  assert.equal(args.includes('--ref-msg-id'), false)
+  assert.equal(args.includes('--ref-sender'), false)
+  assert.ok(args.includes('+messages-send'))
+  assert.equal(argument('--as'), 'user')
   assert.equal(argument('--at-open-dingtalk-ids'), 'user,open-reviewer')
-  assert.equal(argument(quoted ? '--content' : '--text'), quoted ? notice.payload.text : '<@user> <@open-reviewer> ' + notice.payload.text)
+  assert.equal(argument('--text'), '<@user> <@open-reviewer> ' + notice.payload.text)
   assert.equal(args.includes('--at-all'), false)
   assert.equal(args.includes('--at-user-ids'), false)
   const delivered = await f.query('notification.get', { notificationId: notice.id })
@@ -212,7 +208,7 @@ for (const quoted of [true, false]) test('事实回复按Topic选择原需求人
   assert.equal(delivered.receipt.mentionVerification, 'verified')
   await projectTaskNotification({ residentStore: f.resident, notification: delivered })
   const outbound = f.resident.getGroup('group').outbox[0]
-  assert.equal(outbound.replyToMessageId, quoted ? 'origin' : undefined)
+  assert.equal(outbound.replyToMessageId, undefined)
   assert.deepEqual(outbound.atOpenDingTalkIds, ['user', 'open-reviewer'])
 })
 
@@ -299,7 +295,8 @@ test('历史归属只取有效来源，移除与合并记录不广播历史 topi
 
 for (const answeredBeforeDecision of [true, false]) test(`旧问题失效不会吞掉混合完成事实：接纳前答复=${answeredBeforeDecision}`, async t => {
   const f = await fixture(t), question = await f.task('question'), done = await f.task('done')
-  await f.finish(done)
+  const artifactFiles = [{ artifact: { artifactId: 'd'.repeat(64), taskId: 'done', requirementRevision: 1, fileName: 'acceptance.png', size: 8, sha256: 'a'.repeat(64) }, caption: '验收结果' }]
+  await f.commit('task.complete', { binding: done, summary: '核对完成', result: { summary: '核对完成', artifactFiles }, topicFacts: true })
   await f.commit('task.wait', { binding: question, action: 'wait', summary: '等待日期', question: '请确认日期', topicFacts: true,
     humanRequest: { requestId: 'date', audience: 'requester', reason: '缺少日期' } })
   await f.commit('task.drained', { binding: question })
@@ -315,12 +312,14 @@ for (const answeredBeforeDecision of [true, false]) test(`旧问题失效不会�
   const context = await f.context()
   if (answeredBeforeDecision) assert.equal(context.input.facts.find(fact => fact.kind === 'needs-input').questionState, 'resolved')
   await f.submit(f.submission(context, 'mixed-result', '另一项核对完成。'))
-  const [notice] = await f.query('notification.list')
+  const [notice, fileNotice] = await f.query('notification.list')
+  assert.equal(fileNotice.payload.deliveryId, notice.id)
   if (!answeredBeforeDecision) await answer()
   const started = await f.commit('notification.start', { notificationId: notice.id })
   if (answeredBeforeDecision) assert.equal(started.dispatchEligible, true)
   else {
     assert.equal(started.result.notification.state, 'superseded')
+    assert.equal((await f.query('notification.get', { notificationId: fileNotice.id })).state, 'superseded')
     assert.deepEqual(started.result.topicFacts.map(fact => fact.taskId), ['done'])
     await f.reopen()
     const retry = await f.context()
@@ -331,7 +330,9 @@ for (const answeredBeforeDecision of [true, false]) test(`旧问题失效不会�
     assert.deepEqual(await f.query('topic.fact.projections'), [], '同一事件重排后投影新决定，不能重放旧投影收据')
     await f.reopen()
     assert.deepEqual(await f.handler.recover(), [])
-    const current = (await f.query('notification.list')).find(item => item.id !== notice.id)
+    const current = (await f.query('notification.list')).find(item => item.id !== notice.id && !item.payload.artifact)
+    const currentFile = (await f.query('notification.list')).find(item => item.payload.deliveryId === current.id && item.payload.artifact)
+    assert.equal(currentFile.state, 'prepared')
     assert.equal((await f.commit('notification.start', { notificationId: current.id })).dispatchEligible, true)
     assert.equal((await f.query('task.get', { taskId: 'done' })).status, 'completed')
   }

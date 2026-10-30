@@ -131,6 +131,10 @@ export async function apply(ctx, config = {}) {
         profile: dwsConfig.profile, runner: createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: file.directory }) })
         .sendGroupFile({ groupId: notification.payload.conversationId, fileName: file.fileName, idempotencyKey: notification.id }),
       readbackFile: notification => readTaskFileDelivery(dwsAdapter, notification),
+      querySendStatus: (openTaskId, original) => original && Object.hasOwn(original, 'profile')
+        ? createDwsAdapter({ enabled: dwsConfig.enabled === true, profile: original.profile ?? undefined,
+          runner: createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws' }) }).querySendStatus(openTaskId)
+        : dwsAdapter.querySendStatus(openTaskId),
       recall: notification => recallOperatorNotification(dwsAdapter, notification),
       readback: notification => notification.payload.audience === 'operator'
         ? readOperatorNotificationDelivery(dwsAdapter, notification)

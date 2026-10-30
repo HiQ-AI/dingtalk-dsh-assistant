@@ -31,12 +31,13 @@ import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceI
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, taskFilePath, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
 import { installTaskSessionPersistence, taskSessionLogRoot } from './task-session-persistence.js'
 import { formatTaskGroupReply } from './group-reply-format.js'
-import { assertGroupReply, sameDeliveredText } from './group-message.js'
+import { assertGroupReply } from './group-message.js'
 import { taskExecutionContext } from './execution-context.js'
 import { assertTaskContextSemantics, taskContextInputContract } from './task-input-contract.js'
 import { projectTaskTimeline, readTaskLifecycle, latestExecutionRoundTiming } from './task-execution-timeline.js'
 import { createTaskArtifactFiles } from './task-artifact-files.js'
 import { freezeTaskDeliveryFiles, withTaskFileNotifications } from './task-final-delivery.js'
+import { createNativeDwsObserver, nativeDwsCommands, nativeDwsObservation } from './native-dws-send.js'
 export { taskExecutionContext } from './execution-context.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex')
@@ -87,6 +88,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const deliveryFiles = createTaskArtifactFiles({ root: join(root, 'delivery-files') })
   notifications = withTaskFileNotifications(notifications, deliveryFiles)
   const inflightTasks = new Map(), inflightExecutions = new Map(), inflightGroups = new Map(), inflightNotifications = new Map()
+  let nativeDws
   const admissions = new Map(), admissionHolds = new Set()
   const sourceProjections = new Set(), notificationSends = new Set(), notificationReadbacks = new Set()
   const failures = new Map(), taskSlots = new Set(), messageRecoveryFlights = new Set()
@@ -158,6 +160,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (receipt.result?.notification) {
       const previous=notificationCache.get(receipt.result.notification.id), notification=receipt.result.notification
       notificationCache.set(notification.id,notification)
+      nativeDws?.notificationChanged(notification)
       if(observerGroupPage)for(const item of [previous,notification].filter(Boolean))
         for(const value of [item.receipt,item.ack])observerGroupPage.sourceChanged({groupId:item.payload?.conversationId,messageId:receiptMessageId(value)})
     }
@@ -186,6 +189,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     for (const item of await query('notification.list')) notificationCache.set(item.id, item)
     for (const item of await query('execution.list')) executionCache.set(item.executionId, item)
   })
+  nativeDws = createNativeDwsObserver({ operations: operationCache, residentStore, notificationCache,
+    querySendStatus: notifications?.querySendStatus, warn: error => ctx.logger?.warn?.(`native DWS receipt: ${error.code ?? error.message}`) })
+  await nativeDws.recover()
   // 仅为启动时已停住的技术等待补一次唤醒；同一实现重启不能反复驱动模型。
   const runtimeRevision = hash(await Promise.all(['task-session-service.js', 'task-session.js', 'execution-session.js', 'claude-execution-session.js', 'dynamic-native-job.js', 'dynamic-operation-readback.js']
     .map(file => readFile(new URL(file, import.meta.url), 'utf8'))))
@@ -196,17 +202,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       && [...operationCache.values()].some(operation => operation.taskId === task.taskId && operation.state === 'unknown')))
   const receiptMessageId = value => value?.messageId ?? value?.messageRef?.openMessageId ?? value?.sendReceipt?.messageId ?? value?.result?.messageId ?? value?.result?.openMessageId
   const isOwnNotification = message => {
-    const actorId = message.senderOpenDingTalkId ?? message.actorId
-    if (config.assistantActorId && actorId === config.assistantActorId && message.messageAiSendFlag === 'DWS') return true
-    return !!message.messageId && [...notificationCache.values()].some(item => {
-      if (item.payload?.conversationId !== message.groupId) return false
-      if ([receiptMessageId(item.receipt), receiptMessageId(item.ack)].includes(message.messageId)) return true
-      if (!config.assistantActorId || actorId !== config.assistantActorId || !['starting', 'unknown', 'delivered'].includes(item.state)
-        || message.quotedMessage?.messageId !== item.payload.sourceMessageId) return false
-      const sender = message.quotedMessage?.sender ?? message.quotedMessage?.senderName
-        ?? residentStore?.getGroup(message.groupId)?.messages.find(source => source.messageId === item.payload.sourceMessageId)?.senderName
-      return sameDeliveredText(message.text, item.payload.text, { sender })
-    })
+    if (!message.messageId) return false
+    // Account, the generic DWS flag, quote and body do not identify this plugin's send.
+    // Reuse both durable outbound projections and current exact send acknowledgements.
+    if (residentStore?.getGroup(message.groupId)?.outbox.some(item => item.deliveredMessageId === message.messageId)) return true
+    return [...notificationCache.values()].some(item => item.payload?.conversationId === message.groupId
+      && [receiptMessageId(item.receipt), receiptMessageId(item.ack)].includes(message.messageId))
   }
   const observation = createTaskSessionObservability({ store: residentStore, listTasks: () => [...taskCache.values()], resolveSessionIdentity: sessionId => {
     const task = [...taskCache.values()].find(item => item.sessionId === sessionId && item.sessionBound)
@@ -871,6 +872,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (!legacy.getGroup(message.groupId)) fail('group_not_subscribed')
     const actorId = message.senderOpenDingTalkId ?? message.actorId
     if (!actorId) fail('TASK_SESSION_AUTHENTICATED_SOURCE_REQUIRED')
+    if (!isOwnNotification(message)) await nativeDws.beforeIngress(message.groupId)
     if (isOwnNotification(message)) {
       return { accepted: false, processing: 'ignored', reason: 'own-notification' }
     }
@@ -942,7 +944,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
 
   async function nativeOperation(event) {
     const { binding, callId, toolName, arguments: args } = event
-    if (event.effectClass === 'read' || event.effectClass === 'pure') return { readOnly: true }
+    const dwsCommands = nativeDwsCommands(toolName, args)
+    const readOnly = event.effectClass === 'read' || event.effectClass === 'pure'
+    if (readOnly && !dwsCommands.some(item => item.kind === 'status')) return { readOnly: true }
     if (event.phase === 'started') {
       await verifyTaskRestartIsolations(binding.taskId)
       if (typeof args.command === 'string') for (const operation of await query('operation.list')) {
@@ -959,21 +963,29 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     }
     if (event.phase === 'started') {
       await command('operation.prepare', { binding, operationId, key, definition: { toolName, argumentsDigest: hash(args), ...(['pwsh', 'bash'].includes(toolName) ? { commandDigest: hash(args.command) } : {}), effectClass: event.effectClass ?? 'unknown',
+        ...(dwsCommands.length ? { nativeDwsCommands: dwsCommands } : {}),
         ...(['job_output', 'job_list'].includes(toolName) ? { nativeJobRead: false } : {}) },
         authorizationRef: `task:${binding.taskId}:requirement:${binding.requirementRevision}`, resourceKeys: [] }, `prepare:${key}`)
       const receipt = await command('operation.start', { binding, operationId }, `start:${key}`)
       if (!receipt.dispatchEligible) fail(receipt.result.operation.state === 'unknown' ? 'DYNAMIC_OPERATION_UNRESOLVED' : 'DYNAMIC_OPERATION_ALREADY_DISPATCHED')
+      nativeDws.start(operationId, dwsCommands)
       return { operationId }
     }
     // A background launch acknowledgement does not prove a terminal process result.
     if (event.jobReceipt && ['running', 'stopping'].includes(event.jobReceipt.status)) return { operationId, running: true }
     const error = nativeFileError(toolName, args, event.result, event.result?.error?.info ?? event.result?.error)
-    const noEffect = !event.cancelled && event.result?.isError === true && isNativeFilePrecondition(toolName, error)
+    const noEffect = readOnly && (event.cancelled || event.result?.isError === true)
+      || !event.cancelled && event.result?.isError === true && isNativeFilePrecondition(toolName, error)
     const state = noEffect ? 'failed' : event.cancelled || event.result?.isError ? 'unknown' : event.jobReceipt && event.jobReceipt.status !== 'completed' ? 'failed' : 'succeeded'
-    await command('operation.settle', { binding, operationId, state,
-      result: { callId, toolName, isError: event.result?.isError === true, resultDigest: hash(event.result?.content ?? event.result ?? null),
-        ...(error?.code ? { errorCode: error.code } : {}), ...(noEffect ? { noEffect: true } : {}),
-        ...(event.cancelled ? { cancelled: true } : {}), ...(event.jobReceipt ? { jobReceipt: event.jobReceipt } : {}) } }, `settle:${key}`)
+    try {
+      const receipt = await command('operation.settle', { binding, operationId, state,
+        result: { callId, toolName, isError: event.result?.isError === true, resultDigest: hash(event.result?.content ?? event.result ?? null),
+          ...nativeDwsObservation(event, dwsCommands),
+          ...(error?.code ? { errorCode: error.code } : {}), ...(noEffect ? { noEffect: true } : {}),
+          ...(event.cancelled ? { cancelled: true } : {}), ...(event.jobReceipt ? { jobReceipt: event.jobReceipt } : {}) } }, `settle:${key}`)
+      try { await nativeDws.observe(receipt.result.operation) }
+      catch (cause) { ctx.logger?.warn?.(`native DWS receipt: ${cause.code ?? cause.message}`) }
+    } finally { nativeDws.finish(operationId) }
     return { operationId }
   }
   function kickExecution(executionId) {
@@ -1360,7 +1372,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       messages: [{ messageId: current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined
   async function notificationDeliveryGate(notification) {
     if (notification.kind === 'coordination' || notification.state === 'superseded') return false
-    if (notification.payload.afterNotificationId && notificationCache.get(notification.payload.afterNotificationId)?.state !== 'delivered') return false
+    if (notification.payload.afterNotificationId) {
+      const previous = notificationCache.get(notification.payload.afterNotificationId)
+        ?? await query('notification.get', { notificationId: notification.payload.afterNotificationId })
+      if (previous?.state !== 'delivered') return false
+    }
     if (notification.state === 'prepared' || notification.state === 'failed' && notification.deliveryError?.knownNotSent === true && notification.deliveryError?.retryable === true) {
       const owners = residentStore.listGroups().flatMap(group => group.topics.flatMap(topic => topic.decisions.filter(record => record.outboundId === notification.id).map(record => ({ group, topic, record }))))
       if (owners.length) {
@@ -1934,6 +1950,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     },
     async close() {
       closed = true
+      nativeDws.close()
       clearTimeout(providerRetryTimer)
       stopObservation?.()
       await observationTail

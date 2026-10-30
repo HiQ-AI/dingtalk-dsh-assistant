@@ -13,6 +13,7 @@ import { taskSessionLogRoot } from '../packages/dingtalk-dsh-assistant/task-sess
 import { retireTaskContext } from '../packages/dingtalk-dsh-assistant/task-session.js'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
+import { taskNotificationRecovery } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
 
 testRunner('same-host recovery drains the original native process without replaying an unknown operation', { skip: !available ? reason : false, timeout: 20000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'native-drain-retry-'))
@@ -110,7 +111,78 @@ const call = (name, args) => ({ name, args })
 const test = (name, options, run) => testRunner(name, { ...options, ...(!available ? { skip: reason } : {}) }, run)
 const decision = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: ['实际文件和进程输出已核验'], limitations: [] } })
 
-test('native completion freezes reported acceptance files for Topic delivery', { timeout: 20000 }, async t => {
+test('native DWS observer binds send and status operations, filters early echoes and persists exact identities', { timeout: 20000 }, async t => {
+  const fixture = await nativeCase(t, 'native-dws-receipts-')
+  const launched = Promise.withResolvers(), allowAck = Promise.withResolvers(), allowStatus = Promise.withResolvers()
+  let delegated = false, h, probes = 0
+  const status = (openTaskId = 'trusted-send', messageId = 'sent-file') => ({ contractVersion: 'im.message-send-status.v1', success: true, openTaskId,
+    result: { sendStatus: 'SUCCESS', openConversationId: 'native-group', openMessageId: messageId }, messageRef: { openConversationId: 'native-group', openMessageId: messageId } })
+  const result = (...values) => ({ value: { kind: 'foreground', exitCode: 0, timedOut: false, aborted: false, stdout: { text: values.map(JSON.stringify).join('\n') }, stderr: { text: '' } } })
+  const executor = { close: async () => {}, cancel: async () => {}, feedback: async () => {}, assertDrained() {},
+    async run({ binding, onNativeExecution, onResult }) {
+      const invoke = async (callId, command, output, effectClass = 'unknown', cancelled = false) => {
+        const event = { binding, callId, toolName: 'pwsh', arguments: { command, timeoutMs: 10000 }, effectClass }
+        await onNativeExecution({ ...event, phase: 'started' })
+        await onNativeExecution({ ...event, phase: 'settled', result: output, cancelled })
+      }
+      await invoke('failed-read', "dws chat message send-status --open-task-id 'failed-read' --format json", { isError: true }, 'read')
+      await invoke('cancelled-read', "dws chat message send-status --open-task-id 'cancelled-read' --format json", result(status()), 'pure', true)
+      await invoke('mget-only', "dws chat +messages-mget --msg-ids 'other' --no-reactions --no-threads --format json", result(status()))
+      assert.equal(h.residentStore.getGroup('native-group').outbox.length, 0)
+      const event = { binding, callId: 'original-send', toolName: 'pwsh', effectClass: 'unknown', arguments: {
+        command: "dws chat +messages-send --as user --group 'native-group' --file 'accepted.png' --msg-type file --idempotency-key 'original-key' --yes --format json", timeoutMs: 10000 } }
+      await onNativeExecution({ ...event, phase: 'started' }); launched.resolve()
+      await allowAck.promise
+      await onNativeExecution({ ...event, phase: 'settled', result: result({ ok: true, result: { success: true, result: { openTaskId: 'trusted-send' } }, sendReceipt: { openTaskId: 'trusted-send' } }) })
+      await allowStatus.promise
+      await invoke('unrelated-status', "dws chat message send-status --open-task-id 'unrelated-send' --format json", result(status('unrelated-send', 'unrelated-message')))
+      await invoke('original-status', "dws chat message send-status --open-task-id 'trusted-send' --format json; dws chat +messages-mget --msg-ids 'sent-file' --no-reactions --no-threads --format json",
+        result(status(), { messages: [status('forged-in-mget', 'not-ours')] }))
+      await onResult({ status: 'completed', summary: '原发送及成功状态已观察', evidence: ['exact-send-receipt'], limitations: [], artifacts: [] })
+      return { status: 'submitted' }
+    } }
+  const options = { config: { assistantActorId: 'native-assistant' }, serviceFactory: options => openTaskSessionService({ ...options, executionSessions: executor }),
+    notifications: { send: async () => assert.fail('This test must not dispatch a notification'), readback: async () => undefined,
+      querySendStatus: async id => { assert.equal(id, 'trusted-send'); return ++probes === 1 ? { ...status(), result: { sendStatus: 'PROCESSING' } } : status() } } }
+  h = await fixture.host(async (request, host) => {
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
+      routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, units: [], ignoredRefs: [{ quote: message.text, reason: '人工测试消息无任务' }] })) } }]
+    if (!delegated) { delegated = true; return [call('task_delegate', { key: 'send', objective: '观察受信发送回执' }), decision('wait', '等待发送观察')] }
+    const [execution] = await host.query('execution.list', { taskId: input.task.taskId })
+    return [decision(execution?.drained && execution.status === 'succeeded' ? 'complete' : 'wait', '核对发送观察结果')]
+  }, options)
+  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'native-send', objective: '观察明确授权的发送及成功状态' })
+  await launched.promise
+  const echo = { groupId: 'native-group', messageId: 'sent-file', senderOpenDingTalkId: 'native-assistant', text: '[文件] accepted.png', timestamp: new Date().toISOString() }
+  const early = h.service.ingest(echo)
+  allowAck.resolve()
+  assert.equal((await early).reason, 'own-notification')
+  allowStatus.resolve(); await h.service.whenIdle()
+  const outbox = h.residentStore.getGroup('native-group').outbox
+  assert.equal(outbox.length, 1); assert.equal(outbox[0].deliveredMessageId, 'sent-file')
+  assert.equal(outbox[0].sendReceipt.openTaskId, 'trusted-send')
+  const operations = await h.query('operation.list', { taskId: created.taskId })
+  assert.ok(operations.some(operation => operation.result?.nativeDwsSend?.openTaskId === 'trusted-send'))
+  assert.ok(operations.some(operation => operation.result?.nativeDwsStatuses?.some(proof => proof.messageId === 'sent-file')))
+  for (const id of ['failed-read', 'cancelled-read']) {
+    const operation = operations.find(item => item.result?.callId === id)
+    assert.equal(operation.state, 'failed'); assert.equal(operation.result.noEffect, true)
+    assert.equal(operation.result.nativeDwsStatuses, undefined)
+  }
+  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
+  assert.equal((await h.service.ingest({ ...echo, messageId: 'manual-same-body', messageAiSendFlag: 'DWS' })).accepted, true)
+  await h.service.whenIdle()
+  const sources = await h.query('source.list')
+  assert.equal(sources.filter(source => source.messageId === 'manual-same-body').length, 1)
+  assert.equal(sources.some(source => source.messageId === 'sent-file'), false, 'The echo never reaches semantic ingress')
+  await h.close()
+  h = await fixture.host(() => { throw new Error('Receipt recovery must not invoke models') }, { ...options, initialize: false })
+  assert.equal((await h.service.ingest(echo)).reason, 'own-notification')
+  assert.equal(h.residentStore.getGroup('native-group').outbox.length, 1)
+})
+
+test('native completion freezes files and resumes remaining delivery after the explanation is archived', { timeout: 20000 }, async t => {
   const fixture = await nativeCase(t, 'native-final-files-')
   let delegated = false, step = 0
   const h = await fixture.host(async (request, host) => {
@@ -127,13 +199,54 @@ test('native completion freezes reported acceptance files for Topic delivery', {
     return [call('execution_submit', { output: { status: 'completed', summary: '本地验收文件已生成', evidence: ['acceptance.txt'], limitations: [], artifacts: ['acceptance.txt'] } })]
   }, { notifications: { send: async () => ({ messageId: 'summary' }), readback: async () => undefined,
     sendFile: async () => assert.fail('Files must wait for the final explanation receipt'), readbackFile: async () => undefined } })
-  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'final-file', objective: '生成并核验本地文件，随最终结果交付' })
+  await h.service.ingest({ groupId: 'native-group', messageId: 'final-file', senderOpenDingTalkId: 'native-user', senderName: '用户',
+    text: '测试助手，生成并核验本地文件，随最终结果交付', timestamp: new Date().toISOString() })
   await h.service.whenIdle()
+  const [created] = await h.query('task.list')
   const task = await h.query('task.get', { taskId: created.taskId })
   assert.equal(task.status, 'completed', JSON.stringify(h.toolResults.filter(item => item.result.isError)))
   assert.equal(task.completion.result.artifactFiles.length, 1)
   assert.equal(task.completion.result.artifactFiles[0].artifact.taskId, created.taskId)
   assert.equal(task.completion.result.artifactFiles[0].caption, '本地验收结果')
+  const notices = await h.query('notification.list')
+  const explanation = notices.find(n => n.payload.deliveryId === n.id)
+  const fileNotice = notices.find(n => n.payload.artifact)
+  assert.ok(explanation); assert.equal(fileNotice.state, 'prepared')
+  await h.service.store.command({ id: 'observe-summary', kind: 'notification.reconcile', args: { notificationId: explanation.id, state: 'delivered',
+    evidenceRef: 'exact-original-send', receipt: { messageId: explanation.ack.messageId, conversationId: 'native-group' } } })
+  await h.service.store.command({ id: 'archive-delivery-task', kind: 'task.archive', args: { taskId: created.taskId, actorId: 'native-user' } })
+  assert.equal((await h.query('notification.list')).some(n => n.id === explanation.id), false)
+  await h.close()
+  const sent = []
+  const recovered = await fixture.host(() => { throw new Error('Recovery must not re-run task models') }, { initialize: false, notifications: {
+    send: async () => assert.fail('The explanation must not be sent twice'), readback: async n => ({ messageId: n.ack.messageId }),
+    sendFile: async (n, file) => { sent.push(n.id); assert.equal(await readFile(file.path, 'utf8'), 'accepted original bytes'); return { openTaskId: 'queued-file-send' } },
+    readbackFile: async () => undefined,
+    querySendStatus: async id => { assert.equal(id, 'queued-file-send'); return { contractVersion: 'im.message-send-status.v1', success: true, openTaskId: id,
+      result: { sendStatus: 'SUCCESS', openConversationId: 'native-group', openMessageId: 'delivered-file' },
+      messageRef: { openConversationId: 'native-group', openMessageId: 'delivered-file' } } },
+  } })
+  await recovered.service.whenIdle()
+  assert.deepEqual(sent, [fileNotice.id])
+  const echo = { groupId: 'native-group', messageId: 'delivered-file', senderOpenDingTalkId: 'native-assistant', text: '[文件] acceptance.txt', timestamp: new Date().toISOString() }
+  assert.equal((await recovered.service.ingest(echo)).reason, 'own-notification')
+  const pendingFile = await recovered.query('notification.get', { notificationId: fileNotice.id })
+  assert.equal(pendingFile.state, 'starting'); assert.equal(pendingFile.ack.openTaskId, 'queued-file-send')
+  const outbound = recovered.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === fileNotice.id)
+  assert.equal(outbound.deliveredMessageId, 'delivered-file'); assert.equal(outbound.status, 'pending')
+  await recovered.close()
+  const verified = await fixture.host(() => { throw new Error('Receipt recovery must not re-run models') }, { initialize: false, notifications: {
+    send: async () => assert.fail('The explanation must not be sent twice'), readback: async () => undefined,
+    sendFile: async () => assert.fail('An acknowledged file must not be sent twice'),
+    readbackFile: async () => ({ messageId: 'delivered-file', conversationId: 'native-group' }),
+  } })
+  assert.equal((await verified.service.ingest(echo)).reason, 'own-notification', 'Early identity proof survives restart')
+  await verified.service.whenIdle()
+  const awaitingReadback = await verified.query('notification.get', { notificationId: fileNotice.id })
+  const retry = await verified.service.retryNotification({ groupId: 'native-group', notificationId: fileNotice.id,
+    expectedToken: taskNotificationRecovery(awaitingReadback).expectedToken })
+  assert.equal(retry.action, 'readback')
+  assert.equal((await verified.query('notification.get', { notificationId: fileNotice.id })).state, 'delivered')
 })
 
 test('running reminder and coordinator clarification preserve one native shell job with received and consumed receipts', { timeout: 20000 }, async t => {

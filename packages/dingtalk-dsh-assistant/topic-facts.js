@@ -12,7 +12,7 @@ export const factDecisionSchema = z.strictObject({
   decision: z.strictObject({ actions: z.tuple([]),
     topicUpdate: z.strictObject({ summary: z.string().trim().min(1).max(4000), openQuestions: z.array(z.string().max(500)).max(12).optional() }),
     reply: z.string().trim().min(1).max(6000).optional(), reason: z.string().trim().min(1).max(1000),
-    replyToMessageId: z.string().min(1).optional().describe('确需引用时，按Topic上下文选择本话题内真人消息；作者必须属于本次收件人集合，因为引用可能自动提及作者。没有合适引用或需避免叠加提及时省略，直接发送普通群消息，不默认引用最后来源。'),
+    replyToMessageId: z.string().min(1).optional().describe('可省略的本话题上下文来源；兼容旧决策并校验来源身份。最终事实通知固定发送普通群消息，不作原生引用，避免引用隐式@与显式@叠加；本字段不改变实际通知对象。'),
     atOpenDingTalkIds: z.array(z.string().min(1)).min(1).optional().describe('本次结果应通知的受信群成员ID集合，可多人；从话题原文身份选择，不按姓名猜ID，不自动包含全部参与者。回复时显式填写，正文@姓名不能替代原生提及。'),
   }),
 }).superRefine(({ decision }, ctx) => {
@@ -163,15 +163,13 @@ export function topicFactLedger({ db, get, put }) {
         // Topic membership is checked against the frozen resident revision by the Host.
         // A recipient can be the original requester or reviewer, outside this fact's trigger sources.
         if (JSON.stringify(a.reply.atOpenDingTalkIds) !== JSON.stringify(decision.atOpenDingTalkIds)
+          || a.reply.replyToMessageId || a.reply.replyToSenderOpenDingTalkId
           || (decision.replyToMessageId ? !source || source.groupId !== a.groupId || source.messageId !== decision.replyToMessageId
-            || a.reply.replyToMessageId !== source.messageId || a.reply.replyToSenderOpenDingTalkId !== source.actorId
-            || !decision.atOpenDingTalkIds.includes(source.actorId)
-            : a.sourceId || a.reply.replyToMessageId || a.reply.replyToSenderOpenDingTalkId)) fail('TOPIC_REPLY_SOURCE_INVALID')
+            : a.sourceId)) fail('TOPIC_REPLY_SOURCE_INVALID')
         notification = { id: `fact-reply:${hash([a.submission.requestId, a.factIds])}`, kind: 'topic-reply', taskId: facts[0].taskId,
           requirementRevision: facts[0].requirementRevision, state: 'prepared', createdAt: stamp, updatedAt: stamp,
           payload: { ...a.reply, text: a.reply.text, conversationId: a.groupId, replyTopicId: a.topicId,
             topicRefs: [{ topicId: a.topicId, revision: a.submission.revision }], taskIds: [...new Set(facts.map(f => f.taskId))],
-            ...(source ? { sourceMessageId: source.messageId, sourceId: source.sourceId, sourceVersion: source.version, actorId: source.actorId } : {}),
             coveredEventIds: a.factIds, replyKind: 'substantive', kind: 'topic-reply',
             humanRequests: facts.filter(fact => fact.humanRequestId && currentRequest(fact)).map(fact => ({ taskId: fact.taskId, requestId: fact.humanRequestId })),
             fact: { taskIds: [...new Set(facts.map(f => f.taskId))], eventIds: a.factIds } } }
@@ -218,7 +216,16 @@ export function topicFactLedger({ db, get, put }) {
     const pending = []
     for (const id of notification.payload.coveredEventIds ?? []) {
       const fact = get('dynamic_topic_facts', id)
-      if (fact?.state !== 'accepted' || fact.notificationId !== notification.id || fact.humanRequestId && !currentRequest(fact)) continue
+      if (fact?.state !== 'accepted' || fact.notificationId !== notification.id) continue
+      // The explanation was never dispatched. Retire only its unclaimed file parts;
+      // a send acknowledgement or unresolved external effect must remain reconcilable.
+      for (const file of fact.result.artifactFiles ?? []) {
+        const part = get('dynamic_notifications', `${notification.id}:file:${file.artifact.artifactId}`, true)
+        if (part?.payload.deliveryId !== notification.id || part.state !== 'prepared' || part.ack || part.receipt
+          || part.sendPermit || part.dispatchToken || part.sendStartedAt || part.sendAttemptCount > 0) continue
+        put('dynamic_notifications', { ...part, state: 'superseded', reason: 'stale_delivery', updatedAt: notification.updatedAt })
+      }
+      if (fact.humanRequestId && !currentRequest(fact)) continue
       const { decision, decisionId, notificationId, projectedAt, processedAt, ...rest } = fact
       const next = { ...rest, state: 'pending', lastSupersededNotificationId: notification.id }
       put('dynamic_topic_facts', next); pending.push(next)
@@ -320,7 +327,6 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
         const recipients = [...new Set(submission.decision.atOpenDingTalkIds)]
         if (recipients.some(id => !participants.some(message => message.senderOpenDingTalkId === id))) fail('group_reply_recipient_not_in_topic')
         if (target) {
-          if (!recipients.includes(target.senderOpenDingTalkId)) fail('group_reply_quote_author_not_in_recipients')
           const source = await query('topic.fact.reply-source', { groupId: request.groupId, messageId: target.messageId,
             actorId: target.senderOpenDingTalkId, version: target.messageVersion })
           if (!source) fail('TOPIC_REPLY_SOURCE_INVALID')
@@ -329,7 +335,10 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
         submission = { ...submission, decision: { ...submission.decision, atOpenDingTalkIds: recipients } }
         const attachments = context.artifactFiles?.length ? '\n\n附件与验收对应：\n' + context.artifactFiles
           .map((file, index) => `${index + 1}. ${file.artifact.fileName}：${file.caption}`).join('\n') : ''
-        reply = formatTaskGroupReply({ source: { ...target, groupId: request.groupId }, allowUnrouted: !target,
+        // Freeze the actual final delivery as plain text + selected native mentions.
+        // Keeping a model's optional context reference must not add an implicit recipient
+        // or duplicate a mention through the native quote transport.
+        reply = formatTaskGroupReply({ source: { groupId: request.groupId }, allowUnrouted: true,
           summary: submission.decision.reply + attachments, evidence: [], limitations: [], signature: signature(),
           internalIds: [request.groupId, request.topicId, request.requestId, sourceId, target?.messageId, ...recipients,
             ...context.eventIds, ...context.input.tasks.map(task => task.taskId), ...context.sourceIdentities],
