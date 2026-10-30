@@ -12,6 +12,12 @@ const providerFiles = [
 const safePath = value => typeof value === 'string' && win32.isAbsolute(value) && !/[\r\n'";&|<>`$]/u.test(value)
 const shellPath = '[A-Za-z]:\\\\[^\\s;\'"&|<>`$]+'
 
+// An operator may retain evidence of the original Host's exit without knowing
+// its cause. This is reviewed evidence, not a fabricated native exit receipt.
+export const observedHostExitSchema = { type: 'object', properties: {
+ observedAt: { type: 'string', format: 'date-time' }, evidenceRef: { type: 'string', minLength: 1, maxLength: 2000 },
+}, required: ['observedAt', 'evidenceRef'], additionalProperties: false }
+
 export function localRestartScope(command) {
  const pg = new RegExp(`^& (${shellPath}\\\\postgres\\.exe) -D (${shellPath}) -h 127\\.0\\.0\\.1 -p ([0-9]+)$`, 'i').exec(command)
  if (pg && Number(pg[3]) > 0 && Number(pg[3]) <= 65535) return { kind: 'local-postgres', executable: pg[1], directory: pg[2], port: Number(pg[3]) }
@@ -57,12 +63,17 @@ export function restartScopeProbePlan({ command, binding, evidence, dshHome = pr
  if (!scope || !safePath(dshHome) || !safePath(evidence?.hostLogPath) || !/^[a-f0-9]{64}$/u.test(evidence.hostLogSha256 ?? '')
   || !Number.isSafeInteger(evidence.hostPid) || evidence.hostPid < 1
   || evidence.producerScopeReviewed !== true || evidence.localEffectsOnlyConfirmed !== true || evidence.excludeOriginalSourcesConfirmed !== true) return null
- const spec = { schema: 'native-restart-scope-v1', binding, scope, hostPid: evidence.hostPid, hostLogPath: evidence.hostLogPath,
+ const hostExit = evidence.hostExit
+ if (hostExit !== undefined && (!hostExit || Object.keys(hostExit).some(key => !['observedAt', 'evidenceRef'].includes(key))
+  || typeof hostExit.observedAt !== 'string' || !Number.isFinite(Date.parse(hostExit.observedAt)) || Date.parse(hostExit.observedAt) < binding.startedAt || Date.parse(hostExit.observedAt) > Date.now()
+  || typeof hostExit.evidenceRef !== 'string' || !hostExit.evidenceRef.trim() || hostExit.evidenceRef.length > 2000)) return null
+ const spec = { schema: hostExit ? 'native-restart-scope-v2' : 'native-restart-scope-v1', ...(hostExit ? { hostExit } : {}), binding, scope, hostPid: evidence.hostPid, hostLogPath: evidence.hostLogPath,
   hostLogSha256: evidence.hostLogSha256, managedProviderRoot: win32.join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai'), providerFiles: providerFiles.map(([path, sha256]) => ({ path: win32.join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai', path), sha256 })) }
  const encoded = Buffer.from(JSON.stringify(spec)).toString('base64')
  const probe = `$ErrorActionPreference = 'Stop'
 ${restartProducerFilter}
-$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')) | ConvertFrom-Json
+$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')) | ConvertFrom-Json${hostExit ? `
+$s.hostExit.observedAt = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(hostExit.observedAt).toString('base64')}'))` : ''}
 $log = Get-Item -LiteralPath $s.hostLogPath -ErrorAction Stop
 if ($log.PSIsContainer -or ($log.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'HOST_LOG_NOT_REGULAR' }
 $logHash = (Get-FileHash -LiteralPath $s.hostLogPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
@@ -77,7 +88,7 @@ $all = @(Get-CimInstance Win32_Process -ErrorAction Stop)
 $hostCount = @($all | Where-Object { $_.ProcessId -eq $s.hostPid }).Count
 $hostChildren = @($all | Where-Object { $_.ParentProcessId -eq $s.hostPid }).Count
 $windowStart = [DateTimeOffset]::FromUnixTimeMilliseconds($s.binding.startedAt - 5000).UtcDateTime
-$windowEnd = $log.LastWriteTimeUtc
+$windowEnd = ${hostExit ? "[DateTimeOffset]::Parse($s.hostExit.observedAt).UtcDateTime" : '$log.LastWriteTimeUtc'}
 $portCount = 0; $preserved = $false; $sourceProcessId = 0; $artifactState = $null
 if ($s.scope.kind -eq 'local-postgres') {
  $sourcePidFile = Join-Path $s.scope.directory 'postmaster.pid'
@@ -94,9 +105,19 @@ if ($s.scope.kind -eq 'local-postgres') {
  $artifactState = 'retained-unverified-build'
 }
 $legacySourceCount = @(Get-RestartRelatedProducer $all $s $windowStart $windowEnd $sourceProcessId).Count
-[ordered]@{schema=$s.schema;specDigest='${hash(spec)}';observedAt=[DateTimeOffset]::UtcNow.ToString('o');hostFatal=$fatal;hostFatalTime=$log.LastWriteTimeUtc.ToString('o');providerContractVerified=$providerOk;originalHostCount=$hostCount;originalHostChildCount=$hostChildren;legacySourceCount=$legacySourceCount;sourceWriterCount=$writers;listeningCount=$portCount;originalArtifactsPreserved=$preserved;artifactState=$artifactState} | ConvertTo-Json -Compress
+[ordered]@{schema=$s.schema;specDigest='${hash(spec)}';observedAt=[DateTimeOffset]::UtcNow.ToString('o');hostFatal=$fatal;hostFatalTime=$log.LastWriteTimeUtc.ToString('o');${hostExit ? "hostLogVerified=($logHash -eq $s.hostLogSha256 -and $log.LastWriteTimeUtc -le $windowEnd);hostExitObservedAt=$s.hostExit.observedAt;" : ''}providerContractVerified=$providerOk;originalHostCount=$hostCount;originalHostChildCount=$hostChildren;legacySourceCount=$legacySourceCount;sourceWriterCount=$writers;listeningCount=$portCount;originalArtifactsPreserved=$preserved;artifactState=$artifactState} | ConvertTo-Json -Compress
 `
  return { command: probe, spec, specDigest: hash(spec), scriptDigest: hash({ command: probe }) }
+}
+
+export function validRestartScopeObservation(plan, observation) {
+ const observedAt = Date.parse(observation?.observedAt)
+ const exitAt = Date.parse(plan.spec.hostExit ? observation?.hostExitObservedAt : observation?.hostFatalTime)
+ return observation?.schema === plan.spec.schema && observation.specDigest === plan.specDigest
+  && (plan.spec.hostExit ? observation.hostLogVerified === true && observation.hostExitObservedAt === plan.spec.hostExit.observedAt : observation.hostFatal === true)
+  && Number.isFinite(observedAt) && Number.isFinite(exitAt) && exitAt >= plan.spec.binding.startedAt && observedAt >= exitAt
+  && observation.providerContractVerified === true && observation.originalHostCount === 0 && observation.originalHostChildCount === 0
+  && observation.legacySourceCount === 0 && observation.sourceWriterCount === 0 && observation.listeningCount === 0 && observation.originalArtifactsPreserved === true
 }
 
 const toolMessages = event => event.type !== 'tool/result' ? [] : event.data.message?.role === 'tool' ? [event.data.message] : event.data.message?.content ?? []
@@ -115,6 +136,7 @@ export function registerRestartScopeProbe({ agentCtx, agent, current, readPlan, 
    expectedOperationDigest: digestSchema, expectedScriptDigest: digestSchema,
    scopeEvidence: { type: 'object', properties: {
     hostPid: { type: 'integer', minimum: 1 }, hostLogPath: { type: 'string', minLength: 1 }, hostLogSha256: digestSchema,
+    hostExit: observedHostExitSchema,
     producerScopeReviewed: { const: true }, localEffectsOnlyConfirmed: { const: true }, excludeOriginalSourcesConfirmed: { const: true },
    }, required: ['hostPid', 'hostLogPath', 'hostLogSha256', 'producerScopeReviewed', 'localEffectsOnlyConfirmed', 'excludeOriginalSourcesConfirmed'], additionalProperties: false },
   }, required: ['expectedOperationDigest', 'expectedScriptDigest', 'scopeEvidence'], additionalProperties: false },
@@ -225,15 +247,13 @@ export async function readRestartScopeProbe({ ctx, plan, evidence, operation, ex
  const raw = text.trim().replace(/\s*\[exit code: 0\]\s*$/u, '')
  let observation
  try { observation = JSON.parse(raw) } catch { return null }
- if (observation.schema !== plan.spec.schema || observation.specDigest !== plan.specDigest || observation.hostFatal !== true
-  || observation.providerContractVerified !== true || observation.originalHostCount !== 0 || observation.originalHostChildCount !== 0
-  || observation.legacySourceCount !== 0 || observation.sourceWriterCount !== 0 || observation.listeningCount !== 0 || observation.originalArtifactsPreserved !== true
-  || Date.parse(observation.hostFatalTime) < operation.job.startedAt || Date.parse(observation.observedAt) < Date.parse(observation.hostFatalTime)) return null
+ if (!validRestartScopeObservation(plan, observation)) return null
  const provenance = { kind: 'native-windows-restart-probe', scope: plan.spec.scope, isolationBasis: 'bounded-producer-exclusion', historicalJobObjectIdentity: 'unavailable', specDigest: plan.specDigest, scriptDigest: plan.scriptDigest,
   hostPid: plan.spec.hostPid, hostLogSha256: plan.spec.hostLogSha256, executionId: readback.executionId, sessionId: readback.sessionId,
+  ...(plan.spec.hostExit ? { hostExit: { ...plan.spec.hostExit, basis: 'operator-observed-exit', cause: 'unknown' } } : {}),
   callId: call.data.callId, callSequence: call.seq, resultSequence: returned.seq, settledSequence: settled[0].seq, observation }
  return { kind: 'native-source-scope-isolation', receiptId: `native-scope:${hash(provenance)}`, issuer: 'native-windows-scope-evidence-v1',
-  binding: plan.spec.binding, fenceRef: `retired-managed-range:${plan.specDigest}`, hostExitRef: `host-fatal:${plan.spec.hostLogSha256}`,
+  binding: plan.spec.binding, fenceRef: `retired-managed-range:${plan.specDigest}`, hostExitRef: plan.spec.hostExit ? `observed-host-exit:${hash(plan.spec.hostExit)}` : `host-fatal:${plan.spec.hostLogSha256}`,
   originalHostExited: true, sourceScopeQuiescent: true, durableSourceExclusion: true, externalWritersExcluded: true, activeSourceCount: 0,
   observedAt: observation.observedAt, provenance, provenanceDigest: hash(provenance) }
 }

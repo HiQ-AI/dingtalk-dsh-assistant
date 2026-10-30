@@ -1678,7 +1678,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           command: plan.probe.command, scriptDigest: plan.probe.scriptDigest, scope: plan.probe.spec.scope,
           managedCall: { name: 'execution_restart_scope_probe', arguments: { expectedOperationDigest: resolution.expectedOperationDigest,
             expectedScriptDigest: plan.probe.scriptDigest, scopeEvidence: Object.fromEntries(['hostPid', 'hostLogPath', 'hostLogSha256',
-              'producerScopeReviewed', 'localEffectsOnlyConfirmed', 'excludeOriginalSourcesConfirmed'].map(key => [key, resolution.scopeEvidence[key]])) } } })
+              'producerScopeReviewed', 'localEffectsOnlyConfirmed', 'excludeOriginalSourcesConfirmed', 'hostExit'].filter(key => resolution.scopeEvidence[key] !== undefined).map(key => [key, resolution.scopeEvidence[key]])) } } })
         continue
       }
       if (!resolution.scopeEvidence && !ctx.get?.('nativeJobRecovery')) fail('DYNAMIC_SCOPED_ISOLATION_EVIDENCE_REQUIRED')

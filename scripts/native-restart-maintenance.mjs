@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { zstdDecompressSync } from 'node:zlib'
 import { isolationDigest as hash, isolationBinding, hasRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
-import { restartScopeProbePlan } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
+import { restartScopeProbePlan, validRestartScopeObservation } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
 
 export function readNativeHistory(workspace, row) {
   const matches = []
@@ -90,12 +90,7 @@ export function inspectRetainedRestart({ tables, workspace, proposal, ownerPid, 
       evidence: item.scopeEvidence, dshHome: proposal.dshHome })
     if (!plan) fail()
     const observed = runProbe(plan), now = Date.now()
-    if (observed.schema !== plan.spec.schema || observed.specDigest !== plan.specDigest || observed.hostFatal !== true
-      || observed.providerContractVerified !== true || observed.originalHostCount !== 0 || observed.originalHostChildCount !== 0
-      || observed.legacySourceCount !== 0 || observed.sourceWriterCount !== 0 || observed.listeningCount !== 0
-      || observed.originalArtifactsPreserved !== true || !Number.isFinite(Date.parse(observed.observedAt))
-      || Math.abs(now - Date.parse(observed.observedAt)) > 60000
-      || Date.parse(observed.hostFatalTime) < operation.job.startedAt) {
+    if (!validRestartScopeObservation(plan, observed) || Math.abs(now - Date.parse(observed.observedAt)) > 60000) {
       const error = Error('DEPLOY_RESTART_ISOLATION_UNPROVEN'); error.observation = observed; throw error
     }
     sessions.push(execution.sessionId)

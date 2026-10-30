@@ -453,6 +453,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
         nativeRestartResolutions: z.array(z.strictObject({ operationId: requiredText, expectedOperationDigest: z.string().regex(/^[a-f0-9]{64}$/u),
           expectedIsolationDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
           scopeEvidence: z.strictObject({ hostPid: z.number().int().positive(), hostLogPath: requiredText, hostLogSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+            hostExit: z.strictObject({ observedAt: z.iso.datetime({ offset: true }), evidenceRef: requiredText.max(2000) }).optional(),
             producerScopeReviewed: z.literal(true), localEffectsOnlyConfirmed: z.literal(true), excludeOriginalSourcesConfirmed: z.literal(true),
             probeExecutionId: requiredText.optional(), probeCallId: requiredText.optional() }).optional() })).min(1).max(8)
           .refine(items => new Set(items.map(item => item.operationId)).size === items.length).optional() }).safeParse(await readJson(request))

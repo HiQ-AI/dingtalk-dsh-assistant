@@ -1,5 +1,5 @@
 import test from 'node:test'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import { restartFixture } from './fixtures/native-restart-isolation.js'
 import { restartScopeProbePlan, localRestartScope, restartProducerFilter } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
@@ -12,14 +12,16 @@ const evidence = () => ({ hostPid: 900, hostLogPath: 'D:\\approved\\host.oom.log
  producerScopeReviewed: true, localEffectsOnlyConfirmed: true, excludeOriginalSourcesConfirmed: true,
  probeExecutionId: 'investigation', probeCallId: 'scope-probe' })
 
-function probeFixture(command, acknowledged) {
+function probeFixture(command, acknowledged, hostExit) {
  const f = restartFixture(acknowledged, command), scopeEvidence = evidence()
+ if (hostExit) scopeEvidence.hostExit = hostExit
  const plan = restartScopeProbePlan({ command, binding: isolationBinding(f.operation, 'original-call'), evidence: scopeEvidence, dshHome: 'D:\\host' })
  assert.ok(plan)
  const readInput = f.reads[1]
  const observation = { schema: plan.spec.schema, specDigest: plan.specDigest, observedAt: '2026-10-27T08:31:00Z', hostFatalTime: '2026-10-27T07:32:20Z',
   hostFatal: true, providerContractVerified: true, originalHostCount: 0, originalHostChildCount: 0, legacySourceCount: 0, sourceWriterCount: 0,
   listeningCount: 0, originalArtifactsPreserved: true, artifactState: 'retained-unverified' }
+ if (hostExit) Object.assign(observation, { hostFatal: false, hostFatalTime: '2026-10-27T07:00:00Z', hostLogVerified: true, hostExitObservedAt: hostExit.observedAt })
  f.reads.splice(2, f.reads.length, { seq: 2, type: 'tool/call', data: { callId: 'scope-probe', name: 'pwsh', arguments: JSON.stringify({ command: plan.command }) } },
   { seq: 3, type: 'job/registered', data: { jobId: 'scope-job', owner: f.readback.sessionId, kind: 'pwsh', label: plan.command, startedAt: 1000, toolCall: { callId: 'scope-probe' } } },
   { seq: 4, type: 'job/settled', data: { jobId: 'scope-job', owner: f.readback.sessionId, startedAt: 1000, status: 'completed', producerReported: true, detail: 'exit code: 0' } },
@@ -37,6 +39,56 @@ test('only the two bounded local launch recipes are supported; arbitrary shell e
  assert.equal(localRestartScope(pg).kind, 'local-postgres')
  assert.equal(localRestartScope(maven).kind, 'local-maven-compile')
  for (const command of [pg + '; Write-Output fake', maven + '; Invoke-WebRequest https://example.invalid', 'Start-Process postgres', 'python arbitrary.py']) assert.equal(localRestartScope(command), null)
+})
+
+test('observed non-OOM Host exit preserves unknown effects and requires full bounded isolation', async () => {
+ const oldHome = process.env.DSH_HOME; process.env.DSH_HOME = 'D:\\host'
+ try {
+  const hostExit = { observedAt: '2026-10-27T07:32:20Z', evidenceRef: 'retained-launcher-process-observation' }
+  const f = probeFixture(pg, true, hostExit)
+  const proof = await inspectIsolatedHostRestart(f)
+  assert.equal(proof.exitStatus, 'unknown'); assert.equal(proof.partialEffectsPossible, true); assert.equal(proof.noReplay, true)
+  assert.equal(proof.isolation.provenance.observation.hostFatal, false)
+  assert.deepEqual(proof.isolation.provenance.hostExit, { ...hostExit, basis: 'operator-observed-exit', cause: 'unknown' })
+  assert.equal(proof.isolation.hostExitRef, `observed-host-exit:${isolationDigest(hostExit)}`)
+  assert.deepEqual((await inspectIsolatedHostRestart({ ...f, planOnly: true })).probe, f.plan)
+  assert.equal(f.operation.state, 'unknown'); assert.equal(f.operation.job.status, 'running'); assert.equal(f.operation.result, null)
+  for (const [name, change] of Object.entries({
+   'missing retained log': x => { x.observation.hostLogVerified = false },
+   'live Host': x => { x.observation.originalHostCount = 1 },
+   'live descendant': x => { x.observation.originalHostChildCount = 1 },
+   'legacy producer after startup log': x => { x.observation.legacySourceCount = 1 },
+   'remaining writer': x => { x.observation.sourceWriterCount = 1 },
+   'occupied port': x => { x.observation.listeningCount = 1 },
+   'lost artifacts': x => { x.observation.originalArtifactsPreserved = false },
+   'changed provider': x => { x.observation.providerContractVerified = false },
+   'invalid observation time': x => { x.observation.observedAt = 'not-a-date' },
+   'mismatched exit time': x => { x.observation.hostExitObservedAt = '2026-10-27T07:32:21Z' },
+   'foreign task': x => { x.readback.taskId = 'other-task' },
+   'unbound investigation': x => { x.readback.input.readbackOperationId = 'other-operation' },
+  })) {
+   const other = probeFixture(pg, true, hostExit); change(other); other.updateOutput()
+   assert.equal(await inspectIsolatedHostRestart(other), null, name)
+  }
+  for (const hostExit of [null, {}, { observedAt: 'invalid', evidenceRef: 'fact' },
+   { observedAt: '2026-10-27T07:00:00Z', evidenceRef: 'fact' },
+   { observedAt: '9999-01-01T00:00:00Z', evidenceRef: 'fact' },
+   { observedAt: '2026-10-27T07:32:20Z', evidenceRef: ' ' }]) {
+   assert.equal(restartScopeProbePlan({ command: pg, binding: f.plan.spec.binding, evidence: { ...f.scopeEvidence, hostExit } }), null)
+  }
+ } finally { if (oldHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = oldHome }
+})
+
+test('actual PowerShell preserves observed-exit milliseconds and timezone through JSON decoding', { skip: spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0']).error ? 'PowerShell required' : false }, () => {
+ for (const observedAt of ['2026-10-27T07:32:20.000Z', '2026-10-27T15:32:20.123+08:00']) {
+  const f = probeFixture(pg, true, { observedAt, evidenceRef: 'retained-exit-observation' })
+  // Run the generated spec decoder and window expression unchanged; no OS calls.
+  const prefix = f.plan.command.slice(0, f.plan.command.indexOf('$log = Get-Item'))
+  const window = f.plan.command.split('\n').find(line => line.startsWith('$windowEnd ='))
+  const script = prefix + window + '\n[ordered]@{observedAt=$s.hostExit.observedAt;epoch=([DateTimeOffset]$windowEnd).ToUnixTimeMilliseconds()}|ConvertTo-Json -Compress'
+  const output = execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true })
+  assert.deepEqual(JSON.parse(output), { observedAt, epoch: Date.parse(observedAt) })
+ }
 })
 
 for (const [command, acknowledged] of [[pg, true], [maven, false]]) test(`existing native probe proves bounded isolation without a new service: ${acknowledged ? 'PG' : 'Maven'}`, async () => {
