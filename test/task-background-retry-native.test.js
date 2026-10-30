@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { available, reason, nativeTaskHost, topicTaskCalls, latestInput, waitUntil } from './fixtures/task-session-native-host.js'
 import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task-resident-runtime.js'
 import { topicDecisionRecovery, fingerprint } from '../packages/dingtalk-dsh-assistant/topic-model.js'
-import { createHash, randomUUID } from 'node:crypto'
 
 test('Host exact recovery rejects unknown effects and queue-stale facts, then resumes the original pre-effect failure once', { timeout: 20000, ...(!available ? { skip: reason } : {}) }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-host-retry-'))
@@ -53,41 +52,31 @@ test('Host exact recovery rejects unknown effects and queue-stale facts, then re
   await assert.rejects(h.service.retryMessageProcessing(successful), /MESSAGE_RETRY_STALE/)
 })
 
-test('coordination exact recovery retains reservation generation and rejects old facts, frozen runtime and consumed CAS', { timeout: 20000, ...(!available ? { skip: reason } : {}) }, async t => {
+test('retired coordination recovery cannot consume or replay a source already handled by the native Topic and Owner', { timeout: 20000, ...(!available ? { skip: reason } : {}) }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'task-coordination-retry-'))
-  const h = await nativeTaskHost(root, async request => {
-    if (request.tools.some(tool => tool.name === 'coordination_submit')) return [{ name: 'coordination_submit', args: { kind: 'clarify', question: '要查询哪个任务？', candidates: [] } }]
-    return topicTaskCalls(request) ?? []
-  }, { config: { coordination: { enabled: true, provider: 'native-task-test', model: 'controlled' } } })
+  const h = await nativeTaskHost(root, request => topicTaskCalls(request) ?? [{ name: 'task_session_submit', args: {
+    decision: { action: 'wait', summary: '保留原任务，等待核对结果', evidence: [], limitations: [] },
+  } }], { config: { coordination: { enabled: true, provider: 'native-task-test', model: 'controlled' } } })
   t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
   const groupId = 'native-group', messageId = 'coord-original'
-  const command = (kind, args) => h.service.store.command({ id: randomUUID(), kind, args })
-  await h.residentStore.ingest({ groupId, messageId, text: '测试助手，稍后查询那个任务', senderOpenDingTalkId: 'native-user', occurredAt: new Date().toISOString() })
-  await h.residentStore.routeMessages({ groupId, routeId: 'coord-route', routingRevision: 0, routes: [{ messageId, messageVersion: 1,
-    units: [{ unitKey: 'query', summary: '稍后查询任务', sourceRefs: [{ quote: '测试助手，稍后查询那个任务' }], dispatchOwner: 'coordination', topics: [], reason: '对象待确认' }] }] })
-  const owner = h.residentStore.listSourceDispatchOwnership(groupId)[0], original = h.residentStore.getGroup(groupId).messages[0]
-  await command('source.record', { sourceId: 'coord-source', groupId, messageId, version: 1, actorId: 'native-user', text: original.text })
-  let source = (await command('coordination.reserve', { unitId: owner.unitId, revision: owner.unitRevision, groupId, original: original.text,
-    reservationId: owner.reservationId, reservationGeneration: owner.generation, actorId: 'native-user', sourceRefs: ['coord-source'], sourceMessageId: messageId })).result.source
-  for (let i = 0; i < 3; i++) source = (await command('coordination.source.failed', { sourceId: source.id, fence: source.fence, code: 'fixture-auth-blocked' })).result.source
-  const token = createHash('sha256').update(JSON.stringify([source.id, source.fence, source.attemptCount ?? 0, source.retryEpoch ?? 0, source.nextRetryAt ?? null])).digest('hex')
-  const args = { groupId, messageId, messageVersion: 1, activeUnitRefs: original.activeUnitRefs, phase: 'coordination', requestId: owner.reservationId, token }
-  for (const patch of [{ messageVersion: 2 }, { activeUnitRefs: [] }, { requestId: 'foreign' }, { token: 'a'.repeat(64) }])
-    await assert.rejects(h.service.retryMessageProcessing({ ...args, ...patch }), /MESSAGE_RETRY_|DYNAMIC_COORDINATION_SOURCE_STALE/)
-  await command('coordination.runtime.set', { mode: 'frozen', reason: 'fixture freeze' })
-  await assert.rejects(h.service.retryMessageProcessing(args), /MESSAGE_RETRY_UNAVAILABLE/)
-  await command('coordination.runtime.set', { mode: 'active', reason: 'fixture unfreeze' })
-  const results = await Promise.allSettled([h.service.retryMessageProcessing(args), h.service.retryMessageProcessing(args)])
-  assert.equal(results.filter(item => item.status === 'fulfilled').length, 1, results.map(item => item.reason?.stack ?? item.status).join('; '))
+  await h.service.ingest({ groupId, messageId, text: '测试助手，核对原文件后等我补充', senderOpenDingTalkId: 'native-user', occurredAt: new Date().toISOString() })
   await h.service.whenIdle()
-  const saved = await h.query('coordination.source', { unitId: owner.unitId, revision: owner.unitRevision })
-  assert.equal(saved.id, source.id); assert.equal(saved.reservationId, owner.reservationId); assert.equal(saved.reservationGeneration, owner.generation)
-  assert.equal(saved.retryEpoch, 1); assert.equal(saved.state, 'needs_clarification')
-  assert.equal((await h.query('coordination.source.list')).length, 1)
-  assert.equal((await h.query('source.list')).length, 1)
-  assert.equal(h.residentStore.getGroup(groupId).messages.length, 1)
-  assert.deepEqual(await h.query('task.list'), [])
-  await assert.rejects(h.service.retryMessageProcessing(args), /MESSAGE_RETRY_STALE|DYNAMIC_COORDINATION_SOURCE_STALE/)
+  const original = structuredClone(h.residentStore.getGroup(groupId).messages[0])
+  const snapshot = async () => ({ sources: await h.query('source.list'), tasks: await h.query('task.list'),
+    wakes: await h.query('wake.list'), notifications: await h.query('notification.list'),
+    message: structuredClone(h.residentStore.getGroup(groupId).messages[0]), requests: h.requests.length, sent: h.sent.length })
+  const before = await snapshot()
+  assert.equal(before.sources.length, 1); assert.ok(before.sources[0].processingCompleted)
+  assert.equal(before.tasks.length, 1)
+  for (const phase of ['coordination', 'coordination-context']) {
+    const args = { groupId, messageId, messageVersion: original.messageVersion, activeUnitRefs: original.activeUnitRefs,
+      phase, requestId: 'former-reservation', token: 'a'.repeat(64) }
+    for (const patch of [{}, { messageVersion: 2 }, { activeUnitRefs: [] }, { requestId: 'foreign' }])
+      await assert.rejects(h.service.retryMessageProcessing({ ...args, ...patch }), { code: 'MESSAGE_RETRY_STALE' })
+  }
+  assert.deepEqual(await snapshot(), before, '旧阶段恢复不能重派来源、任务或已冻结通知')
+  assert.deepEqual(await h.query('coordination.source.list'), [])
+  assert.ok(h.requests.every(request => !request.tools.some(tool => tool.name === 'coordination_submit')))
 })
 
 test('精确收件恢复沿原生会话处理：外部启动阻塞未修再次失败，修复后成功且不复制事实', { timeout: 20000, ...(!available ? { skip: reason } : {}) }, async t => {

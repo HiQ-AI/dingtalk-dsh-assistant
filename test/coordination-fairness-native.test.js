@@ -1,54 +1,63 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { available, reason, nativeTaskHost, topicTaskCalls } from './fixtures/task-session-native-host.js'
-for (const blockedBy of ['occurrence-pause', 'schedule-pause', 'dependency']) test(`blocked schedules preserve ready cross-group work and do not replay after restart: ${blockedBy}`, { timeout: 60000 }, async t => {
-  assert.ok(available, reason)
-  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
-  const root = await mkdtemp(join(tmpdir(), 'coordination-job-fairness-'))
-  const decide = request => topicTaskCalls(request) ?? [{ name: 'task_session_submit',
-    args: { decision: { action: 'wait', summary: '保持原目标', evidence: [], limitations: [] } } }]
-  let host = await nativeTaskHost(root, decide)
-  t.after(async () => { await host.close(); await rm(root, { recursive: true, force: true }) })
-  const command = (kind, args = {}) => host.service.store.command({ id: randomUUID(), kind, args })
-  await host.residentStore.subscribe({ groupId: 'other-group', name: '另一群', responsibility: '独立查询' })
-  for (const [coordinationId, groupId, count] of [['paused', 'native-group', 3], ['later', 'native-group', 2], ['other', 'other-group', 1]]) {
-    await command('task.create', { taskId: coordinationId, groupId, request: '保持原目标' })
-    const source = (await command('coordination.reserve', { unitId: coordinationId, revision: 1, groupId, original: '独立时间查询' })).result.source
-    const dependent = blockedBy === 'dependency' && coordinationId === 'paused'
-    if (dependent) await command('task.create', { taskId: 'dependent', groupId, request: '等前置完成' })
-    const members = dependent ? ['paused', 'dependent'].map((taskId, index) => ({ instructionId: taskId, taskId,
-      dependencies: index ? ['paused'] : [], progressImpact: 'preserve', command: { id: `coordination-command:paused:${taskId}`,
-        kind: 'task.supplement', args: { taskId, expectedRequirementRevision: 1, expectedControlRevision: 1,
-          messageId: `context-${taskId}`, text: '保持原目标', request: '保持原目标' } } })) : []
-    await command('coordination.accept', { coordinationId, sourceId: source.id, fence: source.fence, members, readOnly: !dependent })
-    for (let i = 0; i < count; i++) await command('coordination.schedule.create', { coordinationId, scheduleId: `${coordinationId}-${i}`,
-      timezone: 'Asia/Shanghai', rule: { kind: 'once', at: '2026-10-21T01:00:00.000Z' },
-      action: dependent ? { kind: 'task-command', instructionIds: ['dependent'] } : { kind: 'read-query', taskIds: [coordinationId] }, target: { conversationId: groupId, recipientIds: [] } })
-  }
-  t.mock.timers.tick(3600000)
-  const occurrences = (await command('coordination.schedule.scan', { limit: 100 })).result.occurrences
-  assert.equal(occurrences.length, 6)
-  for (const occurrence of occurrences.filter(item => item.coordinationId === 'paused')) {
-    if (blockedBy === 'occurrence-pause') await command('coordination.occurrence.control', {
-      occurrenceId: occurrence.id, expectedControlRevision: 1, control: 'pause' })
-    else if (blockedBy === 'schedule-pause') await command('coordination.schedule.change', { scheduleId: occurrence.scheduleId, expectedRevision: 1, state: 'paused', scope: 'future' })
-  }
-  await host.close(); host = await nativeTaskHost(root, decide, { initialize: false })
-  await host.service.recover()
-  await host.service.whenIdle()
-  const jobs = await host.query('coordination.job.list')
-  assert.equal(jobs.filter(job => job.state === 'completed' && job.attempt === 1).length, 3)
-  assert.equal(jobs.filter(job => job.state === 'waiting' && (blockedBy === 'dependency' ? job.attempt > 0 && job.waitingReason === 'waiting_dependency' : job.attempt === 0)).length, 3)
-  for (const id of ['later', 'other']) {
-    const occurrence = (await host.query('coordination.occurrence.list')).find(item => item.coordinationId === id)
-    assert.equal(occurrence.actionState, 'succeeded')
-  }
-  await host.close(); host = await nativeTaskHost(root, decide, { initialize: false })
-  await host.service.recover(); await host.service.whenIdle()
-  assert.deepEqual((await host.query('coordination.job.list')).filter(job => job.state === 'completed').map(job => [job.id, job.attempt]),
-    jobs.filter(job => job.state === 'completed').map(job => [job.id, job.attempt]))
-})
+import { available, reason } from './fixtures/task-session-native-host.js'
+import { retiredCoordinationHost } from './fixtures/retired-coordination-native.js'
+
+// Old schedule/job fairness is no longer an active feature. Its retained safety
+// guarantee is that paused/dependent historical work cannot block current Owners.
+for (const blockedBy of ['occurrence-pause', 'schedule-pause', 'dependency']) test('retired ' + blockedBy + ' preserves history without blocking ready cross-group Task Owners',
+  { timeout: 60000, skip: !available ? reason : false }, async t => {
+    const rows = { coordination: [], coordination_schedules: [], coordination_occurrences: [], coordination_jobs: [], coordination_members: [] }
+    for (const [id, groupId, count] of [['paused', 'native-group', 3], ['later', 'native-group', 2], ['other', 'other-group', 1]]) {
+      rows.coordination.push({ id, groupId, state: 'active', revision: 1, memberIds: [id + '-member'] })
+      rows.coordination_members.push({ id: id + '-member', coordinationId: id, taskId: id, state: id === 'paused' ? 'waiting' : 'applied',
+        dependencies: id === 'paused' && blockedBy === 'dependency' ? ['predecessor'] : [], instruction: '保留原安排，不新增授权' })
+      for (let index = 0; index < count; index++) {
+        const scheduleId = id + '-' + index, occurrenceId = scheduleId + '-occurrence'
+        rows.coordination_schedules.push({ id: scheduleId, coordinationId: id, state: id === 'paused' && blockedBy === 'schedule-pause' ? 'paused' : 'active',
+          timezone: 'Asia/Shanghai', rule: { kind: 'once', at: '2026-10-21T01:00:00.000Z' }, nextDueAt: '2026-10-21T01:00:00.000Z' })
+        rows.coordination_occurrences.push({ id: occurrenceId, scheduleId, coordinationId: id, state: id === 'paused' && blockedBy === 'occurrence-pause' ? 'paused' : 'pending',
+          plannedAt: '2026-10-21T01:00:00.000Z', action: { kind: 'read-query', taskIds: [id] } })
+        rows.coordination_jobs.push({ id: occurrenceId + '-job', occurrenceId, coordinationId: id, state: 'waiting', attempt: 0,
+          ...(id === 'paused' && blockedBy === 'dependency' ? { waitingReason: 'waiting_dependency' } : {}) })
+      }
+    }
+    const f = await retiredCoordinationHost(t, { name: 'retired-fairness-', tasks: [
+      { taskId: 'paused' }, { taskId: 'later' }, { taskId: 'other', groupId: 'other-group' },
+    ], rows })
+    let h = f.host
+    const schedules = await h.query('coordination.schedule.list'), jobs = await h.query('coordination.job.list')
+    assert.equal(schedules.length, 6); assert.equal(jobs.length, 6)
+    for (const [table, records] of [['coordination.schedule.list', rows.coordination_schedules], ['coordination.job.list', rows.coordination_jobs]]) {
+      const saved = await h.query(table)
+      for (const original of records) {
+        const row = saved.find(item => item.id === original.id), { retirement, ...body } = row
+        assert.deepEqual(body, original)
+        assert.equal(retirement.previousState, original.state)
+      }
+    }
+    assert.deepEqual(await h.query('coordination.occurrence.list'), rows.coordination_occurrences)
+    await h.service.recover(); await h.service.whenIdle()
+    assert.deepEqual(await h.query('task.list'), f.beforeTasks, 'retirement must not silently complete/cancel business work')
+    for (const taskId of ['later', 'other']) {
+      const task = await h.query('task.get', { taskId })
+      await h.service.appendTaskContext({ taskId, requestId: 'fresh-' + taskId, context: '只核对原范围内新增材料',
+        expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision, progressImpact: 'preserve' })
+    }
+    await h.service.whenIdle()
+    for (const taskId of ['later', 'other']) {
+      const task = await h.query('task.get', { taskId })
+      assert.equal(task.contextRevision, 1); assert.equal(task.requirementRevision, 1); assert.equal(task.status, 'active')
+    }
+    assert.deepEqual(await h.query('task.get', { taskId: 'paused' }), f.beforeTasks.find(task => task.taskId === 'paused'))
+    assert.deepEqual(await h.query('coordination.job.list'), jobs)
+    assert.equal(h.sent.length, 0)
+    assert.ok(f.requests.every(request => !request.tools.some(tool => tool.name === 'coordination_submit')))
+    const current = await h.query('task.list')
+    h = await f.restart(); await h.service.recover(); await h.service.whenIdle()
+    assert.deepEqual(await h.query('task.list'), current)
+    assert.deepEqual(await h.query('coordination.schedule.list'), schedules)
+    assert.deepEqual(await h.query('coordination.job.list'), jobs)
+    assert.deepEqual(await h.query('coordination.occurrence.list'), rows.coordination_occurrences)
+    assert.equal(h.sent.length, 0)
+  })
