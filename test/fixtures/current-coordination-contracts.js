@@ -70,5 +70,6 @@ export async function currentCoordinationFixture(t) {
     } finally { db.close() }
     ledger = await openDynamicTaskStore({ ...options, initialize: false })
   }
-  return { root, options, resident, handler, topicId, command, query, create, wait, finish, context, submission, submit, inspect, reopen, historical }
+  return { root, options, resident, handler, topicId, command, query, create, wait, finish, context, submission, submit, inspect, reopen, historical,
+    close: () => ledger.close() }
 }
