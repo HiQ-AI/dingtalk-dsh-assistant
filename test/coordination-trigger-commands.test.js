@@ -7,297 +7,242 @@ import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 
-async function fixture(t, { members = ['B'], dependencies = {}, scheduled = true, replan = false } = {}) {
-  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
-  const directory = await mkdtemp(join(tmpdir(), 'coordination-trigger-'))
-  const config = { dbPath: join(directory, 'task.sqlite'), instanceId: 'test', initialize: true }
+async function fixture(t, { rule = { kind: 'once', at: '2026-10-21T01:00:00.000Z' } } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'retired-trigger-'))
+  const config = { dbPath: join(directory, 'task.sqlite'), instanceId: 'test', initialize: true, webActorId: 'operator' }
   let store = await openDynamicTaskStore(config)
   t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }) })
   const command = (kind, args = {}, id = randomUUID()) => store.command({ id, kind, args })
   const query = (kind, args = {}) => store.query({ kind, ...args })
-  for (const id of ['A','B']) await command('task.create', { taskId: id, groupId: 'group', request: id })
-  const source = (await command('coordination.reserve', { unitId: 'source-unit', revision: 1, groupId: 'group', original: '到9点继续原任务' })).result.source
-  const target = { conversationId: 'group', recipientIds: ['member-id'] }
-  const member = id => ({ instructionId: id, taskId: id, progressImpact: replan ? 'replan' : 'preserve', dependencies: dependencies[id] ?? [],
-    command: { id: `coordination-command:batch:${id}`, kind: replan ? 'task.revise' : 'task.supplement', args: { taskId: id,
-      expectedRequirementRevision: 1, expectedControlRevision: 1, messageId: `input:${id}`, text: '按原目标继续', request: `${id}\n按原目标继续` } } })
-  await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'batch',
-    members: members.map(member), readOnly: members.length === 0,
-    ...(scheduled ? { schedule: { scheduleId: 'schedule', timezone: 'Asia/Shanghai', rule: { kind: 'once', at: '2026-10-21T01:00:00.000Z' },
-      action: { kind: 'task-command', instructionIds: ['B'] }, target } } : {}) })
-  return { command, query, target, tick: value => t.mock.timers.tick(value),
-    task: id => query('task.get', { taskId: id }),
-    async due() { t.mock.timers.tick(3600000); return (await command('coordination.schedule.scan')).result.occurrences[0] },
-    async claim(occurrence) { return (await command('coordination.job.claim', { jobId: occurrence.jobId })).result.job },
-    async restart() { await store.close(); store = await openDynamicTaskStore(config) },
-  }
+  for (const id of ['A', 'B', 'C']) await command('task.create', { taskId: id, groupId: 'group', request: id, ownerActorId: 'requester' })
+  const frozen = { id: 'original-command', kind: 'task.supplement', args: { taskId: 'B',
+    expectedRequirementRevision: 1, expectedControlRevision: 1, messageId: 'original-input', text: 'Original authorized continuation', request: 'B with original context' } }
+  await store.close()
+  const db = new DatabaseSync(config.dbPath)
+  const put = (table, id, body) => db.prepare('INSERT INTO dynamic_' + table + '(id,body) VALUES (?,?)').run(id, JSON.stringify({ id, ...body }))
+  try {
+    db.prepare("DELETE FROM dynamic_meta WHERE key='independentCoordinationRetired'").run()
+    put('coordination', 'batch', { groupId: 'group', state: 'active', revision: 1, memberIds: ['B'], sourceId: 'old-source' })
+    put('coordination_sources', 'old-source', { groupId: 'group', state: 'accepted', dispatchOwner: 'coordination', unitId: 'old-unit', revision: 1,
+      sourceMessageId: 'original-message', original: 'Original timed continuation request', coordinationId: 'batch' })
+    put('coordination_members', 'B', { coordinationId: 'batch', taskId: 'B', state: 'ready', requiresTrigger: true, dependencies: ['A'], command: frozen })
+    put('coordination_schedules', 'schedule', { coordinationId: 'batch', revision: 1, state: 'active', timezone: 'Asia/Shanghai', rule,
+      nextDueAt: '2026-10-21T01:00:00.000Z', action: { kind: 'task-command', instructionIds: ['B'] }, target: { conversationId: 'group', recipientIds: ['original-recipient'] } })
+    put('coordination_occurrences', 'occurrence', { coordinationId: 'batch', scheduleId: 'schedule', acceptedScheduleRevision: 1, plannedAt: '2026-10-21T01:00:00.000Z',
+      slotId: 'original-slot', actionState: 'pending', deliveryState: 'pending', action: { kind: 'task-command', instructionIds: ['B'] }, jobId: 'job' })
+    put('coordination_jobs', 'job', { coordinationId: 'batch', occurrenceId: 'occurrence', state: 'pending', fence: 1 })
+  } finally { db.close() }
+  store = await openDynamicTaskStore({ ...config, initialize: false })
+  return { command, query, frozen, config,
+    task: taskId => query('task.get', { taskId }),
+    owner: async taskId => (await command('task.claim', { taskId })).result.binding,
+    async restart() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }) } }
 }
+const currentInput = (f, id, extra = {}) => ({ ...f.frozen.args, messageId: id, text: 'Current explicit input ' + id, ...extra })
 
-test('timer defers a frozen original Task command until due and receives it once without a new Task or session', async t => {
-  const f = await fixture(t)
-  const early = await f.command('coordination.apply', { instructionId: 'B', expectedRevision: 1 })
-  assert.equal(early.result.member.state, 'ready')
-  assert.equal((await f.task('B')).contextRevision ?? 0, 0)
-  const occurrence = await f.due(), job = await f.claim(occurrence)
-  const repeatedTrigger = await f.command('coordination.occurrence.accept', { coordinationId: 'batch', trigger: occurrence.trigger,
-    action: { kind: 'task-command', instructionIds: ['B'] }, target: f.target })
-  assert.equal(repeatedTrigger.result.occurrence.id, occurrence.id)
-  assert.equal(repeatedTrigger.result.replayed, true)
-  const applied = await f.command('coordination.job.command', { jobId: job.id, fence: job.fence }, 'due-job-command')
-  assert.equal(applied.result.job.state, 'completed')
-  assert.equal(applied.result.occurrence.actionState, 'succeeded')
-  assert.equal(applied.result.occurrence.result.results[0].commandId, 'coordination-command:batch:B')
-  assert.equal((await f.task('B')).contextRevision, 1)
-  assert.equal((await f.query('task.list')).length, 2)
-  assert.equal((await f.query('execution.list')).length, 0)
-  assert.equal((await f.task('B')).runSequence, 1)
-  await f.restart()
-  assert.equal((await f.command('coordination.job.command', { jobId: job.id, fence: job.fence }, 'due-job-command')).replayed, true)
-  assert.equal((await f.task('B')).contextRevision, 1)
-  assert.ok(await f.query('receipt.get', { id: 'coordination-command:batch:B' }))
+test('retired once trigger cannot dispatch itself; an explicit current input reaches the original Task once', async t => {
+  const f = await fixture(t), before = await f.task('B')
+  const schedule = (await f.query('coordination.schedule.list'))[0]
+  assert.equal(schedule.retirement.kind, 'feature-removed')
+  assert.equal(await f.query('receipt.get', { id: f.frozen.id }), null)
+  assert.deepEqual(await f.query('execution.list', { taskId: 'B' }), [])
+  const args = currentInput(f, 'current')
+  await f.command('task.supplement', args, 'current-input')
+  assert.equal((await f.command('task.supplement', args, 'current-input')).replayed, true)
+  const after = await f.task('B')
+  assert.equal(after.contextRevision, 1); assert.equal(after.sessionId, before.sessionId)
+  assert.equal((await f.query('task.list')).length, 3)
+  assert.equal(await f.query('receipt.get', { id: f.frozen.id }), null)
 })
 
-test('daily accepted authorization freezes a new exact command per slot and recovers without another user confirmation', async t => {
-  const f = await fixture(t, { scheduled: false })
-  await f.command('coordination.schedule.create', { coordinationId: 'batch', scheduleId: 'recurring', timezone: 'Asia/Shanghai',
-    rule: { kind: 'daily', time: '09:00' }, action: { kind: 'task-command', instructionIds: ['B'] }, target: { ...f.target, summaryOnly:true } })
-  assert.equal((await f.query('coordination.get',{coordinationId:'batch'})).members[0].state,'template')
-  const first = await f.due(), firstJob = await f.claim(first)
-  const applied = await f.command('coordination.job.command',{jobId:firstJob.id,fence:firstJob.fence},'first-slot')
-  const firstInstruction = applied.result.occurrence.action.instructionIds[0]
-  assert.notEqual(firstInstruction,'B')
-  assert.equal((await f.command('coordination.occurrence.accept',{coordinationId:'batch',trigger:first.trigger,
-    action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})).result.replayed,true)
-  assert.equal((await f.task('B')).contextRevision,1)
-  await f.restart()
-  assert.equal((await f.command('coordination.job.command',{jobId:firstJob.id,fence:firstJob.fence},'first-slot')).replayed,true)
-  await f.command('task.supplement',{taskId:'B',expectedRequirementRevision:1,expectedControlRevision:1,messageId:'compatible',text:'新增材料',request:'B\n新增材料'})
-  f.tick(86400000)
-  const second = (await f.command('coordination.schedule.scan')).result.occurrences[0], secondJob = await f.claim(second)
-  const next = await f.command('coordination.job.command',{jobId:secondJob.id,fence:secondJob.fence})
-  const secondInstruction = next.result.occurrence.action.instructionIds[0]
-  assert.notEqual(firstInstruction,secondInstruction)
-  assert.equal((await f.task('B')).contextRevision,3)
-  assert.match((await f.task('B')).request,/新增材料/)
-  assert.notEqual(next.result.job.result.results[0].commandId,applied.result.job.result.results[0].commandId)
-  assert.equal((await f.query('task.list')).length,2)
-  assert.equal((await f.task('B')).runSequence,1)
-})
-
-test('weekly command blocks a changed goal instead of extending its old recurring authorization', async t => {
-  const f = await fixture(t, { scheduled:false })
-  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'weekly',timezone:'Asia/Shanghai',
-    rule:{kind:'weekly',time:'09:00',weekday:3},action:{kind:'task-command',instructionIds:['B']},target:f.target})
-  await f.command('task.revise',{taskId:'B',request:'用户另行修改目标'})
-  const occurrence = await f.due(), job = await f.claim(occurrence)
-  const result = await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})
-  assert.equal(result.result.job.state,'blocked')
-  assert.equal(result.result.job.waitingReason,'DYNAMIC_COORDINATION_RECURRING_AUTHORIZATION_STALE')
-  assert.equal((await f.query('coordination.get',{coordinationId:'batch'})).members.length,1)
-  assert.equal((await f.task('B')).requirementRevision,2)
-  assert.equal((await f.task('B')).contextRevision ?? 0,0)
-})
-
-test('future schedule edits preserve each slot authorized original text rather than replacing it with the control message', async t => {
-  const f=await fixture(t,{scheduled:false})
-  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'daily-edit',timezone:'Asia/Shanghai',
-    rule:{kind:'daily',time:'09:00'},action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})
-  const source=(await f.command('coordination.reserve',{unitId:'edit',revision:1,groupId:'group',original:'改到10点'})).result.source
-  await f.command('coordination.change',{sourceId:source.id,fence:source.fence,coordinationId:'batch',expectedRevision:1,
-    change:{action:'schedule',scheduleChange:{scheduleId:'daily-edit',expectedRevision:1,rule:{kind:'daily',time:'10:00'}}}})
-  f.tick(7200000)
-  const occurrence=(await f.command('coordination.schedule.scan')).result.occurrences[0],job=await f.claim(occurrence)
-  await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})
-  const child=(await f.query('coordination.get',{coordinationId:'batch'})).members.find(member=>member.recurringOccurrenceId)
-  assert.equal(child.original,'到9点继续原任务')
-  assert.equal(child.materializationSourceId,source.id)
-  assert.equal(child.templateInstructionId,'B')
-})
-
-test('recurring replan advances only through its own prior effective target version', async t => {
-  const f = await fixture(t,{scheduled:false,replan:true})
-  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'daily-replan',timezone:'Asia/Shanghai',
-    rule:{kind:'daily',time:'09:00'},action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})
-  for(const elapsed of [3600000,86400000]) {
-    f.tick(elapsed)
-    const occurrence=(await f.command('coordination.schedule.scan')).result.occurrences[0], job=await f.claim(occurrence)
-    assert.equal((await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})).result.job.state,'completed')
+test('retired daily template cannot manufacture slot commands, while distinct current inputs keep their exact identities', async t => {
+  const f = await fixture(t, { rule: { kind: 'daily', time: '09:00' } })
+  const history = await f.query('coordination.occurrence.list')
+  for (const id of ['current-first', 'current-second']) {
+    await f.command('task.supplement', currentInput(f, id), id)
+    await f.restart()
+    assert.deepEqual(await f.query('coordination.occurrence.list'), history)
   }
-  assert.equal((await f.task('B')).requirementRevision,3)
-  const state=await f.query('coordination.get',{coordinationId:'batch'})
-  assert.deepEqual(state.members.filter(member=>member.recurringOccurrenceId).map(member=>member.command.args.expectedRequirementRevision),[1,2])
-  const children=state.members.filter(member=>member.recurringOccurrenceId)
-  assert.equal(children[0].state,'superseded')
-  assert.equal(children[0].supersededBy,children[1].id)
-  const aggregate=(await f.command('coordination.aggregate',{coordinationId:'batch'})).result.snapshot
-  assert.equal(aggregate.state,'active')
-  assert.ok(!aggregate.remainingInstructionIds.includes(children[0].id))
-  await f.command('task.revise',{taskId:'B',request:'计划外新目标'})
-  f.tick(86400000)
-  const occurrence=(await f.command('coordination.schedule.scan')).result.occurrences[0], job=await f.claim(occurrence)
-  assert.equal((await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})).result.job.state,'blocked')
-  assert.equal((await f.task('B')).requirementRevision,4)
+  const task = await f.task('B')
+  assert.equal(task.contextRevision, 2)
+  assert.deepEqual(task.supplements.map(item => item.id), ['current-first', 'current-second'])
+  assert.equal(await f.query('receipt.get', { id: f.frozen.id }), null)
 })
 
-test('per-slot instruction creation and Task effects survive lost acknowledgement under the original frozen identity', async t => {
-  const f=await fixture(t,{scheduled:false})
-  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'daily-ack',timezone:'Asia/Shanghai',
-    rule:{kind:'daily',time:'09:00'},action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})
-  const occurrence=await f.due(), job=await f.claim(occurrence)
-  const original=DatabaseSync.prototype.exec
-  let armed=true
-  const mocked=t.mock.method(DatabaseSync.prototype,'exec',function(sql){
-    const result=original.call(this,sql)
-    if(sql==='COMMIT'&&armed&&this.prepare("SELECT 1 FROM sqlite_master WHERE name='dynamic_meta'").get()){armed=false;throw new Error('injected per-slot ACK loss')}
-    return result
-  })
-  await assert.rejects(f.command('coordination.job.command',{jobId:job.id,fence:job.fence},'slot-ack'),{code:'DYNAMIC_COMMIT_ACK_UNKNOWN'})
-  mocked.mock.restore();await f.restart()
-  const replay=await f.command('coordination.job.command',{jobId:job.id,fence:job.fence},'slot-ack')
-  assert.equal(replay.replayed,true)
-  assert.equal((await f.task('B')).contextRevision,1)
-  const members=(await f.query('coordination.get',{coordinationId:'batch'})).members.filter(member=>member.recurringOccurrenceId)
-  assert.equal(members.length,1)
-  assert.equal(members[0].command.id,replay.result.job.result.results[0].commandId)
-})
-
-test('lost commit acknowledgement is reconciled by the original Task command receipt after restart', async t => {
-  const f = await fixture(t)
-  const occurrence = await f.due(), job = await f.claim(occurrence)
-  const original = DatabaseSync.prototype.exec
-  let armed = true
-  const mocked = t.mock.method(DatabaseSync.prototype, 'exec', function (sql) {
-    const result = original.call(this, sql)
-    if (sql === 'COMMIT' && armed && this.prepare("SELECT 1 FROM sqlite_master WHERE name='dynamic_meta'").get()) { armed = false; throw new Error('injected lost commit acknowledgement') }
-    return result
-  })
-  await assert.rejects(f.command('coordination.job.command', { jobId: job.id, fence: job.fence }, 'commit-ack-unknown'), { code: 'DYNAMIC_COMMIT_ACK_UNKNOWN' })
-  mocked.mock.restore()
-  await f.restart()
-  const receipt = await f.query('receipt.get', { id: 'coordination-command:batch:B' })
-  assert.equal(receipt.result.task.contextRevision, 1)
-  assert.equal((await f.task('B')).contextRevision, 1)
-  const repeated = await f.command('coordination.job.command', { jobId: job.id, fence: job.fence }, 'commit-ack-unknown')
-  assert.equal(repeated.replayed, true)
-  assert.equal((await f.task('B')).contextRevision, 1)
-})
-
-test('due Task command waits for authoritative dependencies and later reuses its frozen command identity', async t => {
-  const f = await fixture(t, { members: ['A','B'], dependencies: { B: ['A'] } })
-  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
-  const occurrence = await f.due(), first = await f.claim(occurrence)
-  const waiting = await f.command('coordination.job.command', { jobId: first.id, fence: first.fence })
-  assert.equal(waiting.result.job.state, 'waiting')
-  assert.equal(waiting.result.job.waitingReason, 'waiting_dependency')
+test('a weekly historical authorization cannot rebase a frozen Task command onto a changed requirement', async t => {
+  const f = await fixture(t, { rule: { kind: 'weekly', weekdays: [1], time: '09:00' } })
+  await f.command('task.revise', { taskId: 'B', expectedRequirementRevision: 1, expectedControlRevision: 1, request: 'Changed goal' })
+  await assert.rejects(f.command(f.frozen.kind, f.frozen.args, f.frozen.id), { code: 'DYNAMIC_TASK_REVISION_STALE' })
   assert.equal((await f.task('B')).contextRevision ?? 0, 0)
-  const owner = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  await f.command('task.complete', { binding: owner, summary: 'A验收完成', result: { evidence: ['A-proof'] } })
-  const second = await f.claim(occurrence)
-  const finished = await f.command('coordination.job.command', { jobId: second.id, fence: second.fence })
-  assert.equal(finished.result.job.state, 'completed')
-  assert.equal((await f.task('B')).contextRevision, 1)
-  assert.equal(finished.result.job.result.results[0].commandId, 'coordination-command:batch:B')
+  assert.equal((await f.task('B')).request, 'Changed goal')
+  assert.equal(await f.query('receipt.get', { id: f.frozen.id }), null)
+  assert.deepEqual((await f.query('coordination.get', { coordinationId: 'batch' })).members[0].command, f.frozen)
 })
 
-test('stale frozen Task version is rejected rather than recomputing expected versions under the same command', async t => {
+test('current source edits never overwrite the original historical request or frozen recipient identity', async t => {
   const f = await fixture(t)
-  await f.command('task.revise', { taskId: 'B', request: '新目标' })
-  const occurrence = await f.due(), job = await f.claim(occurrence)
-  await assert.rejects(f.command('coordination.job.command', { jobId: job.id, fence: job.fence }), { code: 'DYNAMIC_COORDINATION_VERSION_STALE' })
-  assert.equal(await f.query('receipt.get', { id: 'coordination-command:batch:B' }), null)
+  const originalSource = (await f.query('coordination.source.list'))[0]
+  const originalSchedule = (await f.query('coordination.schedule.list'))[0]
+  await f.command('task.supplement', currentInput(f, 'change', { request: 'B with newly supplied context' }))
+  await f.restart()
+  assert.deepEqual((await f.query('coordination.source.list'))[0], originalSource)
+  assert.deepEqual((await f.query('coordination.schedule.list'))[0], originalSchedule)
+  assert.equal(originalSource.original, 'Original timed continuation request')
+  assert.deepEqual(originalSchedule.target.recipientIds, ['original-recipient'])
+  assert.equal((await f.task('B')).request, 'B with newly supplied context')
+})
+
+test('current replan commands advance only their frozen expected revision and never replay a second revision change', async t => {
+  const f = await fixture(t)
+  const first = { taskId: 'B', expectedRequirementRevision: 1, expectedControlRevision: 1, request: 'Current second requirement' }
+  await f.command('task.revise', first, 'current-replan')
+  await f.restart()
+  assert.equal((await f.command('task.revise', first, 'current-replan')).replayed, true)
+  assert.equal((await f.task('B')).requirementRevision, 2)
+  await assert.rejects(f.command('task.revise', { ...first, request: 'Third under old scope' }, 'different-stale-command'), { code: 'DYNAMIC_TASK_REVISION_STALE' })
+  await f.command('task.revise', { ...first, expectedRequirementRevision: 2, request: 'Explicit third requirement' }, 'new-replan')
+  assert.equal((await f.task('B')).requirementRevision, 3)
+  assert.equal((await f.query('task.list')).length, 3)
+})
+
+test('lost supplement acknowledgement is recovered by its original command and message identity without duplicate feedback', async t => {
+  const f = await fixture(t), owner = await f.owner('B')
+  const execution = (await f.command('execution.dispatch', { binding: owner, key: 'original', prompt: 'Current work' })).result.execution
+  await f.command('execution.claim', { executionId: execution.id })
+  const args = currentInput(f, 'lost-ack')
+  const receipt = await f.command('task.supplement', args, 'lost-ack-command')
+  await f.restart()
+  const recovered = await f.command('task.supplement', args, 'lost-ack-command')
+  assert.equal(recovered.replayed, true)
+  assert.equal(recovered.result.task.contextRevision, receipt.result.task.contextRevision)
+  const current = await f.query('execution.get', { executionId: execution.id })
+  assert.equal(current.feedback.length, 1); assert.equal(current.feedback[0].id, 'lost-ack')
+  assert.equal((await f.task('B')).contextRevision, 1)
+})
+
+test('lost commit acknowledgement preserves the original replan receipt after restart and refuses changed content under its id', async t => {
+  const f = await fixture(t)
+  const args = { taskId: 'B', expectedRequirementRevision: 1, expectedControlRevision: 1, request: 'Accepted revised goal' }
+  const committed = await f.command('task.revise', args, 'replan-ack-lost')
+  await f.restart()
+  const durable = await f.query('receipt.get', { id: 'replan-ack-lost' })
+  assert.equal(durable.result.task.requirementRevision, committed.result.task.requirementRevision)
+  assert.equal((await f.command('task.revise', args, 'replan-ack-lost')).replayed, true)
+  await assert.rejects(f.command('task.revise', { ...args, request: 'Changed content' }, 'replan-ack-lost'), { code: 'DYNAMIC_COMMAND_ID_CONFLICT' })
   assert.equal((await f.task('B')).requirementRevision, 2)
 })
 
-test('replacing a future Task-command template cannot return its old ready member to immediate dispatch', async t => {
-  const f = await fixture(t)
-  await f.command('coordination.schedule.change', { scheduleId: 'schedule', expectedRevision: 1,
-    action: { kind: 'read-query', taskIds: ['A'] } })
-  const member = (await f.command('coordination.apply', { instructionId: 'B', expectedRevision: 1 })).result.member
-  assert.equal(member.state, 'ready')
-  assert.equal((await f.task('B')).contextRevision ?? 0, 0)
-})
-
-test('message trigger needs no schedule fields and deduplicates each stable source revision/action', async t => {
-  const f = await fixture(t, { members: [], scheduled: false })
-  const args = { coordinationId: 'batch', trigger: { triggerKind: 'message', sourceUnitId: 'source-unit', sourceUnitRevision: 1, actionId: 'query' },
-    action: { kind: 'read-query', taskIds: ['A'] }, target: f.target }
-  const first = (await f.command('coordination.occurrence.accept', args)).result.occurrence
-  const repeat = await f.command('coordination.occurrence.accept', args)
-  assert.equal(repeat.result.occurrence.id, first.id)
-  assert.equal(repeat.result.replayed, true)
-  for (const key of ['scheduleId','acceptedScheduleRevision','plannedAt','slotId']) assert.equal(Object.hasOwn(first, key), false)
-  await assert.rejects(f.command('coordination.occurrence.accept', { ...args, trigger: { ...args.trigger, scheduleId: 'fake' } }), { code: 'DYNAMIC_COORDINATION_TRIGGER_INVALID' })
-  await assert.rejects(f.command('coordination.occurrence.accept', { ...args, action: { kind: 'read-query', taskIds: ['B'] } }), { code: 'DYNAMIC_COORDINATION_TRIGGER_CONFLICT' })
-  const job = await f.claim(first)
-  assert.equal((await f.command('coordination.job.read', { jobId: job.id, fence: job.fence })).result.occurrence.actionState, 'succeeded')
-})
-
-test('one authoritative business event may trigger two different actions but never the same action twice', async t => {
-  const f = await fixture(t, { members: [], scheduled: false })
-  const owner = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  const completed = await f.command('task.complete', { binding: owner, summary: 'A完成', result: { evidence: ['A'] } })
-  const args = { coordinationId: 'batch', trigger: { triggerKind: 'business-event', eventSource: 'task-ledger', eventId: completed.completionEvent.id, actionId: 'query-A' },
-    action: { kind: 'read-query', taskIds: ['A'] }, target: f.target }
-  const first = (await f.command('coordination.occurrence.accept', args)).result.occurrence
-  assert.equal((await f.command('coordination.occurrence.accept', args)).result.occurrence.id, first.id)
-  const second = (await f.command('coordination.occurrence.accept', { ...args, trigger: { ...args.trigger, actionId: 'query-B' }, action: { kind: 'read-query', taskIds: ['B'] } })).result.occurrence
-  assert.notEqual(first.id, second.id)
-  assert.equal((await f.query('coordination.occurrence.list')).length, 2)
+test('current human prerequisite blocks Owner admission until a real answer arrives, then continues the original Task', async t => {
+  const f = await fixture(t), owner = await f.owner('B')
+  await f.command('task.wait', { binding: owner, summary: 'Need approval', question: 'Proceed with this prepared change?', humanRequest: { requestId: 'approval', audience: 'operator' } })
   await f.command('task.drained', { binding: owner })
-  await f.command('task.reopen', { taskId: 'A', request: 'A变更目标' })
-  await assert.rejects(f.claim(first), { code: 'DYNAMIC_COORDINATION_EVENT_STALE' })
+  await assert.rejects(f.command('task.claim', { taskId: 'B' }), { code: 'DYNAMIC_HUMAN_RESPONSE_REQUIRED' })
+  assert.deepEqual(await f.query('execution.list', { taskId: 'B' }), [])
+  await f.command('source.record', { sourceId: 'answer', groupId: 'group', messageId: 'answer-message', actorId: 'operator', channel: 'web', text: 'Approved this change' })
+  await f.command('task.human.respond', { taskId: 'B', requestId: 'approval', expectedRequirementRevision: 1, expectedControlRevision: 1, sourceId: 'answer' })
+  const resumed = await f.owner('B')
+  assert.equal(resumed.taskId, owner.taskId); assert.equal(resumed.sessionId, owner.sessionId)
+  assert.equal((await f.task('B')).humanRequests[0].status, 'answered')
+  assert.equal((await f.query('task.list')).length, 3)
 })
 
-test('business-event Task command rechecks the source proof after claim and before applying any effect', async t => {
-  const f = await fixture(t, { members: ['B'], scheduled: false })
-  const owner = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  const completed = await f.command('task.complete', { binding: owner, summary: 'A完成', result: { evidence: ['A'] } })
-  const occurrence = (await f.command('coordination.occurrence.accept', { coordinationId: 'batch',
-    trigger: { triggerKind: 'business-event', eventSource: 'task-ledger', eventId: completed.completionEvent.id, actionId: 'continue-B' },
-    action: { kind: 'task-command', instructionIds: ['B'] }, target: f.target })).result.occurrence
-  const job = await f.claim(occurrence)
-  await f.command('task.drained', { binding: owner })
-  await f.command('task.reopen', { taskId: 'A', request: 'A出现新要求' })
-  await assert.rejects(f.command('coordination.job.command', { jobId: job.id, fence: job.fence }), { code: 'DYNAMIC_COORDINATION_EVENT_STALE' })
-  assert.equal((await f.task('B')).contextRevision ?? 0, 0)
-  assert.equal(await f.query('receipt.get', { id: 'coordination-command:batch:B' }), null)
-})
-
-test('instance pause/resume fences the prior worker and cancelling the arrangement never cancels the Task', async t => {
+test('a frozen old control revision is rejected after pause and resume without rewriting its request', async t => {
   const f = await fixture(t)
-  const occurrence = await f.due(), first = await f.claim(occurrence)
-  await f.command('coordination.occurrence.control', { occurrenceId: occurrence.id, expectedControlRevision: 1, control: 'pause' })
-  await assert.rejects(f.claim(occurrence), { code: 'DYNAMIC_COORDINATION_PAUSED' })
-  await f.command('coordination.occurrence.control', { occurrenceId: occurrence.id, expectedControlRevision: 2, control: 'resume' })
-  const current = await f.claim(occurrence)
-  await assert.rejects(f.command('coordination.job.command', { jobId: first.id, fence: first.fence }), { code: 'DYNAMIC_COORDINATION_JOB_STALE' })
-  await f.command('coordination.job.command', { jobId: current.id, fence: current.fence })
-  await f.command('coordination.schedule.change', { scheduleId: 'schedule', expectedRevision: 1, state: 'cancelled' })
-  assert.equal((await f.task('B')).control, 'active')
-  assert.equal((await f.task('B')).contextRevision, 1)
+  await f.command('task.control', { taskId: 'B', expectedControlRevision: 1, control: 'paused' })
+  await f.command('task.control', { taskId: 'B', expectedControlRevision: 2, control: 'active' })
+  await assert.rejects(f.command(f.frozen.kind, f.frozen.args, f.frozen.id), { code: 'DYNAMIC_TASK_REVISION_STALE' })
+  assert.equal((await f.task('B')).controlRevision, 3)
+  assert.equal((await f.task('B')).request, 'B')
+  assert.equal(await f.query('receipt.get', { id: f.frozen.id }), null)
 })
 
-test('accepted recurring command keeps historical identity across future edits and restart, then advances next slot', async t => {
-  const f=await fixture(t,{scheduled:false})
-  await f.command('coordination.schedule.create',{coordinationId:'batch',scheduleId:'daily-history',timezone:'Asia/Shanghai',
-    rule:{kind:'daily',time:'09:00'},action:{kind:'task-command',instructionIds:['B']},target:{...f.target,summaryOnly:true}})
-  const first=await f.due()
-  await f.command('coordination.schedule.change',{scheduleId:'daily-history',expectedRevision:1,scope:'future',
-    target:{...f.target,recipientIds:['new-recipient'],summaryOnly:true}})
+test('a retired ready template cannot re-enter immediate dispatch or gate a new Owner execution', async t => {
+  const f = await fixture(t)
+  const old = await f.query('coordination.get', { coordinationId: 'batch' })
+  assert.equal(old.members[0].state, 'ready'); assert.equal(old.members[0].eligible, false)
+  assert.deepEqual(old.members[0].dependencies, ['A'])
+  const owner = await f.owner('B')
+  const execution = (await f.command('execution.dispatch', { binding: owner, key: 'current', prompt: 'Current authorized work' })).result.execution
+  assert.deepEqual(execution.instructionScope.instructionIds, [])
+  await f.command('execution.claim', { executionId: execution.id })
+  assert.equal((await f.query('execution.get', { executionId: execution.id })).status, 'running')
+  assert.deepEqual(await f.query('coordination.get', { coordinationId: 'batch' }), old)
+  assert.equal(await f.query('receipt.get', { id: f.frozen.id }), null)
+})
+
+test('current message revisions remain distinct sources and stable command retries cannot duplicate their task input', async t => {
+  const f = await fixture(t)
+  for (const version of [1, 2]) {
+    const sourceId = 'message-version-' + version
+    const source = { sourceId, groupId: 'group', messageId: 'one-message', version, actorId: 'requester', text: 'Input version ' + version }
+    await f.command('source.record', source, 'record-' + version)
+    const args = currentInput(f, sourceId, { sourceRefs: ['message-version-1', ...(version === 2 ? ['message-version-2'] : [])] })
+    await f.command('task.supplement', args, 'apply-' + version)
+    assert.equal((await f.command('task.supplement', args, 'apply-' + version)).replayed, true)
+    assert.equal((await f.query('source.get', { sourceId })).version, version)
+  }
   await f.restart()
-  let job=await f.claim(first)
-  const applied=(await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})).result
-  assert.equal(applied.job.state,'completed')
-  assert.deepEqual(applied.occurrence.target.recipientIds,['member-id'])
-  assert.notEqual(applied.occurrence.action.instructionIds[0],'B')
-  assert.equal((await f.task('B')).contextRevision,1)
-  await f.restart();f.tick(86400000)
-  const second=(await f.command('coordination.schedule.scan')).result.occurrences[0]
-  job=await f.claim(second)
-  const next=(await f.command('coordination.job.command',{jobId:job.id,fence:job.fence})).result
-  assert.equal(next.job.state,'completed')
-  assert.equal(next.occurrence.acceptedScheduleRevision,2)
-  assert.deepEqual(next.occurrence.target.recipientIds,['new-recipient'])
-  assert.notEqual(next.occurrence.action.instructionIds[0],applied.occurrence.action.instructionIds[0])
-  assert.equal((await f.task('B')).contextRevision,2)
+  assert.equal((await f.task('B')).contextRevision, 2)
+  assert.deepEqual((await f.task('B')).sourceRefs, ['message-version-1', 'message-version-2'])
+  assert.equal((await f.query('coordination.occurrence.list')).length, 1, 'Current message inputs do not manufacture legacy occurrences')
+})
+
+test('one completion event persists once and cannot dispatch other Tasks without their explicit current commands', async t => {
+  const f = await fixture(t), binding = await f.owner('A')
+  const args = { binding, summary: 'Actual result A', result: { evidence: ['A-proof'] } }
+  const completed = await f.command('task.complete', args, 'completed-A')
+  assert.equal((await f.command('task.complete', args, 'completed-A')).replayed, true)
+  assert.equal((await f.query('task.events')).events.length, 1)
+  for (const taskId of ['B', 'C']) {
+    assert.equal((await f.task(taskId)).contextRevision ?? 0, 0)
+    const input = currentInput(f, 'explicit-' + taskId, { taskId, text: 'Review original result ' + completed.completionEvent.id, request: taskId })
+    await f.command('task.supplement', input, 'apply-' + taskId)
+    assert.equal((await f.command('task.supplement', input, 'apply-' + taskId)).replayed, true)
+    assert.equal((await f.task(taskId)).contextRevision, 1)
+  }
+  assert.equal((await f.query('task.events')).events.length, 1)
+})
+
+test('claimed current execution rechecks its exact Task authority before effects and rejects foreign Owner cancellation', async t => {
+  const f = await fixture(t), a = await f.owner('A'), b = await f.owner('B')
+  const execution = (await f.command('execution.dispatch', { binding: b, key: 'B-work', prompt: 'Original B scope' })).result.execution
+  const scope = (await f.command('execution.claim', { executionId: execution.id })).result.binding
+  await assert.rejects(f.command('execution.cancel', { binding: a, executionId: execution.id }), { code: 'DYNAMIC_EXECUTION_SCOPE_INVALID' })
+  await f.command('task.revise', { taskId: 'B', expectedRequirementRevision: 1, expectedControlRevision: 1, request: 'New B scope' })
+  await assert.rejects(f.command('operation.prepare', { binding: scope, key: 'old-write', definition: { toolName: 'write' }, resourceKeys: [] }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  assert.deepEqual(await f.query('operation.list', { taskId: 'B' }), [])
+  assert.equal((await f.task('B')).request, 'New B scope')
+})
+
+test('pause and resume fence old work while an explicit current Owner reuses the same drained execution', async t => {
+  const f = await fixture(t), oldOwner = await f.owner('B')
+  const execution = (await f.command('execution.dispatch', { binding: oldOwner, key: 'work', prompt: 'Original work' })).result.execution
+  const oldScope = (await f.command('execution.claim', { executionId: execution.id })).result.binding
+  await f.command('task.control', { taskId: 'B', expectedControlRevision: 1, control: 'paused' })
+  await f.command('task.control', { taskId: 'B', expectedControlRevision: 2, control: 'active' })
+  await f.command('execution.drained', { binding: oldScope })
+  await f.command('task.drained', { binding: oldOwner })
+  const owner = await f.owner('B')
+  const resumed = (await f.command('execution.continue', { binding: owner, executionId: execution.id, key: 'explicit-resume', prompt: 'Current continuation' })).result.execution
+  assert.equal(resumed.id, execution.id); assert.equal(resumed.inputVersion, 2); assert.equal(resumed.controlRevision, 3)
+  assert.equal(resumed.inputHistory[0].controlRevision, 1)
+  await assert.rejects(f.command('execution.result', { binding: oldScope, output: { summary: 'Old late result' } }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
+  assert.equal((await f.task('B')).control, 'active')
+})
+
+test('historical recurring identities survive current revisions and repeated recovery without new slots or notifications', async t => {
+  const f = await fixture(t, { rule: { kind: 'daily', time: '09:00' } })
+  const schedule = (await f.query('coordination.schedule.list'))[0], occurrence = (await f.query('coordination.occurrence.list'))[0]
+  const before = await f.task('B')
+  await f.command('task.revise', { taskId: 'B', expectedRequirementRevision: 1, expectedControlRevision: 1, request: 'Current revised delivery' })
+  for (let i = 0; i < 2; i++) {
+    await f.restart()
+    assert.deepEqual((await f.query('coordination.schedule.list'))[0], schedule)
+    assert.deepEqual((await f.query('coordination.occurrence.list'))[0], occurrence)
+    assert.equal((await f.query('coordination.occurrence.list')).length, 1)
+    assert.deepEqual(await f.query('notification.list'), [])
+  }
+  assert.equal((await f.task('B')).sessionId, before.sessionId)
+  assert.equal((await f.task('B')).requirementRevision, 2)
+  assert.deepEqual((await f.query('coordination.get', { coordinationId: 'batch' })).members[0].command, f.frozen)
 })
