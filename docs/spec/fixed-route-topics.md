@@ -28,4 +28,8 @@ mentions 读取兼容标准 `result.conversationMessagesList[].messages`（`open
 
 处理完成时间保存在现有 source unit 的可选 fixedTopicHandledAt 中；入站只有全部固定 unit 与业务 unit 结算后才完成。稳定原消息/版本/unit 身份生成同一个回复 ID，复用 outbox 和 notification 幂等、ACK、回读及重启恢复；已有冻结答复优先恢复，不重新生成。没有数据库 schema 迁移或新的 outbox/任务编排状态机，也不恢复 #288 暂停的 coordination 接纳链。
 
+固定类别回复使用独立的 `fixed-topic-reply` 通知类型，`topicRefs=[]`，不伪造业务 Topic。Host 从真实 Resident 消息、版本、当前固定 unit 和发送人生成事实绑定，通知账本校验已接纳来源及稳定通知 ID；准备和发送前核对冻结来源。普通 `topic-reply` 仍必须携带非空业务 Topic 引用。若旧版本已写入 pending outbox、但因空 topicRefs 未能准备通知，恢复沿用原 outbox ID、正文、引用和 mentions 补齐账本，不重新查询生成或创建另一条补报。ACK 后只回读，不重发；真实送达仍以通知回执为准。
+
+原生集成回归经过 `openTaskSessionService`、真实 SQLite 通知账本和原生平台工具，覆盖两类固定回复、业务 Topic 校验、非法来源拒绝及冻结 outbox 跨重启恢复。仅最后的外部发送/回读适配器为合成实现，未发送真实群消息。
+
 验证覆盖真实 DomainFacility 的持久化/重启、固定类别分页与失败/沉默/回复状态、mentions 契约和静默人工纠正；浏览器使用合成 React 宿主验证键盘、空态、分页、409/503 与窄屏。相关原生回归使用 native profile 与确定性模型；`fixed-topics-native.test.js` 实际调用宿主注册的查询、回复及文件工具，检查会话权限隔离，并在提供 rc2 schedule 包时验证真实调度拒绝。时间指导断言与脚本化过期分支不等于真实模型语义验证。真实 DingTalk、生产库上的纠正和实际模型判断由部署后的独立验证负责，不能用隔离测试代替。

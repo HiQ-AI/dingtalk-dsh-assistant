@@ -10,6 +10,7 @@ import { taskNotificationRecovery } from './notification-delivery.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
+import { fixedTopicIds, fixedUnitRequestId } from './fixed-topics.js'
 import { createExecutionResourceCatalog } from './execution-resource-catalog.js'
 import { DatabaseSync } from 'node:sqlite'
 import { retireIndependentCoordination, coordinationSchema, scheduleSchema } from './coordination-retirement.js'
@@ -1466,10 +1467,19 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'notification.prepare') {
       if (a.kind === 'coordination') fail('INDEPENDENT_COORDINATION_RETIRED')
-      const task = a.kind === 'topic-reply' ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
-      if (!['question','status','topic-reply'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
+      const task = ['topic-reply', 'fixed-topic-reply'].includes(a.kind) ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
+      if (!['question','status','topic-reply','fixed-topic-reply'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
       integer(a.requirementRevision, 'requirementRevision')
       if (a.kind === 'topic-reply' && (!Array.isArray(a.payload?.fact?.topicRefs) || !a.payload.fact.topicRefs.length)) fail('DYNAMIC_ARGUMENT_INVALID', 'topicRefs')
+      if (a.kind === 'fixed-topic-reply') {
+        const p = record(a.payload), fact = record(p.fact), source = get('dynamic_sources', text(p.sourceId, 'sourceId'))
+        integer(p.sourceVersion, 'sourceVersion'); text(fact.unitId, 'unitId'); integer(fact.unitRevision, 'unitRevision')
+        if (!fixedTopicIds.includes(fact.fixedTopic) || a.taskId || p.taskIds?.length || p.topicRefs?.length || fact.topicRefs?.length
+          || source.groupId !== p.conversationId || source.messageId !== p.sourceMessageId || source.version !== p.sourceVersion || source.actorId !== p.actorId
+          || p.replyToMessageId !== source.messageId || p.replyToSenderOpenDingTalkId !== source.actorId
+          || id !== fixedUnitRequestId(source.groupId, { messageId: source.messageId, messageVersion: source.version }, fact))
+          fail('DYNAMIC_ARGUMENT_INVALID', 'fixedTopicSource')
+      }
       const body = { taskId: task?.taskId ?? null, requirementRevision: a.requirementRevision, kind: a.kind, payload: clone(record(a.payload)) }
       const prior = get('dynamic_notifications', id, true)
       if (prior) { if (prior.payloadDigest !== digest(body)) fail('DYNAMIC_NOTIFICATION_ID_CONFLICT'); return changed({ notification: prior }) }
@@ -1571,7 +1581,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           put('dynamic_notifications', notification)
           return changed({ notification, topicFacts: topicFacts.requeueUnsent(notification) })
         }
-        const task = ['topic-reply','coordination'].includes(notification.kind) ? null : get('dynamic_tasks', notification.taskId)
+        const task = ['topic-reply','fixed-topic-reply','coordination'].includes(notification.kind) ? null : get('dynamic_tasks', notification.taskId)
         const request = notification.kind === 'question' && task.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)
         if (notification.kind === 'question' && (notification.requirementRevision !== task.requirementRevision || task.status !== 'active' || task.control !== 'active'
           || !request || request.status !== 'waiting-reply' || request.requirementRevision !== task.requirementRevision

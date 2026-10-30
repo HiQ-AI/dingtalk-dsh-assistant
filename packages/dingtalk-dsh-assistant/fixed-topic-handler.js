@@ -19,6 +19,7 @@ export function createFixedTopicHandler({ ctx, store, legacy, root, models, appe
       if (!current(groupId, message, unit)) throw new Error('fixed_topic_source_stale')
       if (!message.senderOpenDingTalkId) throw new Error('fixed_topic_reply_actor_required')
       await appendOutbox({ groupId, outboundId: requestId, sourceMessageId: requestId, topicRefs: [],
+        fixedTopic: unit.fixedTopic, sourceVersion: message.messageVersion,
         preflight: () => { if (!current(groupId, message, unit)) throw new Error('fixed_topic_source_stale') },
         matterSourceMessageIds: [message.messageId], matterUnitRefs: [{ unitId: unit.unitId, unitRevision: unit.unitRevision }],
         text, replyKind: 'substantive', replyToMessageId: message.messageId, replyToSenderOpenDingTalkId: message.senderOpenDingTalkId,
