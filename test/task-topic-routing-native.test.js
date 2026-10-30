@@ -1043,6 +1043,53 @@ testRunner('business notices 423–424 and named owners remain in the original T
   assert.equal(h.sent.length, 0)
 })
 
+// The model decisions are scripted; this exercises the native context and task pipeline.
+testRunner('native Topic context accepts a requirement that only mentions notification recipients', { timeout: 20000, ...(!available ? { skip: reason } : {}) }, async t => {
+  let topicId, historyRead = false
+  const assignment = '测试助手，列表功能的明确展示需求由你实现，测试成员甲和测试成员乙接收同步。'
+  const summary = '助手负责实现列表需求，两位成员接收同步，等待具体展示要求。'
+  const requirement = '@测试成员甲 @测试成员乙 状态列需要显示等待中的记录。'
+  const h = await extraHost(t, 'topic-participation-', async request => {
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
+      messageId: item.messageId, messageVersion: item.messageVersion, topics: [topicId ? { topicId } : { newTopicKey: 'list', title: '列表状态展示' }],
+    })) })]
+    if (names.includes('group_decision_submit')) {
+      if (input.trigger === 'task-facts') return topicTaskCalls(request)
+      const current = input.messages.at(-1)
+      if (current.messageId === 'assignment') return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+        decision: { basisMessageIds: [current.messageId], actions: [], reason: '等待具体需求', topicUpdate: { summary } } } }]
+      assert.equal(current.text, requirement)
+      assert.equal(input.summary, summary)
+      assert.equal(input.historyAvailable, true)
+      assert.equal(input.linkedTasks.total, 0)
+      if (!historyRead) { historyRead = true; return [call('group_topic_context_get', {})] }
+      assert.ok(modelToolValues(request, 'group_topic_context_get').some(value => value.messages?.some(item => item.text === assignment)), '原分工必须可从真实上下文工具读回')
+      return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+        decision: { basisMessageIds: ['assignment', current.messageId], topicUpdate: { summary: '原分工由助手实现，当前需求明确，同事仅同步，已承接列表状态任务。' },
+          actions: [{ kind: 'new-task', title: '列表状态展示', objective: '在列表状态列显示等待中的记录', acceptanceCriteria: ['等待中的记录可见'], topicRefs: [{ topicId: input.topicId, revision: input.revision }] }],
+          reply: '已承接列表状态展示需求。', replyToMessageId: current.messageId,
+          replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } } }]
+    }
+    assert.ok(names.includes('task_session_submit'))
+    return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续测试资料', evidence: [], limitations: [] } })]
+  })
+  await h.service.ingest(message('assignment', assignment)); await h.service.whenIdle()
+  topicId = h.residentStore.listTopics('native-group')[0].topicId
+  assert.equal((await h.query('task.list')).length, 0)
+  await h.service.ingest(message('requirement', requirement)); await h.service.whenIdle()
+  assert.equal(historyRead, true)
+  const tasks = await h.query('task.list')
+  assert.equal(tasks.length, 1)
+  assert.ok(tasks[0].topicRefs.some(ref => ref.topicId === topicId))
+  const topic = h.residentStore.getTopic('native-group', topicId)
+  const decision = topic.decisions.find(item => item.decision.actions.some(action => action.kind === 'new-task'))
+  assert.equal(decision.status, 'completed')
+  assert.deepEqual(decision.decision.basisMessageIds, ['assignment', 'requirement'])
+  assert.equal(h.sent.length, 1)
+  assert.equal(h.residentStore.listTopics('native-group').length, 1)
+})
+
 testRunner('native proposal prompt preserves original authorization and asks without claiming task execution', { timeout: 15000, ...(!available ? { skip: reason } : {}) }, async t => {
   let checked = false
   const h = await extraHost(t, 'task-topic-proposal-', async request => {
@@ -1050,7 +1097,7 @@ testRunner('native proposal prompt preserves original authorization and asks wit
     if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'proposal', title: '描述框位置调整' }] })) })]
     assert.ok(names.includes('group_decision_submit'))
     const prompt = JSON.stringify(request)
-    for (const rule of ['才允许选择 new-task', '必须选择 task-proposal', '这个事项是否需要我处理？', '暂不创建任务', '不承诺', '消息明确 @其他同事', '测试助手', '不追加未经授权的业务验收']) assert.ok(prompt.includes(rule), rule)
+    for (const rule of ['结合需求原文、引用、已有任务及前后分工判断', '不能把最后一个 @ 当作事项负责人', '不因当前只 @ 同事或省略助手称呼而重复索要确认', '才选择 task-proposal', '这个事项是否需要我处理？', '暂不创建任务', '不承诺', '没你的事', '不是找你', 'topicUpdate.summary 记录承接或静默的判断及分工依据', '测试助手', '不追加未经授权的业务验收']) assert.ok(prompt.includes(rule), rule)
     for (const rule of ['不能只因 @ 别人就硬过滤', '已有任务的新事实仍归原业务 Topic', '仅提到人名不等于指定负责人']) assert.ok(prompt.includes(rule), rule)
     assert.ok(prompt.includes('仍保留对应业务 Topic 的完整上下文'))
     assert.ok(!prompt.includes('未指向 Agent 时必须忽略'))

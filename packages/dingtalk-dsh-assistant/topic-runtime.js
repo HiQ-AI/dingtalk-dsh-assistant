@@ -12,7 +12,7 @@ import { TaskRevisionError } from './task-input-revision.js'
 import { visiblePromptRefs, visibleSectionLength, visibleCoordinatorText, visibleToolOutputs, promptContent, compactSectionValue, buildMaterialManifest } from './coordination-context.js'
 import { taskProgressSnapshot } from './task-progress.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint } from './task-result.js'
-import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, isExplicitAgentDirection, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS, collectDecisionIssues } from './decision.js'
+import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS, collectDecisionIssues } from './decision.js'
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
 const DECISION_SECTIONS = ['messages', 'summary', 'removedUnitRefs', 'rejectedDecisions', 'ownership', 'quotedMessages', 'sourceMessages', 'promptIndex']
@@ -47,17 +47,6 @@ const invalidArguments = (error) => {
 }
 const sameVersions = (left, right) => left.length === right.length && left.every((item) => right.some((other) => other.messageId === item.messageId && other.messageVersion === item.messageVersion))
 const unitKey = (value) => value.unitId ? `${value.unitId}:${value.unitRevision}` : `legacy:${value.messageId}:${value.messageVersion}`
-const unitDirection = (message, sameMessageUnits, agentNames) => {
-  const original = message._sourceMessageText ?? message.text
-  const ends = (message.sourceRanges ?? []).map((range) => range.end)
-  const limit = ends.length ? Math.max(...ends) : sameMessageUnits.length === 1 ? original.length : 0
-  const mentions = [...original.matchAll(/(?<![\w.])@([^\s@，,：:；;。！？!?（）()]+)/gu)]
-    .filter((match) => match.index < limit && !original.slice(Math.max(0, match.index - 8), match.index).endsWith('mediaId='))
-  const latest = mentions.at(-1)
-  if (latest) return isExplicitAgentDirection(latest[0], agentNames) ? 'agent' : 'other'
-  if (/^\s*cc\s*:/iu.test(original) || isExplicitAgentDirection(message.text, agentNames)) return 'agent'
-  return 'none'
-}
 const topicReadCall = ({ topicId, revision }) => ({ name: 'group_topic_context_get', arguments: { topicId, revision } })
 const topicIndex = (topics) => topics.map(({ topicId, title, revision, processedRevision, status, summary }) => ({ topicId, title, revision, processedRevision, status,
   summary: summary?.slice(0, 240), readCall: topicReadCall({ topicId, revision }) }))
@@ -862,7 +851,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     if (unreadDelta.length) throw new Error('topic_decision_delta_unread')
     if ([...request.requiredSections].some((section) => (request.readSectionOffsets.get(section) ?? 0) < request.sections[section].length)) throw new Error('topic_decision_context_unread')
 
-    const issues = collectDecisionIssues(request, decision, { store, delta, ownership: effectOwnership(request.groupId, request.topicId, request.revision, request.messages), unitKey, unitDirection, archivedTasks })
+    const issues = collectDecisionIssues(request, decision, { store, delta, ownership: effectOwnership(request.groupId, request.topicId, request.revision, request.messages), unitKey, archivedTasks })
     if (issues.length) { const error = new Error(issues[0].message); error.issues = issues; throw error }
   }
   function register(agentCtx, groupId, scope) {
