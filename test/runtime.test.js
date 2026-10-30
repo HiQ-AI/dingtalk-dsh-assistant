@@ -258,7 +258,7 @@ test('关闭等待已接受的可靠 Outbox 写入，期间新消息被拒绝', 
   const gate = new Promise((resolve) => { release = resolve }), started = new Promise((resolve) => { entered = resolve })
   const original = h.store.appendOutbox
   h.store.appendOutbox = async (args) => { entered(); await gate; return original(args) }
-  const accepted = await h.call('group_decision_submit', { requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: { basisMessageIds: ['a'], actions: [], reply: '可靠回复', replyReview: { kind: 'substantive' } } })
+  const accepted = await h.call('group_decision_submit', { requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: { basisMessageIds: ['a'], actions: [], reply: '可靠回复', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive' } } })
   assert.equal(accepted.status, 'accepted'); await started
   let closed = false
   const closing = h.runtime.close().then(() => { closed = true })
@@ -485,7 +485,7 @@ test('同 Topic 一次决策不能重复改变同一 Task，共享主 Topic 可�
   ], effectOwner: { topicId: one.topicRefs[0].topicId } })) })
   const owner = routed.pendingDecisions.find((item) => item.topicId === one.topicRefs[0].topicId)
   const actions = [one, two].map((task) => ({ kind: 'task-cancel', taskId: task.taskId, ...inputVersion(task), reason: '用户明确取消两个任务', topicRefs: [{ topicId: owner.topicId, revision: owner.revision }] }))
-  const submission = { requestId: owner.requestId, topicId: owner.topicId, revision: owner.revision, decision: { basisMessageIds: ['cancel-both'], actions: [actions[0], actions[0]], reply: '已取消这两个任务。', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } }
+  const submission = { requestId: owner.requestId, topicId: owner.topicId, revision: owner.revision, decision: { basisMessageIds: ['cancel-both'], actions: [actions[0], actions[0]], reply: '已取消这两个任务。', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } }
   const duplicate = await h.call('group_decision_submit', submission)
   assert.equal(duplicate.status, 'invalid-arguments')
   assert.ok(duplicate.issues.some(issue => issue.code === 'topic_decision_task_target_duplicate'))

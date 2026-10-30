@@ -39,6 +39,8 @@ node --test --test-concurrency=1 --test-name-pattern='工程源仓库缺失' tes
 
 修改旧工程/验收/Runtime源码、对应历史入口或共享夹具时，显式运行相关历史文件/用例，不以Release成功替代相关验证。仍按npm-release runbook准备JDK/Node22/合成profile等实际依赖。旧流程发生变化时重审分类及保证，不为掩盖失败迁移测试。
 
+已审定注册需要修复时，保留原 SHA256、原 ID、变体数及分类，另记包含前后摘要、basis commit、理由和证据的 `review`；不能只刷文件摘要。当前内容必须匹配复审摘要，原 Git 来源仍逐项核对。2.3.0 的三项输入/依赖夹具复审及一项共享 helper 变更见[发行测试恢复](release-230-test-recovery.md)。
+
 手动ci.yml的scope=all执行七组，scope=history仅执行历史组；无push/PR/定时触发。触发CI仍需用户明确授权。
 
 ## 收益与发行边界

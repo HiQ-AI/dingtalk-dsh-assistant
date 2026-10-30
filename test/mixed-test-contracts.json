@@ -800,7 +800,17 @@
             "packages/dingtalk-dsh-assistant/package.json#files",
             "packages/dingtalk-dsh-assistant/session-workspaces.js",
             "docs/ops/task-session-clean-start.md"
-          ]
+          ],
+          "review": {
+            "fromSha256": "22256f83d98d209bc9a7484d367771f6863ad1764e85874d11e8cc3767e4334d",
+            "sha256": "8f7dc0ad49464f3ff7966fd73ce92b4c235d513b779a205636644d85758d7fb7",
+            "basisCommit": "fa14be0f5f571d0740081c65da372c5456220545",
+            "reason": "复审原#20：补真实传递依赖并使用平台无关身份配置；原LF/CRLF相等、实际源码改变不等断言及变体完整保留，不预约Windows进程。",
+            "evidence": [
+              "docs/ops/release-230-test-recovery.md",
+              "test/execution-local-acceptance.test.js"
+            ]
+          }
         },
         {
           "originalId": 21,
@@ -834,7 +844,7 @@
         }
       ],
       "destinationSha256": {
-        "test/execution-local-acceptance.test.js": "37cfd61f99c4fdfea7529971f7808e66301c91087e2adc0f9248700ee986c9a4",
+        "test/execution-local-acceptance.test.js": "0cbd4ec8432094cd716a22b215ec233e78dc9be98620b56ccf058e4d95816a41",
         "test/execution-local-acceptance-history.test.js": "602b1994b6a5f261d320f8de8a6c49edb50074945f4110c9afa4d9bada2aad05"
       }
     },
@@ -849,7 +859,18 @@
       ],
       "fixture": {
         "file": "test/fixtures/runtime-mixed.js",
-        "sha256": "40813b19955082ab93708dfb5ec88703f602c23a2c0601fb1556b0fbdbb032a2"
+        "sha256": "40813b19955082ab93708dfb5ec88703f602c23a2c0601fb1556b0fbdbb032a2",
+        "review": {
+          "fromSha256": "40813b19955082ab93708dfb5ec88703f602c23a2c0601fb1556b0fbdbb032a2",
+          "sha256": "f225c0b59dcdd82833303a2a48293e1374f7a46c1778781ccd513be8341ca9e3",
+          "basisCommit": "fa14be0f5f571d0740081c65da372c5456220545",
+          "reason": "复审共享合成模型decide：仅根据本测试声明的依据作者填写显式接收人；原helper的控制、回执、等待及全部断言不变。历史相关路径单独验证。",
+          "evidence": [
+            "docs/ops/release-230-test-recovery.md",
+            "test/runtime.test.js",
+            "test/runtime-history.test.js"
+          ]
+        }
       },
       "cases": [
         {
@@ -2365,7 +2386,17 @@
             "packages/dingtalk-dsh-assistant/resident.js",
             "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
             "docs/ops/task-session-clean-start.md"
-          ]
+          ],
+          "review": {
+            "fromSha256": "f2cdf50d9edc31ddda0f46ace20a13996648dfdf80e063bae170d09e5c9e7304",
+            "sha256": "1ae50870ae905f42e2c409bcfce0175d2520dd9141c27a466641913892cd5c00",
+            "basisCommit": "fa14be0f5f571d0740081c65da372c5456220545",
+            "reason": "复审原注册：合成决策补明确受信接收人；原可靠关停或重复Task动作拒绝、单次取消与所有效果断言不变。",
+            "evidence": [
+              "docs/ops/release-230-test-recovery.md",
+              "test/runtime.test.js"
+            ]
+          }
         },
         {
           "originalId": 102,
@@ -2890,7 +2921,17 @@
             "packages/dingtalk-dsh-assistant/resident.js",
             "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
             "docs/ops/task-session-clean-start.md"
-          ]
+          ],
+          "review": {
+            "fromSha256": "bb454c4d9527cdd116560db015f4a7b7765c182219ef7e49ae8e322081ddfd21",
+            "sha256": "b413786bd892dfdccd6f5f348f1e2dee6ce715373db52d4bacf783a3c57ee784",
+            "basisCommit": "fa14be0f5f571d0740081c65da372c5456220545",
+            "reason": "复审原注册：合成决策补明确受信接收人；原可靠关停或重复Task动作拒绝、单次取消与所有效果断言不变。",
+            "evidence": [
+              "docs/ops/release-230-test-recovery.md",
+              "test/runtime.test.js"
+            ]
+          }
         },
         {
           "originalId": 137,
@@ -3089,7 +3130,7 @@
         }
       ],
       "destinationSha256": {
-        "test/runtime.test.js": "506c9eaa11a835ce4356b68f2246dd2375518a26507cdcf2421277a4fa6ff432",
+        "test/runtime.test.js": "84a0f722c97b475155b8627e9b2686a59e7c9342d9c0abe0983f142a7b307efe",
         "test/runtime-history.test.js": "2c8ddaa590dad5698bd77f1f90aa66757537db126576dd6f8fa80f1741a6bbdc"
       }
     }

@@ -9,7 +9,6 @@ import { once } from 'node:events'
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { openIndependentCoordination } from '../packages/dingtalk-dsh-assistant/independent-coordination-service.js'
 import { inspectCoordinationMigration, migrateCoordinationLedger } from '../scripts/migrate-coordination-ledger.mjs'
 import { migrationStateDigest } from '../packages/dingtalk-dsh-assistant/coordination-migration-state.js'
 
@@ -170,66 +169,69 @@ test('identity and review mismatches never initialize a new ledger or clear hist
   assert.equal(inspectCoordinationMigration(f.options).expectedDigest,before.expectedDigest)
 })
 
-test('compatible admission-off mode preserves ownership and resumes accepted work without planning new units', async t => {
+// The old admission-off/frozen runtime no longer exists. These upgrade cases
+// retain the real v1 Task/receipt fixture and verify retirement cannot replay its
+// pending coordination command or stop a separately authorized Task Owner.
+function seedPendingCoordination(dbPath) {
+  const db = new DatabaseSync(dbPath)
+  try {
+    const put = (table, value) => db.prepare(`INSERT INTO dynamic_${table}(id,body) VALUES (?,?)`).run(value.id, JSON.stringify(value))
+    db.prepare("DELETE FROM dynamic_meta WHERE key='independentCoordinationRetired'").run()
+    put('coordination_sources', { id: 'pending-source', unitId: 'pending-unit', revision: 1, groupId: 'group', dispatchOwner: 'coordination', state: 'accepted',
+      sourceMessageId: 'historical-message', sourceRefs: ['historical-source'], original: 'Explicit new request', coordinationId: 'pending' })
+    put('coordination', { id: 'pending', groupId: 'group', state: 'active', revision: 1, memberIds: ['pending-member'] })
+    put('coordination_members', { id: 'pending-member', coordinationId: 'pending', taskId: 'history', state: 'ready',
+      command: { id: 'old-reopen', kind: 'task.reopen', args: { taskId: 'history', expectedRequirementRevision: 1, expectedControlRevision: 1, request: 'Explicit new request' } } })
+    put('notifications', { id: 'old-summary', kind: 'coordination', state: 'prepared', payload: { conversationId: 'group', text: 'Frozen old summary', fact: { coordinationId: 'pending', eventId: 'summary' } } })
+  } finally { db.close() }
+}
+
+test('migrated accepted coordination preserves its source and receipt history without reopening the completed Task', async t => {
   const f = await realV1(t), before = inspectCoordinationMigration(f.options)
   await migrateCoordinationLedger({...f.options,expectedDigest:before.expectedDigest})
-  const store = await openDynamicTaskStore(f.options)
-  let service
+  seedPendingCoordination(f.options.dbPath)
+  let store = await openDynamicTaskStore(f.options)
   try {
     const command = (kind,args,id=randomUUID())=>store.command({kind,args,id})
     const query = (kind,args={})=>store.query({kind,...args})
-    const entry = { reservationId:'compat-reservation',generation:1,unitId:'compat-unit',unitRevision:1,dispatchOwner:'coordination',semanticState:'reserved',settled:false,
-      sourceSnapshot:{messageId:'historical-message',messageVersion:1,actorId:'author',unitText:'historical request',text:'historical request',sourceRefs:[]} }
-    const held = { ...entry,reservationId:'held-reservation',unitId:'held-unit',sourceSnapshot:{...entry.sourceSnapshot,messageId:'future-message',unitText:'new pending request',text:'new pending request'} }
-    await command('source.record',{sourceId:'future-source',groupId:'group',messageId:'future-message',actorId:'author',text:'new pending request',timestamp:'2026-10-03T00:00:00.000Z'})
-    const source = (await command('coordination.reserve',{unitId:entry.unitId,revision:1,groupId:'group',original:entry.sourceSnapshot.unitText,
-      reservationId:entry.reservationId,reservationGeneration:1,actorId:'author',sourceRefs:['historical-source'],sourceMessageId:'historical-message'})).result.source
-    await command('coordination.accept',{sourceId:source.id,fence:source.fence,coordinationId:'compat-coordination',members:[{
-      instructionId:'compat-member',taskId:'history',progressImpact:'replan',dependencies:[],command:{id:'coordination-command:compat-coordination:compat-member',kind:'task.reopen',
-        args:{taskId:'history',expectedRequirementRevision:1,expectedControlRevision:1,request:'explicit authorized new request'}}}]})
-    let plans=0,handoffs=0
-    const residentStore = {
-      getSourceDispatchOwnership:(_group,unitId)=>[entry,held].find(item=>item.unitId===unitId),
-      listSourceDispatchOwnership:()=>[entry,held],
-      getGroup:()=>({messages:[{messageId:'historical-message',senderOpenDingTalkId:'author',senderName:'author'}]}),
-      async updateSourceDispatch(args){const current=[entry,held].find(item=>item.unitId===args.unitId);assert.equal(current.generation,args.expectedGeneration);Object.assign(current,args);return current},
-    }
-    service=openIndependentCoordination({config:{enabled:false},residentStore,query,command,
-      planner:{plan:async()=>{plans++},close:async()=>{}},onApplied:async()=>{handoffs++},onError:(_id,error)=>{throw error}})
-    await service.recoverGroup('group')
-    assert.equal(plans,0);assert.equal(handoffs,1)
-    assert.equal((await query('task.get',{taskId:'history'})).runSequence,2)
-    assert.equal((await query('coordination.get',{coordinationId:'compat-coordination'})).members[0].state,'applied')
-    assert.equal((await query('coordination.source',{unitId:entry.unitId,revision:1})).dispatchOwner,'coordination')
-    assert.equal((await query('coordination.source',{unitId:held.unitId,revision:1})).state,'reserved')
-    assert.equal(held.settled,false)
-    await service.recoverGroup('group');assert.equal(handoffs,1);assert.equal(plans,0)
-  } finally { await service?.close();await store.close() }
+    const task = await query('task.get', { taskId: 'history' })
+    const source = (await query('coordination.source.list'))[0]
+    assert.equal(task.status, 'completed'); assert.equal(task.runSequence, f.generated.task.runSequence)
+    assert.equal(source.original, 'Explicit new request'); assert.equal(source.state, 'accepted')
+    assert.equal(source.retirement.previousState, 'accepted')
+    const old = await query('coordination.get', { coordinationId: 'pending' })
+    assert.equal(old.members[0].state, 'ready'); assert.equal(old.members[0].eligible, false)
+    assert.deepEqual(old.members[0].waitingReason, { code: 'coordination-feature-removed' })
+    await assert.rejects(command('coordination.apply', { instructionId: 'pending-member', expectedRevision: 1 }), { code: 'INDEPENDENT_COORDINATION_RETIRED' })
+    assert.equal(await query('receipt.get', { id: 'old-reopen' }), null)
+    assert.equal((await query('receipt.get', { id: 'historical-complete' })).taskDecision.id, 'historical-complete')
+    await store.close(); store = await openDynamicTaskStore(f.options)
+    assert.deepEqual(await query('task.get', { taskId: 'history' }), task)
+    assert.deepEqual((await query('coordination.source.list'))[0], source)
+    assert.equal((await query('notification.get', { notificationId: 'old-summary' })).state, 'superseded')
+  } finally { await store.close() }
 })
 
-test('compatible frozen mode survives restart and blocks coordinated claims and send permits without freezing unrelated work', async t => {
+test('retired migration stops unpermitted summary while explicit Owner reopening and unrelated execution stay available', async t => {
   const f = await realV1(t), before = inspectCoordinationMigration(f.options)
   await migrateCoordinationLedger({...f.options,expectedDigest:before.expectedDigest})
+  seedPendingCoordination(f.options.dbPath)
   let store = await openDynamicTaskStore(f.options)
   const command = (kind,args,id=randomUUID())=>store.command({kind,args,id})
   const query = (kind,args={})=>store.query({kind,...args})
   try {
-    const source=(await command('coordination.reserve',{unitId:'frozen-unit',revision:1,groupId:'group',original:'explicit new request'})).result.source
-    await command('coordination.accept',{sourceId:source.id,fence:source.fence,coordinationId:'frozen-coordination',members:[{
-      instructionId:'frozen-member',taskId:'history',progressImpact:'replan',dependencies:[],command:{id:'coordination-command:frozen-coordination:frozen-member',kind:'task.reopen',
-        args:{taskId:'history',expectedRequirementRevision:1,expectedControlRevision:1,request:'explicit new request'}}}]})
-    await command('coordination.apply',{instructionId:'frozen-member',expectedRevision:1})
+    assert.equal((await query('coordination.runtime')).mode, 'retired')
+    assert.equal((await command('notification.start', { notificationId: 'old-summary' })).dispatchEligible, false)
+    await command('task.reopen', { taskId: 'history', expectedRequirementRevision: 1, expectedControlRevision: 1, request: 'Explicit new request' }, 'current-owner-reopen')
     const owner=(await command('task.claim',{taskId:'history'})).result.binding
-    const execution=(await command('execution.dispatch',{binding:owner,key:'coordinated',prompt:'coordinated work',input:{}})).result.execution
-    await command('notification.prepare',{notificationId:'frozen-summary',kind:'coordination',requirementRevision:1,
-      payload:{conversationId:'group',text:'frozen coordination summary',fact:{coordinationId:'frozen-coordination',eventId:'frozen-summary'}}})
-    await command('coordination.runtime.set',{mode:'frozen',reason:'isolated compatibility rollback drill'})
-    await store.close();store=await openDynamicTaskStore(f.options)
-    assert.equal((await query('coordination.runtime')).mode,'frozen')
-    await assert.rejects(command('execution.claim',{executionId:execution.id}),{code:'DYNAMIC_COORDINATION_FROZEN'})
-    assert.equal((await command('notification.start',{notificationId:'frozen-summary'})).dispatchEligible,false)
-    assert.equal((await query('notification.get',{notificationId:'frozen-summary'})).state,'prepared')
-    assert.equal((await query('coordination.source',{unitId:'frozen-unit',revision:1})).dispatchOwner,'coordination')
+    const execution=(await command('execution.dispatch',{binding:owner,key:'new-round',prompt:'Explicit new work',input:{}})).result.execution
+    const claim = await command('execution.claim', { executionId: execution.id })
+    assert.equal(claim.dispatchEligible, true)
+    await command('execution.result', { binding: claim.result.binding, output: { summary: 'New work checked' } })
+    await command('execution.drained', { binding: claim.result.binding })
+    assert.equal((await query('task.get', { taskId: 'history' })).runSequence, 2)
+    assert.equal((await query('coordination.get', { coordinationId: 'pending' })).members[0].state, 'ready')
+    assert.equal((await query('notification.get', { notificationId: 'old-summary' })).state, 'superseded')
     await command('task.create',{taskId:'unrelated',groupId:'group',request:'unrelated previously authorized task'})
     const independentOwner=(await command('task.claim',{taskId:'unrelated'})).result.binding
     const independent=(await command('execution.dispatch',{binding:independentOwner,key:'unrelated',prompt:'unrelated',input:{}})).result.execution

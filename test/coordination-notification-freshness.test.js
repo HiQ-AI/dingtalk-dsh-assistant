@@ -1,183 +1,138 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { spawn } from 'node:child_process'
-import { once } from 'node:events'
-import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { deliverTaskNotification, retryTaskNotification, taskNotificationRecovery } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
-import { taskNotificationOutbound } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
+import {mkdtemp,rm} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+import {randomUUID} from 'node:crypto'
+import {spawn} from 'node:child_process'
+import {once} from 'node:events'
+import {openDynamicTaskStore} from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import {deliverTaskNotification,retryTaskNotification,taskNotificationRecovery} from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
 
-async function fixture(t) {
-  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
-  const directory = await mkdtemp(join(tmpdir(), 'coordination-freshness-'))
-  const options = { dbPath: join(directory, 'task.sqlite'), instanceId: 'test', initialize: true }
-  let store = await openDynamicTaskStore(options), sends = 0
-  t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }) })
-  const command = (kind, args = {}, id = randomUUID()) => store.command({ id, kind, args })
-  const query = (kind, args = {}) => store.query({ kind, ...args })
-  await command('task.create', { taskId: 'A', groupId: 'group', request: '原业务目标' })
-  const source = (await command('coordination.reserve', { unitId: 'unit', revision: 1, groupId: 'group', original: '9点查询A' })).result.source
-  await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'query', members: [], readOnly: true })
-  await command('coordination.schedule.create', { coordinationId: 'query', scheduleId: 'schedule', timezone: 'Asia/Shanghai',
-    rule: { kind: 'once', at: '2026-10-21T01:00:00.000Z' }, action: { kind: 'read-query', taskIds: ['A'] },
-    target: { conversationId: 'group', recipientIds: ['stable-member'] } })
-  t.mock.timers.tick(3600000)
-  const occurrence = (await command('coordination.schedule.scan')).result.occurrences[0]
-  const job = (await command('coordination.job.claim', { jobId: occurrence.jobId })).result.job
-  await command('coordination.job.read', { jobId: job.id, fence: job.fence })
-  const notification = (await command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
-  const refreshArgs = { occurrenceId: occurrence.id, expectedNotificationId: notification.id, expectedResultVersion: 1,
-    expectedInstanceControlRevision: 1, expectedDeliveryControlRevision: 1 }
-  const notifications = {
-    canDisclose: async () => true,
-    send: async candidate => { sends++; return { messageId: `fake:${candidate.id}` } },
-    readback: async candidate => ({ messageId: `fake:${candidate.id}`, visible: true, deliveryStatus: 'delivered' }),
+// Frozen Topic results are not periodically re-read by the retired coordinator.
+// Recovery CAS, current question validity, and proven-not-sent retirement own the
+// corresponding freshness boundaries; a clock timeout never invents new facts.
+async function fixture(t){
+  t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
+  const directory=await mkdtemp(join(tmpdir(),'topic-notification-freshness-'))
+  const options={dbPath:join(directory,'tasks.sqlite'),instanceId:'freshness',initialize:true}
+  let store=await openDynamicTaskStore(options),sends=0
+  t.after(async()=>{await store.close();await rm(directory,{recursive:true,force:true})})
+  const command=(kind,args={},id=randomUUID())=>store.command({kind,args,id})
+  const query=(kind,args={})=>store.query({kind,...args})
+  const input=(id='notice',extra={})=>({notificationId:id,kind:'topic-reply',requirementRevision:1,payload:{
+    conversationId:'group',text:'Frozen verified result',sourceMessageId:'source',actorId:'actor',
+    fact:{topicRefs:[{topicId:'topic',revision:1}]},...extra}})
+  const prepare=(id,extra)=>command('notification.prepare',input(id,extra))
+  const notification=(await prepare()).result.notification
+  const notifications={canDisclose:async()=>true,send:async candidate=>{sends++;return{messageId:`fake:${candidate.id}`}},
+    readback:async candidate=>({messageId:`fake:${candidate.id}`,visible:true,deliveryStatus:'delivered'})}
+  async function rejectBeforeSend(){
+    const permitted=(await command('notification.start',{notificationId:notification.id})).result.notification
+    const detail={category:'api',code:1,origin:'mcp_gateway',operation:'chat/get_conversation_info',reason:'topic_quote_guard_unavailable',
+      retryable:true,message:'无法确认引用回复目标是否属于话题圈，已阻止发送'}
+    await command('notification.receipt',{notificationId:notification.id,dispatchToken:permitted.dispatchToken,state:'failed',
+      error:{phase:'send',exitCode:1,stdout:'',stderr:JSON.stringify({error:detail}),knownNotSent:true,retryable:true}})
   }
-  return { options, command, query, occurrence, notification, refreshArgs,
-    expire: () => t.mock.timers.tick(300001),
-    refresh: (args = {}, id) => command('coordination.notification.refresh', { ...refreshArgs, ...args }, id),
-    notificationById: id => query('notification.get', { notificationId: id }),
-    occurrenceNow: async () => (await query('coordination.occurrence.list'))[0],
-    deliver: candidate => deliverTaskNotification({ notification: candidate, notifications, command }),
-    retry: candidate => retryTaskNotification({ notification: candidate, notifications, command,
-      expectedToken: taskNotificationRecovery(candidate).expectedToken }),
-    get sends() { return sends },
-    async close() { await store.close() },
-    async restart() { await store.close(); store = await openDynamicTaskStore(options) },
-  }
+  return {options,command,query,input,prepare,notification,rejectBeforeSend,
+    read:(id=notification.id)=>query('notification.get',{notificationId:id}),
+    retire:()=>command('notification.retireUnsent',{notificationId:notification.id,reason:'superseded',evidenceRef:'reviewed-new-conclusion'}),
+    deliver:candidate=>deliverTaskNotification({notification:candidate,notifications,command}),
+    retry:(candidate,token=taskNotificationRecovery(candidate).expectedToken)=>retryTaskNotification({notification:candidate,notifications,command,expectedToken:token}),
+    get sends(){return sends},async close(){await store.close()},async restart(){await store.close();store=await openDynamicTaskStore(options)}}
 }
 
-test('manual recovery cannot obtain a send permit for expired query facts without an automatic scan', async t => {
-  const f = await fixture(t)
-  f.expire()
-  await assert.rejects(f.retry(f.notification), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE' })
-  assert.equal(f.sends, 0)
-  const rejected = await f.notificationById(f.notification.id)
-  assert.equal(rejected.state, 'prepared')
-  assert.equal(rejected.sendPermit, undefined)
-  assert.equal(rejected.sendAttemptCount, undefined)
-  await assert.rejects(f.command('notification.start', { notificationId: rejected.id }), { code: 'DYNAMIC_NOTIFICATION_RECOVERY_STALE' })
-  const fresh = (await f.refresh()).result.notification
-  await f.retry(fresh)
-  assert.equal(f.sends, 1)
+test('manual recovery requires the current durable token, not merely an aged prepared snapshot',async t=>{
+  const f=await fixture(t),token=taskNotificationRecovery(f.notification).expectedToken
+  t.mock.timers.tick(300001)
+  await f.command('notification.recovery.start',{notificationId:f.notification.id,expectedToken:token})
+  await assert.rejects(f.retry(f.notification,token),{code:'DYNAMIC_NOTIFICATION_RECOVERY_STALE'})
+  assert.equal(f.sends,0);assert.equal((await f.read()).state,'prepared')
+  assert.equal((await f.read()).sendPermit,undefined)
+  await f.retry(await f.read())
+  assert.equal(f.sends,1);assert.deepEqual((await f.read()).payload,f.notification.payload)
 })
 
-test('expired unpermitted candidate atomically supersedes with a fresh read and immutable old payload', async t => {
-  const f = await fixture(t)
-  const originalPayload = structuredClone(f.notification.payload)
-  await f.command('task.supplement', { taskId: 'A', expectedRequirementRevision: 1, expectedControlRevision: 1,
-    messageId: 'new-fact', text: '新的材料', request: '原业务目标\n新的材料' })
-  const taskBeforeRefresh = await f.query('task.get', { taskId: 'A' })
-  f.expire()
-  const fresh = (await f.refresh()).result.notification
-  const old = await f.notificationById(f.notification.id), occurrence = await f.occurrenceNow()
-  assert.equal(old.state, 'superseded'); assert.equal(old.supersededBy, fresh.id)
-  assert.deepEqual(old.payload, originalPayload)
-  assert.equal(occurrence.resultVersion, 2); assert.equal(occurrence.notificationId, fresh.id)
-  assert.equal(occurrence.result.results[0].contextRevision, 1)
-  assert.equal(occurrence.resultHistory.length, 1)
-  assert.equal(occurrence.resultHistory[0].result.results[0].contextRevision, 0)
-  assert.notEqual(fresh.payload.fact.resultDigest, old.payload.fact.resultDigest)
-  assert.notEqual(occurrence.result.observedAt, occurrence.resultHistory[0].result.observedAt)
-  assert.deepEqual(await f.query('task.get', { taskId: 'A' }), taskBeforeRefresh)
-  assert.equal(taskNotificationOutbound(old).status, 'superseded')
-  assert.equal(taskNotificationOutbound(old).supersededByOutboundId, fresh.id)
-  await f.deliver(f.notification) // stale outbox candidate still carries the old prepared snapshot
-  assert.equal(f.sends, 0)
-  await f.deliver(fresh)
-  assert.equal(f.sends, 1)
+test('an explicitly replaced unsent result keeps immutable evidence instead of fabricating a fresh query',async t=>{
+  const f=await fixture(t),payload=structuredClone(f.notification.payload)
+  await f.rejectBeforeSend();await f.retire()
+  const fresh=(await f.prepare('replacement',{text:'New independently verified result'})).result.notification
+  const old=await f.read()
+  assert.equal(old.state,'failed');assert.equal(old.retirement.evidenceRef,'reviewed-new-conclusion')
+  assert.deepEqual(old.payload,payload);assert.equal(taskNotificationRecovery(old).reason,'terminal')
+  await f.deliver(f.notification);assert.equal(f.sends,0)
+  await f.deliver(fresh);assert.equal(f.sends,1)
+  assert.equal((await f.query('notification.list')).length,2)
+  assert.deepEqual(await f.query('task.list'),[],'notification replacement never creates work')
 })
 
-test('permit wins: starting, recovered unknown and delivered candidates cannot be refreshed or resent', async t => {
-  const f = await fixture(t)
-  const permit = await f.command('notification.start', { notificationId: f.notification.id }, 'permit-original')
-  assert.equal(permit.dispatchEligible, true)
-  f.expire()
-  await assert.rejects(f.refresh(), { code: 'DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED' })
+test('permit wins: starting and recovered unknown candidates only read back, and delivered candidates never resend',async t=>{
+  const f=await fixture(t)
+  assert.equal((await f.command('notification.start',{notificationId:f.notification.id},'permit-once')).dispatchEligible,true)
+  t.mock.timers.tick(300001)
+  await assert.rejects(f.retire(),{code:'DYNAMIC_NOTIFICATION_RECONCILIATION_REQUIRED'})
+  await f.restart();assert.equal((await f.read()).state,'unknown')
+  assert.equal((await f.command('notification.start',{notificationId:f.notification.id},'permit-once')).dispatchEligible,false)
+  await f.retry(await f.read())
+  assert.equal(f.sends,0);assert.equal((await f.read()).state,'delivered')
+  await assert.rejects(f.retry(await f.read()),{code:'TASK_NOTIFICATION_RECOVERY_FORBIDDEN'})
+  assert.equal((await f.query('notification.list')).length,1)
+})
+
+test('retirement wins: a stale prepared outbox cannot regain a permit after restart',async t=>{
+  const f=await fixture(t);await f.rejectBeforeSend();await f.retire();await f.restart()
+  assert.equal((await f.command('notification.start',{notificationId:f.notification.id})).dispatchEligible,false)
+  await f.deliver(f.notification);await f.deliver(await f.read())
+  assert.equal(f.sends,0);assert.equal((await f.read()).sendAttemptCount,1)
+  assert.deepEqual((await f.read()).payload,f.notification.payload)
+  assert.equal((await f.read()).retirement.reason,'superseded')
+})
+
+test('a cancelled current human request invalidates its prepared Topic question before any send',async t=>{
+  const f=await fixture(t)
+  await f.command('task.create',{taskId:'A',groupId:'group',request:'Need a decision'})
+  const binding=(await f.command('task.claim',{taskId:'A'})).result.binding
+  await f.command('task.wait',{binding,summary:'Waiting for request details',question:'Which target?',
+    humanRequest:{requestId:'question',audience:'requester',reason:'Target missing'}})
+  const question=(await f.prepare('question',{text:'Which target?',humanRequests:[{taskId:'A',requestId:'question'}]})).result.notification
+  await f.command('task.control',{taskId:'A',expectedControlRevision:1,control:'cancelled',reason:'User cancelled'})
+  await f.deliver(question)
+  const rejected=await f.read(question.id)
+  assert.equal(rejected.state,'superseded');assert.equal(rejected.reason,'stale_question')
+  assert.equal(rejected.sendPermit,undefined);assert.equal(f.sends,0)
+  assert.equal((await f.query('task.get',{taskId:'A'})).control,'cancelled')
+})
+
+test('repeated preparation and conflicting recovery identities cannot change a frozen payload',async t=>{
+  const f=await fixture(t),args=f.input()
+  const receipt=await f.command('notification.prepare',args,'prepare-exact')
+  assert.equal((await f.command('notification.prepare',args,'prepare-exact')).replayed,true)
+  assert.equal(receipt.result.notification.id,f.notification.id)
+  await assert.rejects(f.command('notification.prepare',f.input('notice',{text:'Conflicting answer'})),{code:'DYNAMIC_NOTIFICATION_ID_CONFLICT'})
+  await assert.rejects(f.command('notification.prepare',f.input('other'),'prepare-exact'),{code:'DYNAMIC_COMMAND_ID_CONFLICT'})
   await f.restart()
-  assert.equal((await f.notificationById(f.notification.id)).state, 'unknown')
-  await assert.rejects(f.refresh(), { code: 'DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED' })
-  assert.equal((await f.command('notification.start', { notificationId: f.notification.id }, 'permit-original')).dispatchEligible, false)
-  await f.deliver(await f.notificationById(f.notification.id)) // readback only; never invokes send
-  assert.equal(f.sends, 0)
-  assert.equal((await f.notificationById(f.notification.id)).state, 'delivered')
-  await assert.rejects(f.refresh(), { code: 'DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED' })
-  assert.equal((await f.query('notification.list')).length, 1)
+  assert.equal((await f.query('notification.list')).length,1)
+  assert.deepEqual((await f.read()).payload,f.notification.payload)
 })
 
-test('refresh wins: old payload and old outbox identity remain permanently unsendable after restart', async t => {
-  const f = await fixture(t)
-  f.expire()
-  const fresh = (await f.refresh()).result.notification
-  await f.restart()
-  assert.equal((await f.command('notification.start', { notificationId: f.notification.id })).dispatchEligible, false)
-  await f.deliver(f.notification)
-  assert.equal(f.sends, 0)
-  await f.deliver(fresh)
-  assert.equal(f.sends, 1)
-  await f.deliver(await f.notificationById(fresh.id))
-  assert.equal(f.sends, 1)
-})
-
-test('cancellation wins before refresh and prevents all new send permits', async t => {
-  const f = await fixture(t)
-  f.expire()
-  await f.command('coordination.occurrence.cancel', { occurrenceId: f.occurrence.id, expectedControlRevision: 1 })
-  await assert.rejects(f.refresh(), { code: 'DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED' })
-  assert.equal((await f.command('notification.start', { notificationId: f.notification.id })).dispatchEligible, false)
-  await f.deliver(f.notification)
-  assert.equal(f.sends, 0)
-  assert.equal((await f.query('notification.list')).length, 1)
-})
-
-test('freshness threshold, expected versions and replay preserve one immutable replacement identity', async t => {
-  const f = await fixture(t)
-  await assert.rejects(f.refresh(), { code: 'DYNAMIC_COORDINATION_RESULT_FRESH' })
-  f.expire()
-  for (const args of [{ expectedResultVersion: 2 }, { expectedInstanceControlRevision: 2 }, { expectedDeliveryControlRevision: 2 }])
-    await assert.rejects(f.refresh(args), { code: 'DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED' })
-  const first = await f.refresh({}, 'frozen-refresh-command')
-  const replay = await f.refresh({}, 'frozen-refresh-command')
-  assert.equal(replay.replayed, true)
-  assert.equal(replay.result.notification.id, first.result.notification.id)
-  assert.equal((await f.occurrenceNow()).resultVersion, 2)
-  assert.equal((await f.query('notification.list')).length, 2)
-  await assert.rejects(f.refresh(), { code: 'DYNAMIC_COORDINATION_REFRESH_NOT_ALLOWED' })
-  await assert.rejects(f.command('notification.prepare', { notificationId: 'duplicate-event', kind: 'coordination', requirementRevision: 1,
-    payload: first.result.notification.payload }), { code: 'DYNAMIC_NOTIFICATION_EVENT_CONFLICT' })
-})
-
-test('SIGKILL after atomic supersede but before outbox creation recovers the new frozen identity only', async t => {
-  const f = await fixture(t)
-  f.expire()
-  const fixedNow = Date.now()
-  await f.close()
-  const moduleUrl = new URL('../packages/dingtalk-dsh-assistant/dynamic-task-store.js', import.meta.url).href
-  const script = `import { mock } from 'node:test'; import { openDynamicTaskStore } from ${JSON.stringify(moduleUrl)};
-    mock.timers.enable({apis:['Date'],now:Number(process.argv[3])});
+test('SIGKILL after preparation before outbox projection recovers the exact frozen identity only',async t=>{
+  const f=await fixture(t),crashId='crash-notice';await f.close()
+  const moduleUrl=new URL('../packages/dingtalk-dsh-assistant/dynamic-task-store.js',import.meta.url).href
+  const script=`import {openDynamicTaskStore} from ${JSON.stringify(moduleUrl)};
     const store=await openDynamicTaskStore(JSON.parse(process.argv[1]));
-    await store.command({id:'refresh-before-kill',kind:'coordination.notification.refresh',args:JSON.parse(process.argv[2])});
-    process.stdout.write('refreshed'); setInterval(()=>{},1000);`
-  const child = spawn(process.execPath, ['--input-type=module', '--eval', script, JSON.stringify(f.options), JSON.stringify(f.refreshArgs), String(fixedNow)], { stdio: ['ignore','pipe','pipe'] })
-  const exited = once(child, 'exit')
-  t.after(() => child.kill('SIGKILL'))
-  const ready = await Promise.race([
-    once(child.stdout, 'data').then(([chunk]) => chunk.toString()),
-    exited.then(([code, signal]) => { throw new Error(`child exited before refresh: ${code}/${signal}`) }),
-  ])
-  assert.equal(ready, 'refreshed')
-  child.kill('SIGKILL'); assert.deepEqual(await exited, [null, 'SIGKILL'])
+    await store.command({id:'prepare-before-kill',kind:'notification.prepare',args:JSON.parse(process.argv[2])});
+    process.stdout.write('prepared');setInterval(()=>{},1000);`
+  const child=spawn(process.execPath,['--input-type=module','--eval',script,JSON.stringify(f.options),JSON.stringify(f.input(crashId))],{stdio:['ignore','pipe','pipe']})
+  const exited=once(child,'exit');t.after(()=>child.kill('SIGKILL'))
+  const ready=await Promise.race([once(child.stdout,'data').then(([chunk])=>chunk.toString()),exited.then(([code,signal])=>{throw new Error(`child exited before preparation: ${code}/${signal}`)})])
+  assert.equal(ready,'prepared');child.kill('SIGKILL')
+  const [code,signal]=await exited
+  if(process.platform==='win32'){assert.equal(signal,null);assert.equal(code,1)}else assert.equal(signal,'SIGKILL')
   await f.restart()
-  const occurrence = await f.occurrenceNow()
-  const fresh = (await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
-  assert.equal(occurrence.resultVersion, 2)
-  assert.equal(fresh.id, occurrence.notificationId)
-  assert.equal((await f.notificationById(f.notification.id)).supersededBy, fresh.id)
-  assert.deepEqual((await f.notificationById(f.notification.id)).payload, f.notification.payload)
-  await f.deliver(f.notification); assert.equal(f.sends, 0)
-  await f.deliver(fresh); assert.equal(f.sends, 1)
-  assert.equal((await f.query('notification.list')).length, 2)
+  assert.deepEqual((await f.read(crashId)).payload,f.notification.payload)
+  assert.equal((await f.command('notification.prepare',f.input(crashId),'prepare-before-kill')).replayed,true)
+  await f.deliver(await f.read(crashId));await f.deliver(await f.read(crashId))
+  assert.equal(f.sends,1)
+  assert.equal((await f.query('notification.list')).filter(row=>row.id===crashId).length,1)
+  assert.equal((await f.read()).state,'prepared','unrelated prepared notification is not sent by recovery')
 })

@@ -7,86 +7,93 @@ import {randomUUID} from 'node:crypto'
 import {openDynamicTaskStore} from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 
 async function fixture(t) {
-  t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
-  const directory=await mkdtemp(join(tmpdir(),'coordination-races-'))
+  const directory=await mkdtemp(join(tmpdir(),'owner-races-'))
   const options={dbPath:join(directory,'tasks.sqlite'),instanceId:'isolated-races',initialize:true}
   let store=await openDynamicTaskStore(options)
   t.after(async()=>{await store.close();await rm(directory,{recursive:true,force:true})})
   const command=(kind,args={},id=randomUUID())=>store.command({kind,args,id})
   const query=(kind,args={})=>store.query({kind,...args})
   await command('task.create',{taskId:'A',groupId:'group',request:'original A'})
-  const source=(await command('coordination.reserve',{unitId:'unit',revision:1,groupId:'group',original:'query A'})).result.source
-  await command('coordination.accept',{sourceId:source.id,fence:1,coordinationId:'query',readOnly:true,members:[]})
-  await command('coordination.schedule.create',{coordinationId:'query',scheduleId:'schedule',timezone:'Asia/Shanghai',
-    rule:{kind:'once',at:'2026-10-21T01:00:00.000Z'},action:{kind:'read-query',taskIds:['A']},target:{conversationId:'group',recipientIds:['old']}})
-  t.mock.timers.tick(3600000)
-  const occurrence=(await command('coordination.schedule.scan')).result.occurrences[0]
-  return {command,query,occurrence,expire:()=>t.mock.timers.tick(300001),async restart(){await store.close();store=await openDynamicTaskStore(options)},
-    async notification(){const job=(await command('coordination.job.claim',{jobId:occurrence.jobId})).result.job
-      await command('coordination.job.read',{jobId:job.id,fence:job.fence})
-      return (await command('coordination.notification.freeze',{occurrenceId:occurrence.id})).result.notification}}
+  return {command,query,async restart(){await store.close();store=await openDynamicTaskStore({...options,initialize:false})},
+    async question(){
+      const binding=(await command('task.claim',{taskId:'A'})).result.binding
+      await command('task.wait',{binding,summary:'Need the target environment',question:'Which environment?',
+        humanRequest:{requestId:'question',audience:'requester'},evidence:[]})
+      await command('task.drained',{binding})
+      return (await command('notification.prepare',{kind:'question',notificationId:'notice',taskId:'A',requirementRevision:1,
+        payload:{conversationId:'group',humanRequestId:'question',audience:'requester',text:'Which environment?'}})).result.notification
+    }}
 }
 
 const permutations=values=>values.length ? values.flatMap((v,i)=>permutations(values.filter((_,j)=>i!==j)).map(rest=>[v,...rest])) : [[]]
 
-// These are simultaneous producers to one authoritative writer, not a claim that
-// SQLite admits competing unowned writers. Enumerate all submission orders.
-for(const order of permutations(['change','scan','claim'])) test(`slot replacement, repeat scan and first claim linearize: ${order.join('/')}`,async t=>{
+// The retired cross-Task scheduler no longer owns these races. These tests keep
+// the current single-writer guarantees at the Task Owner command boundary.
+for(const order of permutations(['revise','supplement','claim'])) test('Task revision, original supplement and Owner claim linearize: '+order.join('/'),async t=>{
   const f=await fixture(t)
-  const actions={change:()=>f.command('coordination.schedule.change',{scheduleId:'schedule',expectedRevision:1,scope:'unstarted',target:{conversationId:'group',recipientIds:['new']}}),
-    scan:()=>f.command('coordination.schedule.scan'),claim:()=>f.command('coordination.job.claim',{jobId:f.occurrence.jobId})}
+  const actions={
+    revise:()=>f.command('task.revise',{taskId:'A',expectedRequirementRevision:1,expectedControlRevision:1,request:'new A'},'revise'),
+    supplement:()=>f.command('task.supplement',{taskId:'A',expectedRequirementRevision:1,expectedControlRevision:1,
+      messageId:'original-supplement',text:'original evidence',request:'original A with evidence'},'supplement'),
+    claim:()=>f.command('task.claim',{taskId:'A'},'claim'),
+  }
   const results=await Promise.allSettled(order.map(name=>actions[name]()))
   const byName=Object.fromEntries(order.map((name,i)=>[name,results[i]]))
-  assert.equal(byName.scan.status,'fulfilled')
-  assert.equal(byName.scan.value.result.occurrences.length,0)
-  assert.equal([byName.change,byName.claim].filter(r=>r.status==='fulfilled').length,1)
-  if(byName.change.status==='fulfilled') {
-    assert.equal(byName.claim.reason.code,'DYNAMIC_COORDINATION_CANCELLED')
-    const replacement=byName.change.value.result.replacements[0]
-    assert.equal(replacement.replacementOf,f.occurrence.id)
-    await f.command('coordination.job.claim',{jobId:replacement.jobId})
-  } else assert.equal(byName.change.reason.code,'DYNAMIC_COORDINATION_SLOT_CONSUMED')
+  assert.equal(byName.revise.status,'fulfilled')
+  assert.equal(byName.claim.status,'fulfilled')
+  const oldScopeAccepted=order.indexOf('supplement')<order.indexOf('revise')
+  assert.equal(byName.supplement.status,oldScopeAccepted?'fulfilled':'rejected')
+  if(!oldScopeAccepted) assert.equal(byName.supplement.reason.code,'DYNAMIC_TASK_REVISION_STALE')
+  const current=await f.query('task.get',{taskId:'A'})
+  assert.equal(current.request,'new A')
+  assert.equal(current.requirementRevision,2)
+  assert.equal(current.contextRevision??0,oldScopeAccepted?1:0)
+  const claimed=byName.claim.value.result.binding
+  assert.equal(claimed.requirementRevision,order.indexOf('claim')<order.indexOf('revise')?1:2)
+  await assert.rejects(f.command('task.claim',{taskId:'A'}),{code:'DYNAMIC_TASK_BUSY'})
   await f.restart()
-  const occurrences=await f.query('coordination.occurrence.list')
-  assert.equal(occurrences.filter(o=>o.actionState==='running').length,1)
-  assert.equal((await f.command('coordination.schedule.scan')).result.occurrences.length,0)
+  const recovered=await f.query('task.get',{taskId:'A'})
+  assert.equal(recovered.request,'new A')
+  assert.equal(recovered.requirementRevision,2)
+  assert.equal(recovered.contextRevision??0,oldScopeAccepted?1:0)
+  assert.equal((await f.query('task.list')).length,1)
+  assert.equal((await f.query('execution.list',{taskId:'A'})).length,0)
+  assert.equal((await f.query('wake.list',{taskId:'A'})).filter(w=>w.kind==='task.supplement').length,oldScopeAccepted?1:0)
 })
 
-for(const first of ['cancel','permit']) test(`concurrent cancellation and permit: ${first} first`,async t=>{
-  const f=await fixture(t),notification=await f.notification()
-  const actions={cancel:()=>f.command('coordination.occurrence.cancel',{occurrenceId:f.occurrence.id,expectedControlRevision:1}),
+for(const first of ['cancel','permit']) test('Task cancellation and question send permit preserve their committed order: '+first,async t=>{
+  const f=await fixture(t),notification=await f.question()
+  const actions={cancel:()=>f.command('task.control',{taskId:'A',expectedControlRevision:1,control:'cancelled'}),
     permit:()=>f.command('notification.start',{notificationId:notification.id},'original-permit')}
   const order=first==='cancel'?['cancel','permit']:['permit','cancel']
   const results=await Promise.all(order.map(name=>actions[name]()))
-  assert.equal(results[order.indexOf('permit')].dispatchEligible,first==='permit')
+  assert.equal(results[order.indexOf('permit')].dispatchEligible===true,first==='permit')
   await f.restart()
   assert.equal((await f.command('notification.start',{notificationId:notification.id},'original-permit')).dispatchEligible,false)
-  assert.equal((await f.command('notification.start',{notificationId:notification.id})).dispatchEligible,false)
-  const current=await f.query('coordination.occurrence.list')
-  assert.equal(current[0].deliveryState,first==='permit'?'unknown':'cancelled')
+  assert.notEqual((await f.command('notification.start',{notificationId:notification.id})).dispatchEligible,true)
+  const current=await f.query('notification.get',{notificationId:notification.id})
+  assert.equal(current.state,first==='permit'?'unknown':'failed')
+  assert.deepEqual(current.payload,notification.payload)
+  assert.equal(current.sendAttemptCount??0,first==='permit'?1:0)
+  assert.equal((await f.query('task.get',{taskId:'A'})).control,'cancelled')
 })
 
-for(const first of ['refresh','permit']) test(`concurrent stale-result replacement and permit: ${first} first`,async t=>{
-  const f=await fixture(t),notification=await f.notification();f.expire()
-  const actions={refresh:()=>f.command('coordination.notification.refresh',{occurrenceId:f.occurrence.id,expectedNotificationId:notification.id,
-    expectedResultVersion:1,expectedInstanceControlRevision:1,expectedDeliveryControlRevision:1}),
-    permit:()=>f.command('notification.start',{notificationId:notification.id})}
-  const order=first==='refresh'?['refresh','permit']:['permit','refresh']
-  const results=await Promise.allSettled(order.map(name=>actions[name]()))
-  const byName=Object.fromEntries(order.map((name,i)=>[name,results[i]]))
-  if(first==='permit') {
-    assert.equal(byName.permit.status,'rejected')
-    assert.equal(byName.permit.reason.code,'DYNAMIC_NOTIFICATION_RECOVERY_STALE')
-  } else {
-    assert.equal(byName.permit.status,'fulfilled')
-    assert.equal(byName.permit.value.dispatchEligible,false)
-  }
-  assert.equal(byName.refresh.status,'fulfilled','stale permit must not consume a sending attempt or prevent refresh')
+for(const first of ['first','second']) test('competing send claims issue one durable permit and never replace frozen content: '+first,async t=>{
+  const f=await fixture(t),notification=await f.question()
+  const order=first==='first'?['first','second']:['second','first']
+  const result=await Promise.all(order.map(id=>f.command('notification.start',{notificationId:notification.id},id)))
+  assert.equal(result.filter(r=>r.dispatchEligible===true).length,1)
+  const permitted=result.find(r=>r.dispatchEligible).result.notification
+  assert.equal(permitted.sendAttemptCount,1)
+  await f.command('notification.receipt',{notificationId:notification.id,dispatchToken:permitted.dispatchToken,state:'unknown',
+    error:{phase:'send',message:'Outcome unknown'}})
   await f.restart()
-  const candidates=await f.query('notification.list')
-  assert.equal(candidates.length,2)
-  assert.equal(candidates.find(item=>item.id===notification.id).state,'superseded')
-  assert.equal(candidates.find(item=>item.id!==notification.id).state,'prepared')
-  assert.equal(candidates.find(item=>item.id!==notification.id).sendPermit,undefined)
-  assert.equal((await f.command('notification.start',{notificationId:notification.id})).dispatchEligible,false)
+  const current=await f.query('notification.get',{notificationId:notification.id})
+  assert.equal(current.state,'unknown')
+  assert.deepEqual(current.payload,notification.payload)
+  assert.equal(current.dispatchToken,permitted.dispatchToken)
+  assert.equal(current.sendAttemptCount,1)
+  for(const id of order) assert.equal((await f.command('notification.start',{notificationId:notification.id},id)).dispatchEligible,false)
+  await assert.rejects(f.command('notification.prepare',{kind:'question',notificationId:'notice',taskId:'A',requirementRevision:1,
+    payload:{...notification.payload,text:'An unsafe replacement'}}),{code:'DYNAMIC_NOTIFICATION_ID_CONFLICT'})
 })

@@ -1,54 +1,53 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
+import { available, reason } from './fixtures/task-session-native-host.js'
+import { retiredCoordinationHost } from './fixtures/retired-coordination-native.js'
 
-test('chat daily Task command reaches two original Owner inputs with distinct slot identities and no replanning confirmation',
+// Periodic Task commands belonged to the removed coordinator. Their original
+// slots remain audit facts; a new explicit input still reaches the original Owner once.
+test('retired daily Task schedule preserves both occurrence identities and never invents another Owner input',
   { skip: !available ? reason : false, timeout: 15000 }, async t => {
-    t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
-    const root = await mkdtemp(join(tmpdir(),'coordination-recurring-native-'))
-    let host, plans=0
-    const ownerInputs=[]
-    t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
-    host = await nativeTaskHost(root,request=>{
-      const names=request.tools.map(tool=>tool.name), input=latestInput(request)
-      if(names.includes('group_topic_route_submit')) return [{name:'group_topic_route_submit',args:{requestId:input.requestId,
-        routes:input.messages.map(message=>({messageId:message.messageId,messageVersion:message.messageVersion,ignoredRefs:[],
-          units:[{unitKey:'daily',summary:'每天给原任务补充固定材料',sourceRefs:[{quote:message.text}],dispatchOwner:'coordination',topics:[],reason:'独立周期安排'}]}))}}]
-      if(names.includes('coordination_submit')) {
-        const task=modelToolValues(request).find(value=>value.taskContexts?.length)?.taskContexts[0]
-        if(!task) return [{name:'coordination_context_get',args:{taskIds:['A']}}]
-        plans++
-        return [{name:'coordination_submit',args:{kind:'schedule',actionKind:'task-command',timezone:'Asia/Shanghai',rule:{kind:'daily',time:'09:00'},
-          members:[{action:'task-context',taskId:'A',inputVersion:task.requirementRevision,runSequence:task.runSequence,
-            progressImpact:'preserve',impactReason:'固定材料，原目标与授权不变',context:'每天核对已授权原目标',afterTaskIds:[]}],recipientIds:[],interpretation:'每天09:00 Asia/Shanghai 给原任务A补充固定核对材料'}}]
-      }
-      const topic=topicTaskCalls(request);if(topic)return topic
-      if(names.includes('task_session_submit')) {
-        ownerInputs.push(...input.wakes.filter(wake=>wake.kind==='task.supplement').map(wake=>wake.payload.contextRevision))
-        return [{name:'task_session_submit',args:{decision:{action:'wait',summary:'保持原目标并处理固定补充',evidence:[],limitations:[]}}}]
-      }
-      return []
-    },{config:{coordination:{enabled:true,provider:'native-task-test',model:'coordination-controlled'}}})
-    await host.service.store.command({id:'seed:A',kind:'task.create',args:{taskId:'A',groupId:'native-group',ownerActorId:'native-user',request:'原任务A'}})
-    await host.service.ingest({groupId:'native-group',messageId:'daily',senderOpenDingTalkId:'native-user',senderName:'测试用户',
-      text:'测试助手，每天九点给原任务A补充固定核对材料，保持原目标和范围。',timestamp:'2026-10-21T00:00:00Z'})
-    await host.service.whenIdle()
-    assert.equal(plans,1,JSON.stringify(host.service.listAlerts()))
-    for(const elapsed of [3600000,86400000]) {
-      t.mock.timers.tick(elapsed);await host.service.recover();await host.service.whenIdle()
-    }
-    const task=await host.query('task.get',{taskId:'A'})
-    assert.equal(task.contextRevision,2,JSON.stringify(host.service.listAlerts()))
-    assert.equal(task.requirementRevision,1);assert.equal(task.runSequence,1);assert.equal(plans,1)
-    assert.ok(ownerInputs.includes(1));assert.ok(ownerInputs.includes(2))
-    const occurrences=await host.query('coordination.occurrence.list')
-    assert.equal(occurrences.length,2)
-    assert.ok(occurrences.every(occurrence=>occurrence.actionState==='succeeded' && occurrence.deliveryState==='delivered'))
-    assert.notEqual(occurrences[0].action.instructionIds[0],occurrences[1].action.instructionIds[0])
-    const state=await host.query('coordination.get',{coordinationId:occurrences[0].coordinationId})
-    assert.ok(state.members.filter(member=>member.recurringOccurrenceId).every(member=>member.hostHandoffAt))
-    assert.equal((await host.query('task.list')).length,1)
+    const occurrences = ['2026-10-21T01:00:00.000Z', '2026-10-22T01:00:00.000Z'].map((plannedAt, index) => ({
+      id: 'daily-occurrence-' + index, coordinationId: 'daily', scheduleId: 'daily-schedule', plannedAt,
+      action: { kind: 'task-command', instructionIds: ['a-day-' + index] }, actionState: 'pending', deliveryState: 'pending',
+    }))
+    const slots = occurrences.map(item => ({ id: item.id + '-slot', scheduleId: item.scheduleId, plannedAt: item.plannedAt, occurrenceId: item.id }))
+    const f = await retiredCoordinationHost(t, { name: 'retired-recurring-', tasks: [{ taskId: 'A', request: '原任务A，保留完整目标' }], rows: {
+      coordination: [{ id: 'daily', groupId: 'native-group', state: 'active', revision: 1, memberIds: ['a-template'] }],
+      coordination_members: [{ id: 'a-template', taskId: 'A', coordinationId: 'daily', state: 'waiting', dependencies: [],
+        instruction: '每天核对已授权原目标', progressImpact: 'preserve' }],
+      coordination_schedules: [{ id: 'daily-schedule', coordinationId: 'daily', state: 'active', timezone: 'Asia/Shanghai',
+        rule: { kind: 'daily', time: '09:00' }, nextDueAt: '2026-10-23T01:00:00.000Z', action: { kind: 'task-command', instructionIds: ['a-template'] } }],
+      coordination_occurrences: occurrences, coordination_slots: slots,
+      coordination_jobs: occurrences.map(item => ({ id: item.id + '-job', occurrenceId: item.id, coordinationId: 'daily', state: 'pending', attempt: 0 })),
+    } })
+    let h = f.host
+    for (let attempt = 0; attempt < 2; attempt++) { await h.service.recover(); await h.service.whenIdle() }
+    assert.deepEqual(await h.query('task.list'), f.beforeTasks)
+    assert.deepEqual(await h.query('coordination.occurrence.list'), occurrences)
+    const savedSchedule = (await h.query('coordination.schedule.list'))[0]
+    assert.equal(savedSchedule.rule.kind, 'daily'); assert.equal(savedSchedule.rule.time, '09:00')
+    assert.equal(savedSchedule.retirement.previousState, 'active')
+    assert.ok((await h.query('coordination.job.list')).every(job => job.state === 'pending' && job.attempt === 0 && job.retirement))
+    assert.equal(h.sent.length, 0)
+    const args = { taskId: 'A', requestId: 'explicit-today', context: '今天只核对这份新增材料，目标不变',
+      expectedRequirementRevision: 1, expectedControlRevision: 1, progressImpact: 'preserve' }
+    await h.service.appendTaskContext(args); await h.service.whenIdle()
+    const task = await h.query('task.get', { taskId: 'A' })
+    assert.equal(task.contextRevision, 1); assert.equal(task.requirementRevision, 1); assert.equal(task.runSequence, 1)
+    assert.equal((await h.query('task.list')).length, 1)
+    const executions = await h.query('execution.list'), notifications = await h.query('notification.list')
+    h = await f.restart(); await h.service.recover(); await h.service.whenIdle()
+    const restored = await h.query('task.get', { taskId: 'A' })
+    for (const key of ['taskId', 'groupId', 'objective', 'request', 'requirements', 'requirementRevision',
+      'contextRevision', 'control', 'controlRevision', 'runSequence', 'status', 'sessionId', 'sessionBound',
+      'sourceRefs', 'topicRefs', 'supplements', 'appliedOperations', 'lastDecision', 'drained'])
+      assert.deepEqual(restored[key], task[key], 'recovery must preserve ' + key)
+    assert.equal(restored.leaseEpoch, task.leaseEpoch + 1, 'one recovery reclaims the same Owner session once')
+    assert.ok(Date.parse(restored.updatedAt) >= Date.parse(task.updatedAt))
+    assert.deepEqual(await h.query('execution.list'), executions)
+    assert.deepEqual(await h.query('notification.list'), notifications)
+    assert.deepEqual(await h.query('coordination.occurrence.list'), occurrences)
+    assert.equal(h.sent.length, 0)
+    assert.ok(f.requests.every(request => !request.tools.some(tool => tool.name === 'coordination_submit')))
   })

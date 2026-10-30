@@ -649,6 +649,10 @@ test('v1 迁移先零副作用检查，再备份升级并独立读回版本', as
   } })
   await store.close()
   const raw = new DatabaseSync(dbPath)
+  // The current store installs observer projections; those did not exist in v1.
+  // Remove them only from this new fixture before constructing the historical schema.
+  for (const { name, type } of raw.prepare("SELECT name,type FROM sqlite_master WHERE name GLOB 'observer_legacy_*' ORDER BY CASE type WHEN 'trigger' THEN 0 WHEN 'index' THEN 1 ELSE 2 END").all())
+    raw.exec(`DROP ${type.toUpperCase()} "${name.replaceAll('"', '""')}"`)
   raw.exec(`DROP TABLE message_topic_facts; DROP TABLE task_reports; DROP TABLE task_owner_turns; DROP TABLE task_acceptance_items; DROP TABLE task_events;
     DROP TABLE task_owners; DROP TABLE task_plan_stages; DROP TABLE task_controls;
     DROP TABLE business_tasks; PRAGMA user_version=1;`)

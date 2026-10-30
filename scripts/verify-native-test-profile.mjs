@@ -24,4 +24,6 @@ const modules = ['agent', 'session', 'session-projection', 'system-prompt', 'llm
   'credentials-local', 'attachment-local', 'agent-default-model', 'api-session-controller', 'file-reference-local']
 const missing = modules.filter(name => { try { native.resolve('@deepseek-ai/dsh-' + name); return false } catch { return true } })
 assert.deepEqual(missing, [], 'Isolated native fixture is missing required public modules')
-console.log(JSON.stringify({ nativeProfile: 'isolated-scripted-fixture', resolvedModules: modules.length, credentialsLoaded: false }))
+const scheduleModules = ['schedule', 'tool-schedule']
+for (const name of scheduleModules) profile.resolve('@deepseek-ai/dsh-' + name)
+console.log(JSON.stringify({ nativeProfile: 'isolated-scripted-fixture', resolvedModules: modules.length + scheduleModules.length, credentialsLoaded: false }))

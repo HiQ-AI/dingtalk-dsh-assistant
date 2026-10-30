@@ -21,7 +21,7 @@ $ownerGuard=$scriptAst.Find({param($n)$n-is[Management.Automation.Language.Funct
 . ([scriptblock]::Create($ownerGuard.Extent.Text))
 $foreign=[pscustomobject]@{};$foreign|Add-Member ScriptMethod GetOwner {param($type)[Security.Principal.SecurityIdentifier]::new('S-1-5-18')}
 try{AssertOwner $foreign;throw 'FOREIGN_OWNER_ACCEPTED'}catch{if($_.Exception.Message-ne'TASK_ACL_FOREIGN_OWNER'){throw}}
-$acl=Get-Acl $tasks;$acl.SetAccessRuleProtection($true,$false)
+$acl=Get-Acl $tasks;$acl.SetOwner($sid);$acl.SetAccessRuleProtection($true,$false)
 $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]'Modify,ChangePermissions',[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))
 $guests=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-546')
 $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($guests,[Security.AccessControl.FileSystemRights]::WriteData,[Security.AccessControl.AccessControlType]::Deny))

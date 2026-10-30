@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { deliverTaskNotification } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
-import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
+import { currentCoordinationFixture } from './fixtures/current-coordination-contracts.js'
+import { available, reason, nativeTaskHost, latestInput, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
 
 async function fixture(t, notificationId = 'old-clarification') {
   const root = await mkdtemp(join(tmpdir(), 'notification-pending-source-'))
@@ -16,79 +17,87 @@ async function fixture(t, notificationId = 'old-clarification') {
   const query = (kind, args = {}) => store.query({ kind, ...args })
   const source = async (id, extra = {}) => (await command('source.record', { sourceId: id, groupId: 'g', messageId: id,
     actorId: 'owner', text: id, timestamp: '2026-10-23T08:00:00Z', ...extra })).result.source
-  const reserve = async original => (await command('coordination.reserve', { unitId: `unit:${original.id}`, revision: 1,
-    groupId: original.groupId, original: original.text, reservationId: `reservation:${original.id}`, reservationGeneration: 1,
-    actorId: original.actorId, sourceRefs: [original.id], sourceMessageId: original.messageId })).result.source
   const complete = (original, units = []) => command('source.processingCompleted', { sourceId: original.id,
     messageVersion: original.version, routingRevision: 1, activeUnitRefs: units.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), units })
-  const original = await source('original'), coordinated = await reserve(original)
-  await command('coordination.source.clarify', { sourceId: coordinated.id, fence: 1, coordinationId: 'arrangement', question: '改到几点？' })
-  const notification = (await command('notification.prepare', { notificationId, requirementRevision: 1, kind: 'coordination',
-    payload: { conversationId: 'g', text: '改到几点？', sourceMessageId: original.messageId, actorId: original.actorId,
-      fact: { coordinationId: 'arrangement', eventId: 'clarification:original', sourceUnitId: coordinated.unitId, sourceUnitRevision: 1 } } })).result.notification
-  return { command, query, source, reserve, complete, notification, coordinated,
+  const original = await source('original')
+  const notification = (await command('notification.prepare', { notificationId, requirementRevision: 1, kind: 'topic-reply',
+    payload: { conversationId: 'g', text: '原事项的已判断结果', sourceMessageId: original.messageId, actorId: original.actorId,
+      atOpenDingTalkIds: [original.actorId], fact: { topicRefs: [{ topicId: 'matter', revision: 1 }] } } })).result.notification
+  return { command, query, source, complete, notification,
     async restart() { await store.close(); store = await openDynamicTaskStore(config) } }
 }
 
-for (const timestamp of ['2026-10-23T08:00:00Z', '2026-10-23T07:59:00Z']) test(`后续来源按准入顺序暂缓，相同start ID在重启和判定后可再次领取: ${timestamp}`, async t => {
-  const f = await fixture(t), newer = await f.source('newer', { timestamp }), startId = 'notification-start:old-clarification:0'
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await assert.rejects(f.command('notification.start', { notificationId: f.notification.id }, startId), { code: 'DYNAMIC_NOTIFICATION_SOURCE_PENDING' })
-    assert.equal(await f.query('receipt.get', { id: startId }), null)
-    const pending = await f.query('notification.get', { notificationId: f.notification.id })
-    assert.equal(pending.state, 'prepared'); assert.equal(pending.sendAttemptCount, undefined)
-    await f.restart()
-  }
-  await f.complete(newer)
+// Pending sources belong to Topic preparation. A durable, frozen notification is
+// not globally stalled or retargeted by later messages from the same person.
+for (const timestamp of ['2026-10-23T08:00:00Z', '2026-10-23T07:59:00Z']) test('frozen Topic reply keeps its original audience despite a later pending source: ' + timestamp, async t => {
+  const f = await fixture(t), newer = await f.source('newer', { timestamp }), startId = 'notification-start:original:0'
+  await f.restart()
   const started = await f.command('notification.start', { notificationId: f.notification.id }, startId)
   assert.equal(started.dispatchEligible, true); assert.equal(started.result.notification.sendAttemptCount, 1)
+  assert.deepEqual(started.result.notification.payload, f.notification.payload)
+  assert.equal((await f.query('source.get', { sourceId: newer.id })).processingCompleted, undefined)
   assert.equal((await f.command('notification.start', { notificationId: f.notification.id }, startId)).dispatchEligible, false)
 })
 
-test('订正判定完成后旧澄清退役；暂缓不产生发送或错误重试', async t => {
-  const f = await fixture(t), newer = await f.source('correction'), coordinated = await f.reserve(newer)
-  let sends = 0
-  await deliverTaskNotification({ notification: f.notification, command: f.command, notifications: { send: async () => { sends++ } } })
-  assert.equal(sends, 0)
-  await f.command('coordination.change', { sourceId: coordinated.id, fence: 1, coordinationId: 'arrangement', expectedRevision: 1,
-    change: { action: 'resolve', members: [], readOnly: true } })
-  await deliverTaskNotification({ notification: f.notification, command: f.command, notifications: { send: async () => { sends++ } } })
-  assert.equal((await f.query('notification.get', { notificationId: f.notification.id })).state, 'superseded')
-  assert.equal(sends, 0)
+test('a newer Topic revision rejects stale preparation before persisting any reply, then accepts one fresh decision', async t => {
+  const f = await currentCoordinationFixture(t), binding = await f.create()
+  await f.finish(binding)
+  const stale = f.submission(await f.context(), { reply: '原结论', atOpenDingTalkIds: ['author'] }, 'stale-decision')
+  await f.resident.ingest({ groupId: 'group', messageId: 'correction', text: '补充最新验收要求', senderOpenDingTalkId: 'author', occurredAt: '2026-10-23T08:00:00Z' })
+  const group = f.resident.getGroup('group')
+  await f.resident.routeMessages({ groupId: 'group', routeId: 'correction', routingRevision: group.routingRevision,
+    routes: [{ messageId: 'correction', messageVersion: 1, topics: [{ topicId: f.topicId }] }] })
+  assert.equal((await f.submit(stale)).status, 'topic-stale')
+  assert.deepEqual(await f.query('notification.list'), [])
+  assert.equal(await f.query('receipt.get', { id: 'fact-decision:stale-decision' }), null)
+  const topic = f.resident.getTopic('group', f.topicId)
+  await f.resident.acceptTopicDecision({ groupId: 'group', topicId: f.topicId, revision: topic.revision, decisionId: 'current-source',
+    decision: { basisMessageIds: ['correction'], actions: [], reason: '已核对补充要求，等待本轮事实判断' } })
+  await f.resident.completeTopicDecision({ groupId: 'group', topicId: f.topicId, decisionId: 'current-source' })
+  await f.reopen()
+  assert.equal((await f.submit(f.submission(await f.context(), { reply: '已核对新要求', atOpenDingTalkIds: ['author'] }))).status, 'accepted')
+  const [notice] = await f.query('notification.list')
+  assert.equal(notice.payload.text, '已核对新要求')
+  assert.deepEqual(notice.payload.atOpenDingTalkIds, ['author'])
+  assert.equal(notice.payload.sourceMessageId, undefined, 'evidence sources do not force a native quote')
 })
 
-test('新的待澄清事项算本轮已判定；所有units和来源版本必须准确', async t => {
-  const f = await fixture(t), newer = await f.source('different'), coordinated = await f.reserve(newer)
-  const unit = { unitId: coordinated.unitId, unitRevision: 1, dispatchOwner: 'coordination' }
-  await assert.rejects(f.complete(newer, [unit]), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
-  await f.command('coordination.source.clarify', { sourceId: coordinated.id, fence: 1, coordinationId: 'other', question: '另一件事需要什么？' })
+test('Topic reply preparation requires the exact quoted source version, not an older row with the same message id', async t => {
+  const f = await currentCoordinationFixture(t), binding = await f.create()
+  await f.finish(binding)
+  await f.resident.ingest({ groupId: 'group', messageId: 'origin', messageVersion: 2, text: '核验原需求并报告结果（补充引用）', senderOpenDingTalkId: 'author', occurredAt: '2026-10-23T08:00:00Z' })
+  const group = f.resident.getGroup('group')
+  await f.resident.routeMessages({ groupId: 'group', routeId: 'version-2', routingRevision: group.routingRevision,
+    routes: [{ messageId: 'origin', messageVersion: 2, topics: [{ topicId: f.topicId }] }] })
+  const request = f.submission(await f.context(), { reply: '当前版本结论', replyToMessageId: 'origin', atOpenDingTalkIds: ['author'] }, 'exact-source')
+  await assert.rejects(f.submit(request), { code: 'TOPIC_REPLY_SOURCE_INVALID' })
+  assert.deepEqual(await f.query('notification.list'), [])
+  await f.command('source.record', { sourceId: 'source-v2', groupId: 'group', messageId: 'origin', version: 2,
+    actorId: 'author', channel: 'im', text: '核验原需求并报告结果（补充引用）' })
+  const topic = f.resident.getTopic('group', f.topicId)
+  await f.resident.acceptTopicDecision({ groupId: 'group', topicId: f.topicId, revision: topic.revision, decisionId: 'version-2-current',
+    decision: { basisMessageIds: ['origin'], actions: [], reason: '当前版本已判断，等待事实回复' } })
+  await f.resident.completeTopicDecision({ groupId: 'group', topicId: f.topicId, decisionId: 'version-2-current' })
+  assert.equal((await f.submit(request)).status, 'accepted')
+  assert.equal((await f.query('notification.list')).length, 1)
+})
+
+test('source completion requires every current Topic unit and exact message version', async t => {
+  const f = await fixture(t), newer = await f.source('mixed')
+  const units = ['first', 'second'].map(unitId => ({ unitId, unitRevision: 1, dispatchOwner: 'legacy-topic', processingComplete: false }))
+  await f.command('source.processingStarted', { sourceId: newer.id, messageVersion: 1, activeUnitRefs: units.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })) })
   await assert.rejects(f.command('source.processingCompleted', { sourceId: newer.id, messageVersion: 2, routingRevision: 1, activeUnitRefs: [], units: [] }), { code: 'DYNAMIC_SOURCE_REVISION_CONFLICT' })
-  await assert.rejects(f.command('source.processingCompleted', { sourceId: newer.id, messageVersion: 1, routingRevision: 1,
-    activeUnitRefs: [{ unitId: unit.unitId, unitRevision: 1 }], units: [] }), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
-  await f.complete(newer, [unit])
-  assert.equal((await f.query('coordination.source', { unitId: coordinated.unitId, revision: 1 })).settled, false)
-  assert.equal((await f.command('notification.start', { notificationId: f.notification.id })).dispatchEligible, true)
-})
-
-test('全部协调units判定后才释放，rejected完成持久handoff后不永挂', async t => {
-  const f = await fixture(t), newer = await f.source('mixed'), first = await f.reserve(newer)
-  const second = (await f.command('coordination.reserve', { unitId: 'second-unit', revision: 1, groupId: 'g', original: newer.text,
-    reservationId: 'second-reservation', reservationGeneration: 1, actorId: 'owner', sourceRefs: [newer.id], sourceMessageId: newer.messageId })).result.source
-  const units = [first, second].map(item => ({ unitId: item.unitId, unitRevision: 1, dispatchOwner: 'coordination' }))
-  await f.command('coordination.source.clarify', { sourceId: first.id, fence: 1, coordinationId: 'different', question: '需要哪个对象？' })
-  await assert.rejects(f.complete(newer, units), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
-  await f.command('coordination.source.reject', { sourceId: second.id, fence: 1, reason: '交回普通话题处理' })
-  units[1].dispatchOwner = 'legacy-topic'
-  await assert.rejects(f.complete(newer, units), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
-  const frozen = await f.command('coordination.source.freezeHandoff', { sourceId: second.id, fence: 1, freezeId: 'handoff-proof' })
-  await f.command('coordination.source.completeHandoff', { sourceId: second.id, fence: 1, handoffProof: frozen.result.handoffProof })
+  units[0].processingComplete = true
   await assert.rejects(f.complete(newer, units), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
   units[1].processingComplete = true
-  await f.complete(newer, units)
-  assert.equal((await f.command('notification.start', { notificationId: f.notification.id })).dispatchEligible, true)
+  await assert.rejects(f.command('source.processingCompleted', { sourceId: newer.id, messageVersion: 1, routingRevision: 1,
+    activeUnitRefs: units.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), units: [units[0]] }), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
+  await f.complete(newer, units); await f.restart()
+  assert.deepEqual((await f.query('source.get', { sourceId: newer.id })).processingCompleted.activeUnitRefs,
+    units.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })))
 })
 
-test('同版重路由只按精确refs失效旧语义戳，已routed来源也重新拦住旧通知', async t => {
+test('same-version rerouting invalidates only exact semantic refs without changing a frozen notification', async t => {
   const f = await fixture(t), newer = await f.source('rerouted')
   const first = { unitId: 'legacy', unitRevision: 1, dispatchOwner: 'legacy-topic', processingComplete: true }
   await f.complete(newer, [first])
@@ -103,7 +112,7 @@ test('同版重路由只按精确refs失效旧语义戳，已routed来源也重�
   assert.equal(pending.routed, true)
   assert.equal(pending.processingCompleted, undefined)
   assert.deepEqual(pending.processingHistory, [original])
-  await assert.rejects(f.command('notification.start', { notificationId: f.notification.id }), { code: 'DYNAMIC_NOTIFICATION_SOURCE_PENDING' })
+  assert.deepEqual((await f.query('notification.get', { notificationId: f.notification.id })).payload, f.notification.payload)
   await assert.rejects(f.complete(newer, [first]), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
   await assert.rejects(f.complete(newer, [{ ...next, processingComplete: false }]), { code: 'DYNAMIC_SOURCE_PROCESSING_INCOMPLETE' })
   await f.complete(newer, [next])
@@ -111,7 +120,7 @@ test('同版重路由只按精确refs失效旧语义戳，已routed来源也重�
   assert.equal((await f.command('notification.start', { notificationId: f.notification.id })).dispatchEligible, true)
 })
 
-for (const routed of [false, true]) test(`superseded pending source releases notifications without rewriting its route receipt: routed=${routed}`, async t => {
+for (const routed of [false, true]) test(`superseded pending source preserves its route receipt and does not rewrite the frozen reply: routed=${routed}`, async t => {
   const f = await fixture(t), old = await f.source('later-v1', { messageId: 'later' })
   const receipt = [{ topicId: 'original-topic', revision: 1 }]
   if (routed) await f.command('source.routed', { sourceId: old.id, receipt }, `topic-routed:${old.id}`)
@@ -119,7 +128,7 @@ for (const routed of [false, true]) test(`superseded pending source releases not
   const replacement = await f.source('later-v2', { messageId: 'later', version: 2 })
   const args = { sourceId: old.id, receipt: routed ? receipt : [{ supersededByVersion: 2 }], supersededByVersion: 2 }
   await f.command('source.routed', args, `source-superseded:${old.id}:2`)
-  await assert.rejects(f.command('notification.start', { notificationId: f.notification.id }), { code: 'DYNAMIC_NOTIFICATION_SOURCE_PENDING' })
+  assert.deepEqual((await f.query('notification.get', { notificationId: f.notification.id })).payload, f.notification.payload)
   await f.complete(replacement)
   await f.restart()
   await f.command('source.routed', args, `source-superseded:${old.id}:2`)
@@ -184,54 +193,44 @@ test('明确原uuid长度校验拒绝在重启后只结清failed，保留证据�
   assert.equal(sends, 0); assert.equal(reads, 0)
 })
 
-for (const correction of [true, false]) test(`原生同群慢规划期间后续入站拦住旧回复并自动续跑: ${correction ? '订正' : '不同待澄清事项'}`,
+for (const sameAuthor of [true, false]) test('native later Topic admission keeps two decisions and exact original recipients: sameAuthor=' + sameAuthor,
   { skip: !available ? reason : false, timeout: 20000 }, async t => {
-    const root = await mkdtemp(join(tmpdir(), 'notification-source-fence-native-'))
+    const root = await mkdtemp(join(tmpdir(), 'notification-topic-admission-native-'))
     const releaseFirst = Promise.withResolvers(), releaseSecond = Promise.withResolvers()
     let host, firstStarted = false, secondStarted = false
     t.after(async () => { releaseFirst.resolve(); releaseSecond.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
     host = await nativeTaskHost(root, async request => {
       const input = latestInput(request), names = request.tools.map(tool => tool.name)
-      if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
-        routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
-          units: [{ unitKey: message.messageId, summary: '提醒验收', sourceRefs: [{ quote: message.text }], dispatchOwner: 'coordination', topics: [], reason: '协调请求' }] })) } }]
-      if (names.includes('coordination_submit')) {
-        if (input.source.messageId === 'original') {
-          firstStarted = true; await releaseFirst.promise
-          return [{ name: 'coordination_submit', args: { kind: 'clarify', question: '旧请求改到几点？', candidates: [] } }]
-        }
-        secondStarted = true; await releaseSecond.promise
-        if (!correction) return [{ name: 'coordination_submit', args: { kind: 'clarify', question: '另一件事请提供对象。', candidates: [] } }]
-        const context = modelToolValues(request).find(value => value.arrangementContexts?.length)
-        if (!context) return [{ name: 'coordination_context_get', args: { coordinationIds: [input.unresolved[0].coordinationId] } }]
-        const original = context.arrangementContexts[0]
-        return [{ name: 'coordination_submit', args: { kind: 'resolve', coordinationId: original.coordination.id,
-          expectedRevision: original.coordination.revision, resolution: { kind: 'schedule', actionKind: 'message-reminder',
-            timezone: 'Asia/Shanghai', rule: { kind: 'once', at: new Date(Math.ceil(Date.now() / 1000) * 1000 + 600000).toISOString() },
-            recipientIds: [input.source.actorId], reminderText: '验收提醒', interpretation: '订正旧提醒' } } }]
+      const calls = topicTaskCalls(request)
+      if (names.includes('group_decision_submit') && input.trigger !== 'task-facts') {
+        const message = input.messages.at(-1)
+        if (message.messageId === 'original') { firstStarted = true; await releaseFirst.promise }
+        else { secondStarted = true; await releaseSecond.promise }
+        calls[0].args.decision = { basisMessageIds: [message.messageId],
+          basisUnitRefs: [{ unitId: message.unitId, unitRevision: message.unitRevision }],
+          actions: [], reply: message.messageId === 'original' ? '原事项已核对。' : '另一事项已核对。',
+          replyToMessageId: message.messageId, atOpenDingTalkIds: [message.senderOpenDingTalkId],
+          replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }
       }
-      return topicTaskCalls(request) ?? []
-    }, { config: { coordination: { enabled: true, provider: 'native-task-test', model: 'controlled' } } })
+      return calls ?? []
+    })
     const envelope = { groupId: 'native-group', senderOpenDingTalkId: 'native-user', timestamp: new Date().toISOString() }
-    await host.service.ingest({ ...envelope, messageId: 'original', text: '测试助手，三点提醒我验收。' })
-    await waitUntil(() => firstStarted, '第一条规划已进入', 4000)
-    await host.service.ingest({ ...envelope, messageId: 'newer', text: correction ? '测试助手，订正为十分钟后提醒。' : '测试助手，另一件事帮我查询。' })
+    await host.service.ingest({ ...envelope, messageId: 'original', text: '测试助手，请确认原事项。' })
+    await waitUntil(() => firstStarted, 'original Topic decision entered', 4000)
+    await host.service.ingest({ ...envelope, senderOpenDingTalkId: sameAuthor ? 'native-user' : 'other-user', messageId: 'newer', text: '测试助手，另一个独立事项也请确认。' })
     releaseFirst.resolve()
-    await waitUntil(() => secondStarted, '新入站自动续跑，无需恢复轮询', 6000)
-    assert.equal(host.sent.length, 0, '后续已入账但尚未判定时旧澄清不能发送')
-    releaseSecond.resolve()
-    await host.service.whenIdle()
-    const diagnostics = JSON.stringify({ alerts: host.service.listAlerts(), notifications: await host.query('notification.list'), sources: await host.query('source.list'), tools: host.toolResults.slice(-3) })
-    assert.equal(host.sent.filter(item => item.payload.sourceMessageId === 'original').length, correction ? 0 : 1,
-      diagnostics)
-    assert.equal(host.sent.filter(item => item.payload.sourceMessageId === 'newer').length, 1, diagnostics)
-    const newer = (await host.query('source.list')).find(item => item.messageId === 'newer')
-    assert.ok(newer.processingCompleted, 'needs_clarification也有本轮判定完成事实')
-    for (const stage of ['ingress', 'queue', 'turn', 'host', 'send', 'readback'])
-      assert.ok(newer.stages.some(item => item.stage === stage && item.completedAt), `missing ${stage}`)
-    assert.ok(newer.stages.some(item => item.stage === 'turn' && item.sessionId.startsWith('independent-')))
-    assert.ok(newer.stages.some(item => item.stage === 'host' && item.sessionId?.startsWith('independent-')))
-    assert.equal(host.service.listAlerts().some(item => item.id?.startsWith('timing:')), false)
+    await waitUntil(() => secondStarted, 'later Topic decision entered', 6000)
+    releaseSecond.resolve(); await host.service.whenIdle()
+    const diagnostics = JSON.stringify({ alerts: host.service.listAlerts(), tools: host.toolResults.slice(-4) })
+    const [original] = host.sent.filter(item => item.payload.sourceMessageId === 'original')
+    const [newer] = host.sent.filter(item => item.payload.sourceMessageId === 'newer')
+    assert.ok(original && newer, diagnostics)
+    assert.deepEqual(original.payload.atOpenDingTalkIds, ['native-user'])
+    assert.deepEqual(newer.payload.atOpenDingTalkIds, [sameAuthor ? 'native-user' : 'other-user'])
+    assert.equal(host.sent.length, 2, diagnostics); assert.deepEqual(await host.query('task.list'), [])
+    await host.service.recover(); await host.service.whenIdle()
+    assert.equal(host.sent.length, 2)
+    for (const source of await host.query('source.list')) assert.ok(source.processingCompleted)
   })
 
 test('native enrichment retires an already routed pending version with an independent command identity',

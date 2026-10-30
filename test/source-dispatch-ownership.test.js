@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
-import { createTopicCoordinator } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
+import { COORDINATION_RETIRED_REASON, retiredSourceOwnership } from '../packages/dingtalk-dsh-assistant/coordination-retirement.js'
+import { messageProcessingProjection } from '../packages/dingtalk-dsh-assistant/observer-message-projection.js'
 
 function facility(snapshot) {
   return new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
@@ -11,165 +12,145 @@ function facility(snapshot) {
     async deleteRecord(table, key) { delete snapshot.tables[table][key] },
   } } } }) } } }, { backend: 'source-dispatch-test' })
 }
-async function fixture(t, snapshot = { tables: {}, global: null }) {
-  const store = await openResidentStore(facility(snapshot))
-  if (!store.getGroup('g')) await store.subscribe({ groupId: 'g' })
+const ref = unit => ({ unitId: unit.unitId, unitRevision: unit.unitRevision })
+const retirement = { kind: 'feature-removed', reason: COORDINATION_RETIRED_REASON, at: '2026-10-29T00:00:00Z' }
+async function fixture(t) {
+  const snapshot = { tables: {}, global: null }
+  let store = await openResidentStore(facility(snapshot))
+  await store.subscribe({ groupId: 'g' })
+  await store.close(); store = await openResidentStore(facility(snapshot))
   t.after(() => store.close())
-  return { store, snapshot }
+  return { get store() { return store }, snapshot, async reopen(change = () => {}) {
+    await store.close(); change(snapshot.tables.groups.g); store = await openResidentStore(facility(snapshot)); return store
+  } }
 }
-const unitRef = unit => ({ unitId: unit.unitId, unitRevision: unit.unitRevision })
-async function routed(store, withTopic = false) {
-  await store.ingest({ groupId: 'g', messageId: 'message', text: '先A后B；讨论C', occurredAt: '2026-10-21T00:00:00Z', senderName: '甲', senderOpenDingTalkId: 'actor' })
-  return store.routeMessages({ groupId: 'g', routeId: 'route', routingRevision: 0, routes: [{ messageId: 'message', messageVersion: 1,
+async function routed(store) {
+  await store.ingest({ groupId: 'g', messageId: 'message', text: 'First A then B; discuss C', occurredAt: '2026-10-21T00:00:00Z', senderOpenDingTalkId: 'actor' })
+  await store.routeMessages({ groupId: 'g', routeId: 'route', routingRevision: 0, routes: [{ messageId: 'message', messageVersion: 1, replyTopic: { newTopicKey: 'delivery' },
     units: [
-      { unitKey: 'arrangement', summary: '先A后B', sourceRefs: [{ quote: '先A后B；' }], dispatchOwner: 'coordination', reason: '独立安排',
-        topics: withTopic ? [{ newTopicKey: 'shared', title: '讨论' }] : [] },
-      { unitKey: 'discussion', summary: '讨论C', sourceRefs: [{ quote: '讨论C' }], topics: [{ newTopicKey: 'shared', title: '讨论' }] },
+      { unitKey: 'delivery', summary: 'A then B in one delivery', sourceRefs: [{ quote: 'First A then B;' }], topics: [{ newTopicKey: 'delivery', title: 'Delivery' }] },
+      { unitKey: 'discussion', summary: 'Discuss C', sourceRefs: [{ quote: 'discuss C' }], topics: [{ newTopicKey: 'discussion', title: 'Discussion' }] },
     ] }] })
+  return store.getGroup('g')
+}
+async function historical(t, state = 'needs_clarification', extra = {}) {
+  const f = await fixture(t), group = await routed(f.store), unit = group.messages[0].units[0]
+  const owner = { reservationId: 'reservation', ...ref(unit), generation: 1, dispatchOwner: 'coordination', semanticState: state,
+    settled: false, sourceSnapshot: { groupId: 'g', messageId: 'message', messageVersion: 1, text: group.messages[0].text },
+    coordinationId: 'old-arrangement', clarification: 'Which target?', history: [], createdAt: retirement.at, updatedAt: retirement.at, ...extra }
+  // Historical fixture only: new routing and reservation APIs must not recreate it.
+  await f.reopen(g => { g.sourceDispatchOwnership = [owner]; g.messages[0].units[0].dispatchOwner = 'coordination' })
+  return { ...f, get store() { return f.store }, owner }
+}
+async function finish(store, topic, decisionId) {
+  const entry = topic.entries[0]
+  await store.acceptTopicDecision({ groupId: 'g', topicId: topic.topicId, revision: topic.revision, decisionId,
+    decision: { actions: [], reason: 'Recorded current discussion', basisMessageIds: ['message'], basisUnitRefs: [ref(entry)] } })
+  await store.completeTopicDecision({ groupId: 'g', topicId: topic.topicId, decisionId })
 }
 
-test('explicit source recovery holds the message-version queue through the separate ledger CAS', async t => {
-  const { store } = await fixture(t)
-  await routed(store)
-  const owner = store.listSourceDispatchOwnership('g')[0], message = store.getGroup('g').messages[0]
-  const args = { groupId: 'g', messageId: message.messageId, messageVersion: 1, activeUnitRefs: message.activeUnitRefs, reservationId: owner.reservationId }
-  let calls = 0
-  for (const patch of [{ messageVersion: 2 }, { activeUnitRefs: [] }, { reservationId: 'foreign' }])
-    await assert.rejects(store.retrySourceDispatch({ ...args, ...patch }, () => { calls++ }), /MESSAGE_RETRY_STALE/)
-  assert.equal(calls, 0)
-  const entered = Promise.withResolvers(), release = Promise.withResolvers()
-  const retry = store.retrySourceDispatch(args, async snapshot => { entered.resolve(); await release.promise; return snapshot })
-  await entered.promise
-  const changed = store.ingest({ groupId: 'g', messageId: message.messageId, messageVersion: 2, text: '已订正原消息', occurredAt: message.occurredAt, senderOpenDingTalkId: 'actor' })
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(store.getGroup('g').messages[0].messageVersion, 1)
-  release.resolve()
-  assert.equal((await retry).reservationId, owner.reservationId)
-  await changed
-  assert.equal(store.getGroup('g').messages[0].messageVersion, 2)
-  await assert.rejects(store.retrySourceDispatch(args, () => { calls++ }), /MESSAGE_RETRY_STALE/)
-  assert.equal(calls, 0)
+test('retired coordination routing rejects the entire batch without claiming a source or dropping discussion', async t => {
+  const f = await fixture(t)
+  await f.store.ingest({ groupId: 'g', messageId: 'message', text: 'A; B', occurredAt: '2026-10-21T00:00:00Z', senderOpenDingTalkId: 'actor' })
+  const before = structuredClone(f.store.getGroup('g'))
+  await assert.rejects(f.store.routeMessages({ groupId: 'g', routeId: 'old-route', routingRevision: 0, routes: [{ messageId: 'message', messageVersion: 1,
+    units: [{ unitKey: 'a', summary: 'A', sourceRefs: [{ quote: 'A;' }], dispatchOwner: 'coordination', topics: [] },
+      { unitKey: 'b', summary: 'B', sourceRefs: [{ quote: 'B' }], topics: [{ newTopicKey: 'b', title: 'B' }] }] }] }), /INDEPENDENT_COORDINATION_RETIRED/)
+  assert.deepEqual(f.store.getGroup('g'), before)
+  await f.reopen()
+  assert.deepEqual(f.store.getGroup('g'), before)
 })
 
-test('引用重判只归还遗漏引用的旧澄清预约，原问题进审计且不接受新预约', async t => {
-  const { store } = await fixture(t)
-  await routed(store)
-  const owner = store.listSourceDispatchOwnership('g')[0], message = store.getGroup('g').messages[0]
-  await store.updateSourceDispatch({ groupId: 'g', ...unitRef(owner), expectedGeneration: 1,
-    semanticState: 'needs_clarification', coordinationId: 'original-arrangement', clarification: '缺少具体对象' })
-  const args = { groupId: 'g', messageId: message.messageId, messageVersion: 1, activeUnitRefs: message.activeUnitRefs,
-    reservationId: owner.reservationId, phase: 'coordination-context' }
-  for (const patch of [{ messageVersion: 2 }, { activeUnitRefs: [] }, { reservationId: 'other' }])
-    await assert.rejects(store.retrySourceDispatch({ ...args, ...patch }, () => assert.fail('must not run')), /MESSAGE_RETRY_STALE/)
-  await assert.rejects(store.retrySourceDispatch(args, () => { throw new Error('ledger refused') }), /ledger refused/)
-  assert.equal(store.listSourceDispatchOwnership('g')[0].semanticState, 'needs_clarification')
-  await store.retrySourceDispatch(args, current => { assert.equal(current.generation, 1); return { accepted: true } })
-  const current = store.listSourceDispatchOwnership('g')[0]
-  assert.equal(current.semanticState, 'reserved'); assert.equal(current.generation, 1); assert.equal(current.reservationId, owner.reservationId)
-  assert.equal(current.coordinationId, 'original-arrangement'); assert.equal(current.clarification, '缺少具体对象')
-  assert.equal(current.history[0].kind, 'context-reconsideration'); assert.equal(current.history[0].question, '缺少具体对象')
-  await assert.rejects(store.retrySourceDispatch(args, () => assert.fail('cannot reset twice')), /MESSAGE_RETRY_STALE/)
-})
-
-for (const state of ['accepted', 'needs_clarification', 'frozen']) test(`explicit source recovery never resets ${state} ownership`, async t => {
-  const { store } = await fixture(t)
-  await routed(store)
-  const owner = store.listSourceDispatchOwnership('g')[0], message = store.getGroup('g').messages[0]
-  if (state === 'frozen') {
-    await store.updateSourceDispatch({ groupId: 'g', ...unitRef(owner), expectedGeneration: 1, semanticState: 'rejected' })
-    await store.beginSourceDispatchHandoff({ groupId: 'g', ...unitRef(owner), expectedGeneration: 1, freezeId: 'freeze', reason: 'fixture handoff' })
-  } else await store.updateSourceDispatch({ groupId: 'g', ...unitRef(owner), expectedGeneration: 1, semanticState: state,
-    ...(state === 'accepted' ? { coordinationId: 'accepted', settled: true } : { clarification: '对象不明' }) })
-  const before = store.listSourceDispatchOwnership('g')
-  await assert.rejects(store.retrySourceDispatch({ groupId: 'g', messageId: message.messageId, messageVersion: 1,
-    activeUnitRefs: message.activeUnitRefs, reservationId: owner.reservationId }, () => assert.fail('must not reach ledger')), /MESSAGE_RETRY_STALE/)
-  assert.deepEqual(store.listSourceDispatchOwnership('g'), before)
-})
-
-test('route atomically reserves coordination unit; no Topic required and discussion remains separate', async t => {
-  const { store } = await fixture(t)
-  await routed(store)
-  const group = store.getGroup('g'), units = group.messages[0].units
-  const reservation = store.listSourceDispatchOwnership('g')[0]
-  assert.equal(group.topics.length, 1)
-  assert.equal(group.topics[0].entries.length, 1)
-  assert.equal(group.topics[0].entries[0].unitId, units[1].unitId)
-  assert.equal(reservation.unitId, units[0].unitId)
-  assert.equal(reservation.semanticState, 'reserved')
-  assert.equal(reservation.settled, false)
-  assert.equal(reservation.sourceSnapshot.text, '先A后B；讨论C')
-  assert.equal(reservation.sourceSnapshot.unitText, '先A后B；')
+test('new requirements and discussion retain independent Topic source ownership without a coordinator reservation', async t => {
+  const f = await fixture(t), group = await routed(f.store)
+  assert.equal(group.topics.length, 2)
+  for (const unit of group.messages[0].units) {
+    assert.equal(group.topics.filter(topic => topic.entries.some(entry => entry.unitId === unit.unitId)).length, 1)
+    assert.equal(f.store.getSourceDispatchOwnership('g', unit.unitId, unit.unitRevision), undefined)
+  }
+  assert.deepEqual(f.store.listSourceDispatchOwnership('g'), [])
   assert.equal(group.messages[0].agentDeliveryStatus, 'pending')
-  assert.equal((await store.reserveSourceDispatch({ groupId: 'g', ...unitRef(units[0]) })).reservationId, reservation.reservationId)
-  await assert.rejects(store.reserveSourceDispatch({ groupId: 'g', ...unitRef(units[0]), expectedGeneration: 2 }), /generation_stale/)
-  await assert.rejects(store.reserveSourceDispatch({ groupId: 'g', unitId: 'unknown', unitRevision: 1 }), /unit_not_found/)
+  await finish(f.store, group.topics[0], 'delivery-decision')
+  assert.equal(f.store.getGroup('g').messages[0].agentDeliveryStatus, 'pending', 'Another Topic still needs a real decision')
+  await finish(f.store, group.topics[1], 'discussion-decision')
+  assert.equal(f.store.getGroup('g').messages[0].agentDeliveryStatus, 'delivered')
 })
 
-test('needs clarification survives restart and Topic completion cannot settle it', async t => {
-  const { store, snapshot } = await fixture(t)
-  await routed(store)
-  const reservation = store.listSourceDispatchOwnership('g')[0]
-  await store.updateSourceDispatch({ groupId: 'g', ...unitRef(reservation), expectedGeneration: 1, semanticState: 'needs_clarification', clarification: '哪个A？' })
-  const topic = store.getGroup('g').topics[0], discussion = store.getGroup('g').messages[0].units[1]
-  const args = { groupId: 'g', topicId: topic.topicId, revision: topic.revision, decisionId: 'discussion',
-    decision: { actions: [], reason: '讨论', basisMessageIds: ['message'], basisUnitRefs: [unitRef(discussion)] } }
-  await store.acceptTopicDecision(args)
-  await store.completeTopicDecision({ groupId: 'g', topicId: topic.topicId, decisionId: 'discussion' })
-  assert.equal(store.getGroup('g').messages[0].agentDeliveryStatus, 'pending')
-  await store.close()
-  const reopened = await openResidentStore(facility(snapshot)); t.after(() => reopened.close())
-  assert.equal(reopened.listSourceDispatchOwnership('g')[0].semanticState, 'needs_clarification')
-  assert.equal(reopened.listSourceDispatchOwnership('g')[0].settled, false)
-  await assert.rejects(reopened.updateSourceDispatch({ groupId: 'g', ...unitRef(reservation), expectedGeneration: 1, semanticState: 'needs_clarification', clarification: '哪个A？', settled: true }), /state_invalid/)
-  await reopened.updateSourceDispatch({ groupId: 'g', ...unitRef(reservation), expectedGeneration: 1, semanticState: 'accepted', coordinationId: 'c', settled: true })
-  assert.equal(reopened.getGroup('g').messages[0].agentDeliveryStatus, 'delivered')
+for (const state of ['accepted', 'needs_clarification', 'reserved']) test('retirement preserves ' + state + ' audit and does not rewrite it as business acceptance', async t => {
+  const f = await historical(t, state)
+  await f.store.retireIndependentCoordination(retirement)
+  const owner = f.store.listSourceDispatchOwnership('g')[0]
+  assert.equal(owner.semanticState, state)
+  assert.equal(owner.clarification, f.owner.clarification)
+  assert.equal(owner.coordinationId, f.owner.coordinationId)
+  assert.deepEqual(owner.sourceSnapshot, f.owner.sourceSnapshot)
+  assert.equal(owner.settled, true)
+  assert.equal(owner.history.length, 1)
+  assert.equal(owner.history[0].previousSemanticState, state)
+  assert.equal(owner.history[0].previousSettled, false)
+  const once = structuredClone(f.store.getGroup('g'))
+  await f.store.retireIndependentCoordination(retirement)
+  await f.reopen()
+  assert.deepEqual(f.store.getGroup('g'), once)
 })
 
-test('coordination ownership suppresses new Topic decisions and acknowledgement outbox', async t => {
-  const { store } = await fixture(t)
-  await routed(store, true)
-  const group = store.getGroup('g'), topic = group.topics[0], reservation = store.listSourceDispatchOwnership('g')[0]
-  await assert.rejects(store.acceptTopicDecision({ groupId: 'g', topicId: topic.topicId, revision: topic.revision, decisionId: 'old-chain',
-    decision: { actions: [], reply: '已承接', basisMessageIds: ['message'], basisUnitRefs: [unitRef(reservation)] } }), /owned_by_coordination/)
-  const result = await store.appendOutbox({ groupId: 'g', sourceMessageId: 'topic-decision:old-chain', outboundId: 'ack', decisionId: 'old-chain', text: '已承接', matterUnitRefs: [unitRef(reservation)] })
-  assert.equal(result.status, 'coordination-owned')
-  assert.equal(store.getGroup('g').outbox.length, 0)
-  const errors = []
-  const coordinator = createTopicCoordinator({ store, getAgent: () => ({ steer() {}, whenIdle: () => new Promise(() => {}) }), assertSession() {}, serializeTasks: fn => fn(),
-    reviewCandidates: () => [],
-    applyAction: () => assert.fail('coordination unit must not reach legacy apply'), appendOutbox: args => store.appendOutbox(args),
-    cancelTask() {}, onError(_groupId, error) { errors.push(error) }, isClosing: () => false })
-  t.after(() => coordinator.close())
-  const requests = await coordinator.schedule('g')
-  assert.deepEqual(errors, [])
-  assert.equal(requests[0].ownedDeltaUnitRefs.some(ref => ref.unitId === reservation.unitId), false)
+test('retirement settles only old ownership; another Topic keeps the original message pending until its decision', async t => {
+  const f = await historical(t)
+  await f.store.retireIndependentCoordination(retirement)
+  assert.equal(f.store.getGroup('g').messages[0].agentDeliveryStatus, 'pending')
+  const discussion = f.store.getGroup('g').topics.find(topic => topic.title === 'Discussion')
+  await finish(f.store, discussion, 'discussion-current')
+  const group = f.store.getGroup('g'), source = retiredSourceOwnership([], group.sourceDispatchOwnership, 'g')[0]
+  assert.equal(group.messages[0].agentDeliveryStatus, 'delivered')
+  const projected = messageProcessingProjection(group.messages[0], group.topics, source, [])
+  assert.equal(projected.processingState, 'processed')
+  assert.match(projected.processingConclusion, /协调功能已移除/)
+  assert.equal(group.topics.find(topic => topic.title === 'Delivery').decisions.length, 0, 'Retirement must not invent a Topic decision')
 })
 
-test('accepted legacy decision cannot be claimed by coordination and retains original operation identity', async t => {
-  const { store } = await fixture(t)
-  await store.ingest({ groupId: 'g', messageId: 'm', text: 'legacy', occurredAt: '2026-10-21T00:00:00Z', senderName: '甲', senderOpenDingTalkId: 'actor' })
-  await store.routeMessages({ groupId: 'g', routeId: 'legacy', routingRevision: 0, routes: [{ messageId: 'm', messageVersion: 1, topics: [{ newTopicKey: 't', title: '任务' }] }] })
-  const group = store.getGroup('g'), topic = group.topics[0], unit = group.messages[0].units[0]
-  await store.acceptTopicDecision({ groupId: 'g', topicId: topic.topicId, revision: topic.revision, decisionId: 'legacy-decision',
-    decision: { actions: [], reason: 'legacy', basisMessageIds: ['m'], basisUnitRefs: [unitRef(unit)] } })
-  await assert.rejects(store.reserveSourceDispatch({ groupId: 'g', ...unitRef(unit) }), /legacy_decision_exists/)
-  assert.equal(store.getGroup('g').topics[0].decisions[0].decisionId, 'legacy-decision')
-  assert.deepEqual(store.listSourceDispatchOwnership('g'), [])
+test('a changed message version never inherits the retired source completion or an old decision', async t => {
+  const f = await historical(t)
+  await f.store.retireIndependentCoordination(retirement)
+  const audit = f.store.listSourceDispatchOwnership('g')
+  await f.store.ingest({ groupId: 'g', messageId: 'message', messageVersion: 2, text: 'Revised business request', occurredAt: '2026-10-21T00:01:00Z', senderOpenDingTalkId: 'actor' })
+  const group = f.store.getGroup('g'), message = group.messages[0]
+  assert.equal(message.messageVersion, 2)
+  assert.equal(message.routingStatus, 'pending')
+  assert.equal(message.agentDeliveryStatus, 'pending')
+  assert.deepEqual(f.store.listSourceDispatchOwnership('g'), audit)
+  const source = retiredSourceOwnership([], audit, 'g')[0]
+  assert.notEqual(messageProcessingProjection(message, group.topics, source, []).processingState, 'processed')
 })
 
-test('rejected source remains exclusive until frozen handoff with matching durable proof and generation CAS', async t => {
-  const { store } = await fixture(t)
-  await routed(store)
-  const reservation = store.listSourceDispatchOwnership('g')[0], ref = unitRef(reservation)
-  await store.updateSourceDispatch({ groupId: 'g', ...ref, expectedGeneration: 1, semanticState: 'rejected' })
-  assert.equal(store.getSourceDispatchOwnership('g', ref.unitId, ref.unitRevision).dispatchOwner, 'coordination')
-  await store.beginSourceDispatchHandoff({ groupId: 'g', ...ref, expectedGeneration: 1, freezeId: 'freeze', reason: '不属于协调意图' })
-  await assert.rejects(store.updateSourceDispatch({ groupId: 'g', ...ref, expectedGeneration: 1, semanticState: 'accepted', coordinationId: 'late' }), /generation_stale/)
-  await assert.rejects(store.completeSourceDispatchHandoff({ groupId: 'g', ...ref, expectedGeneration: 1, proof: 'no commands' }), /proof_invalid/)
-  const proof = { kind: 'coordination.no-commands', reservationId: reservation.reservationId, generation: 1, ...ref,
-    freezeId: 'freeze', dynamicSourceId: 'dynamic-source', commandCount: 0, unknownCount: 0, checkedAt: '2026-10-21T00:00:00Z' }
-  const handedBack = await store.completeSourceDispatchHandoff({ groupId: 'g', ...ref, expectedGeneration: 1, proof })
-  assert.equal(handedBack.dispatchOwner, 'legacy-topic'); assert.equal(handedBack.generation, 2)
-  assert.equal(handedBack.history.length, 1)
-  await assert.rejects(store.updateSourceDispatch({ groupId: 'g', ...ref, expectedGeneration: 1, semanticState: 'accepted' }), /generation_stale/)
+test('all former recovery and handoff entry points reject without invoking a ledger callback or mutating audit', async t => {
+  const f = await historical(t), before = structuredClone(f.store.getGroup('g'))
+  for (const name of ['retrySourceDispatch', 'reserveSourceDispatch', 'updateSourceDispatch', 'beginSourceDispatchHandoff', 'completeSourceDispatchHandoff']) {
+    await assert.rejects(f.store[name]({ groupId: 'g', ...ref(f.owner), expectedGeneration: 1, reservationId: f.owner.reservationId },
+      () => assert.fail('Retired recovery must not reach another ledger')), /INDEPENDENT_COORDINATION_RETIRED/)
+    assert.deepEqual(f.store.getGroup('g'), before)
+  }
+})
+
+test('a current Topic decision retains its operation identity when an old coordinator tries to reclaim it', async t => {
+  const f = await fixture(t), group = await routed(f.store), topic = group.topics[0], unit = group.messages[0].units[0]
+  await finish(f.store, topic, 'current-decision')
+  const before = structuredClone(f.store.getGroup('g'))
+  await assert.rejects(f.store.reserveSourceDispatch({ groupId: 'g', ...ref(unit) }), /INDEPENDENT_COORDINATION_RETIRED/)
+  assert.deepEqual(f.store.getGroup('g'), before)
+  assert.equal(before.topics[0].decisions[0].decisionId, 'current-decision')
+  assert.deepEqual(before.sourceDispatchOwnership, [])
+})
+
+test('frozen historical handoff keeps original proof and generation; retirement cannot authorize new commands', async t => {
+  const handoff = { freezeId: 'freeze', reason: 'Original handoff', proof: { commandCount: 0, checkedAt: '2026-10-21T00:00:00Z' } }
+  const f = await historical(t, 'rejected', { frozen: true, handoff, generation: 3 })
+  await f.store.retireIndependentCoordination(retirement)
+  const owner = f.store.listSourceDispatchOwnership('g')[0]
+  assert.equal(owner.generation, 3)
+  assert.equal(owner.frozen, true)
+  assert.equal(owner.semanticState, 'rejected')
+  assert.deepEqual(owner.handoff, handoff)
+  assert.equal(owner.dispatchOwner, 'coordination')
+  await assert.rejects(f.store.completeSourceDispatchHandoff({ groupId: 'g', ...ref(owner), expectedGeneration: 3, proof: handoff.proof }), /INDEPENDENT_COORDINATION_RETIRED/)
+  assert.deepEqual(f.store.listSourceDispatchOwnership('g')[0], owner)
 })

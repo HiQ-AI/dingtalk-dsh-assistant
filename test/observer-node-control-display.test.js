@@ -55,73 +55,59 @@ test('execution card keeps a compact loading state and preserves visible records
   h.unmount()
 })
 
-const workFixture = (id, overrides = {}) => ({ id, kind: 'schedule', groupId: 'g', title: `安排 ${id}`, updatedAt: '2026-10-25T00:00:00Z', result: { code: 'delivery_failed', label: '提醒发送失败', tone: 'danger' }, plan: { label: '单次计划已启用', state: 'active', rule: { kind: 'once', at: '2026-10-25T00:00:00Z' }, timezone: 'Asia/Shanghai' }, nextStep: { label: '无后续触发安排；无重试安排', triggerAt: null, sendRetryAt: null, readbackAt: null }, ...overrides })
-const detailFixture = (work, overrides = {}) => ({ work, members: [], history: { sources: [], changes: [], occurrences: [], jobs: [] }, observedAt: '2026-10-25T00:00:00Z', ...overrides })
 const relationFixture = (overrides = {}) => ({ id: 'relation-b', instructionId: 'i-b', coordinationId: 'coord', condition: 'all', target: { taskId: 'task-b', title: '后续任务' }, prerequisites: [{ instructionId: 'i-a', taskId: 'task-a', title: '前置任务', fulfilled: false, state: 'observing', reason: '等待前置正式完成' }], state: 'waiting', dispatch: { status: 'waiting', receipt: 'absent', reason: '前置尚未满足', nextStep: '等待前置任务完成后调度后续任务' }, trigger: null, ...overrides })
 
-test('协调工作从实体接口读取结果而非输入，区分加载空态失败并保留同范围数据', async () => {
-  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g', name: '验收群' }] })
-  let tree = h.render()
-  assert.match(h.requests[0].url, /\/state\/coordination-work\?offset=0&limit=10&groupId=g$/)
-  assert.match(text(tree), /正在读取协调工作/); assert.doesNotMatch(text(tree), /暂无协调工作/)
-  h.requests[0].resolve({ works: [workFixture('schedule:one', { title: '真实提醒安排', sources: [{ original: '修改输入不能成为行标题', state: 'accepted' }] })], total: 1, observedAt: '2026-10-25T00:00:00Z' }); await settle()
-  tree = h.render(); assert.match(text(tree), /真实提醒安排/); assert.doesNotMatch(text(tree), /修改输入不能成为行标题|已接纳|进行中|已完成/)
-  const rows = elements(tree).filter(item => item.props['data-work-id'])
-  assert.equal(rows.length, 1); assert.equal(elements(rows[0]).filter(item => item.props['data-work-result']).length, 1)
-  assert.match(text(rows[0]), /提醒发送失败/)
-  assert.equal(elements(rows[0]).find(item => item.type === 'dot').props.state, 'error')
-  assert.equal(h.intervals.size, 1)
-  const tick = [...h.intervals.values()][0]; assert.equal(tick.delay, 5000)
-  tick.fn(); tick.fn(); assert.equal(h.requests.length, 2, '单范围轮询不能重复发起慢请求')
-  h.requests[1].reject(new Error('private raw diagnostic')); await settle(); tree = h.render()
-  assert.match(text(tree), /保留上次列表/); assert.match(text(tree), /真实提醒安排/); assert.doesNotMatch(text(tree), /private raw diagnostic/)
-  button(tree, '重试列表').props.onClick(); h.render()
-  h.requests[2].resolve({ works: [], total: 0, observedAt: '2026-10-25T00:00:01Z' }); await settle(); tree = h.render()
-  assert.match(text(tree), /暂无协调工作/); assert.doesNotMatch(text(tree), /真实提醒安排/)
-  h.unmount(); assert.equal(h.intervals.size, 0); assert.equal(h.timeouts.size, 0)
-})
-
-test('协调详情按实体隔离慢响应，任务依赖证据只读且返回目标保留实体身份', async () => {
-  const navigations = [], h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], onOpenTask: (...args) => navigations.push(args) })
-  h.render(); h.requests[0].resolve({ works: [workFixture('one'), workFixture('dispatch:two')], total: 2 }); await settle()
-  let tree = h.render()
-  elements(tree).find(item => item.props['data-work-id'] === 'one').props.onClick(); h.render()
-  elements(tree).find(item => item.props['data-work-id'] === 'dispatch:two').props.onClick(); tree = h.render()
-  assert.equal(h.requests[1].options.signal.aborted, true)
-  assert.match(h.requests[2].url, /coordination-work\/dispatch%3Atwo$/)
-  h.requests[1].resolve(detailFixture(workFixture('one', { title: '过期安排' }))); await settle()
-  const detail = detailFixture(workFixture('dispatch:two', { title: '<script>untrusted()</script>', kind: 'dispatch', result: { code: 'waiting_completion', label: '等待任务完成', tone: 'warning' }, plan: null }), { relations: [relationFixture()], history: { sources: [{ id: 's', original: '修改输入', state: 'accepted' }], occurrences: [{ occurrenceId: 'o', actionState: 'succeeded', deliveryState: 'unknown' }] }, members: [
-    { instructionId: 'i-a', taskId: 'task-a', title: '前置任务', state: 'applied', dependencies: [], taskState: 'active' },
-    { instructionId: 'i-b', taskId: 'task-b', title: '后续任务', state: 'ready', dependencies: ['i-a'], waitingReason: { code: 'waiting_dependency' }, reorderAssessment: { state: 'assessed', summary: '保持既有工作', evidence: ['顺序核验'] }, decision: { action: 'blocked', summary: '等待证据', evidence: ['javascript:alert(1)'], limitations: ['未核验'] } },
-    { instructionId: 'i-c', taskId: 'task-c', title: '历史证明任务', state: 'version_changed', dependencies: [], completionProofCurrent: false, completionProof: null, historicalCompletionProof: { eventId: 'old-proof', commandId: 'old-completion' } },
-  ], collections: { changes: { truncated: true, returned: 100, total: 101 } } })
-  h.requests[2].resolve(detail); await settle(); tree = h.render()
-  assert.doesNotMatch(text(tree), /过期安排/); assert.match(text(tree), /前置任务 → 后续任务/)
-  assert.doesNotMatch(text(tree), /已接纳，尚未完成/); assert.match(text(tree), /结果未知/); assert.match(text(tree), /暂无当前指令的正式完成证明/)
-  assert.match(text(tree), /历史完成证明引用（不证明当前指令完成）/); assert.match(text(tree), /仅显示最近 100 \/ 101 条/); assert.match(text(tree), /保持既有工作/)
-  assert.match(text(tree), /<script>untrusted/); assert.equal(elements(tree).some(item => item.type === 'a' || item.props.dangerouslySetInnerHTML), false)
-  for (const label of ['输入与变更历史', '任务要求与证据', '触发与送达记录', '证据与读取边界']) {
-    const node = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === label)
-    assert.ok(node); assert.equal(node.props.open, undefined)
-  }
-  const actions = elements(tree).filter(item => item.type === 'button' && text(item) === '查看任务')
-  actions[1].props.onClick(); assert.equal(navigations[0][0].taskId, 'task-b'); assert.equal(navigations[0][1].workId, 'dispatch:two'); assert.equal(navigations[0][1].groupId, 'g'); assert.equal(navigations[0][1].offset, 0)
-  button(tree, '返回协调工作').props.onClick(); h.render(); assert.equal(h.requests[2].options.signal.aborted, true)
-  h.unmount(); assert.equal(h.intervals.size, 0)
-})
-
-test('协调筛群立即移除旧实体且拒绝迟到响应，新页空态不泄露旧详情', async () => {
-  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g', name: '新群' }], target: { groupId: '', workId: 'old' } })
+test('current Topic list reads bounded entity summaries and distinguishes loading, empty and failed refresh', async () => {
+  const props = { groups: [{ groupId: 'g' }], target: { groupId: 'g' }, updatedAt: 'one' }
+  const h = harness('TopicBrowser', props)
   let tree = h.render()
   assert.equal(h.requests.length, 2)
-  const filter = elements(tree).find(item => item.props.label === '筛选协调群组')
-  filter.props.onChange('g'); tree = h.render()
-  assert.match(h.requests[2].url, /groupId=g/)
-  h.requests[0].resolve({ works: [workFixture('old', { title: '旧群正文' })], total: 1 })
-  h.requests[1].resolve(detailFixture(workFixture('old', { title: '旧群详情' }))); await settle()
-  tree = h.render(); assert.doesNotMatch(text(tree), /旧群正文|旧群详情/)
-  h.requests[2].reject(new Error('coordination_observer_unavailable')); await settle(); tree = h.render()
-  assert.match(text(tree), /尚未提供协调工作读取/); assert.doesNotMatch(text(tree), /暂无协调工作/)
+  assert.match(h.requests[1].url, /\/state\/topics\?offset=0&limit=10&view=overview&groupId=g$/)
+  assert.doesNotMatch(text(tree), /暂无业务话题/)
+  h.requests[0].resolve({ fixedTopics: [] })
+  h.requests[1].resolve({ topics: [{ groupId: 'g', topicId: 't', title: 'Business summary', summary: 'Current facts' }], total: 1, offset: 0, limit: 10, nextOffset: null }); await settle()
+  tree = h.render()
+  assert.equal(elements(tree).find(item => item.type?.name === 'TopicListItem').props.title, 'Business summary')
+  h.render({ ...props, updatedAt: 'two' })
+  h.requests[2].reject(new Error('offline')); await settle(); tree = h.render({ ...props, updatedAt: 'two' })
+  assert.equal(elements(tree).find(item => item.type?.name === 'TopicListItem').props.title, 'Business summary')
+  const failed = elements(tree).find(item => item.type?.name === 'TopicPageStatus' && item.props.error)
+  assert.equal(failed.props.error, 'offline')
+  failed.props.onRetry(); h.render()
+  h.requests.at(-1).resolve({ topics: [], total: 0, offset: 0, limit: 10, nextOffset: null }); await settle()
+  tree = h.render(); assert.match(text(tree), /暂无业务话题/)
+  h.unmount()
+})
+
+test('Topic history unmount aborts old reads and preserves exact source identity in the new view', async () => {
+  const old = harness('TopicRecords', { selection: { groupId: 'old-group', topicId: 'old-topic', revision: 1 }, kind: 'messages' })
+  old.render(); old.unmount()
+  assert.equal(old.requests[0].options.signal.aborted, true)
+  const h = harness('TopicRecords', { selection: { groupId: 'new-group', topicId: 'new/topic', revision: 2 }, kind: 'messages' })
+  h.render()
+  assert.match(h.requests[0].url, /new%2Ftopic\?groupId=new-group&offset=0&limit=25&revision=2$/)
+  old.requests[0].resolve({ messages: [{ messageId: 'old', text: 'Old secret' }], total: 1, offset: 0, limit: 25 }); await settle()
+  h.requests[0].resolve({ messages: [{ messageId: 'new', text: '<script>untrusted()</script>', senderName: 'Member' }], total: 1, offset: 0, limit: 25, revision: 2 }); await settle()
+  const tree = h.render()
+  assert.doesNotMatch(text(tree), /Old secret/)
+  assert.match(text(tree), /<script>untrusted/)
+  assert.equal(elements(tree).some(item => item.props.dangerouslySetInnerHTML), false)
+  h.unmount()
+})
+
+test('Topic group change clears prior selection and ignores delayed list and fixed-category responses', async () => {
+  const h = harness('TopicBrowser', { groups: [{ groupId: 'a' }, { groupId: 'b' }], target: { groupId: 'a', topicId: 'old' } })
+  h.render()
+  elements(h.render()).find(item => item.props.label === '筛选话题群聊').props.onChange('b')
+  let tree = h.render()
+  assert.equal(h.requests[0].options.signal.aborted, true)
+  assert.equal(h.requests[1].options.signal.aborted, true)
+  assert.equal(elements(tree).some(item => item.type?.name === 'TopicOverview'), false)
+  h.requests[0].resolve({ fixedTopics: [{ topicId: 'old-fixed', title: 'Old fixed' }] })
+  h.requests[1].resolve({ topics: [{ groupId: 'a', topicId: 'old', title: 'Old private' }], total: 1 }); await settle()
+  tree = h.render()
+  assert.equal(elements(tree).some(item => item.props.title === 'Old private' || item.props.title === 'Old fixed'), false)
+  assert.match(h.requests.at(-1).url, /groupId=b$/)
   h.unmount()
 })
 
@@ -607,234 +593,191 @@ test('人工详情使用原生Modal隔离背景，关闭恢复焦点和滚动，
   assert.equal(testDocument.documentElement.style.overflow, 'auto')
 })
 
-test('协调首群按稳定顺序初始化，异步不读全部，空群与失效选择明确处理', async () => {
-  const props = { groups: [], groupsReady: false }
-  const h = harness('CoordinationBrowser', props)
+test('current Topic all-groups default stays bounded and does not issue removed coordination requests', async () => {
+  const h = harness('TopicBrowser', { groups: [] })
   let tree = h.render()
-  assert.equal(h.requests.length, 0); assert.match(text(tree), /正在读取群聊/)
-  tree = h.render({ groupsReady: true, groups: [{ groupId: '' }, { groupId: 'b', name: '首群' }, { groupId: 'a' }, { groupId: 'b', name: '重复群' }] })
-  assert.equal(h.requests.length, 1); assert.match(h.requests[0].url, /groupId=b/)
-  h.requests[0].resolve({ works: [], total: 0 }); await settle(); tree = h.render()
-  assert.match(text(tree), /暂无协调工作/)
-  const filter = elements(tree).find(item => item.props.label === '筛选协调群组')
-  assert.equal(filter.props.value, 'b'); assert.equal(filter.props.options.length, 3)
-  filter.props.onChange('a'); h.render()
-  assert.match(h.requests[1].url, /groupId=a/)
-  h.requests[0].resolve({ works: [{ id: 'late', title: '迟到旧群' }], total: 1 }); await settle()
-  tree = h.render({ groupsReady: true, groups: [{ groupId: 'b' }, { groupId: 'a' }] })
-  assert.equal(elements(tree).find(item => item.props.label === '筛选协调群组').props.value, 'a')
-  assert.doesNotMatch(text(tree), /迟到旧群/)
-  tree = h.render({ groupsReady: true, groups: [{ groupId: 'b' }] })
-  assert.equal(h.requests[1].options.signal.aborted, true)
-  assert.equal(elements(tree).find(item => item.props.label === '筛选协调群组').props.value, 'b')
-  assert.match(h.requests.at(-1).url, /groupId=b/)
-  tree = h.render({ groupsReady: true, groups: [] })
-  assert.match(text(tree), /暂无可选群聊/)
-  assert.equal([...h.intervals.values()].length, 0)
-  assert.equal(h.requests.every(req => /groupId=/.test(req.url)), true)
+  assert.equal(elements(tree).find(item => item.props.label === '筛选话题群聊').props.value, '')
+  assert.equal(h.requests.length, 2)
+  assert.match(h.requests[1].url, /offset=0&limit=10&view=overview$/)
+  tree = h.render({ groups: [{ groupId: 'b' }, { groupId: 'a' }] })
+  assert.equal(h.requests.length, 2)
+  assert.equal(elements(tree).find(item => item.props.label === '筛选话题群聊').props.value, '')
+  assert.equal(h.requests.some(item => /coordination/.test(item.url)), false)
   h.unmount()
+  assert.equal(h.requests.every(request => request.options.signal.aborted), true)
 })
 
-test('协调手选与显式全部在重排刷新后保持，失效返回目标不读旧详情', async () => {
+test('manual Topic group selection survives list reorder and explicit all-groups resets paging', async () => {
   const groups = [{ groupId: 'a' }, { groupId: 'b' }]
-  const h = harness('CoordinationBrowser', { groups, target: { groupId: 'removed', workId: 'secret', offset: 30 } })
+  const h = harness('TopicBrowser', { groups })
   let tree = h.render()
-  assert.equal(h.requests.length, 1); assert.match(h.requests[0].url, /offset=0&limit=10&groupId=a/)
-  assert.equal(h.requests.some(req => req.url.includes('secret')), false)
-  elements(tree).find(item => item.props.label === '筛选协调群组').props.onChange('b'); tree = h.render()
-  h.requests.at(-1).resolve({ works: [], total: 0 }); await settle(); tree = h.render()
-  button(tree, '刷新协调记录').props.onClick(); tree = h.render({ groups: [...groups].reverse() })
-  assert.match(h.requests.at(-1).url, /groupId=b/)
-  elements(tree).find(item => item.props.label === '筛选协调群组').props.onChange(''); tree = h.render()
+  elements(tree).find(item => item.props.label === '筛选话题群聊').props.onChange('b')
+  tree = h.render({ groups: [...groups].reverse() })
+  assert.equal(elements(tree).find(item => item.props.label === '筛选话题群聊').props.value, 'b')
+  assert.match(h.requests.at(-1).url, /offset=0&limit=10&view=overview&groupId=b$/)
+  elements(tree).find(item => item.props.label === '筛选话题群聊').props.onChange('')
+  tree = h.render({ groups })
+  assert.equal(elements(tree).find(item => item.props.label === '筛选话题群聊').props.value, '')
   assert.doesNotMatch(h.requests.at(-1).url, /groupId=/)
-  tree = h.render({ groups }); assert.equal(elements(tree).find(item => item.props.label === '筛选协调群组').props.value, '')
   h.unmount()
 })
 
-test('协调单次active空nextDue且作业完成仍突出提醒发送失败，输入变更只在历史', async () => {
-  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', workId: 'schedule:s' } })
+test('fixed platform outcome distinguishes prepared reply from delivered message and retains its original source', async () => {
+  const h = harness('FixedTopicDetail', { topicId: 'agent-platform', title: '职责内Agent平台相关', groupId: 'g' })
   h.render()
-  const work = workFixture('schedule:s', { title: '真实定时提醒' })
-  h.requests[0].resolve({ works: [work], total: 1 })
-  h.requests[1].resolve(detailFixture(work, { history: { sources: [{ id: 'create', original: '原始长文本', state: 'accepted' }, { id: 'change', original: '修改时间', state: 'accepted' }], changes: [{ action: 'reschedule', revision: 2 }], occurrences: [{ occurrenceId: 'o', actionState: 'succeeded', deliveryState: 'failed' }], jobs: [{ jobId: 'j', state: 'completed' }] } })); await settle()
-  const tree = h.render(), words = text(tree), article = elements(tree).find(item => item.type === 'article')
-  assert.equal(elements(tree).filter(item => item.props['data-work-id']).length, 1)
-  assert.equal(elements(article).filter(item => item.props['data-work-result']).length, 1)
-  assert.equal(text(elements(article).find(item => item.props['data-work-result'])).trim(), '提醒发送失败')
-  assert.match(words, /计划：单次计划已启用/); assert.match(words, /下次触发：无后续触发安排/); assert.match(words, /重试：无重试安排/)
-  assert.doesNotMatch(words, /下次触发：未记录|进行中/)
-  assert.equal(elements(tree).some(item => item.type === 'h3' && text(item) === '任务调度'), false)
-  const history = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === '输入与变更历史')
-  assert.ok(history); assert.equal(history.props.open, undefined); assert.match(text(history), /原始长文本/); assert.match(text(history), /修改时间/)
-  const visibleWords = node => node?.type === 'details' ? text(node.children[0]) : node && typeof node === 'object' ? (node.children || []).map(visibleWords).join('\n') : String(node ?? '')
-  assert.doesNotMatch(visibleWords(article), /已完成|已接纳|已执行|修改时间/)
+  h.requests[0].resolve({ items: [{ id: 'unit', state: 'replied', sourceText: 'Original timed report', text: 'Original input audit',
+    reply: { outboundId: 'n', status: 'pending', notificationState: 'unknown', text: 'Prepared report' } }], total: 1, offset: 0, nextOffset: null }); await settle()
+  const tree = h.render()
+  assert.match(text(tree), /回复已准备/)
+  assert.match(text(tree), /待确认/)
+  assert.doesNotMatch(text(tree), /已送达/)
+  assert.match(text(tree), /Original timed report/)
+  const original = elements(tree).find(item => item.type === 'details')
+  assert.equal(original.props.open, undefined); assert.match(text(original), /Original input audit/)
   h.unmount()
 })
 
-test('协调全部群同文实体仍显示归属，历史结论不冒充下一动作', async () => {
-  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'a', name: '甲群' }, { groupId: 'b', name: '乙群' }], target: { groupId: '' } })
-  h.render(); h.requests[0].resolve({ works: [workFixture('a', { groupId: 'a', title: '同文' }), workFixture('b', { groupId: 'b', title: '同文' })], total: 2 }); await settle()
+test('equal Topic titles retain their group and topic identity when opening a current overview', async () => {
+  const h = harness('TopicBrowser', { groups: [{ groupId: 'a' }, { groupId: 'b' }] })
+  h.render(); h.requests[0].resolve({ fixedTopics: [] })
+  h.requests[1].resolve({ topics: [{ groupId: 'a', topicId: 'same', title: 'Same title' }, { groupId: 'b', topicId: 'same', title: 'Same title' }], total: 2, offset: 0, limit: 10, nextOffset: null }); await settle()
   let tree = h.render()
-  const rows = elements(tree).filter(item => item.props['data-work-id'])
-  assert.match(text(rows[0]), /甲群/); assert.match(text(rows[1]), /乙群/)
-  rows[1].props.onClick(); h.render()
-  h.requests[1].resolve(detailFixture(workFixture('b', { kind: 'dispatch', groupId: 'b', result: { code: 'waiting_completion', label: '等待任务完成', tone: 'warning' } }), { members: [{ instructionId: 'i', taskId: 't', state: 'applied', decision: { action: 'complete', summary: '历史完成结论' } }] })); await settle()
-  tree = h.render(); assert.match(text(tree), /所属群聊：乙群/)
-  assert.doesNotMatch(text(tree), /下一动作：/)
-  assert.doesNotMatch(text(tree), /下一动作：.*历史完成结论/)
-  assert.match(text(tree), /任务最近记录的结论（complete）：历史完成结论/)
+  const rows = elements(tree).filter(item => item.type?.name === 'TopicListItem')
+  assert.equal(rows.length, 2)
+  assert.notEqual(rows[0].props.key, rows[1].props.key)
+  rows[1].props.onSelect(); tree = h.render()
+  const overview = elements(tree).find(item => item.type?.name === 'TopicOverview')
+  assert.equal(overview.props.selection.groupId, 'b'); assert.equal(overview.props.selection.topicId, 'same')
   h.unmount()
 })
 
-test('协调主结果只消费后端投影，未知状态不推导成功且周期下次与重试分层', async () => {
-  for (const result of [
-    { code: 'delivery_pending', label: '等待发送提醒', tone: 'warning' },
-    { code: 'delivery_unknown', label: '提醒送达未确认', tone: 'warning' },
-    { code: 'delivered', label: '提醒已送达', tone: 'success' },
-    { code: 'dispatch_applied', label: '任务已调度', tone: 'warning' },
-    { code: 'dispatch_fulfilled', label: '任务调度已完成', tone: 'success' },
-    { code: 'future_raw_state' },
-  ]) {
-    const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }] })
-    h.render(); h.requests[0].resolve({ works: [workFixture(result.code, { result })], total: 1 }); await settle()
-    const tree = h.render(), row = elements(tree).find(item => item.props['data-work-id'])
-    assert.equal(elements(row).filter(item => item.props['data-work-result']).length, 1)
-    assert.match(text(row), new RegExp(result.label || '状态未确认'))
+test('Topic overview uses its actual lifecycle and never infers completion from an old coordination result', async () => {
+  for (const [status, label] of [['active', '进行中'], ['waiting', '等待中'], ['closed', '已关闭'], ['future', '状态未记录']]) {
+    const h = harness('TopicOverview', { selection: { groupId: 'g', topicId: 't', title: 'Current Topic' } })
+    h.render()
+    h.requests[0].resolve({ topic: { title: 'Current Topic', status, summary: 'Recorded facts', coordination: { state: 'fulfilled' } } }); await settle()
+    const tree = h.render()
+    assert.match(text(tree), new RegExp(label))
+    assert.match(text(tree), /Recorded facts/)
+    assert.doesNotMatch(text(tree), /任务调度已完成|已正式完成/)
     h.unmount()
   }
-  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', workId: 'recurring' } })
-  h.render(); h.requests[1].resolve(detailFixture(workFixture('recurring', { result: { code: 'failed', label: '最近提醒发送失败', tone: 'danger' }, plan: { label: '周期计划已启用', rule: { kind: 'daily', time: '09:00' } }, nextStep: { label: '等待下次触发', triggerAt: '2026-10-26T01:00:00Z', sendRetryAt: '2026-10-25T02:00:00Z', readbackAt: null } }))); await settle()
-  const words = text(h.render())
-  assert.match(words, /最近提醒发送失败/); assert.match(words, /周期计划已启用/); assert.match(words, /每日 09:00/)
-  assert.doesNotMatch(words, /下次触发：无后续触发安排|重试：无重试安排/)
+})
+
+
+test('Topic messages and judgment evidence remain separate lazy disclosures below current summary', async () => {
+  const h = harness('TopicOverview', { selection: { groupId: 'g', topicId: 't', revision: 3 } })
+  h.render(); h.requests[0].resolve({ topic: { title: 'Current issue', status: 'active', summary: 'Current summary' } }); await settle()
+  let tree = h.render()
+  assert.match(text(tree), /Current summary/)
+  assert.equal(elements(tree).some(item => item.type?.name === 'TopicRecords'), false)
+  const disclosures = elements(tree).filter(item => item.type === 'details')
+  assert.deepEqual(disclosures.map(item => text(item.children[0])), ['消息记录', '判断记录'])
+  for (const item of disclosures) assert.equal(item.props.open, undefined)
+  disclosures[1].props.onToggle({ currentTarget: { open: true } }); tree = h.render()
+  const records = elements(tree).find(item => item.type?.name === 'TopicRecords')
+  assert.equal(records.props.kind, 'decisions'); assert.equal(records.props.selection.revision, 3)
+  assert.equal(h.requests.length, 1, 'The current overview never preloads complete evidence history')
   h.unmount()
 })
 
-
-test('协调当前与历史proof独立折叠，计划修订展示历史状态周期与下次事实', async () => {
-  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', workId: 'dispatch:proof' } })
-  h.render(); h.requests[1].resolve(detailFixture(workFixture('dispatch:proof', { kind: 'dispatch', result: { code: 'partially_completed', label: '部分任务已正式完成', tone: 'info' } }), {
-    members: [
-      { instructionId: 'current', taskId: 'current', title: '当前完成任务', state: 'fulfilled', completionProofCurrent: true, completionProof: { eventId: 'current-event', commandId: 'current-command' } },
-      { instructionId: 'old', taskId: 'old', title: '版本变化任务', state: 'version_changed', completionProofCurrent: false, completionProof: null, historicalCompletionProof: { eventId: 'old-event', commandId: 'old-command' } },
-    ], history: { sources: [], changes: [{ action: 'schedule-revision', revision: 1, state: 'paused', timezone: 'Asia/Shanghai', rule: { kind: 'daily', time: '09:30' }, nextDueAt: null }], occurrences: [], jobs: [] },
-  })); await settle()
-  const tree = h.render(), words = text(tree)
-  assert.doesNotMatch(words, /当前指令已有正式完成证明/); assert.match(words, /历史完成证明引用（不证明当前指令完成）/)
-  assert.equal(elements(tree).filter(item => item.type === 'summary' && text(item) === '正式完成证明引用').length, 1)
-  for (const label of ['正式完成证明引用', '历史完成证明引用（不证明当前指令完成）']) {
-    const node = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === label)
-    assert.equal(node.props.open, undefined)
-  }
-  const history = elements(tree).find(item => item.type === 'details' && text(item.children[0]) === '输入与变更历史')
-  assert.match(text(history), /计划修订/); assert.match(text(history), /历史计划状态：已暂停/); assert.match(text(history), /历史周期：每日 09:30/); assert.match(text(history), /历史下次触发：无后续触发安排/)
-  h.unmount()
-})
-
-test('协调实体分页收缩回有效页并清理选中，轮询与卸载不泄漏请求', async () => {
-  const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', offset: 20, workId: 'schedule:old' } })
-  h.render(); h.requests[0].resolve({ works: [], total: 11 }); await settle(); h.render(); h.render()
-  assert.match(h.requests.at(-1).url, /offset=10&limit=10&groupId=g/)
-  assert.equal(h.requests[1].options.signal.aborted, true)
-  const before = h.requests.length
-  h.unmount(); assert.equal(h.intervals.size, 0)
-  assert.equal(h.requests.every(request => request.options.signal.aborted), true)
-  h.requests[1].reject(new Error('aborted')); h.requests.at(-1).reject(new Error('aborted')); await settle()
-  assert.equal(h.timeouts.size, 0); assert.equal(h.requests.length, before)
-})
-
-
-test('任务页跨安排前置等待仅列真实未满足项，链接可导航且不借目标完成释放门禁', () => {
-  const opened = [], satisfied = { instructionId: 'i-c', taskId: 'task-c', title: '已满足前置', fulfilled: true }
-  const relation = relationFixture({ prerequisites: [...relationFixture().prerequisites, satisfied] })
-  const h = harness('TaskSessionDetail', { task: { taskId: 'task-b', title: '后续任务', state: 'completed', coordination: { condition: 'all', relations: [relation, relationFixture({ id: 'second', state: 'paused', dispatch: { status: 'paused', nextStep: '等待安排恢复' } })] } }, onOpenTask: task => opened.push(task.taskId) })
-  const tree = h.render(), waiting = elements(tree).filter(item => item.props['aria-label'] === '前置任务等待')
-  assert.equal(waiting.length, 1)
-  assert.match(text(waiting[0]), /前置任务/); assert.doesNotMatch(text(waiting[0]), /已满足前置/)
-  assert.equal(elements(tree).filter(item => item.props['data-dispatch-target']).length, 2)
-  assert.match(text(tree), /所有前置任务正式完成后/)
-  assert.match(text(tree), /调度结果：等待前置任务完成/)
-  const prerequisite = elements(waiting[0]).find(item => item.props['data-prerequisite-task'] === 'task-a')
-  prerequisite.props.onClick(); assert.deepEqual(opened, ['task-a'])
-  button(tree, '查看目标任务：后续任务').props.onClick(); assert.deepEqual(opened, ['task-a', 'task-b'])
-  h.unmount()
-})
-
-test('关系调度状态只消费DTO，目标运行或完成都不能冒充调度成功', () => {
-  const labels = { pending: '等待调度', dispatched: '调度成功', failed: '调度失败', blocked: '调度受阻', cancelled: '调度已取消', paused: '调度已暂停', stale: '安排版本已变化', unknown: '调度结果未确认', future: '调度结果未确认' }
-  for (const [state, label] of Object.entries(labels)) for (const taskState of ['running', 'completed']) {
-    const relation = relationFixture({ state, dispatch: { status: state, reason: '真实调度原因', nextStep: '真实下一步' } })
-    const tree = harness('TaskSessionDetail', { task: { taskId: 'task-b', state: taskState, coordination: { relations: [relation] } }, onOpenTask() {} }).render()
-    const section = elements(tree).find(item => item.props['aria-label'] === '任务调度关系')
-    assert.match(text(section), new RegExp(`调度结果：${label}`))
-    assert.match(text(section), /原因：真实调度原因/); assert.match(text(section), /下一步：真实下一步/)
-    assert.doesNotMatch(text(section), /执行中|已正式完成|任务已完成|正式完成证明/)
-    assert.equal(elements(section).some(item => item.props['aria-label'] === '前置任务等待'), false)
-    if (state !== 'dispatched') assert.doesNotMatch(text(section), /调度成功/)
-  }
-  const empty = harness('TaskSessionDetail', { task: { taskId: 'none', coordination: { relations: [] } } }).render()
-  assert.equal(elements(empty).some(item => item.props['aria-label'] === '任务调度关系'), false)
-})
-
-test('协调关系跨实体链接保留原筛群分页work身份且证据不成为下一步', async () => {
-  const opened = [], h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', offset: 10, workId: 'trigger:a/b' }, onOpenTask: (...args) => opened.push(args) })
+test('related Task paging clamps a shrinking page and cancels owned requests on unmount', async () => {
+  const h = harness('TopicRelatedTasks', { selection: { groupId: 'g', topicId: 't' }, onOpenTask() {} })
+  h.render(); h.requests[0].resolve({ items: [], total: 31, offset: 0, limit: 10, nextOffset: 10, revision: 'snapshot' }); await settle()
+  let tree = h.render()
+  elements(tree).find(item => item.type?.name === 'TopicPager').props.onChange(20)
   h.render()
-  const work = workFixture('trigger:a/b', { kind: 'trigger', title: '前置任务 → 后续任务', result: { code: 'dispatch_waiting', label: '等待前置任务完成', tone: 'warning' }, relations: [relationFixture()] })
-  h.requests[0].resolve({ works: [work], total: 11 })
-  h.requests[1].resolve(detailFixture(work, { relations: [relationFixture()], members: [{ instructionId: 'i-b', taskId: 'task-b', state: 'fulfilled', taskState: 'completed', completionProofCurrent: true, completionProof: { eventId: 'proof', commandId: 'complete' } }] })); await settle()
-  const tree = h.render(), relation = elements(tree).find(item => item.props['data-dispatch-target'] === 'task-b')
-  elements(relation).find(item => item.props['data-prerequisite-task'] === 'task-a').props.onClick()
-  assert.equal(opened[0][0].taskId, 'task-a'); assert.equal(opened[0][1].workId, 'trigger:a/b'); assert.equal(opened[0][1].offset, 10); assert.equal(opened[0][1].groupId, 'g')
-  assert.doesNotMatch(text(relation), /正式完成证明|已正式完成|已接纳，尚未完成/)
-  assert.match(text(tree), /正式完成证明引用/)
-  assert.match(h.requests[1].url, /trigger%3Aa%2Fb$/)
+  assert.match(h.requests[1].url, /offset=20&limit=10&revision=snapshot$/)
+  h.requests[1].resolve({ items: [], total: 11, offset: 20, limit: 10, nextOffset: null, revision: 'snapshot' }); await settle()
+  h.render(); h.render()
+  assert.match(h.requests.at(-1).url, /offset=10&limit=10&revision=snapshot$/)
+  h.unmount()
+  assert.equal(h.requests.at(-1).options.signal.aborted, true)
+  assert.equal(h.intervals.size, 0); assert.equal(h.timeouts.size, 0)
+})
+
+
+test('Task detail ignores retired coordination gates while showing the current Owner blocker and explicit navigation', () => {
+  const calls = [], task = { taskId: 'task-b', title: 'Current task', state: 'waiting', waitingReason: 'Waiting for current verification',
+    coordination: { relations: [relationFixture()] } }
+  const before = structuredClone(task)
+  const h = harness('TaskSessionDetail', { task, onBack: () => calls.push('board'), onOpenTask: () => assert.fail('No retired relation navigation') })
+  const tree = h.render()
+  assert.equal(elements(tree).some(item => item.props['aria-label'] === '任务调度关系'), false)
+  assert.match(text(tree), /Waiting for current verification/)
+  assert.doesNotMatch(text(tree), /前置任务 → 后续任务|所有前置任务正式完成后/)
+  button(tree, '返回看板').props.onClick(); assert.deepEqual(calls, ['board'])
+  assert.deepEqual(task, before); assert.equal(h.requests.length, 0)
   h.unmount()
 })
 
-test('once计划显示计划时区时间而不是浏览器本地时间，历史计划同样适用', async () => {
+test('retired relation states cannot override current Task status or fabricate an active dispatch result', () => {
+  for (const state of ['waiting', 'dispatched', 'failed', 'paused', 'fulfilled', 'future']) {
+    const task = { taskId: 'task', state: 'running', coordination: { relations: [relationFixture({ state, dispatch: { status: state } })] } }
+    const h = harness('TaskSessionDetail', { task })
+    const tree = h.render()
+    assert.match(text(tree), /执行中/)
+    assert.doesNotMatch(text(tree), /调度成功|任务调度已完成|调度失败/)
+    assert.equal(elements(tree).some(item => item.props['data-dispatch-target']), false)
+    assert.equal(h.requests.length, 0)
+    h.unmount()
+  }
+})
+
+test('current related Task navigation retains exact task identity without creating an old coordination return target', async () => {
+  const calls = [], task = { taskId: 'task/a', groupId: 'g', title: 'Actual task', state: 'completed', archivedAt: '2026-10-28T00:00:00Z' }
+  const h = harness('TopicRelatedTasks', { selection: { groupId: 'g', topicId: 'topic' }, onOpenTask: (...args) => calls.push(args) })
+  h.render(); h.requests[0].resolve({ items: [task], total: 1, offset: 0, limit: 10, nextOffset: null }); await settle()
+  const tree = h.render()
+  assert.match(text(tree), /已归档/)
+  const open = elements(tree).find(item => item.type === 'button' && text(item).includes('Actual task'))
+  assert.equal(calls.length, 0)
+  open.props.onClick()
+  assert.equal(calls.length, 1); assert.equal(calls[0].length, 1); assert.deepEqual(calls[0][0], task)
+  h.unmount()
+})
+
+test('current Topic timestamp keeps its exact ISO evidence and does not render an obsolete schedule as a live timer', async () => {
   const old = process.env.TZ
   try {
     for (const timezone of ['UTC', 'America/New_York']) {
       process.env.TZ = timezone
-      const h = harness('CoordinationBrowser', { groups: [{ groupId: 'g' }], target: { groupId: 'g', workId: 'schedule:tz' } })
+      const h = harness('TopicOverview', { selection: { groupId: 'g', topicId: 't' } })
       h.render()
-      const rule = { kind: 'once', at: '2026-10-25T09:54:00Z' }
-      h.requests[1].resolve(detailFixture(workFixture('schedule:tz', { plan: { label: '单次', timezone: 'Asia/Shanghai', rule } }), { history: { changes: [{ action: 'schedule-revision', rule, timezone: 'Asia/Shanghai' }] } })); await settle()
-      const words = text(h.render())
-      assert.match(words, /周期：单次 2026\/10\/25 17:54:00 · 时区 Asia\/Shanghai/)
-      assert.match(words, /历史周期：单次 2026\/10\/25 17:54:00 · 时区 Asia\/Shanghai/)
+      h.requests[0].resolve({ topic: { title: 'Current facts', status: 'active', updatedAt: '2026-10-25T09:54:00Z',
+        schedule: { timezone: 'Asia/Shanghai', rule: { kind: 'once', at: '2026-10-26T09:54:00Z' } } } }); await settle()
+      const tree = h.render(), time = elements(tree).find(item => item.type === 'time')
+      assert.equal(time.props.dateTime, '2026-10-25T09:54:00Z')
+      assert.match(text(time), /更新于/)
+      assert.doesNotMatch(text(tree), /周期：|下次触发：|2026\/10\/26/)
       h.unmount()
     }
   } finally { if (old === undefined) delete process.env.TZ; else process.env.TZ = old }
 })
 
 
-test('关系展示真实待触发时间和可读等待原因，不显示内部proof代码', () => {
-  const waiting = relationFixture({ prerequisites: [{ instructionId: 'i-a', taskId: 'task-a', title: '前置任务', fulfilled: false, reason: 'waiting_completion_proof' }], dispatch: { reason: 'waiting_dependency', nextStep: '等待前置完成', triggerAt: null } })
-  const pending = relationFixture({ id: 'scheduled', state: 'pending', dispatch: { nextStep: '等待已安排的触发时间', triggerAt: '2026-10-25T09:54:00Z' } })
-  const tree = harness('TaskSessionDetail', { task: { taskId: 'task-b', coordination: { relations: [waiting, pending] } }, onOpenTask() {} }).render()
-  const section = elements(tree).find(item => item.props['aria-label'] === '任务调度关系')
-  assert.match(text(section), /等待前置任务正式完成/)
-  assert.doesNotMatch(text(section), /waiting_completion_proof|waiting_dependency/)
-  assert.equal(elements(section).filter(item => item.type === 'p' && text(item).startsWith('已安排触发时间：')).length, 1)
-  assert.match(text(section), /已安排触发时间：/)
+test('obsolete trigger dates cannot become a current Task waiting reason or an actionable control', () => {
+  const relation = relationFixture({ dispatch: { reason: 'waiting_dependency', nextStep: 'Old next step', triggerAt: '2026-10-25T09:54:00Z' } })
+  const h = harness('TaskSessionDetail', { task: { taskId: 'task', state: 'waiting', waitingReason: 'Current evidence not ready', coordination: { relations: [relation] } } })
+  const tree = h.render()
+  assert.match(text(tree), /Current evidence not ready/)
+  assert.doesNotMatch(text(tree), /waiting_dependency|Old next step|已安排触发时间/)
+  assert.equal(elements(tree).some(item => item.props['data-prerequisite-task']), false)
+  assert.equal(h.requests.length, 0)
+  h.unmount()
 })
 
 
-test('真实触发门禁原因显示中文且保留后端唯一状态', () => {
-  for (const [reason, state, label] of [
-    ['waiting_trigger', 'blocked', '等待约定触发条件满足'],
-    ['trigger_paused', 'paused', '触发安排已暂停'],
-    ['trigger_cancelled', 'cancelled', '触发安排已取消'],
-    ['trigger_superseded', 'stale', '触发安排已被替代'],
-  ]) {
-    const relation = relationFixture({ state, dispatch: { status: state, reason, nextStep: '等待真实触发安排' } })
-    const tree = harness('TaskSessionDetail', { task: { taskId: 'task-b', coordination: { relations: [relation] } }, onOpenTask() {} }).render()
-    const section = elements(tree).find(item => item.props['aria-label'] === '任务调度关系')
-    assert.match(text(section), new RegExp(`原因：${label}`))
-    assert.doesNotMatch(text(section), new RegExp(reason))
-    assert.equal(elements(section).find(item => item.props['data-dispatch-state']).props['data-dispatch-state'], state)
-  }
+test('current human question retains its reason and source rather than a retired trigger diagnostic', () => {
+  const request = { requestId: 'current', status: 'waiting-reply', reason: 'Need actual approval', question: 'Approve the prepared change?', evidence: ['https://example.test/proof'] }
+  const h = harness('TaskSessionDetail', { task: { taskId: 'task', state: 'waiting', humanRequests: [request],
+    coordination: { relations: [relationFixture({ dispatch: { status: 'blocked', reason: 'trigger_paused' } })] } } })
+  const tree = h.render()
+  assert.match(text(tree), /等待答复/)
+  assert.equal(elements(tree).find(item => item.type?.name === 'HumanRequestContent').props.request, request)
+  assert.doesNotMatch(text(tree), /trigger_paused|触发安排已暂停/)
+  assert.ok(button(tree, '查看人工介入问题'))
+  h.unmount()
 })
 
 

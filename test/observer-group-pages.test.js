@@ -67,13 +67,14 @@ test('topic page builds only reference metadata before touching requested messag
 
 
 test('persistent inbox survives restart; source completion updates its row without touching outbox history',async t=>{
- const dir=await mkdtemp(join(tmpdir(),'inbox-index-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const dir=await mkdtemp(join(tmpdir(),'inbox-index-'));let page
+ t.after(async()=>{await page?.close();await rm(dir,{recursive:true,force:true})})
  const group={groupId:'g',topics:[],messages:[{messageId:'m',messageVersion:1,sequence:1,routingStatus:'routed',activeUnitRefs:[],text:'Synthetic'}],get outbox(){throw new Error('message page inspected unrelated outbox history')}}
  let sources=[],reads=0
  const options={indexPath:join(dir,'inbox.sqlite'),readGroup:()=>group,readSources:()=>{reads++;return sources},readRequests:()=>[],isOwnNotification:()=>false}
- let page=createObserverGroupPages(options);page.update({group})
+ page=createObserverGroupPages(options);page.update({group})
  const first=await page('g',{limit:1});await page.close()
- page=createObserverGroupPages(options);t.after(()=>page.close())
+ page=createObserverGroupPages(options)
  const resumed=await page('g',{limit:1,revision:first.revision});assert.deepEqual(resumed,first);assert.equal(reads,1)
  page.update({group});await page.ready()
  assert.equal((await page('g',{limit:1})).revision,first.revision,'unchanged startup preserves revision')

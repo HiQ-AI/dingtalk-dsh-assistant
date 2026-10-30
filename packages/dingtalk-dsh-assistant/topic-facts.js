@@ -132,7 +132,7 @@ export function topicFactLedger({ db, get, put }) {
       WHERE json_extract(body,'$.groupId')=? AND json_extract(body,'$.messageId')=?
         AND json_extract(body,'$.actorId')=? AND json_extract(body,'$.version')=?
         AND json_extract(body,'$.channel') NOT IN ('internal','web') LIMIT 1`)
-      .get(q.groupId, q.messageId, q.actorId, q.version)
+      .get(q.groupId, q.messageId, q.actorId, q.version) ?? null
     if (q.kind === 'topic.fact.replies') return db.prepare(`WITH reply_rows AS (SELECT id,body,rowid sequence FROM dynamic_notifications
       UNION ALL SELECT id,body,sequence FROM dynamic_archived_notifications)
       SELECT id outboundId,

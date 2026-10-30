@@ -8,31 +8,29 @@ import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task-resident-runtime.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 
-test('saved Agent cwd is injected into the next native coordination plan while active sessions and task log root stay fixed',
+test('saved Agent cwd survives restart without moving native Topic sessions or existing task files and logs',
   { skip: !available ? reason : false, timeout: 30000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'coordination-cwd-')), next = join(root, 'configured-agent-work')
     await mkdir(next)
     const entered = Promise.withResolvers(), release = Promise.withResolvers(), sessions = []
     let first = true, h, runtime, store
-    t.after(async () => { release.resolve(); await h?.service?.close(); await runtime?.close(); await h?.close(); await rm(root, { recursive: true, force: true }) })
+    t.after(async () => { release.resolve(); await h?.service?.close(); if (h) h.service = undefined; await runtime?.close(); if (h) h.residentStore = undefined; await h?.close(); await rm(root, { recursive: true, force: true }) })
     h = await nativeTaskHost(root, async request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
-      if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: {
-        requestId: input.requestId, routes: input.messages.map(message => ({ messageId: message.messageId,
-          messageVersion: message.messageVersion, ignoredRefs: [], units: [{ unitKey: 'sequence', summary: '前置任务存在歧义',
-            sourceRefs: [{ quote: message.text }], dispatchOwner: 'coordination', topics: [], reason: '同群任务顺序' }] })) } }]
-      if (names.includes('coordination_submit')) {
+      if (names.includes('group_topic_route_submit')) {
         if (first) { first = false; entered.resolve(); await release.promise }
-        return [{ name: 'coordination_submit', args: { kind: 'clarify', question: '请明确任务A', candidates: [] } }]
+        return [{ name: 'group_topic_route_submit', args: {
+          requestId: input.requestId, routes: input.messages.map(message => ({ messageId: message.messageId,
+            messageVersion: message.messageVersion, units: [], ignoredRefs: [{ quote: message.text, reason: '仅讨论，无业务交办' }] })) } }]
       }
       if (names.includes('task_session_submit')) return [{ name: 'task_session_submit', args: {
         decision: { action: 'wait', summary: '仅核验目录，等待后续要求', evidence: [], limitations: [] } } }]
       return []
     }, { resident: true })
     h.ctx.on('session/created', session => {
-      if (session.id.startsWith('independent-')) sessions.push({ id: session.id, cwd: session.header.cwd, session })
+      if (session.id.startsWith('session-coordination-')) sessions.push({ id: session.id, cwd: session.header.cwd, session })
     })
-    store = await openResidentStore(h.ctx.storageDomain)
+    store = h.residentStore = await openResidentStore(h.ctx.storageDomain)
     runtime = await openTaskResidentRuntime(h.ctx, store, root, { agentPreset: 'native-test' })
     await runtime.subscribe({ groupId: 'native-group', name: '测试群' })
     const open = initialize => openTaskSessionService({ ctx: h.ctx, legacy: runtime, residentStore: store,
@@ -44,21 +42,23 @@ test('saved Agent cwd is injected into the next native coordination plan while a
       text: `A完成后继续B：第${n}条`, timestamp: '2026-10-21T01:00:00Z' })
     const firstIngress = ingest(1)
     await entered.promise
-    assert.equal(sessions[0].cwd, root, 'empty initial Agent configuration uses its existing cwd fallback')
+    const originalCwd = sessions[0].cwd
+    assert.ok(originalCwd.startsWith(join(root, 'session-workspaces')), 'Topic has its own trusted session workspace')
     const before = await runtime.updateAgentConfig({ workspaceDir: `  ${next}  ` })
     assert.equal(before.workspaceDir, next)
-    assert.equal(sessions[0].session.header.cwd, root, 'saving configuration never mutates a running session')
+    assert.equal(sessions[0].session.header.cwd, originalCwd, 'saving configuration never mutates a running session')
     assert.equal(store.getTaskWorkspaceDir(), root)
     release.resolve(); await firstIngress; await h.service.whenIdle()
     await ingest(2); await h.service.whenIdle()
-    assert.equal(sessions[1].cwd, next)
+    assert.equal(sessions[1].cwd, originalCwd, 'future Topic sessions remain under the stable runtime root')
+    assert.ok(!sessions[1].cwd.startsWith(next))
     assert.notEqual(sessions[0].id, sessions[1].id)
     await assert.rejects(runtime.updateAgentConfig({ workspaceDir: 'relative-folder' }), /agent_workspace_must_be_absolute/)
     assert.equal(runtime.getAgentConfig().workspaceDir, next)
     // Restart the Host service with no explicit task root: it must retain the
     // original task workspace and persistence route root, not the new Agent cwd.
-    await h.service.close(); await runtime.close()
-    store = await openResidentStore(h.ctx.storageDomain)
+    await h.service.close(); h.service = undefined; await runtime.close()
+    store = h.residentStore = await openResidentStore(h.ctx.storageDomain)
     runtime = await openTaskResidentRuntime(h.ctx, store, root, { agentPreset: 'native-test' })
     assert.equal(runtime.getAgentConfig().workspaceDir, next, 'saved Agent cwd survives facade restart')
     h.service = await open(false)
@@ -70,5 +70,6 @@ test('saved Agent cwd is injected into the next native coordination plan while a
     assert.ok(!projection.session.logPath.startsWith(next))
     await runtime.updateAgentConfig({ workspaceDir: '' })
     await ingest(3); await h.service.whenIdle()
-    assert.equal(sessions[2].cwd, root, 'empty saved value uses runtime cwd, without a fixed coordination subdirectory')
+    assert.equal(sessions[2].cwd, originalCwd, 'clearing Agent cwd does not relocate the runtime session workspace')
+    assert.ok(h.requests.every(request => !request.tools.some(tool => tool.name === 'coordination_submit')))
   })

@@ -1,12 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { coordinationSnapshot, coordinationNotificationState, formatCoordinationSnapshot, formatCoordinationAcceptance, formatCoordinationTime } from '../packages/dingtalk-dsh-assistant/coordination-summary.js'
-import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import { currentCoordinationFixture } from './fixtures/current-coordination-contracts.js'
 
 const member = (id, state) => ({ id, taskId: id, state, control: state === 'cancelled' ? 'cancelled' : 'active',
   command: { id: `command:${id}`, args: { request: `goal:${id}` } } })
@@ -245,52 +241,6 @@ test('cancelled blocked occurrence retires execution obligations but preserves u
   }
 })
 
-for (const delivery of ['delivered','unknown','cancelled']) test(`expired read-only schedule prepares one recoverable notice and preserves ${delivery} boundary`, async t => {
-  t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-10-21T00:00:00Z')})
-  const directory=await mkdtemp(join(tmpdir(),'coordination-expired-notice-'))
-  const options={dbPath:join(directory,'tasks.sqlite'),instanceId:'expired-notice',initialize:true}
-  let store=await openDynamicTaskStore(options)
-  t.after(async()=>{await store.close();await rm(directory,{recursive:true,force:true})})
-  const command=(kind,args={})=>store.command({id:randomUUID(),kind,args})
-  await command('task.create',{taskId:'A',groupId:'group',request:'原目标'})
-  const before=await store.query({kind:'task.get',taskId:'A'})
-  const source=(await command('coordination.reserve',{unitId:'expired-query',revision:1,groupId:'group',original:'九点查询A'})).result.source
-  await command('coordination.accept',{coordinationId:'expired',sourceId:source.id,fence:source.fence,members:[],readOnly:true,
-    schedule:{scheduleId:'at-nine',timezone:'Asia/Shanghai',rule:{kind:'once',at:'2026-10-21T01:00:00.000Z'},
-      action:{kind:'read-query',taskIds:['A']},target:{conversationId:'group',recipientIds:['recipient']}}})
-  t.mock.timers.tick(76*60000)
-  const occurrence=(await command('coordination.schedule.scan')).result.occurrences[0]
-  assert.equal(occurrence.actionState,'expired');assert.equal(occurrence.deliveryState,'none')
-  assert.deepEqual(await store.query({kind:'coordination.job.list'}),[])
-  const first=(await command('coordination.aggregate',{coordinationId:'expired'})).result.notification
-  assert.ok(first);assert.match(first.payload.text,/已过期，本次未执行/);assert.ok(first.payload.text.includes(formatCoordinationTime('2026-10-21T01:00:00Z')))
-  assert.deepEqual(first.payload.atOpenDingTalkIds,['recipient'])
-  assert.doesNotMatch(first.payload.text,/recipient|Asia\/Shanghai|at-nine|time:|版本|0 项/)
-  await store.close();store=await openDynamicTaskStore(options)
-  assert.equal((await command('coordination.aggregate',{coordinationId:'expired'})).result.notification,undefined)
-  assert.equal((await store.query({kind:'notification.list'})).length,1)
-  if (delivery==='cancelled') {
-    await command('coordination.occurrence.cancel',{occurrenceId:occurrence.id,expectedControlRevision:1})
-    // 不先 aggregate，直接竞争发送许可，证明最终门禁回读取消事实。
-    const rejected=await command('notification.start',{notificationId:first.id})
-    assert.equal(rejected.dispatchEligible,false);assert.equal(rejected.result.notification.state,'superseded')
-    const after=(await command('coordination.aggregate',{coordinationId:'expired'})).result
-    assert.equal(after.notification,undefined);assert.equal(after.snapshot.state,'cancelled')
-    assert.equal((await store.query({kind:'notification.list'})).length,1)
-    assert.deepEqual(await store.query({kind:'task.get',taskId:'A'}),before)
-    return
-  }
-  const permitted=(await command('notification.start',{notificationId:first.id})).result.notification
-  if (delivery==='unknown') await command('coordination.occurrence.cancel',{occurrenceId:occurrence.id,expectedControlRevision:1})
-  await command('notification.receipt',{notificationId:first.id,dispatchToken:permitted.dispatchToken,state:delivery})
-  await store.close();store=await openDynamicTaskStore(options)
-  await command('coordination.schedule.scan');await command('coordination.aggregate',{coordinationId:'expired'})
-  const notices=await store.query({kind:'notification.list'})
-  assert.equal(notices.length,1);assert.equal(notices[0].id,first.id);assert.equal(notices[0].state,delivery)
-  assert.equal(notices[0].payloadDigest,first.payloadDigest)
-  assert.deepEqual(await store.query({kind:'task.get',taskId:'A'}),before)
-})
-
 test('a past recurring slot retains its own fulfillment without releasing current-version dependencies', () => {
   const old={...member('A','fulfilled'),recurringOccurrenceId:'yesterday',waitingReason:{code:'target_version_changed'},completionProof:{commandId:'old-proof'}}
   const result=coordinationSnapshot({coordination:{id:'coordination',revision:1,state:'active'},members:[old],tasks:[],
@@ -300,178 +250,135 @@ test('a past recurring slot retains its own fulfillment without releasing curren
   assert.deepEqual(result.members[0].completionProof,{commandId:'old-proof'})
 })
 
-test('unsent summary A superseded by active facts B can freeze A again, while an unknown permitted summary keeps its identity', async t => {
-  const directory=await mkdtemp(join(tmpdir(),'coordination-summary-'))
-  const store=await openDynamicTaskStore({dbPath:join(directory,'tasks.sqlite'),instanceId:'summary-test',initialize:true})
-  t.after(async()=>{await store.close();await rm(directory,{recursive:true,force:true})})
-  const command=(kind,args)=>store.command({id:randomUUID(),kind,args})
-  await command('task.create',{taskId:'A',groupId:'group',request:'original goal'})
-  const source=(await command('coordination.reserve',{unitId:'unit',revision:1,groupId:'group',original:'extra material'})).result.source
-  await command('coordination.accept',{sourceId:source.id,fence:1,coordinationId:'coordination',members:[{
-    instructionId:'instruction',taskId:'A',progressImpact:'preserve',dependencies:[],command:{id:'coordination-command:coordination:instruction',kind:'task.supplement',
-      args:{taskId:'A',expectedRequirementRevision:1,expectedControlRevision:1,messageId:'material',text:'extra material',request:'goal and material'}}}]})
-  const binding=(await command('task.claim',{taskId:'A'})).result.binding
-  await command('task.wait',{binding,action:'blocked',summary:'need verified evidence'})
-  const first=(await command('coordination.aggregate',{coordinationId:'coordination'})).result.notification
-  assert.ok(first)
-  await command('task.wait',{binding,action:'wait',summary:'working'})
-  await command('coordination.aggregate',{coordinationId:'coordination'})
-  assert.equal((await store.query({kind:'notification.get',notificationId:first.id})).state,'superseded')
-  await command('task.wait',{binding,action:'blocked',summary:'need verified evidence'})
-  const returned=(await command('coordination.aggregate',{coordinationId:'coordination'})).result
-  const second=returned.notification
-  assert.equal(returned.snapshot.state,'needs_attention')
-  assert.ok(second,'the earlier A candidate never received a send permit, so its supersession must not suppress the later A summary')
-  assert.notEqual(second.id,first.id)
-  assert.equal((await command('notification.start',{notificationId:first.id})).dispatchEligible,false)
-  const permitted=(await command('notification.start',{notificationId:second.id})).result.notification
-  await command('notification.receipt',{notificationId:second.id,dispatchToken:permitted.dispatchToken,state:'unknown'})
-  await command('task.wait',{binding,action:'blocked',summary:'different new evidence missing'})
-  const changed=(await command('coordination.aggregate',{coordinationId:'coordination'})).result
-  assert.equal(changed.notification,undefined)
-  assert.equal(changed.coordination.summaryNotificationId,second.id)
-  const frozen=await store.query({kind:'notification.get',notificationId:second.id})
-  assert.equal(frozen.state,'unknown')
-  assert.equal(frozen.payloadDigest,second.payloadDigest)
-  assert.deepEqual((await store.query({kind:'notification.list'})).map(n=>n.id),[first.id,second.id])
+
+for (const delivery of ['delivered', 'unknown', 'cancelled']) test(`historical expired query keeps its ${delivery} evidence without scheduling or changing its Task`, async t => {
+  const f = await currentCoordinationFixture(t), binding = await f.create()
+  await f.command('task.drained', { binding })
+  const task = await f.query('task.get', { taskId: 'A' }), wakes = await f.query('wake.list')
+  const receipt = delivery === 'delivered' ? { messageId: 'already-sent', conversationId: 'group' } : undefined
+  await f.historical([
+    ['coordination', 'expired', { state: 'active', revision: 1, groupId: 'group', memberIds: [] }],
+    ['coordination_schedules', 'at-nine', { coordinationId: 'expired', state: 'expired', rule: { kind: 'once', at: '2026-10-21T01:00:00Z' } }],
+    ['coordination_occurrences', 'slot', { coordinationId: 'expired', actionState: 'expired', deliveryState: delivery, plannedAt: '2026-10-21T01:00:00Z' }],
+    ['notifications', 'old', { kind: 'coordination', state: delivery, receipt, sendPermit: { notificationId: 'old' },
+      payload: { text: '原查询已过期，本次未执行', conversationId: 'group', atOpenDingTalkIds: ['author'], fact: { coordinationId: 'expired', eventId: 'expired-slot' } } }],
+  ])
+  const before = await f.query('notification.get', { notificationId: 'old' })
+  await f.reopen()
+  assert.deepEqual(await f.query('notification.get', { notificationId: 'old' }), before)
+  assert.equal((await f.query('coordination.schedule.list'))[0].state, 'expired')
+  assert.equal((await f.query('coordination.occurrence.list'))[0].deliveryState, delivery)
+  assert.deepEqual(await f.query('coordination.job.list'), [])
+  assert.deepEqual(await f.query('task.get', { taskId: 'A' }), task)
+  assert.deepEqual(await f.query('wake.list'), wakes)
 })
 
-async function summaryFixture(t) {
-  const directory = await mkdtemp(join(tmpdir(), 'coordination-significance-'))
-  const options = { dbPath: join(directory, 'tasks.sqlite'), instanceId: 'significance-test', initialize: true }
-  let store = await openDynamicTaskStore(options)
-  t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }) })
-  const command = (kind, args) => store.command({ id: randomUUID(), kind, args })
-  await command('task.create', { taskId: 'A', groupId: 'group', request: '核查UPR导入' })
-  const source = (await command('coordination.reserve', { unitId: 'unit', revision: 1, groupId: 'group', original: '补充材料' })).result.source
-  await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'coordination', members: [{
-    instructionId: 'instruction', taskId: 'A', progressImpact: 'preserve', dependencies: [],
-    command: { id: 'coordination-command:coordination:instruction', kind: 'task.supplement',
-      args: { taskId: 'A', expectedRequirementRevision: 1, expectedControlRevision: 1, messageId: 'material', text: '补充材料', request: '核查UPR导入及材料' } } }] })
-  const binding = (await command('task.claim', { taskId: 'A' })).result.binding
-  return { command, maintain: args => store.maintain(args), dbPath: options.dbPath, query: args => store.query(args), binding,
-    restart: async () => { await store.close(); store = await openDynamicTaskStore(options) } }
-}
+test('Topic explicitly decides A to B to A facts; no retired significance cache suppresses a new authorized result', async t => {
+  const f = await currentCoordinationFixture(t), binding = await f.create()
+  await f.wait(binding, 'A：等待证据')
+  await f.submit(f.submission(await f.context(), { reply: '等待证据', atOpenDingTalkIds: ['author'] }, 'first-A'))
+  const [first] = await f.query('notification.list')
+  await f.wait(binding, 'B：核对中')
+  await f.submit(f.submission(await f.context(), {}, 'silent-B'))
+  await f.wait(binding, 'A：新核验仍需证据')
+  assert.equal((await f.query('notification.list')).length, 1, '事实本身不自动发通知')
+  await f.submit(f.submission(await f.context(), { reply: '新核验仍需证据', atOpenDingTalkIds: ['author'] }, 'second-A'))
+  const notices = await f.query('notification.list')
+  assert.equal(notices.length, 2); assert.notEqual(notices[0].id, notices[1].id)
+  assert.deepEqual(notices[0], first); assert.match(notices[1].payload.text, /新核验/)
+})
 
-test('已送达摘要不因内部诊断改写、重启或未通知的 A→B→A 重复发送', async t => {
-  const f = await summaryFixture(t)
-  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '等待只读核对结果' })
-  const first = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
-  const permitted = (await f.command('notification.start', { notificationId: first.id })).result.notification
-  await f.command('notification.receipt', { notificationId: first.id, dispatchToken: permitted.dispatchToken, state: 'delivered' })
-  for (const summary of ['已检查内部回包，仍待校验', '已排空调查，仍待结算']) {
-    await f.command('task.wait', { binding: f.binding, action: 'blocked', summary })
-    const result = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result
-    assert.equal(result.notification, undefined)
-    assert.equal(result.changed, true, '审计快照仍完整反映内部事实变化')
-    await f.command('task.drained', { binding: f.binding })
-    await f.restart()
-    f.binding = (await f.command('task.claim', { taskId: 'A', force: true })).result.binding
+test('delivered Topic result and frozen text survive new diagnostics and silent followup decisions', async t => {
+  const f = await currentCoordinationFixture(t), binding = await f.create()
+  await f.wait(binding, '等待只读核对结果')
+  await f.submit(f.submission(await f.context(), { reply: '仍待校验', atOpenDingTalkIds: ['author'] }))
+  const [first] = await f.query('notification.list')
+  const started = (await f.command('notification.start', { notificationId: first.id })).result.notification
+  await f.command('notification.receipt', { notificationId: first.id, dispatchToken: started.dispatchToken, state: 'delivered',
+    receipt: { messageId: 'delivered-once', conversationId: 'group' } })
+  const delivered = await f.query('notification.get', { notificationId: first.id })
+  for (const summary of ['内部回读已更新', '仍待业务核验']) {
+    await f.wait(binding, summary)
+    const ctx = await f.context()
+    assert.equal(ctx.input.replies[0].deliveredMessageId, 'delivered-once')
+    await f.submit(f.submission(ctx))
   }
-  await f.command('task.wait', { binding: f.binding, action: 'wait', summary: '核对中' })
-  assert.equal((await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification, undefined)
-  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '仍待校验' })
-  assert.equal((await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification, undefined)
-  assert.deepEqual((await f.query({ kind: 'notification.list' })).map(item => item.id), [first.id])
+  await f.command('task.drained', { binding }); await f.reopen(); await f.handler.recover()
+  assert.deepEqual(await f.query('notification.get', { notificationId: first.id }), delivered)
+  assert.equal((await f.query('notification.list')).length, 1)
+  assert.equal(await f.context(), null)
 })
 
-test('相同业务意义不能绕过发送前完整事实 fence，未发送候选可重新准备', async t => {
-  const f = await summaryFixture(t)
-  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '旧核对事实' })
-  const first = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
-  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '最新核对事实' })
-  const start = await f.command('notification.start', { notificationId: first.id })
-  assert.equal(start.dispatchEligible, false)
-  assert.equal(start.result.notification.state, 'superseded')
-  const next = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
-  assert.ok(next)
-  assert.notEqual(next.id, first.id)
-  assert.equal(next.payload.fact.significanceDigest, first.payload.fact.significanceDigest)
-  assert.notEqual(next.payload.fact.snapshotDigest, first.payload.fact.snapshotDigest)
-  assert.match(next.payload.text, /最新核对事实/)
+test('same wording cannot bypass the current task snapshot fence before a Topic reply is accepted', async t => {
+  const f = await currentCoordinationFixture(t), binding = await f.create()
+  await f.wait(binding, '待核对')
+  const old = f.submission(await f.context(), { reply: '待核对', atOpenDingTalkIds: ['author'] }, 'old-facts')
+  await f.command('task.supplement', { taskId: 'A', messageId: 'new-context', text: '补充验收条件',
+    expectedRequirementRevision: 1, expectedControlRevision: 1 })
+  assert.equal((await f.submit(old)).status, 'topic-stale')
+  assert.deepEqual(await f.query('notification.list'), [])
+  const fresh = await f.context()
+  assert.notEqual(fresh.taskSnapshot, old.factContext.taskSnapshot)
+  await f.submit(f.submission(fresh, { reply: '按新增验收条件核对', atOpenDingTalkIds: ['author'] }, 'fresh-facts'))
+  assert.equal((await f.query('notification.list')).length, 1)
+  assert.match((await f.query('notification.list'))[0].payload.text, /新增验收条件/)
 })
 
-test('发送中聚合不能提前记为已通知：确定未发送后允许准备同业务状态的新事实', async t => {
-  const f = await summaryFixture(t)
-  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '旧核对事实' })
-  const first = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
-  const permit = (await f.command('notification.start', { notificationId: first.id })).result.notification
-  assert.equal((await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification, undefined)
-  await f.command('notification.receipt', { notificationId: first.id, dispatchToken: permit.dispatchToken, state: 'failed',
-    error: { phase: 'send', knownNotSent: true, retryable: true, message: '发送前已确定拒绝' } })
-  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: '最新核对事实' })
-  const next = (await f.command('coordination.aggregate', { coordinationId: 'coordination' })).result.notification
-  assert.ok(next, '从未送达不能永久抑制相同业务状态的通知')
-  assert.notEqual(next.id, first.id)
-  assert.equal(next.payload.fact.significanceDigest, first.payload.fact.significanceDigest)
-  assert.match(next.payload.text, /最新核对事实/)
+test('unknown Topic delivery remains frozen across recovery and new facts stay pending for a new decision', async t => {
+  const f = await currentCoordinationFixture(t), binding = await f.create()
+  await f.wait(binding, '旧核对事实')
+  const request = f.submission(await f.context(), { reply: '旧结论', atOpenDingTalkIds: ['author'] }, 'unknown-result')
+  await f.submit(request)
+  const [first] = await f.query('notification.list')
+  const started = (await f.command('notification.start', { notificationId: first.id })).result.notification
+  await f.command('notification.receipt', { notificationId: first.id, dispatchToken: started.dispatchToken, state: 'unknown' })
+  await f.wait(binding, '最新核对事实')
+  const frozen = await f.query('notification.get', { notificationId: first.id })
+  await f.command('task.drained', { binding }); await f.reopen(); await f.handler.recover(); await f.handler.recover()
+  assert.deepEqual(await f.query('notification.get', { notificationId: first.id }), frozen)
+  assert.equal((await f.query('notification.list')).length, 1)
+  assert.equal((await f.context()).input.facts[0].summary, '最新核对事实')
+  assert.equal(Boolean((await f.command('notification.start', { notificationId: first.id })).dispatchEligible), false)
 })
 
-for (const phase of ['aggregate', 'permit', 'unknown', 'delivered']) test(`历史纯观察保留可读记录并停止自动群通知：${phase}`, async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'coordination-historical-observation-'))
-  const options = { dbPath: join(directory, 'tasks.sqlite'), instanceId: 'observation-test', initialize: true }
-  let store = await openDynamicTaskStore(options)
-  t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }) })
-  const command = (kind, args) => store.command({ id: randomUUID(), kind, args })
-  await command('task.create', { taskId: 'A', groupId: 'group', request: '原任务' })
-  const task = await store.query({ kind: 'task.get', taskId: 'A' })
-  const source = (await command('coordination.reserve', { unitId: 'unit', revision: 1, groupId: 'group', original: '修复了没' })).result.source
-  await command('coordination.accept', { sourceId: source.id, fence: source.fence, coordinationId: 'coordination', members: [{
-    instructionId: 'observe', taskId: 'A', observation: true, dependencies: [],
-    command: { id: 'coordination-command:coordination:observe', kind: 'coordination.observe', args: { taskId: 'A',
-      expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision,
-      expectedContextRevision: task.contextRevision ?? 0, expectedRunSequence: task.runSequence } } }] })
-  const aggregate = (await command('coordination.aggregate', { coordinationId: 'coordination' })).result
-  assert.equal(aggregate.notification, undefined)
-  const notificationId = 'coordination:coordination:summary:1'
-  await command('notification.prepare', { notificationId, kind: 'coordination', requirementRevision: 1,
-    payload: { kind: 'coordination', conversationId: 'group', text: '旧观察摘要', fact: { coordinationId: 'coordination',
-      eventId: 'summary:1', snapshotDigest: aggregate.coordination.aggregateDigest, summaryRevision: 1 } } })
-  const historicalCoordination=(await store.query({kind:'coordination.get',coordinationId:'coordination'})).coordination
-  const historicalNotice=await store.query({kind:'notification.get',notificationId})
-  await store.close()
-  // 只在隔离库播种升级前已存在的通知状态；不调用新版本的发送许可来伪造旧行为。
-  const db = new DatabaseSync(options.dbPath)
-  const coordination = historicalCoordination
-  coordination.summaryNotificationId = notificationId; coordination.summaryRevision = 1
-  db.prepare('UPDATE dynamic_coordination SET body=? WHERE id=?').run(JSON.stringify(coordination), 'coordination')
-  if (['unknown', 'delivered'].includes(phase)) {
-    const notice = historicalNotice
-    notice.state = phase; notice.sendPermit = { notificationId }; notice.dispatchToken = 'old-permit'
-    db.prepare('UPDATE dynamic_notifications SET body=? WHERE id=?').run(JSON.stringify(notice), notificationId)
-  }
-  db.close(); store = await openDynamicTaskStore(options)
-  if (phase === 'permit') {
-    const start = await command('notification.start', { notificationId })
-    assert.equal(start.dispatchEligible, false)
-    assert.equal(start.result.notification.retirement.reason, 'coordination-observation-only')
-  }
-  const observed = (await command('coordination.aggregate', { coordinationId: 'coordination' })).result
-  assert.equal(observed.notification, undefined)
-  assert.equal(observed.snapshot.members[0].observation, true)
-  const notices = await store.query({ kind: 'notification.list' })
-  assert.equal(notices.length, 1)
-  assert.equal(notices[0].state, ['unknown', 'delivered'].includes(phase) ? phase : 'superseded')
-  assert.deepEqual(await store.query({ kind: 'task.get', taskId: 'A' }), task)
+for (const phase of ['aggregate', 'permit', 'unknown', 'delivered']) test(`historical observation is readable and cannot create a new group effect: ${phase}`, async t => {
+  const f = await currentCoordinationFixture(t), binding = await f.create()
+  await f.command('task.drained', { binding })
+  const task = await f.query('task.get', { taskId: 'A' })
+  const state = ['unknown', 'delivered'].includes(phase) ? phase : 'prepared'
+  const payload = { conversationId: 'group', text: '历史观察摘要', fact: { coordinationId: 'history', eventId: 'summary-1' } }
+  await f.historical([
+    ['coordination', 'history', { groupId: 'group', state: 'active', revision: 1, memberIds: ['observer'] }],
+    ['coordination_members', 'observer', { coordinationId: 'history', taskId: 'A', observation: true, state: 'observing' }],
+    ['notifications', 'history-summary', { kind: 'coordination', state, payload,
+      ...(['unknown', 'delivered'].includes(phase) ? { sendPermit: { notificationId: 'history-summary' }, dispatchToken: 'historical-permit' } : {}),
+      ...(phase === 'delivered' ? { receipt: { messageId: 'historical-delivery' } } : {}) }],
+  ])
+  const history = await f.query('coordination.get', { coordinationId: 'history' })
+  assert.equal(history.members[0].observation, true); assert.equal(history.members[0].eligible, false)
+  assert.equal(history.coordination.retirement.previousState, 'active')
+  if (phase === 'permit') assert.equal(Boolean((await f.command('notification.start', { notificationId: 'history-summary' })).dispatchEligible), false)
+  await f.reopen()
+  const notices = await f.query('notification.list')
+  assert.equal(notices.length, 1); assert.deepEqual(notices[0].payload, payload)
+  assert.equal(notices[0].state, state === 'prepared' ? 'superseded' : state)
+  assert.deepEqual(await f.query('task.get', { taskId: 'A' }), task)
 })
 
-
-test('Host coordination inspections stop unchanged durable growth without replaying notification effects', async t => {
-  const f = await summaryFixture(t)
-  await f.command('task.wait', { binding: f.binding, action: 'blocked', summary: 'synthetic blocker' })
-  const first = (await f.maintain({ kind: 'coordination.aggregate', args: { coordinationId: 'coordination' } })).result
-  assert.ok(first.notification)
-  const before = new DatabaseSync(f.dbPath, { readOnly: true })
-  const receipts = before.prepare('SELECT count(*) n FROM dynamic_receipts').get().n
-  const changes = before.prepare('PRAGMA data_version').get().data_version
-  for (let i=0;i<20;i++) {
-    await f.maintain({ kind: 'coordination.observe.reconcile', args: { coordinationId: 'coordination' } })
-    const result = (await f.maintain({ kind: 'coordination.aggregate', args: { coordinationId: 'coordination' } })).result
-    assert.equal(result.changed, false)
-    assert.equal(result.notification, undefined)
-  }
-  assert.equal(before.prepare('SELECT count(*) n FROM dynamic_receipts').get().n, receipts)
-  assert.equal(before.prepare('PRAGMA data_version').get().data_version, changes, 'unchanged passes must not write central state')
-  before.close()
-  assert.deepEqual((await f.query({ kind: 'notification.list' })).map(n => n.id), [first.notification.id])
+test('unchanged Topic fact inspections do not grow receipts or replay accepted notification effects', async t => {
+  const f = await currentCoordinationFixture(t), binding = await f.create()
+  await f.wait(binding, 'synthetic blocker')
+  await f.submit(f.submission(await f.context(), { reply: '等待核验', atOpenDingTalkIds: ['author'] }))
+  const notices = await f.query('notification.list'), reader = new DatabaseSync(f.options.dbPath, { readOnly: true })
+  try {
+    const receipts = reader.prepare('SELECT count(*) n FROM dynamic_receipts').get().n
+    const changes = reader.prepare('PRAGMA data_version').get().data_version
+    for (let i = 0; i < 20; i++) {
+      assert.equal(await f.context(), null)
+      await f.query('coordination.list'); await f.query('task.events')
+    }
+    assert.equal(reader.prepare('SELECT count(*) n FROM dynamic_receipts').get().n, receipts)
+    assert.equal(reader.prepare('PRAGMA data_version').get().data_version, changes)
+  } finally { reader.close() }
+  assert.deepEqual(await f.query('notification.list'), notices)
 })

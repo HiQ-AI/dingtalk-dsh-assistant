@@ -160,7 +160,7 @@ async function route(h, topicByMessage = {}, groupId = 'g') {
   return h.call('group_topic_route_submit', { requestId: request.requestId, routes: request.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [topicByMessage[message.messageId] ? { topicId: topicByMessage[message.messageId] } : { newTopicKey: message.messageId, title: message.messageId }] })) }, groupId)
 }
 async function decide(h, request, decision = {}, groupId = 'g') {
-  const value = { basisMessageIds: [request.messages.at(-1).messageId], actions: [], ...(decision.reply ? { replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } : {}), ...(decision.reply === undefined ? { reason: '无需回复' } : {}), ...decision }
+  const value = { basisMessageIds: [request.messages.at(-1).messageId], actions: [], ...(decision.reply ? { atOpenDingTalkIds: [request.messages.at(-1).senderOpenDingTalkId].filter(Boolean), replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } : {}), ...(decision.reply === undefined ? { reason: '无需回复' } : {}), ...decision }
   const result = await h.call('group_decision_submit', { requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: value }, groupId)
   await h.runtime.drainTopicOperations(groupId)
   return result
