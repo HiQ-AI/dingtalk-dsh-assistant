@@ -222,6 +222,7 @@ for (const denyOutside of [false, true]) test(`one Task Owner preserves retained
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
     const artifactRoot = await existingScopedTask(root)
     const steps = new Map(), finished = [], bindings = []
+    let completionAttempted = false, completionRejectionVerified = false, completionRejection
     const outsideFs = join(root, 'tasks', 'foreign-task', 'outside-fs.txt'), outsideShell = join(root, 'tasks', 'foreign-task', 'outside-shell.txt')
     await mkdir(join(root, 'tasks', 'foreign-task'), { recursive: true })
     host = await nativeTaskHost(root, async (request, h) => {
@@ -238,7 +239,31 @@ for (const denyOutside of [false, true]) test(`one Task Owner preserves retained
           assert.deepEqual(finished, Array.from({ length: stage - 1 }, (_, index) => index + 1))
           return [{ name: 'task_delegate', args: { key: 'scoped-stage-' + stage, objective: 'Scoped stage ' + stage } }, ownerWait()]
         }
-        if (denyOutside && input.blockers?.operations?.length) return [ownerWait()]
+        if (denyOutside && input.blockers?.operations?.length) {
+          if (!completionAttempted) {
+            completionAttempted = true
+            const submit = h.ctx.tools.get('task_session_submit', h.ctx.agents.get(ownerSession)), execute = submit.execute
+            // Native tool receipts retain Error.message, but omit code for non-HarnessError.
+            // Observe the real rejection before serialization, then rethrow it unchanged.
+            submit.execute = async (...args) => {
+              try { return await execute.apply(submit, args) }
+              catch (error) { completionRejection = { code: error.code, message: error.message }; throw error }
+              finally { submit.execute = execute }
+            }
+            return [ownerComplete()]
+          }
+          assert.equal(completionRejection?.code, 'DYNAMIC_TASK_NOT_QUIESCENT')
+          const rejected = h.toolResults.filter(item => item.name === 'task_session_submit' && item.result.isError)
+          assert.equal(rejected.length, 1)
+          assert.equal(rejected[0].result.error.message, completionRejection.message)
+          const unknown = (await h.query('operation.list', { taskId: 'A' })).filter(operation => operation.state === 'unknown')
+          assert.ok(unknown.length > 0)
+          assert.deepEqual(JSON.parse(rejected[0].result.error.message).operations.filter(operation => operation.state === 'unknown')
+            .map(operation => operation.operationId), unknown.map(operation => operation.operationId))
+          assert.notEqual((await h.query('task.get', { taskId: 'A' })).status, 'completed')
+          completionRejectionVerified = true
+          return [ownerWait()]
+        }
         return [ownerComplete()]
       }
       const execution = (await h.query('execution.list')).find(item => item.status === 'running')
@@ -270,6 +295,13 @@ for (const denyOutside of [false, true]) test(`one Task Owner preserves retained
     for (const file of [outsideFs, outsideShell]) await assert.rejects(access(file), { code: 'ENOENT' })
     const task = await host.query('task.get', { taskId: 'A' })
     if (denyOutside) {
+      assert.equal(completionAttempted, true)
+      assert.equal(completionRejectionVerified, true)
+      assert.equal(completionRejection?.code, 'DYNAMIC_TASK_NOT_QUIESCENT')
+      assert.equal(task.lastDecision?.action, 'wait')
+      const submissions = host.toolResults.filter(item => item.name === 'task_session_submit' && item.sessionId === ownerSession)
+      assert.equal(submissions.filter(item => item.result.isError).length, 1)
+      assert.equal(submissions.at(-1).result.isError, false)
       assert.equal(host.toolResults.filter(item => item.name === 'write' && item.result.isError).length, 1)
       assert.equal(host.toolResults.filter(item => item.name === nativeShell && item.result.value?.sandbox?.denied && item.result.value?.exitCode !== 0).length, 1)
       assert.ok((await host.query('operation.list', { taskId: 'A' })).some(operation => operation.state === 'unknown'))
