@@ -57,6 +57,23 @@ async function fixture(t, { signature = '' } = {}) {
     async reopen() { await ledger.close(); ledger = await openDynamicTaskStore(config) } }
 }
 
+test('ordinary Topic final result shares the whole-group contract and persists it across recovery', async t => {
+  const f = await fixture(t, { signature: '助手代回' }), binding = await f.task('all-result')
+  await f.finish(binding)
+  const submission = f.submission(await f.context(), 'all-result-reply', '请大家查看[验收说明](https://example.org/acceptance)。')
+  delete submission.decision.atOpenDingTalkIds; delete submission.decision.replyToMessageId
+  submission.decision.atAll = true
+  await f.submit(submission); await f.reopen(); await f.handler.recover()
+  const [notice] = await f.query('notification.list'), [outbound] = f.resident.getGroup('group').outbox
+  assert.equal(notice.payload.atAll, true); assert.equal(outbound.atAll, true)
+  assert.deepEqual(notice.payload.atOpenDingTalkIds, []); assert.equal(notice.payload.sourceMessageId, undefined)
+  const calls = []
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => { calls.push(args); return { exitCode: 0, stdout: '{"success":true}' } } } })
+  await sendWorkflowNotification(adapter, notice)
+  assert.ok(calls[0].includes('--at-all')); assert.ok(!calls[0].includes('--ref-msg-id'))
+  assert.match(calls[0][calls[0].indexOf('--markdown') + 1], /\[验收说明\]\(https:\/\/example.org\/acceptance\)/)
+})
+
 test('最终文字与附件同批冻结，逐件有序发送，重启只核对未知项且不重发已送项', async t => {
   const f = await fixture(t), binding = await f.task('delivery-task')
   const artifactFiles = [1, 2].map(index => ({ artifact: { artifactId: String(index).repeat(64), taskId: 'delivery-task', requirementRevision: 1,

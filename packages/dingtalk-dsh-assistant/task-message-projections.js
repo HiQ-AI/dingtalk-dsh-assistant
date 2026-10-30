@@ -92,10 +92,10 @@ export function messageProcessingSources(sources, notifications, groupId, coordi
       routingRevision: source.processingCompleted.routingRevision,
       activeUnitRefs: (source.processingCompleted.activeUnitRefs ?? []).map(({ unitId, unitRevision }) => ({ unitId, unitRevision })) } : null,
     notifications: notifications.filter(notification => notification.payload?.conversationId === source.groupId
-      && notification.payload.sourceMessageId === source.messageId
+      && (notification.payload.sourceRef?.messageId ?? notification.payload.sourceMessageId) === source.messageId
       && (!notification.payload.sourceId || notification.payload.sourceId === source.sourceId)
       && (!notification.payload.sourceVersion || notification.payload.sourceVersion === source.version)).map(notification => ({
-      notificationId: notification.id, state: notification.state, sourceMessageId: notification.payload.sourceMessageId,
+      notificationId: notification.id, state: notification.state, sourceMessageId: notification.payload.sourceRef?.messageId ?? notification.payload.sourceMessageId,
       sourceVersion: notification.payload.sourceVersion ?? null,
       versionMatched: notification.payload.sourceId === source.sourceId || notification.payload.sourceVersion === source.version,
       sendStartedAt: notification.sendStartedAt ?? null, ackedAt: notification.ackedAt ?? null,
@@ -148,9 +148,10 @@ export function taskNotificationOutbound(notification) {
     readbackRequired: true,
     replyToMessageId: payload.sourceMessageId,
     replyToSenderOpenDingTalkId: payload.actorId,
-    atOpenDingTalkIds: payload.atOpenDingTalkIds ?? [],
+    atOpenDingTalkIds: payload.atOpenDingTalkIds ?? [], ...(payload.atAll ? { atAll: true } : {}),
+    ...(payload.sourceRef ? { sourceRef: payload.sourceRef } : {}), ...(payload.artifactFiles?.length ? { artifactFiles: payload.artifactFiles } : {}),
     replyKind: payload.replyKind ?? 'substantive',
-    matterSourceMessageIds: payload.sourceMessageId ? [payload.sourceMessageId] : [],
+    matterSourceMessageIds: payload.sourceRef ? [payload.sourceRef.messageId] : payload.sourceMessageId ? [payload.sourceMessageId] : [],
     ...(notification.kind === 'fixed-topic-reply' ? { matterUnitRefs: [{ unitId: payload.fact.unitId, unitRevision: payload.fact.unitRevision }] } : {}),
     // 创建通知到获得发送许可之间可能排队；历史缺失时不伪造发送开始。
     sendStartedAt: notification.sendStartedAt,

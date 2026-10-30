@@ -28,6 +28,8 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
   if (payload.sourceMessageId ? quote?.messageId !== payload.sourceMessageId || quote?.conversationId !== payload.conversationId
     : quote != null) return undefined
   const expected = payload.atOpenDingTalkIds ?? []
+  const actualAll = observed.atAll ?? observed.at?.atAll
+  if (payload.atAll ? actualAll !== true : actualAll === true) return undefined
   // userId 与 openDingTalkId 不是同一身份类型，不能据前者宣称原生提及已核验。
   const actual = observed.atOpenDingTalkIds ?? observed.at?.atOpenDingTalkIds
     ?? (Array.isArray(observed.mentions) ? observed.mentions.map(item => item && typeof item === 'object' ? item.openDingTalkId : undefined) : undefined)
@@ -46,7 +48,7 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
   if (!sameDeliveredText(observed.text, payload.text, quote)) return undefined
   return { messageId, conversationId: payload.conversationId, ...(quote ? { quoteMessageId: quote.messageId } : {}),
     ...(Number.isFinite(sentTime) ? { sentAt: new Date(sentTime).toISOString() } : {}),
-    atOpenDingTalkIds: unavailableMention ? [] : [...expected], mentionVerification: unavailableMention ? 'unavailable' : 'verified',
+    atOpenDingTalkIds: unavailableMention ? [] : [...expected], ...(payload.atAll ? { atAll: true } : {}), mentionVerification: unavailableMention ? 'unavailable' : 'verified',
     identity: exactReceipt ? 'send-receipt' : exactUuid ? 'idempotency-key' : 'configured-sender', observedAt: new Date().toISOString() }
 }
 
@@ -68,7 +70,7 @@ export async function readTaskNotificationDelivery(adapter, notification, { send
   if (!messageId) {
     const outbound = { outboundId: notification.id, text: notification.payload.text,
       replyToMessageId: notification.payload.sourceMessageId, replyToSenderOpenDingTalkId: notification.payload.actorId,
-      atOpenDingTalkIds: notification.payload.atOpenDingTalkIds ?? [] }
+      atOpenDingTalkIds: notification.payload.atOpenDingTalkIds ?? [], ...(notification.payload.atAll ? { atAll: true } : {}) }
     const history = await adapter.readGroup(notification.payload.conversationId)
     if (history.complete !== true || history.hasMore === true || !Array.isArray(history.messages) || history.failedCount > 0 || history.failures?.length) throw new Error('TASK_NOTIFICATION_INCOMPLETE_READBACK')
     const exact = history.messages?.filter(message => matchesOutbound(message, outbound)) ?? []

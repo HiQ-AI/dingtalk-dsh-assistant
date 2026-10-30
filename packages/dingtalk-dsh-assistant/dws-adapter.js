@@ -182,7 +182,8 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     compileGroupReadRange(groupId, { start, end }) {
       return withProfile(['chat', '+chat-messages', '--group', assertStableId(groupId, 'group_id'), '--start', assertStableId(start, 'start'), '--end', assertStableId(end, 'end'), '--order', 'asc', '--page-all', '--page-limit', '50', '--format', 'json'])
     },
-    compileGroupSend({ groupId, text, idempotencyKey, atOpenDingTalkIds = [] }) {
+    compileGroupSend({ groupId, text, idempotencyKey, atOpenDingTalkIds = [], atAll = false }) {
+      if (typeof atAll !== 'boolean' || atAll && atOpenDingTalkIds.length) throw new Error('group_reply_audience_conflict')
       const mentions = nativeMentionIds(atOpenDingTalkIds)
       // DWS v1.0.63 --text sends msgType=text; --markdown preserves the same
       // formatted body as native replies, without adding a quote recipient.
@@ -192,6 +193,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       const content = mentions ? `${mentions.split(',').map(id => `<@${id}>`).join(' ')}\n\n${assertStableId(text, 'text')}` : assertStableId(text, 'text')
       const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--msg-type', 'markdown', '--markdown', content, '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       if (mentions) args.push('--at-open-dingtalk-ids', mentions)
+      if (atAll) args.push('--at-all')
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
@@ -200,14 +202,16 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
-    compileGroupReply({ groupId, text, idempotencyKey, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds = [] }) {
+    compileGroupReply({ groupId, text, idempotencyKey, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds = [], atAll = false }) {
       const args = ['chat', 'message', 'reply', '--group', assertStableId(groupId, 'group_id'), '--ref-msg-id', assertStableId(replyToMessageId, 'reply_message_id'), '--ref-sender', assertStableId(replyToSenderOpenDingTalkId, 'reply_sender_id'), '--content', assertStableId(text, 'text'), '--uuid', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       // DWS v1.0.63's reply contract separates ref-sender from atOpenDingTalkIds.
       // Topic selection includes the quote author in the audience. When implicit + explicit
       // mention rendering is uncertain, Topic can use unquoted send instead of quoting an unrelated author.
       // https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/issues/845
+      if (typeof atAll !== 'boolean' || atAll && atOpenDingTalkIds.length) throw new Error('group_reply_audience_conflict')
       const mentions = nativeMentionIds(atOpenDingTalkIds)
       if (mentions) args.push('--at-open-dingtalk-ids', mentions)
+      if (atAll) args.push('--at-all')
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
@@ -641,8 +645,8 @@ export async function dispatchOutbox({ adapter, groupId, outbound, beforeSend, b
     if (beforeSend && !(await beforeSend())) return { status: 'superseded' }
     phase = 'send'
     const sent = outbound.replyToMessageId && outbound.replyToSenderOpenDingTalkId
-      ? await adapter.sendGroupReply({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, replyToMessageId: outbound.replyToMessageId, replyToSenderOpenDingTalkId: outbound.replyToSenderOpenDingTalkId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [] })
-      : await adapter.sendGroup({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [] })
+      ? await adapter.sendGroupReply({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, replyToMessageId: outbound.replyToMessageId, replyToSenderOpenDingTalkId: outbound.replyToSenderOpenDingTalkId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [], ...(outbound.atAll ? { atAll: true } : {}) })
+      : await adapter.sendGroup({ groupId, text: outbound.text, idempotencyKey: outbound.outboundId, atOpenDingTalkIds: outbound.atOpenDingTalkIds ?? [], ...(outbound.atAll ? { atAll: true } : {}) })
     if (sent?.deliveryStatus === 'unknown') return { status: 'pending', reason: 'delivery_unknown', sendResult: sent }
 
     phase = 'postflight'

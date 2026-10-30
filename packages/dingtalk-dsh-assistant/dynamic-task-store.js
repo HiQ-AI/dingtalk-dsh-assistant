@@ -10,6 +10,7 @@ import { taskNotificationRecovery } from './notification-delivery.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
+import { groupNotificationParts } from './group-notification.js'
 import { fixedTopicIds, fixedUnitRequestId, platformScheduleOutboundId } from './fixed-topics.js'
 import { createExecutionResourceCatalog } from './execution-resource-catalog.js'
 import { DatabaseSync } from 'node:sqlite'
@@ -1477,17 +1478,35 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const requestId = fixedUnitRequestId(source.groupId, { messageId: source.messageId, messageVersion: source.version }, fact)
         if (fact.scheduleId !== undefined && (!text(fact.scheduleId, 'scheduleId') || fact.fixedTopic !== 'agent-platform'
           || !Number.isFinite(Date.parse(fact.scheduledAt)))) fail('DYNAMIC_ARGUMENT_INVALID', 'platformSchedule')
+        const origin = p.sourceRef ?? { messageId: p.sourceMessageId, messageVersion: p.sourceVersion, actorId: p.actorId }
+        const quotedSource = p.sourceRef && p.sourceMessageId ? all('dynamic_sources',
+          "WHERE json_extract(body,'$.groupId')=? AND json_extract(body,'$.messageId')=? AND json_extract(body,'$.actorId')=? LIMIT 1",
+          [p.conversationId, p.sourceMessageId, p.actorId])[0] : null
         if (!fixedTopicIds.includes(fact.fixedTopic) || a.taskId || p.taskIds?.length || p.topicRefs?.length || fact.topicRefs?.length
-          || source.groupId !== p.conversationId || source.messageId !== p.sourceMessageId || source.version !== p.sourceVersion || source.actorId !== p.actorId
-          || p.replyToMessageId !== source.messageId || p.replyToSenderOpenDingTalkId !== source.actorId
+          || source.groupId !== p.conversationId || source.messageId !== origin.messageId || source.version !== origin.messageVersion
+          || source.version !== p.sourceVersion || source.actorId !== origin.actorId
+          || (p.sourceRef ? !!p.sourceMessageId !== !!p.actorId || p.sourceMessageId && !quotedSource
+            : p.replyToMessageId !== source.messageId || p.replyToSenderOpenDingTalkId !== source.actorId)
+          || p.replyToMessageId !== p.sourceMessageId || p.replyToSenderOpenDingTalkId !== p.actorId
           || id !== (fact.scheduleId === undefined ? requestId : platformScheduleOutboundId(requestId)))
           fail('DYNAMIC_ARGUMENT_INVALID', 'fixedTopicSource')
+        for (const file of p.artifactFiles ?? []) {
+          const s = file.artifact?.platformSource
+          if (!p.sourceRef || !s || file.artifact.taskId || s.requestId !== id || s.groupId !== source.groupId
+            || s.messageId !== source.messageId || s.messageVersion !== source.version || s.unitId !== fact.unitId
+            || s.unitRevision !== fact.unitRevision) fail('DYNAMIC_ARGUMENT_INVALID', 'fixedTopicArtifact')
+        }
       }
       const body = { taskId: task?.taskId ?? null, requirementRevision: a.requirementRevision, kind: a.kind, payload: clone(record(a.payload)) }
+      if (body.payload.atAll !== undefined && typeof body.payload.atAll !== 'boolean'
+        || body.payload.atAll && (body.payload.atOpenDingTalkIds?.length || body.payload.sourceMessageId)) fail('DYNAMIC_ARGUMENT_INVALID', 'notificationAudience')
+      if (body.payload.artifactFiles?.length) body.payload.deliveryId = id
       const prior = get('dynamic_notifications', id, true)
       if (prior) { if (prior.payloadDigest !== digest(body)) fail('DYNAMIC_NOTIFICATION_ID_CONFLICT'); return changed({ notification: prior }) }
       const notification = { id, notificationId: id, ...body, payloadDigest: digest(body), state: 'prepared', createdAt: stamp, updatedAt: stamp }
-      put('dynamic_notifications', notification); return changed({ notification })
+      const notifications = groupNotificationParts(notification, a.payload.artifactFiles)
+      for (const part of notifications) put('dynamic_notifications', part)
+      return changed({ notification, notifications })
     }
     if (kind === 'notification.rejectBeforeSend') {
       const notification = get('dynamic_notifications', a.notificationId), error = notification.deliveryError

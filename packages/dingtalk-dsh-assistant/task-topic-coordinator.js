@@ -6,6 +6,7 @@ import { createCoordinationResourceTools } from './coordination-resources.js'
 import { buildReplyReviewCandidates } from './decision.js'
 import { sessionWorkspace, nameSession } from './session-workspaces.js'
 import { groupReplyInstructions } from './group-message.js'
+import { groupNotificationInstructions } from './group-notification.js'
 import { createFixedTopicHandler } from './fixed-topic-handler.js'
 import { taskBoundaryInstructions } from './task-boundary-instructions.js'
 
@@ -118,7 +119,7 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
           const allowed = new Set(coordinationTools(role))
           agentCtx.tools.restrict({ allow: [...allowed].filter(name => agentCtx.tools.get(name)) })
           agentCtx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'coordination_tool_outside_role')
-          agentCtx.systemPrompt.section({ name: 'dingtalk-group-reply', order: 119, text: groupReplyInstructions })
+          agentCtx.systemPrompt.section({ name: 'dingtalk-group-reply', order: 119, text: `${groupReplyInstructions}\n${groupNotificationInstructions}` })
           agentCtx.systemPrompt.section({ name: 'dingtalk-reply-ownership', order: 130, text:
             request.trigger === 'task-facts'
               ? '本轮由已绑定Topic处理任务事实。只判断回复或沉默并更新摘要，不能调用任务动作、路由或把事实当新需求。默认输入是有界摘要和证据引用；只有影响决定的缺口才补读。无需重新总结执行会话，不复述内部标识或逐条日志。'

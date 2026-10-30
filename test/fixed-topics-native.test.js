@@ -11,6 +11,10 @@ import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { createFixedTopicHandler } from '../packages/dingtalk-dsh-assistant/fixed-topic-handler.js'
 import { createPlatformSchedules } from '../packages/dingtalk-dsh-assistant/platform-schedule.js'
+import { sessionWorkspace } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
+import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/group-message.js'
+import { taskNotificationRecovery } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
 import { fixedUnitRequestId } from '../packages/dingtalk-dsh-assistant/fixed-topics.js'
 
 async function nativeSchedule(h, t) {
@@ -44,7 +48,7 @@ function fixedReplyModel(category) {
     if (!queried) { queried = true; return [{ name: 'platform_task_query', args: { state: 'completed' } }] }
     if (submitted) return []
     submitted = true
-    return [{ name: 'platform_reply_submit', args: { text: '约定时间已过，现补报本群工作成果：当前范围没有已完成任务。' } }]
+    return [{ name: 'platform_reply_submit', args: { atOpenDingTalkIds: ['native-user'], text: '约定时间已过，现补报本群工作成果：当前范围没有已完成任务。' } }]
   }
 }
 const fixedMessage = { groupId: 'native-group', messageId: 'platform-request', senderOpenDingTalkId: 'native-user',
@@ -60,16 +64,18 @@ for (const category of ['agent-platform', 'out-of-scope']) test(`fixed ${categor
   const [notification] = await h.query('notification.list')
   assert.ok(notification, JSON.stringify(h.toolResults))
   assert.equal(notification.kind, 'fixed-topic-reply')
-  assert.equal(notification.state, 'delivered')
+  assert.equal(notification.state, 'delivered', JSON.stringify(await h.service.recover()))
   assert.equal(notification.payload.fact.fixedTopic, category)
   assert.deepEqual(notification.payload.topicRefs, [])
   assert.equal(notification.taskId, null)
   assert.equal(h.sent.length, 1); assert.equal(h.readbacks.length, 1)
   const group = h.residentStore.getGroup(fixedMessage.groupId), message = group.messages[0], unit = message.units[0]
   assert.equal(notification.id, fixedUnitRequestId(group.groupId, message, unit))
-  assert.equal(notification.payload.sourceMessageId, fixedMessage.messageId)
+  assert.equal(notification.payload.sourceRef.messageId, fixedMessage.messageId)
+  assert.equal(notification.payload.sourceMessageId, undefined)
   assert.equal(notification.payload.sourceVersion, 1)
-  assert.equal(notification.payload.actorId, fixedMessage.senderOpenDingTalkId)
+  assert.equal(notification.payload.sourceRef.actorId, fixedMessage.senderOpenDingTalkId)
+  assert.equal(notification.payload.actorId, undefined)
   assert.deepEqual(notification.payload.atOpenDingTalkIds, [fixedMessage.senderOpenDingTalkId])
   assert.deepEqual(group.topics, []); assert.deepEqual(await h.query('task.list'), [])
   assert.equal(group.outbox.length, 1); assert.equal(group.outbox[0].status, 'sent')
@@ -88,7 +94,7 @@ for (const category of ['agent-platform', 'out-of-scope']) test(`fixed ${categor
   assert.equal(h.sent.length, 1)
 })
 
-test('restart resumes a frozen fixed reply after outbox commit and before notification prepare, without regenerating or resending it', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+for (const legacyFrozen of [false, true]) test(`restart resumes a frozen fixed reply before notification prepare without regenerating it: legacy=${legacyFrozen}`, { skip: !available ? reason : false, timeout: 20000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'fixed-outbound-restart-'))
   let h
   t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
@@ -98,6 +104,13 @@ test('restart resumes a frozen fixed reply after outbox commit and before notifi
     if (input.kind === 'notification.prepare') throw Object.assign(new Error('injected_prepare_failure'), { code: 'injected_prepare_failure' })
     return ledger.command(input)
   } } })
+  if (legacyFrozen) {
+    // Reproduce the previous release's durable intent, including its quote and
+    // audience. Upgrade must resume this exact intent, not reselect recipients.
+    const append = h.residentStore.appendOutbox
+    h.residentStore.appendOutbox = ({ sourceRef: _source, ...args }) => append({ ...args,
+      replyToMessageId: fixedMessage.messageId, replyToSenderOpenDingTalkId: fixedMessage.senderOpenDingTalkId })
+  }
   await h.service.ingest(fixedMessage); await h.service.whenIdle()
   const [frozen] = h.residentStore.getGroup(fixedMessage.groupId).outbox
   assert.ok(frozen); assert.equal(frozen.status, 'pending')
@@ -108,6 +121,8 @@ test('restart resumes a frozen fixed reply after outbox commit and before notifi
   await h.service.recover(); await h.service.whenIdle()
   const [notification] = await h.query('notification.list')
   assert.equal(notification.id, frozen.outboundId); assert.equal(notification.state, 'delivered')
+  assert.equal(notification.payload.sourceMessageId, legacyFrozen ? fixedMessage.messageId : undefined)
+  assert.equal(notification.payload.sourceRef?.messageId, legacyFrozen ? undefined : fixedMessage.messageId)
   assert.equal(notification.payload.text, frozen.text)
   assert.equal(h.sent.length, 1); assert.equal(h.readbacks.length, 1)
   assert.equal(h.residentStore.getGroup(fixedMessage.groupId).outbox.length, 1)
@@ -129,7 +144,7 @@ test('native platform tools coexist with preset tools and full access stays sess
     const names = request.tools.map(tool => tool.name)
     for (const name of ['read', 'write', 'platform_task_query', 'platform_reply_submit']) assert.ok(names.includes(name), name)
     if (step++ === 0) return [{ name: 'read', args: { file_path: join(root, 'probe.txt') } }, { name: 'platform_task_query', args: { state: 'completed', day: 'today' } }]
-    return [{ name: 'platform_reply_submit', args: { text: '约定时间已过，现补报：本群当前范围没有完成记录。' } }]
+    return [{ name: 'platform_reply_submit', args: { atOpenDingTalkIds: ['test-actor'], text: '约定时间已过，现补报：本群当前范围没有完成记录。' } }]
   }, { resident: true })
   h.ctx.on('tools/result', exec => modes.push(h.ctx.permissionPresets.current(exec.agent.session)))
   h.ctx.on('agent/error', event => errors.push(event.error))
@@ -185,12 +200,12 @@ for (const scenario of ['before-due', 'late-bridge', 'superseded']) test('Host n
     h = await nativeTaskHost(root, request => {
       if (request.tools.some(tool => tool.name === 'platform_schedule_submit')) {
         if (originalTurns++ === 0) return [0, 1].map(() => ({ name: 'platform_schedule_submit', args: scheduled }))
-        return [{ name: 'platform_reply_submit', args: { text: '已安排本次工作汇报。' } }]
+        return [{ name: 'platform_reply_submit', args: { atOpenDingTalkIds: ['original-actor'], text: '已安排本次工作汇报。' } }]
       }
       if (!request.tools.some(tool => tool.name === 'platform_task_query')) return []
       if (dueTurns++ === 0) return [{ name: 'platform_task_query', args: { state: 'completed', day: 'today' } }]
       assert.match(JSON.stringify(request.messages), /到期时新事实/)
-      return [{ name: 'platform_reply_submit', args: { text: '本群当前完成一项：到期时新事实。' } }]
+      return [{ name: 'platform_reply_submit', args: { atOpenDingTalkIds: ['original-actor'], text: '本群当前完成一项：到期时新事实。' } }]
     }, { resident: true })
     h.ctx.on('agent/error', event => errors.push(event.error))
     h.ctx.on('tools/result', exec => { if (exec.name === 'platform_schedule_submit') childHeaders.push(exec.agent.session.header) })
@@ -235,7 +250,7 @@ for (const scenario of ['before-due', 'late-bridge', 'superseded']) test('Host n
   assert.deepEqual(errors, [])
   const outbox = h.residentStore.getGroup('scheduled-group').outbox
   assert.equal(outbox.length, superseded ? 1 : 2)
-  assert.ok(outbox.every(item => item.replyToMessageId === 'scheduled-source' && item.replyToSenderOpenDingTalkId === 'original-actor'))
+  assert.ok(outbox.every(item => item.sourceRef.messageId === 'scheduled-source' && item.sourceRef.actorId === 'original-actor' && !item.replyToMessageId))
   assert.equal((await h.ctx.schedule.catalog())[0].status, 'inactive')
   assert.equal((await h.ctx.schedule.history({ sessionId: record.sessionId, id: record.id, limit: 10 })).records.length, 1)
   const restored = await h.ctx.sessionController.resolveAgent(record.sessionId)
@@ -245,9 +260,10 @@ for (const scenario of ['before-due', 'late-bridge', 'superseded']) test('Host n
   assert.equal(h.residentStore.listTasks().length, 0)
 })
 
-test('native due report crosses the real task service and notification ledger after cold restart, separately from its confirmation', { skip: !available ? reason : false, timeout: 15000 }, async t => {
+for (const audience of ['all', 'members']) test(`native due ${audience} report shares final delivery and recovers attachments after cold restart`, { skip: !available ? reason : false, timeout: 15000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'platform-scheduled-ledger-'))
-  let h, originalTurns = 0, dueTurns = 0, initialize = true
+  let h, originalTurns = 0, dueTurns = 0, initialize = true, filesReadable = false
+  const dwsCalls = [], adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => { dwsCalls.push(args); return { exitCode: 0, stdout: '{"success":true}' } } } })
   const sends = [], errors = [], scheduleInput = { title: '工作汇报', prompt: '汇报本群今天完成情况', at: new Date(Date.now() + 2500).toISOString() }
   const route = fixedReplyModel('agent-platform')
   const boot = async () => {
@@ -255,7 +271,7 @@ test('native due report crosses the real task service and notification ledger af
       if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) return route(request)
       if (request.tools.some(tool => tool.name === 'platform_schedule_submit')) {
         if (originalTurns++ === 0) return [{ name: 'platform_schedule_submit', args: scheduleInput }]
-        return [{ name: 'platform_reply_submit', args: { text: '已安排本次工作汇报。' } }]
+        return [{ name: 'platform_reply_submit', args: { atOpenDingTalkIds: ['native-user'], text: '已安排本次工作汇报。' } }]
       }
       if (!request.tools.some(tool => tool.name === 'platform_task_query')) return []
       if (dueTurns++ === 0) return [{ name: 'platform_task_query', args: { state: 'completed', day: 'today' } }]
@@ -263,20 +279,27 @@ test('native due report crosses the real task service and notification ledger af
       assert.ok(page, 'due report must read real task-service facts')
       assert.ok(Date.parse(page.asOf) >= Date.parse(scheduleInput.at))
       assert.deepEqual(page.items, [])
-      return [{ name: 'platform_reply_submit', args: { text: '本次工作汇报：当前范围没有已完成任务。' } }]
+      return [{ name: 'platform_reply_submit', args: { ...(audience === 'all' ? { atAll: true } : { atOpenDingTalkIds: ['reviewer', 'native-user'] }), replyToMessageId: fixedMessage.messageId,
+        text: '本次工作汇报：当前范围没有已完成任务。[验收说明](https://example.org/result)', files: [1, 2].map(index => ({ path: `result-${index}.png`, caption: `核验项${index}` })) } }]
     }, { resident: true })
     h.ctx.on('agent/error', event => errors.push(event.error))
     h.residentStore = await openResidentStore(h.ctx.storageDomain)
     if (initialize) {
       await h.residentStore.subscribe({ groupId: 'native-group', timezone: 'Asia/Shanghai', responsibility: '处理交办给测试助手的工作' })
       await h.residentStore.setAgentNames(['测试助手'])
+      await h.residentStore.ingest({ groupId: 'native-group', messageId: 'reviewer-message', senderOpenDingTalkId: 'reviewer', text: '我是验收成员', occurredAt: new Date().toISOString() })
+      await h.residentStore.routeMessages({ groupId: 'native-group', routeId: 'reviewer-route', routingRevision: 0, routes: [{ messageId: 'reviewer-message', messageVersion: 1, units: [], ignoredRefs: [{ quote: '我是验收成员', reason: '背景身份' }] }] })
+      const directory = await sessionWorkspace(root, 'platform')
+      for (const index of [1, 2]) await writeFile(join(directory, `result-${index}.png`), Buffer.from([137,80,78,71,index]))
     }
     const legacy = { getAgentConfig: () => ({ workspaceDir: root, agentPreset: 'native-test', provider: 'native-task-test', model: 'controlled', agentNames: ['测试助手'] }),
       getGroup: id => h.residentStore.getGroup(id) }
     h.service = await openTaskSessionService({ ctx: h.ctx, residentStore: h.residentStore, legacy,
       config: { workspaceDir: root, dbPath: join(root, 'dynamic.db'), instanceId: 'scheduled-native-test', initialize, ownerActorId: 'native-user', provider: 'native-task-test' },
       notifications: {
-        async send(notification) { sends.push(structuredClone(notification)); return { messageId: `delivered-${notification.id}` } },
+        async send(notification) { await sendWorkflowNotification(adapter, notification); sends.push(structuredClone(notification)); return { messageId: `delivered-${notification.id}` } },
+        async sendFile(notification, file) { assert.equal(file.artifactId, notification.payload.artifact.artifactId); sends.push(structuredClone(notification)); return { messageId: `delivered-${notification.id}` } },
+        async readbackFile(notification) { return filesReadable ? { messageId: notification.ack.messageId, visible: true } : undefined },
         async readback(notification) { return { messageId: notification.ack.messageId, visible: true } },
       } })
     h.query = (kind, args = {}) => h.service.store.query({ kind, ...args })
@@ -294,19 +317,41 @@ test('native due report crosses the real task service and notification ledger af
   assert.equal(sends.length, 1); assert.equal(dueTurns, 0)
   await h.close(); await boot()
   await waitUntil(() => h.residentStore.getPlatformSchedule(record.sessionId)?.outcome === 'replied', 'scheduled report prepared after native cold restore')
+    .catch(error => { t.diagnostic(JSON.stringify({ tools: h.toolResults.slice(-4), errors: errors.map(value => value.message) })); throw error })
   await h.service.whenIdle()
+  await waitUntil(async () => (await h.query('notification.list')).some(item => item.payload.artifact && item.ack && item.readbackAttemptCount > 0), 'first attachment has its original ACK and unconfirmed readback')
+    .catch(async error => { t.diagnostic(JSON.stringify({ recovery: await h.service.recover(), errors: errors.map(value => value.stack) })); throw error })
   const notices = await h.query('notification.list'), report = notices.find(item => item.id !== confirmation.id)
-  assert.equal(notices.length, 2); assert.equal(report.kind, 'fixed-topic-reply'); assert.equal(report.state, 'delivered')
+  assert.equal(notices.length, 4); assert.equal(report.kind, 'fixed-topic-reply'); assert.equal(report.state, 'delivered')
   assert.equal(report.payload.fact.scheduleId, record.id); assert.equal(report.payload.fact.scheduledAt, scheduleInput.at)
   assert.equal(report.id, `${confirmation.id}-scheduled-delivery`)
-  assert.equal(report.payload.sourceMessageId, fixedMessage.messageId); assert.equal(report.payload.actorId, fixedMessage.senderOpenDingTalkId)
-  assert.deepEqual(report.payload.topicRefs, []); assert.deepEqual(report.payload.atOpenDingTalkIds, [fixedMessage.senderOpenDingTalkId])
-  assert.equal(sends.length, 2); assert.equal(dueTurns, 2); assert.deepEqual(errors, [])
+  assert.equal(report.payload.sourceRef.messageId, fixedMessage.messageId); assert.equal(report.payload.sourceRef.actorId, fixedMessage.senderOpenDingTalkId)
+  assert.equal(report.payload.sourceMessageId, undefined); assert.equal(report.payload.actorId, undefined)
+  assert.deepEqual(report.payload.topicRefs, []); assert.deepEqual(report.payload.atOpenDingTalkIds, audience === 'all' ? [] : ['reviewer', 'native-user']); assert.equal(report.payload.atAll, audience === 'all' ? true : undefined)
+  const [firstFile, secondFile] = notices.filter(item => item.payload.artifact)
+  assert.ok(['starting', 'unknown'].includes(firstFile.state)); assert.ok(firstFile.ack); assert.equal(secondFile.state, 'prepared')
+  assert.equal(firstFile.payload.afterNotificationId, report.id); assert.equal(secondFile.payload.afterNotificationId, firstFile.id)
+  assert.equal(firstFile.payload.artifact.taskId, undefined); assert.equal(firstFile.payload.artifact.platformSource.sessionId, record.sessionId)
+  assert.match(report.payload.text, /result-1.png：核验项1/); assert.ok(!dwsCalls.at(-1).includes('--ref-msg-id'))
+  assert.equal(dwsCalls.at(-1).includes('--at-all'), audience === 'all')
+  assert.ok(dwsCalls.at(-1).includes('--markdown'))
+  assert.equal(sends.length, 3); assert.equal(dueTurns, 2); assert.deepEqual(errors, [])
   assert.deepEqual(await h.query('task.list'), []); assert.deepEqual(h.residentStore.getGroup(fixedMessage.groupId).topics, [])
   assert.equal((await h.ctx.schedule.catalog()).length, 1)
   assert.equal((await h.ctx.schedule.history({ sessionId: record.sessionId, id: record.id, limit: 10 })).records.length, 1)
-  await h.close(); await boot()
-  assert.equal(sends.length, 2); assert.equal(dueTurns, 2)
+  await h.close(); filesReadable = true; await boot()
+  const pending = await h.query('notification.get', { notificationId: firstFile.id })
+  await h.service.retryNotification({ groupId: fixedMessage.groupId, notificationId: firstFile.id, expectedToken: taskNotificationRecovery(pending).expectedToken })
+  await h.service.recover(); await h.service.whenIdle()
+  await waitUntil(async () => (await h.query('notification.list')).every(item => item.state === 'delivered'), 'remaining parts read back after restart')
+  assert.equal(sends.length, 4); assert.equal(dueTurns, 2)
+  assert.equal(new Set(sends.map(item => item.id)).size, 4, 'no already sent item is resent')
+  assert.ok((await h.query('notification.list')).every(item => item.state === 'delivered'))
+  const deliveredFile = await h.query('notification.get', { notificationId: firstFile.id })
+  const echo = await h.service.ingest({ groupId: fixedMessage.groupId, messageId: deliveredFile.receipt.messageId,
+    senderOpenDingTalkId: fixedMessage.senderOpenDingTalkId, text: '[file] result-1.png', occurredAt: new Date().toISOString() })
+  assert.equal(echo.reason, 'own-notification', 'shared attachment receipts retain existing self-echo filtering')
+  await h.close(); await boot(); assert.equal(sends.length, 4); assert.equal(dueTurns, 2)
 })
 
 test('Host refuses an expired instant without scheduling tomorrow, while native source binding stays trusted', { skip: !available ? reason : false, timeout: 10000 }, async t => {

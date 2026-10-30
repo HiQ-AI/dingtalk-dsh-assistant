@@ -2,6 +2,7 @@ import { acceptanceCriteriaSchema } from './task-input-contract.js'
 import { randomUUID } from 'node:crypto'
 import { coordinationRole, coordinationTools } from './coordination-sessions.js'
 import { z } from 'zod'
+import { groupNotificationFields, groupNotificationRouting } from './group-notification.js'
 import { FIXED_TOPICS, fixedTopicInstructions } from './fixed-topics.js'
 import { personAliasInstructions, referencedPersonAliases } from './group-person-aliases.js'
 import { toToolJsonSchema } from './tool-schema.js'
@@ -115,7 +116,7 @@ const notificationDraftSchema = z.strictObject({
     kind: z.enum(['confirmation', 'substantive', 'correction']),
     reviewedOutboundIds: z.array(z.string().min(1)).default([]), sameMatterOutboundIds: z.array(z.string().min(1)).default([]), replaceOutboundIds: z.array(z.string().min(1)).default([]),
   }),
-  replyToMessageId: z.string().min(1).optional(), atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
+  ...groupNotificationFields,
 })
 const completionReviewSchema = z.union([
   z.strictObject({ accepted: z.literal(false), reason: z.string().trim().min(1) }),
@@ -301,16 +302,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       await store.updateCoordinationRequest(groupId, requestId, { status: 'completed', nextRetryAt: undefined })
     }
   }
-  const replyRouting = (messages, replyToMessageId, atOpenDingTalkIds) => {
-    const participants = messages.filter((message) => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
-    const target = participants.find((message) => message.messageId === replyToMessageId)
-    const recipients = atOpenDingTalkIds?.length ? atOpenDingTalkIds : target ? [target.senderOpenDingTalkId] : []
-    if (participants.length && !target && !recipients.length) throw new Error('group_reply_routing_required')
-    if (replyToMessageId && !target) throw new Error('group_reply_target_not_in_topic')
-    if (new Set(recipients).size !== recipients.length || recipients.some((id) => !participants.some((message) => message.senderOpenDingTalkId === id))) throw new Error('group_reply_recipient_not_in_topic')
-    if (target && !recipients.includes(target.senderOpenDingTalkId)) throw new Error('group_reply_quote_author_not_in_recipients')
-    return { target, recipients }
-  }
+  const replyRouting = (messages, replyToMessageId, atOpenDingTalkIds, atAll) => groupNotificationRouting(messages, { replyToMessageId, atOpenDingTalkIds, atAll })
   function reviewRequestIdentity(kind, task, value) {
     const { submittedAt: _submittedAt, reviewedAt: _reviewedAt, ...content } = value
     return requestIdentity(kind, { groupId: task.groupId, taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
@@ -720,7 +712,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
               topicRefs: [{ topicId: topic.topicId, revision: topic.revision }] }
             decisions.set(requestId, request)
             const envelope = { requestId, topicId: topic.topicId, revision: topic.revision, trigger: 'task-facts', ...context.input }
-            const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n本轮是任务事实，不是用户新请求。完成事实中的files是Host已冻结的最终附件；结合最新上下文说明完成范围、实际部署环境和验收结果。非空最终回复之后，Host将连续发送该批附件并逐件记录回执，自动附上文件名与验收对应说明，不必另派任务或让执行单独群发。文件存在、业务完成和通知送达分别表述，不提前宣称附件已经送达；已送历史仅引用原记录，不重复发送。结合最新补充、相关任务和已发/待发回复，决定直接回复、合并这些结果或沉默。actions 必须为空；不创建、补充、重开或取消任务。提交 group_decision_submit：decision 包含 actions:[]、topicUpdate.summary、reason，可选 reply。有reply时显式选择atOpenDingTalkIds。最终事实通知固定使用普通Markdown群消息与所选多人原生提及，不使用原生引用，避免引用隐式提及和显式提及叠加；省略replyToMessageId。保留事实中已核验的PR及产物完整链接，用Markdown链接和清晰段落列表组织，不降为只有编号，不按编号猜URL；配置签名由Host添加。旧决策中的上下文来源仍会校验并留档，但不会转换成发送引用，不因来源作者改变通知集合。结合原始需求、验收反馈、明确交付或知会约定选择本次结果的收件人集合，可多人。sources是任务事实的触发来源，不是默认收件人；最近补充者、恢复条件提供者或截图要求者不自动替换原需求人和验收人。originMessages、recentMessages提供本话题原文及受信ID；不足时沿readCall读取相关话题原文，不读取全执行历史。按ID区分同名/近似名，不猜ID，不自动@所有历史参与者，身份不确定时不伪装通知。正文不要用@姓名代替原生提及；Host校验并冻结所选身份，经现有通知路径投递。reason解释回复或沉默及收件人选择依据。不使用 basisMessageIds/replyReview。不得把任务事实当新授权。通常无需额外读取；确需完整事实可用 group_decision_context_get 的 facts section。`
+            const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n本轮是任务事实，不是用户新请求。完成事实中的files是Host已冻结的最终附件；结合最新上下文说明完成范围、实际部署环境和验收结果。非空最终回复之后，Host将连续发送该批附件并逐件记录回执，自动附上文件名与验收对应说明，不必另派任务或让执行单独群发。文件存在、业务完成和通知送达分别表述，不提前宣称附件已经送达；已送历史仅引用原记录，不重复发送。结合最新补充、相关任务和已发/待发回复，决定直接回复、合并这些结果或沉默。actions 必须为空；不创建、补充、重开或取消任务。提交 group_decision_submit：decision 包含 actions:[]、topicUpdate.summary、reason，可选 reply。有reply时显式选择atOpenDingTalkIds；本次明确面向全群时选择atAll=true并省略成员提及和引用。最终事实通知固定使用普通Markdown群消息与所选多人原生提及，不使用原生引用，避免引用隐式提及和显式提及叠加；省略replyToMessageId。保留事实中已核验的PR及产物完整链接，用Markdown链接和清晰段落列表组织，不降为只有编号，不按编号猜URL；配置签名由Host添加。旧决策中的上下文来源仍会校验并留档，但不会转换成发送引用，不因来源作者改变通知集合。结合原始需求、验收反馈、明确交付或知会约定选择本次结果的收件人集合，可多人。sources是任务事实的触发来源，不是默认收件人；最近补充者、恢复条件提供者或截图要求者不自动替换原需求人和验收人。originMessages、recentMessages提供本话题原文及受信ID；不足时沿readCall读取相关话题原文，不读取全执行历史。按ID区分同名/近似名，不猜ID，不自动@所有历史参与者，身份不确定时不伪装通知。正文不要用@姓名代替原生提及；Host校验并冻结所选身份，经现有通知路径投递。reason解释回复或沉默及收件人选择依据。不使用 basisMessageIds/replyReview。不得把任务事实当新授权。通常无需额外读取；确需完整事实可用 group_decision_context_get 的 facts section。`
             context.metrics.inputBytes = Buffer.byteLength(body, 'utf8')
             taskFacts.observe?.(context.metrics)
             monitor(send(groupId, body, [], request), request, decisions)
@@ -801,9 +793,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         })
         const frozen = await readFrozenReply?.({ groupId, topicRefs: [{ topicId, revision: record.revision }], decisionId, outboundId: record.outboundId })
           ?? store.getGroup(groupId)?.outbox.find(item => item.outboundId === record.outboundId)
-        if (!frozen && !Object.hasOwn(decision, 'atOpenDingTalkIds')) throw new Error('group_reply_routing_reconciliation_required')
-        const route = frozen ? { replyToMessageId: frozen.replyToMessageId, replyToSenderOpenDingTalkId: frozen.replyToSenderOpenDingTalkId, atOpenDingTalkIds: frozen.atOpenDingTalkIds ?? [] }
-          : (() => { const { target, recipients } = replyRouting(messages, decision.replyToMessageId, decision.atOpenDingTalkIds); return { ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients } })()
+        if (!frozen && !Object.hasOwn(decision, 'atOpenDingTalkIds') && !decision.atAll) throw new Error('group_reply_routing_reconciliation_required')
+        const route = frozen ? { replyToMessageId: frozen.replyToMessageId, replyToSenderOpenDingTalkId: frozen.replyToSenderOpenDingTalkId, atOpenDingTalkIds: frozen.atOpenDingTalkIds ?? [], ...(frozen.atAll ? { atAll: true } : {}) }
+          : (() => { const { target, recipients, atAll } = replyRouting(messages, decision.replyToMessageId, decision.atOpenDingTalkIds, decision.atAll); return { ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients, ...(atAll ? { atAll } : {}) } })()
         const persisted = await appendOutbox({ groupId, sourceMessageId: `topic-decision:${decisionId}`, outboundId: record.outboundId, decisionId,
           topicRefs: [{ topicId, revision: record.revision }], text: decision.reply, replyKind: decision.replyReview?.kind,
           matterSourceMessageIds: [...new Set(messages.filter((message) => decision.basisUnitRefs.some((ref) => unitKey(ref) === unitKey(message))).map((message) => message.messageId))],
@@ -1034,8 +1026,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         }
         try {
           const messages = request.messages.filter(message => { const owner = replyTopicForMessage(store.getGroup(groupId), message); return !owner || owner === args.topicId })
-          const { target, recipients } = replyRouting(messages, decision.replyToMessageId, decision.atOpenDingTalkIds)
-          decision = { ...decision, ...(target ? { replyToMessageId: target.messageId } : {}), atOpenDingTalkIds: recipients }
+          const { target, recipients, atAll } = replyRouting(messages, decision.replyToMessageId, decision.atOpenDingTalkIds, decision.atAll)
+          decision = { ...decision, ...(target ? { replyToMessageId: target.messageId } : {}), atOpenDingTalkIds: recipients, ...(atAll ? { atAll } : {}) }
         }
         catch (error) { return { status: 'invalid-arguments', issues: [{ field: 'decision.replyToMessageId', code: error.message, message: error.message }], nextAction: 'correct-arguments' } }
         if (!decision.replyReview) return { status: 'review-required', error: 'reply_kind_required' }
@@ -1194,7 +1186,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       return { prompts: prompts.map((prompt) => reused.has(prompt.id) ? { id: prompt.id, revision: prompt.revision, reused: true, contentFingerprint: fingerprint(promptContent(prompt)) } : promptContent(prompt)) }
     })
     tool('group_reply_submit', '提交绑定 Topic 与 Task 输入版本的结果通知；不依赖全群 observedRequestIds。', { type: 'object', additionalProperties: false, required: ['requestId', 'reply'], properties: {
-      requestId: { type: 'string' }, reply: { type: 'string' }, replyReview: replyReviewJsonSchema, replyToMessageId: { type: 'string' }, atOpenDingTalkIds: { type: 'array', items: { type: 'string' } },
+      requestId: { type: 'string' }, reply: { type: 'string' }, replyReview: replyReviewJsonSchema, replyToMessageId: { type: 'string' }, atOpenDingTalkIds: { type: 'array', items: { type: 'string' } }, atAll: { type: 'boolean' },
     } }, async (args) => {
       const request = replies.get(args.requestId)
       if (!request || request.groupId !== groupId) {
@@ -1228,11 +1220,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const task = store.getTask(request.task.taskId)
       let replyReview
       try { replyReview = validateReplyReview(args.replyReview, request.candidates, { confirmationTaskIds: [task.taskId] }) } catch (error) { return { status: 'review-required', error: error.message } }
-      const { target, recipients } = replyRouting(request.messages, args.replyToMessageId, args.atOpenDingTalkIds)
+      const { target, recipients, atAll } = replyRouting(request.messages, args.replyToMessageId, args.atOpenDingTalkIds, args.atAll)
       const outbound = { groupId, outboundId: request.outboundId ?? `reply-${args.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.task.result), text: args.reply.trim(), taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence, topicRefs: task.topicRefs,
         matterSourceMessageIds: [...new Set(request.messages.map((message) => message.messageId))], matterUnitRefs: request.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })),
         replyKind: replyReview?.kind, replacesOutboundIds: replyReview?.replaceOutboundIds,
-        ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients }
+        ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients, ...(atAll ? { atAll } : {}) }
       // 对外调用在短状态提交之后；独立通知的失败不消费其他 Topic 请求。
       const persisted = await appendOutbox({ ...outbound, preflight })
       if (persisted?.status) { await schedule(groupId); return persisted }
@@ -1314,12 +1306,12 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
   }
   function taskOutbound(request, task, draft) {
     const replyReview = validateReplyReview(draft.replyReview, request.candidates, { confirmationTaskIds: [task.taskId] })
-    const { target, recipients } = replyRouting(request.messages, draft.replyToMessageId, draft.atOpenDingTalkIds)
+    const { target, recipients, atAll } = replyRouting(request.messages, draft.replyToMessageId, draft.atOpenDingTalkIds, draft.atAll)
     const sources = taskMessages(task)
     return { groupId: task.groupId, outboundId: `reply-${request.requestId}`, sourceMessageId: request.resultKey, resultFingerprint: fingerprint(request.value), text: draft.reply.trim(), taskIds: [task.taskId], taskInputVersion: task.inputVersion, taskRunSequence: task.runSequence, topicRefs: task.topicRefs,
       matterSourceMessageIds: [...new Set(sources.map((message) => message.messageId))], matterUnitRefs: sources.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })),
       replyKind: replyReview.kind, replacesOutboundIds: replyReview.replaceOutboundIds,
-      ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients }
+      ...(target ? { replyToMessageId: target.messageId, replyToSenderOpenDingTalkId: target.senderOpenDingTalkId } : {}), atOpenDingTalkIds: recipients, ...(atAll ? { atAll } : {}) }
   }
   function notificationFence(request) {
     return { observedTopics: request.observedTopics, outboxFingerprint: fingerprint(store.getGroup(request.groupId)?.outbox ?? []) }

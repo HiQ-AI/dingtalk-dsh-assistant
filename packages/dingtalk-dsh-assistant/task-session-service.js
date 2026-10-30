@@ -30,6 +30,7 @@ import { createTopicFactHandler } from './topic-facts.js'
 import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from './task-message-projections.js'
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, taskFilePath, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
 import { installTaskSessionPersistence, taskSessionLogRoot } from './task-session-persistence.js'
+import { prepareGroupNotification } from './group-notification.js'
 import { formatTaskGroupReply } from './group-reply-format.js'
 import { assertGroupReply } from './group-message.js'
 import { taskExecutionContext } from './execution-context.js'
@@ -760,14 +761,15 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const sameRefs = (left, right) => hash((left ?? []).map(({ topicId, revision }) => [topicId, revision]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))) === hash((right ?? []).map(({ topicId, revision }) => [topicId, revision]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
   const sameIds = (left, right) => hash([...(left ?? [])].sort()) === hash([...(right ?? [])].sort())
   function fixedReplyFact(args) {
-    const message = residentStore.getGroup(args.groupId)?.messages.find(item => item.messageId === args.replyToMessageId && item.messageVersion === args.sourceVersion)
+    const message = residentStore.getGroup(args.groupId)?.messages.find(item => item.messageId === (args.sourceRef?.messageId ?? args.replyToMessageId) && item.messageVersion === args.sourceVersion)
     const ref = args.matterUnitRefs?.length === 1 && args.matterUnitRefs[0]
     const unit = message?.units?.find(item => item.unitId === ref?.unitId && item.unitRevision === ref?.unitRevision && item.fixedTopic === args.fixedTopic)
     const requestId = unit && fixedUnitRequestId(args.groupId, message, unit)
     const scheduled = args.outboundId === platformScheduleOutboundId(requestId)
     if (!fixedTopicIds.includes(args.fixedTopic) || !unit || args.topicRefs?.length || args.taskIds?.length
       || !message.activeUnitRefs?.some(item => item.unitId === unit.unitId && item.unitRevision === unit.unitRevision)
-      || args.replyToSenderOpenDingTalkId !== message.senderOpenDingTalkId
+      || (args.sourceRef ? args.sourceRef.actorId !== message.senderOpenDingTalkId || args.sourceRef.messageVersion !== message.messageVersion
+        : args.replyToSenderOpenDingTalkId !== message.senderOpenDingTalkId)
       || !scheduled && args.outboundId !== requestId) fail('fixed_topic_reply_source_invalid')
     const fact = { fixedTopic: unit.fixedTopic, unitId: unit.unitId, unitRevision: unit.unitRevision }
     if (scheduled) {
@@ -779,26 +781,28 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     }
     return fact
   }
-  const frozenReply = async ({ groupId, topicRefs, decisionId, outboundId, taskIds, resultFingerprint, taskInputVersion, taskRunSequence, fixedTopic, sourceVersion, matterUnitRefs, replyToMessageId, replyToSenderOpenDingTalkId }) => {
-    const fact = fixedTopic ? fixedReplyFact({ groupId, topicRefs, outboundId, taskIds, fixedTopic, sourceVersion, matterUnitRefs, replyToMessageId, replyToSenderOpenDingTalkId }) : null
+  const frozenReply = async ({ groupId, topicRefs, decisionId, outboundId, taskIds, resultFingerprint, taskInputVersion, taskRunSequence, fixedTopic, sourceVersion, matterUnitRefs, sourceRef, replyToMessageId, replyToSenderOpenDingTalkId }) => {
+    const fact = fixedTopic ? fixedReplyFact({ groupId, topicRefs, outboundId, taskIds, fixedTopic, sourceVersion, matterUnitRefs, sourceRef, replyToMessageId, replyToSenderOpenDingTalkId }) : null
     const outbound = residentStore.getGroup(groupId)?.outbox.find(item => item.outboundId === outboundId)
     const notification = (await query('notification.list')).find(item => item.id === outboundId)
     const payload = notification?.payload
     if (notification && (notification.kind !== (fact ? 'fixed-topic-reply' : 'topic-reply') || payload?.conversationId !== groupId || !sameRefs(payload?.topicRefs, topicRefs)
-      || fact && (hash(payload.fact) !== hash(fact) || payload.sourceVersion !== sourceVersion || payload.sourceMessageId !== replyToMessageId || payload.actorId !== replyToSenderOpenDingTalkId)
+      || fact && (hash(payload.fact) !== hash(fact) || payload.sourceVersion !== sourceVersion || payload.sourceMessageId !== replyToMessageId || payload.actorId !== replyToSenderOpenDingTalkId || hash(payload.sourceRef ?? null) !== hash(sourceRef ?? null))
       || taskIds !== undefined && !sameIds(payload?.taskIds, taskIds)
       || Object.hasOwn(payload, 'replyToMessageId') && payload.replyToMessageId !== payload.sourceMessageId
       || Object.hasOwn(payload, 'replyToSenderOpenDingTalkId') && payload.replyToSenderOpenDingTalkId !== payload.actorId)) fail('group_reply_frozen_identity_conflict')
     if (outbound && (!sameRefs(outbound.topicRefs, topicRefs)
-      || fact && (outbound.replyToMessageId !== replyToMessageId || outbound.replyToSenderOpenDingTalkId !== replyToSenderOpenDingTalkId || hash(outbound.matterUnitRefs ?? []) !== hash(matterUnitRefs))
+      || fact && (outbound.replyToMessageId !== replyToMessageId || outbound.replyToSenderOpenDingTalkId !== replyToSenderOpenDingTalkId || hash(outbound.matterUnitRefs ?? []) !== hash(matterUnitRefs) || hash(outbound.sourceRef ?? null) !== hash(sourceRef ?? null))
       || decisionId && outbound.decisionId !== decisionId && !(notification && !outbound.decisionId && outbound.sourceMessageId === `task-notification:${outboundId}`)
       || !decisionId && outbound.decisionId
       || taskIds !== undefined && !sameIds(outbound.taskIds, taskIds)
       || resultFingerprint !== undefined && outbound.resultFingerprint !== undefined && outbound.resultFingerprint !== resultFingerprint
       || taskInputVersion !== undefined && outbound.taskInputVersion !== undefined && outbound.taskInputVersion !== taskInputVersion
       || taskRunSequence !== undefined && outbound.taskRunSequence !== undefined && outbound.taskRunSequence !== taskRunSequence)) fail('group_reply_frozen_identity_conflict')
-    const frozen = payload && { text: payload.text, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId, atOpenDingTalkIds: payload.atOpenDingTalkIds ?? [] }
-    if (outbound && frozen && (outbound.text !== frozen.text || outbound.replyToMessageId !== frozen.replyToMessageId || outbound.replyToSenderOpenDingTalkId !== frozen.replyToSenderOpenDingTalkId || hash(outbound.atOpenDingTalkIds ?? []) !== hash(frozen.atOpenDingTalkIds))) fail('group_reply_frozen_identity_conflict')
+    const frozen = payload && { text: payload.text, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId, atOpenDingTalkIds: payload.atOpenDingTalkIds ?? [], ...(payload.atAll ? { atAll: true } : {}),
+      ...(payload.sourceRef ? { sourceRef: payload.sourceRef } : {}), artifactFiles: payload.artifactFiles ?? [] }
+    if (outbound && frozen && (outbound.text !== frozen.text || outbound.replyToMessageId !== frozen.replyToMessageId || outbound.replyToSenderOpenDingTalkId !== frozen.replyToSenderOpenDingTalkId || hash(outbound.atOpenDingTalkIds ?? []) !== hash(frozen.atOpenDingTalkIds) || !!outbound.atAll !== !!frozen.atAll
+      || hash(outbound.artifactFiles ?? []) !== hash(frozen.artifactFiles))) fail('group_reply_frozen_identity_conflict')
     return { outbound, notification, frozen: outbound ?? frozen }
   }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction, taskFacts: topicFacts,
@@ -848,8 +852,19 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const sourceText = replySource?.text
       if (previous?.status === 'sent' || previous?.status === 'superseded') return residentStore.getGroup(args.groupId)
       // The resident outbox can survive a crash before notification.prepare.
-      const reply = previous ? { text: previous.text, replyToMessageId: previous.replyToMessageId, replyToSenderOpenDingTalkId: previous.replyToSenderOpenDingTalkId } : formatTaskGroupReply({ source: { groupId: args.groupId, messageId: args.replyToMessageId, senderOpenDingTalkId: args.replyToSenderOpenDingTalkId, text: sourceText }, summary: args.text, evidence: [], limitations: [], signature: legacy.getAgentConfig().replySignature, includeSignature: args.replyKind === 'substantive', internalIds: await topicReplyInternalIds(args), allowUnrouted: true })
-      args = { ...args, ...reply, atOpenDingTalkIds: previous ? previous.atOpenDingTalkIds ?? [] : args.atOpenDingTalkIds ?? [] }
+      const reply = previous ? { text: previous.text, replyToMessageId: previous.replyToMessageId, replyToSenderOpenDingTalkId: previous.replyToSenderOpenDingTalkId,
+        atOpenDingTalkIds: previous.atOpenDingTalkIds ?? [], atAll: previous.atAll, artifactFiles: previous.artifactFiles ?? [] }
+        : prepareGroupNotification({ ...args, sourceText, signature: legacy.getAgentConfig().replySignature,
+          includeSignature: args.replyKind === 'substantive', internalIds: await topicReplyInternalIds(args) })
+      args = { ...args, ...reply }
+      if (args.artifactFiles?.length) {
+        const platformSource = args.artifactFiles[0].artifact.platformSource
+        if (!args.fixedTopic || !args.sourceRef || platformSource?.requestId !== args.outboundId
+          || platformSource.groupId !== args.groupId || platformSource.messageId !== args.sourceRef.messageId
+          || platformSource.messageVersion !== args.sourceVersion || platformSource.unitId !== args.matterUnitRefs[0]?.unitId
+          || platformSource.unitRevision !== args.matterUnitRefs[0]?.unitRevision) fail('fixed_topic_reply_artifact_invalid')
+        await deliveryFiles.validateManifest(args.artifactFiles.map(file => file.artifact), { platformSource })
+      }
       const group = await residentStore.appendOutbox(args)
       const notificationId = args.outboundId
       const frozenSource = residentStore.getGroup(args.groupId)?.messages.find(message => message.messageId === args.replyToMessageId)
@@ -857,8 +872,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const fact = args.fixedTopic ? fixedReplyFact(args) : { topicRefs: args.topicRefs }
       await command('notification.prepare', { notificationId, taskId: args.taskIds?.[0] ?? null, requirementRevision: 1, kind,
         payload: { text: args.text, topicRefs: args.topicRefs, replyTopicId: args.topicRefs?.[0]?.topicId, taskIds: args.taskIds, replyKind: args.replyKind, conversationId: args.groupId, sourceMessageId: args.replyToMessageId, ...(frozenSource ? { sourceVersion: frozenSource.messageVersion } : {}), actorId: args.replyToSenderOpenDingTalkId,
-          ...(args.fixedTopic ? { sourceId: `im:${hash([args.groupId, args.replyToMessageId, args.sourceVersion])}` } : {}),
-          replyToMessageId: args.replyToMessageId, replyToSenderOpenDingTalkId: args.replyToSenderOpenDingTalkId, atOpenDingTalkIds: args.atOpenDingTalkIds ?? [], fact, kind } }, `prepare-notification:${notificationId}`)
+          ...(args.fixedTopic ? { sourceId: `im:${hash([args.groupId, args.sourceRef?.messageId ?? args.replyToMessageId, args.sourceVersion])}`,
+            ...(args.sourceRef ? { sourceRef: args.sourceRef } : {}), sourceVersion: args.sourceVersion } : {}),
+          replyToMessageId: args.replyToMessageId, replyToSenderOpenDingTalkId: args.replyToSenderOpenDingTalkId, atOpenDingTalkIds: args.atOpenDingTalkIds ?? [], ...(args.atAll ? { atAll: true } : {}),
+          ...(args.artifactFiles?.length ? { artifactFiles: args.artifactFiles } : {}), fact, kind } }, `prepare-notification:${notificationId}`)
       void deliverNotifications()
       return group
     },
@@ -1395,14 +1412,16 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const notificationRecoveryError = (code, statusCode = 409) => Object.assign(new Error(code), { code, statusCode })
   const notificationStage = (current, stage) => current.payload.conversationId && Number.isSafeInteger(current.payload.sourceVersion)
     ? recordMessageStage({ groupId: current.payload.conversationId,
-      messages: [{ messageId: current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined
+      messages: [{ messageId: current.payload.sourceRef?.messageId ?? current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined
   async function notificationDeliveryGate(notification) {
     if (notification.kind === 'coordination' || notification.state === 'superseded') return false
     if (notification.kind === 'fixed-topic-reply' && ['prepared', 'failed'].includes(notification.state)) {
-      const p = notification.payload
+      const parent = notification.payload.artifact ? await query('notification.get', { notificationId: notification.payload.deliveryId }) : notification
+      const p = parent?.payload
       try {
-        await frozenReply({ groupId: p.conversationId, outboundId: notification.id, topicRefs: p.topicRefs, taskIds: p.taskIds,
-          fixedTopic: p.fact.fixedTopic, sourceVersion: p.sourceVersion, matterUnitRefs: [{ unitId: p.fact.unitId, unitRevision: p.fact.unitRevision }],
+        if (!p || parent.kind !== 'fixed-topic-reply') fail('fixed_topic_reply_source_invalid')
+        await frozenReply({ groupId: p.conversationId, outboundId: parent.id, topicRefs: p.topicRefs, taskIds: p.taskIds,
+          fixedTopic: p.fact.fixedTopic, sourceVersion: p.sourceVersion, sourceRef: p.sourceRef, matterUnitRefs: [{ unitId: p.fact.unitId, unitRevision: p.fact.unitRevision }],
           replyToMessageId: p.sourceMessageId, replyToSenderOpenDingTalkId: p.actorId })
         if (['fixed_topic_reply_source_invalid', 'group_reply_frozen_identity_conflict'].includes(failures.get(notification.id)?.code)) failures.delete(notification.id)
       } catch (error) {

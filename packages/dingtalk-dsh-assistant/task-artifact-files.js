@@ -88,6 +88,7 @@ export function createTaskArtifactFiles({ root, maxFileBytes = 20 * 1024 * 1024,
     || [maxFileBytes, maxBatchBytes, maxFiles].some(value => !Number.isSafeInteger(value) || value <= 0)) fail('CONFIG_INVALID')
   const configuredRoot = resolve(root)
   async function artifactDirectory(file) {
+    if (file.platformSource) return join(configuredRoot, 'platform', executionDigest(file.platformSource), file.artifactId)
     const directories = await getTaskDirectories?.(file.taskId)
     const base = directories == null ? configuredRoot : directories.outputs
     if (typeof base !== 'string' || !isAbsolute(base)) fail('CONFIG_INVALID')
@@ -95,6 +96,16 @@ export function createTaskArtifactFiles({ root, maxFileBytes = 20 * 1024 * 1024,
   }
   function binding(input) {
     const { taskId, requirementRevision, producer, role, fileName } = input ?? {}
+    if (input?.platformSource) {
+      const s = input.platformSource
+      if (taskId !== undefined || requirementRevision !== undefined || producer !== undefined
+        || !identity(s.requestId) || !identity(s.sessionId) || !identity(s.unitId)
+        || !Number.isSafeInteger(s.messageVersion) || s.messageVersion < 1 || !Number.isSafeInteger(s.unitRevision) || s.unitRevision < 1
+        || ![s.groupId, s.messageId].every(value => typeof value === 'string' && value.trim() && value.length <= 1024)
+        || !safeName(role) || !safeName(fileName) || fileName.toLowerCase() === 'descriptor.json') fail('INPUT_INVALID')
+      return { version: 2, platformSource: { requestId: s.requestId, sessionId: s.sessionId, groupId: s.groupId,
+        messageId: s.messageId, messageVersion: s.messageVersion, unitId: s.unitId, unitRevision: s.unitRevision }, role, fileName }
+    }
     if (!identity(taskId) || !Number.isSafeInteger(requirementRevision) || requirementRevision < 1
       || !producer || !identity(producer.runId) || !identity(producer.nodeRunId)
       || typeof producer.outputRef !== 'string' || !producer.outputRef.trim() || producer.outputRef.length > 1024
@@ -111,7 +122,7 @@ export function createTaskArtifactFiles({ root, maxFileBytes = 20 * 1024 * 1024,
     const base = { ...binding(input), mediaType: mediaTypes[extname(input.fileName).toLowerCase()] ?? 'application/octet-stream',
       size: input.size, sha256: input.sha256 }
     const artifactId = executionDigest(base)
-    return { ...base, artifactId, fileRef: `${base.taskId}/${artifactId}/${base.fileName}` }
+    return { ...base, artifactId, fileRef: `${base.platformSource ? `platform/${executionDigest(base.platformSource)}` : base.taskId}/${artifactId}/${base.fileName}` }
   }
   async function resolveFile(file) {
     binding(file)
@@ -153,13 +164,14 @@ export function createTaskArtifactFiles({ root, maxFileBytes = 20 * 1024 * 1024,
   }
   async function prepareImport(input) { return descriptor(input, await importBytes(input, false)) }
   async function importFile(input) { return register({ ...input, bytes: await importBytes(input, true) }) }
-  async function validateManifest(files, { taskId, requirementRevision } = {}) {
-    if (!identity(taskId) || !Number.isSafeInteger(requirementRevision) || requirementRevision < 1
+  async function validateManifest(files, { taskId, requirementRevision, platformSource } = {}) {
+    if ((!platformSource && (!identity(taskId) || !Number.isSafeInteger(requirementRevision) || requirementRevision < 1))
       || !Array.isArray(files) || files.length === 0 || files.length > maxFiles) fail('MANIFEST_INVALID')
     const seen = new Set(), verified = []
     let total = 0
     for (const file of files) {
-      if (!file || file.taskId !== taskId || file.requirementRevision !== requirementRevision) fail('MANIFEST_SCOPE_DENIED')
+      if (!file || (platformSource ? file.taskId !== undefined || canonicalExecutionJson(file.platformSource) !== canonicalExecutionJson(platformSource)
+        : file.platformSource || file.taskId !== taskId || file.requirementRevision !== requirementRevision)) fail('MANIFEST_SCOPE_DENIED')
       if (seen.has(file.artifactId)) fail('MANIFEST_DUPLICATE')
       seen.add(file.artifactId)
       await resolveFile(file)
