@@ -123,11 +123,16 @@ test('SIGKILL after preparation before outbox projection recovers the exact froz
     await store.command({id:'prepare-before-kill',kind:'notification.prepare',args:JSON.parse(process.argv[2])});
     process.stdout.write('prepared');setInterval(()=>{},1000);`
   const child=spawn(process.execPath,['--input-type=module','--eval',script,JSON.stringify(f.options),JSON.stringify(f.input(crashId))],{stdio:['ignore','pipe','pipe']})
-  const exited=once(child,'exit');t.after(()=>child.kill('SIGKILL'))
-  const ready=await Promise.race([once(child.stdout,'data').then(([chunk])=>chunk.toString()),exited.then(([code,signal])=>{throw new Error(`child exited before preparation: ${code}/${signal}`)})])
-  assert.equal(ready,'prepared');child.kill('SIGKILL')
-  const [code,signal]=await exited
-  if(process.platform==='win32'){assert.equal(signal,null);assert.equal(code,1)}else assert.equal(signal,'SIGKILL')
+  const closed=once(child,'close')
+  try {
+    const ready=await Promise.race([once(child.stdout,'data').then(([chunk])=>chunk.toString()),closed.then(([code,signal])=>{throw new Error(`child exited before preparation: ${code}/${signal}`)})])
+    assert.equal(ready,'prepared');assert.equal(child.kill('SIGKILL'),true)
+    const [code,signal]=await closed
+    assert.equal(code,null);assert.equal(signal,'SIGKILL')
+  } finally {
+    if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL')
+    await closed.catch(()=>{})
+  }
   await f.restart()
   assert.deepEqual((await f.read(crashId)).payload,f.notification.payload)
   assert.equal((await f.command('notification.prepare',f.input(crashId),'prepare-before-kill')).replayed,true)

@@ -88,15 +88,17 @@ test('wrapper isolation binds the original command and task; identity and arbitr
 
 test('actual PowerShell AST verifies serve preamble without executing database identity or prepare', t => {
  const scope = postgresWrapperScope(wrapperCommand, wrapperEvidence, { taskId: 'task' }, 'D:\\agent')
+ const source = wrapperScript.replace(/\r\n/g, '\n')
  const cases = [
-  [wrapperScript, true], [wrapperScript.replaceAll('\n', '\r\n'), true],
-  [wrapperScript.replace("$pgBin =", "Write-Output unsafe\n$pgBin ="), false],
-  [wrapperScript.replace("$Action -eq 'prepare'", "$Action -ne 'prepare'"), false],
-  [wrapperScript.replace("[string]$Action", "[string]$Action = $(Write-Output unsafe)"), false],
-  [wrapperScript.replace('    exit $LASTEXITCODE\n}', '    Write-Output unsafe\n}'), false],
-  [wrapperScript.replace("$ownerText = 'synthetic-task-owner'", "$ownerText = 'foreign'"), false],
-  [wrapperScript.replace("-h 127.0.0.1", "-h 0.0.0.0"), false],
+  [source, true], [source.replaceAll('\n', '\r\n'), true],
+  [source.replace("$pgBin =", "Write-Output unsafe\n$pgBin ="), false],
+  [source.replace("$Action -eq 'prepare'", "$Action -ne 'prepare'"), false],
+  [source.replace("[string]$Action", "[string]$Action = $(Write-Output unsafe)"), false],
+  [source.replace('    exit $LASTEXITCODE\n}', '    Write-Output unsafe\n}'), false],
+  [source.replace("$ownerText = 'synthetic-task-owner'", "$ownerText = 'foreign'"), false],
+  [source.replace("-h 127.0.0.1", "-h 0.0.0.0"), false],
  ]
+ for (const [candidate, valid] of cases) if (!valid) assert.notEqual(candidate, source, 'negative AST fixture must change the wrapper')
  const encoded = Buffer.from(JSON.stringify({ scope, cases })).toString('base64')
  const script = postgresWrapperInspection + `\n$fixture=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))|ConvertFrom-Json\n@($fixture.cases|ForEach-Object { try { Assert-PgServeScript $_[0] $fixture.scope; $true } catch { $false } })|ConvertTo-Json -Compress`
  const root = mkdtempSync(join(tmpdir(), 'pg-wrapper-ast-'))
