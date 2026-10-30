@@ -77,6 +77,19 @@ PR #315 合并后的 `a88a82ea17ab99fced30ce925e90a776fffcada3` 由完整 Window
 
 独立审查还发现相邻两项定时附件交付使用同样的启动前计时，已同样在首次提交时冻结目标并等待原生投递终态，两项真实原生 2/2 通过。最终 `pnpm test:release-smoke` 14/14 通过，无跳过；rc.2 的合成生产者通过真实 jobs 服务产生并持久保存一组 registered/settled 及 producerReported，只验证原生账本能力，未执行 Windows shell。目录仍为 332 文件、329 Release、3 history；本轮未变更生产代码或提高任何超时。
 
+## 第二轮 Windows 复核与解包测试时序
+
+PR #316 合并后的 `784688e09afcaca00f75b6647b8f31fea82568f4` 由完整 Windows CI run `41142643365` 验证。unit、compat-0/1/2、history 和 native-0 六组通过；native-1 为 225 通过、2 取消。合计 4449 通过、0 断言失败、2 超时取消、5 原有跳过。前轮的原生 job、目录、权限恢复、定时和兼容失败已在此精确提交通过 Windows 验证，但整个发行门禁仍未通过。
+
+两个取消均在 `task-session-package-native.test.js`，各自原 30 秒门限不变。第一项在 message-ingested（约 3.5 秒）之后等待排空；第二项准备变慢，在约 27 秒取得 Resident Host 后未到 listening。相同文件在前轮 Windows 分别约 9.9 秒和 1.9 秒通过，本地未复现该完整慢路径，因此不能将其全部归因于环境或声称已确定唯一原因。
+
+定向控制确认了两处测试缺陷：
+
+- 真实排队执行可以同时是 `status=queued`、`drained=true`。原合成 Owner 只看 drained，可能在 review 尚未 claim 时请求 complete，被实际账本拒绝。现在明确等待 queued/running，终态须全部 succeeded；仅暂缓一项真实 review 的 claim，等 Owner 的正式 wait 回执后放行，继续断言三项执行成功和原 Task 完成。恢复旧条件的反向控制会命中原完成断言，不伪造执行结果或回执。
+- Node 测试超时不会展开挂起主体的 finally，旧 after 注册顺序会先删除仍运行的 Host/SQLite 目录。现在取消实际 Host、等待测试主体及 npm/tar 子进程关闭后再清理文件；Resident 启动使用原始 fiber 取消，避免先等启动完成。受控模型挂起验证了超时后的关闭及清理顺序，随后实际 Resident 用例正常通过；该预期取消的诊断不计入通过数。
+
+仅修改这两个解包测试及本记录，不调整产品、共享 Host、测试分类、门限或跳过条件。两项实际 npm 打包/解包运行定向通过，保留最终精确提交的完整 Windows 复验要求；这些局部证据不代替正式 Release 工作流、注册表及资产核验。
+
 ## 保留 2.3.0 的标签恢复边界
 
 本轮修复准备时，npm 三包仍未存在 2.3.0，GitHub Release 也不存在；失败 run 的构建/发布均跳过。恢复需先正常合并修复，再把原 annotated tag 对象 `8ff676edd1ef292cc21da6b332050191b00ab7d0` 保留到不触发发行的 `archive/failed-v2.3.0-fa14be0` 引用，并以该精确旧值为保护条件原子更新 `v2.3.0` 到最终 main 的新 annotated tag。远端值或制品状态变化时停止，不能盲目覆盖。
