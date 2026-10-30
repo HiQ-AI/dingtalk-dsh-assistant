@@ -6,6 +6,7 @@ import {observerWorkMetadata} from '../packages/dingtalk-dsh-assistant/observer-
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync, constants } from 'node:sqlite'
+import { dirname, join } from 'node:path'
 import { installObserverPagination, installObserverArchivePagination, observerPage, observerGroupQuery } from '../packages/dingtalk-dsh-assistant/observer-pagination.js'
 
 function fixture(t,{archives=false}={}) {
@@ -16,6 +17,24 @@ function fixture(t,{archives=false}={}) {
  installObserverPagination(db,{migrate:true})
  return {db,put,page:q=>observerPage(db,q,'test')}
 }
+test('task page joins only selected topic names once per group/id without reading topic history', async t => {
+ const {put,page}=fixture(t)
+ const refs=[{topicId:'shared',revision:2},{groupId:'other',topicId:'shared',revision:4},{topicId:'missing',revision:1}]
+ for(let i=0;i<3;i++)put('tasks',`t${i}`,{taskId:`t${i}`,groupId:'web:g',sourceGroupId:'g',status:'active',control:'active',drained:true,updatedAt:'same',topicRefs:i<2?refs:[{topicId:'off-page',revision:1}]})
+ const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/task-session-service.js',import.meta.url),'utf8')
+ const projection=source.slice(source.indexOf('  const taskTopicRefs ='),source.indexOf('  const taskDTO ='))
+ const method=source.slice(source.indexOf('    async boardTasks(options)'),source.indexOf('    async taskDecisions('))
+ const lookups=[],queries=[]
+ const board=runInNewContext(`(()=>{${projection};return ({${method}}).boardTasks})()`,{Map,dirname,root:'/fixture',taskFilePath:(...args)=>join(...args),taskSessionLogRoot:()=>'/log',
+  residentStore:{getTopic(groupId,topicId){lookups.push([groupId,topicId]);return topicId==='missing'?undefined:{title:groupId==='g'?'事项甲':'事项乙',get messages(){throw new Error('topic history must not be projected')}}}},
+  query:async(kind,args)=>{queries.push(kind);assert.equal(kind,'observer.page');return page(args)}})
+ const result=await board({offset:0,limit:2,state:'waiting'})
+ assert.equal(result.total,3);assert.equal(result.items.length,2)
+ assert.deepEqual(lookups,[['g','shared'],['other','shared'],['g','missing']])
+ assert.deepEqual(queries,['observer.page'])
+ for(const task of result.items){assert.deepEqual(Array.from(task.topicRefs,ref=>ref.title),['事项甲','事项乙',null]);assert.equal(task.topicRefs[1].revision,4);assert.equal(task.topicRefs[1].groupId,'other');assert.equal(task.topicRefs[0].messages,undefined)}
+ assert.equal(page({collection:'tasks',offset:0,limit:1}).items[0].topicRefs[0].title,undefined,'名称仅做读取投影，不回写任务引用')
+})
 test('page materialization is bounded, ordered and count uses metadata, not historical bodies',t=>{
  const {db,put}=fixture(t)
  db.exec('BEGIN')

@@ -69,6 +69,14 @@ test('历史卡片保留只读状态，不恢复旧归档或工作流写入口',
  assert.match(source,/padding: '8px 4px'/)
  assert.match(source,/overflowY: 'auto', scrollbarWidth: 'none'/)
 })
+test('任务卡片优先显示当前页投影名称，多话题与缺名仍保留正确入口',()=>{
+ const {tree,actions}=card({taskId:'names',title:'任务',groupId:'g',topicRefs:[{topicId:'topic',title:'更新后的事项名'},{groupId:'other',topicId:'topic',title:'另一群事项'},{topicId:'unresolved-id'}]})
+ const topics=flatten(tree).filter(node=>node.props['aria-label']?.startsWith('话题 '))
+ assert.deepEqual(topics.map(node=>node.children[0]),['更新后的事项名','另一群事项','话题名称未记录'])
+ assert.doesNotMatch(JSON.stringify(tree),/话题 unresolved-id/)
+ for(const topic of topics)topic.props.onClick({stopPropagation(){}})
+ assert.deepEqual(actions.filter(([kind])=>kind==='topic').map(([,id])=>id),['topic','topic','unresolved-id'])
+})
 test('原四列局部滚动保留，空列和大量任务分页有界，窄屏仅改变列数',()=>{
  const render = data => runInNewContext(`(()=>{${source.slice(source.indexOf('      const bucketColumns ='),source.indexOf('      const menu ='))};return bucketColumns})()`,{
   React:{createElement:(type,props,...children)=>({type,props:props||{},children:children.flat()})},data,error:undefined,taskBuckets:[{state:'running',label:'执行中',tone:'blue',background:'white'}],taskPages:{running:99},renderTaskCard:task=>({type:'article',props:{taskId:task.taskId},children:[]}),colors:{border:'gray',muted:'gray',cardSurface:'white'},Button:'button',setTaskPages(){}

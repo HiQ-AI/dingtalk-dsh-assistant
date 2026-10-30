@@ -421,13 +421,20 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return source ? bindingsForSources([source]) : []
   }
   const requireTask = async taskId => (await query('task.get', { taskId })) ?? fail('TASK_SESSION_NOT_FOUND')
+  const taskTopicRefs = (task, titles = new Map()) => (task.topicRefs ?? []).map(ref => {
+    const groupId = ref.groupId || task.sourceGroupId || task.groupId
+    const key = JSON.stringify([groupId, ref.topicId])
+    // The resident already owns these topics; project only names for the selected task page.
+    if (!titles.has(key)) titles.set(key, residentStore.getTopic(groupId, ref.topicId)?.title)
+    return { ...ref, title: titles.get(key) || ref.title || null }
+  })
   const taskDTO = async task => {
     const { dialogue: _dialogue, ...publicTask } = task
     const executions = await query('execution.list', { taskId: task.taskId })
     const pendingWake = !task.lastDecision && (await query('wake.list', { taskId: task.taskId })).some(wake => wake.state !== 'acked')
     const state = taskBoardState(task, executions, pendingWake)
     return { ...publicTask, state, contextInputContract: taskContextInputContract,
-    topicRefs: task.topicRefs ?? [], executionCount: executions.length,
+    topicRefs: taskTopicRefs(task), executionCount: executions.length,
     executionSessions: [...new Map(executions.map(execution => [execution.sessionId || execution.executionId, {
       executionId: execution.executionId, sessionId: execution.sessionId, executionBackend: executionBackend(execution), title: executionSessionTitle(execution), status: execution.status, createdAt: execution.createdAt,
       runTiming: execution.runTiming ?? null,
@@ -1875,7 +1882,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     async boardTasks(options) {
       if (!options) return Promise.all((await query('task.list')).map(taskDTO))
       const page = await query('observer.page', { collection: 'tasks', ...options })
-      return { ...page, items: page.items.map(task => ({ ...task, inputVersion: task.requirementRevision,
+      const titles = new Map()
+      return { ...page, items: page.items.map(task => ({ ...task, topicRefs: taskTopicRefs(task, titles), inputVersion: task.requirementRevision,
         controlState: task.control, waitingReason: task.state === 'waiting' ? task.lastDecision?.summary ?? '' : '',
         result: task.completion?.result ?? task.lastDecision ?? null, legacyReadonly: false,
         session: { sessionId: task.sessionId, sessionBound: task.sessionBound, status: task.drained ? 'idle' : 'running',
