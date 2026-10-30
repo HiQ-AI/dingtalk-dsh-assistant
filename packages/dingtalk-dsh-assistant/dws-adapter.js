@@ -25,7 +25,7 @@ function nativeMentionIds(values) {
   for (const value of values) {
     if (typeof value !== 'string' || !value || /[\s,"<>@\u0000-\u001f\u007f]/u.test(value)) throw new Error('dws_at_open_dingtalk_ids_invalid')
   }
-  return values.join(',')
+  return [...new Set(values)].join(',')
 }
 
 function assertFileName(value) {
@@ -185,7 +185,7 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     compileGroupSend({ groupId, text, idempotencyKey, atOpenDingTalkIds = [] }) {
       const mentions = nativeMentionIds(atOpenDingTalkIds)
       // 普通发送要求原生占位符；仅编码传输正文，不改持久业务正文。引用回复由 DWS 原生补齐。
-      const content = mentions ? `${atOpenDingTalkIds.map(id => `<@${id}>`).join(' ')} ${assertStableId(text, 'text')}` : assertStableId(text, 'text')
+      const content = mentions ? `${mentions.split(',').map(id => `<@${id}>`).join(' ')} ${assertStableId(text, 'text')}` : assertStableId(text, 'text')
       const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--text', content, '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       if (mentions) args.push('--at-open-dingtalk-ids', mentions)
       if (writesAuthorized) args.push('--yes')
@@ -198,6 +198,9 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     },
     compileGroupReply({ groupId, text, idempotencyKey, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds = [] }) {
       const args = ['chat', 'message', 'reply', '--group', assertStableId(groupId, 'group_id'), '--ref-msg-id', assertStableId(replyToMessageId, 'reply_message_id'), '--ref-sender', assertStableId(replyToSenderOpenDingTalkId, 'reply_sender_id'), '--content', assertStableId(text, 'text'), '--uuid', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
+      // DWS v1.0.63's reply contract separates ref-sender from atOpenDingTalkIds.
+      // Keep the selected author once: unlike the client UI, no automatic mention is guaranteed.
+      // https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/issues/845
       const mentions = nativeMentionIds(atOpenDingTalkIds)
       if (mentions) args.push('--at-open-dingtalk-ids', mentions)
       if (writesAuthorized) args.push('--yes')

@@ -104,6 +104,26 @@ test('普通群发仅传输正文编码原生提及，引用交由DWS补齐且�
   assert.equal(commands.length, 2)
 })
 
+test('当前DWS引用通道保留作者的显式mention，作者和其他成员按ID去重且不重复写正文', async () => {
+  const commands = [], recipients = ['open-author', 'open-reviewer', 'open-author', 'open-observer', 'open-reviewer']
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    commands.push(args); return { exitCode: 0, stdout: '{}' }
+  } } })
+  for (const quoted of [true, false]) {
+    await sendWorkflowNotification(adapter, { id: `deduplicated-${quoted}`, payload: { conversationId: 'group-id', text: '请查收核验结果。',
+      atOpenDingTalkIds: recipients, ...(quoted ? { sourceMessageId: 'source', actorId: 'open-author' } : {}) } })
+    const args = commands.at(-1)
+    assert.equal(args[args.indexOf('--at-open-dingtalk-ids') + 1], 'open-author,open-reviewer,open-observer')
+    assert.equal(args[args.indexOf(quoted ? '--content' : '--text') + 1], quoted ? '请查收核验结果。' : '<@open-author> <@open-reviewer> <@open-observer> 请查收核验结果。')
+    assert.equal(args.includes('--at-all'), false)
+  }
+  // The CLI only maps explicit IDs to mentions; ref-sender is a quote identity.
+  // This checks our pinned command contract, not unobserved server-side/UI behavior.
+  const noSelection = adapter.compileGroupReply({ groupId: 'group-id', text: '收到。', idempotencyKey: 'no-selection', replyToMessageId: 'source', replyToSenderOpenDingTalkId: 'open-author' })
+  assert.equal(noSelection.includes('--at-open-dingtalk-ids'), false)
+  assert.deepEqual(recipients, ['open-author', 'open-reviewer', 'open-author', 'open-observer', 'open-reviewer'])
+})
+
 test('普通与引用发送空提及不添加任何@参数，非法列表在调用DWS前拒绝', async () => {
   let calls = 0
   const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => { calls++; return { exitCode: 0, stdout: '{}' } } } })

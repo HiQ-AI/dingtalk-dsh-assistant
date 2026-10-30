@@ -13,6 +13,9 @@ import { createTopicCoordinator } from '../packages/dingtalk-dsh-assistant/topic
 import { replyTopicForMessage } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 import { projectTaskNotification } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { deliverTaskNotification } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
+import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
+import { sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/group-message.js'
+import { verifyTaskNotificationReadback } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'topic-facts-')), snapshot = { tables: {}, global: null }
@@ -40,7 +43,7 @@ async function fixture(t) {
     onNotification: notification => projectTaskNotification({ residentStore: resident, notification }) })
   const context = () => handler.context('group', resident.getTopic('group', topicId))
   const submission = (ctx, id, reply) => ({ requestId: id, groupId: 'group', topicId, revision: resident.getTopic('group', topicId).revision,
-    factContext: ctx, decision: { actions: [], topicUpdate: { summary: '已核对结果' }, reason: '有新结论', ...(reply ? { reply } : {}) } })
+    factContext: ctx, decision: { actions: [], topicUpdate: { summary: '已核对结果' }, reason: '有新结论', ...(reply ? { reply, replyToMessageId: 'origin', atOpenDingTalkIds: ['user'] } : {}) } })
   const submit = request => handler.submit(request, Object.fromEntries(['requestId', 'topicId', 'revision', 'decision'].map(key => [key, request[key]])))
   async function task(taskId, sourceIds = ['source']) {
     await commit('task.create', { taskId, groupId: 'group', ownerActorId: 'user', title: '核对结果', request: '核对结果', sourceRefs: sourceIds,
@@ -99,6 +102,77 @@ test('完成与事实同事务，回复失败不影响完成；重启复用结�
   assert.equal((await f.query('notification.list')).length, 1)
 })
 
+test('事实回复按Topic选择原需求人和验收人，多人原生提及冻结后经过真实发送适配器', async t => {
+  const f = await fixture(t)
+  const additions = [{ messageId: 'review', actorId: 'open-reviewer', senderName: '测试成员甲', text: '我来验收，请把核验结果也同步给我。' },
+    ...Array.from({ length: 10 }, (_, i) => ({ messageId: `progress-${i}`, actorId: 'open-helper', senderName: '测试成员甲一',
+      text: i === 9 ? '访问条件已恢复，完成后把截图发群里。' : '补充核验材料。' })),
+    { messageId: 'unresolved', senderName: '测试成员甲', text: '仅有显示名的历史信息。' }]
+  for (const item of additions) {
+    await f.resident.ingest({ groupId: 'group', messageId: item.messageId, senderOpenDingTalkId: item.actorId,
+      senderName: item.senderName, text: item.text, occurredAt: new Date().toISOString() })
+    if (item.actorId) await f.commit('source.record', { sourceId: `source-${item.messageId}`, groupId: 'group', ...item })
+  }
+  await f.resident.routeMessages({ groupId: 'group', routeId: 'context-route', routingRevision: f.resident.getGroup('group').routingRevision,
+    routes: additions.map(item => ({ messageId: item.messageId, messageVersion: 1, topics: [{ topicId: f.topicId }] })) })
+  const revision = f.resident.getTopic('group', f.topicId).revision
+  await f.resident.acceptTopicDecision({ groupId: 'group', topicId: f.topicId, revision, decisionId: 'context-decision',
+    decision: { actions: [], reason: '保留原始需求、验收约定及同事推进材料', topicUpdate: { summary: '按原需求核验，验收人需要同步结果；后续同事提供截图要求和访问条件。' } } })
+  await f.resident.completeTopicDecision({ groupId: 'group', topicId: f.topicId, decisionId: 'context-decision' })
+  const binding = await f.task('check', ['source-progress-9'])
+  await f.finish(binding)
+  const ctx = await f.context()
+  assert.deepEqual(ctx.input.sources.map(source => source.actorId), ['open-helper'], 'fact trigger alone would pick the wrong recipient')
+  assert.ok(ctx.input.originMessages.some(message => message.messageId === 'origin' && message.senderOpenDingTalkId === 'user'))
+  assert.ok(ctx.input.originMessages.some(message => message.messageId === 'review' && message.senderOpenDingTalkId === 'open-reviewer'))
+  assert.ok(!ctx.input.recentMessages.some(message => message.messageId === 'origin'))
+  assert.ok(ctx.metrics.contextBytes <= 22 * 1024)
+  const sub = f.submission(ctx, 'selected-audience', '核验已完成，结果和截图已整理。')
+  sub.decision.reason = '原需求人接收交付，验收人明确要求同步；后续材料提供者不自动替换或加入收件人。'
+  sub.decision.atOpenDingTalkIds = ['user', 'open-reviewer', 'user']
+  for (const patch of [{ replyToMessageId: undefined }, { atOpenDingTalkIds: undefined, reply: '@测试成员甲 核验完成。' },
+    { atOpenDingTalkIds: ['测试成员甲'] }, { atOpenDingTalkIds: ['untrusted-id'] }, { replyToMessageId: 'unresolved' }]) {
+    await assert.rejects(f.submit({ ...sub, decision: { ...sub.decision, ...patch } }))
+    assert.equal((await f.query('notification.list')).length, 0)
+  }
+  await f.submit(sub)
+  const [notice] = await f.query('notification.list')
+  assert.equal(notice.payload.sourceId, 'source')
+  assert.equal(notice.payload.sourceMessageId, 'origin')
+  assert.equal(notice.payload.actorId, 'user')
+  assert.deepEqual(notice.payload.atOpenDingTalkIds, ['user', 'open-reviewer'])
+  await f.reopen(); await f.handler.recover()
+  const persisted = await f.query('notification.get', { notificationId: notice.id })
+  assert.deepEqual(persisted.payload, notice.payload)
+  const commands = []
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    commands.push(args); return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'send-operation' } }) }
+  } } })
+  const observed = { messageId: 'sent-result', conversationId: 'group', text: notice.payload.text,
+    quotedMessage: { messageId: 'origin', conversationId: 'group' }, atOpenDingTalkIds: ['user', 'open-reviewer'] }
+  assert.equal(verifyTaskNotificationReadback(persisted, { ...observed, atOpenDingTalkIds: undefined, text: '@测试成员甲 ' + observed.text }, { acknowledgedMessageId: 'sent-result' }), undefined)
+  await deliverTaskNotification({ notification: persisted, command: f.commit, notifications: {
+    send: notification => sendWorkflowNotification(adapter, notification),
+    readback: notification => verifyTaskNotificationReadback(notification, observed, { acknowledgedMessageId: 'sent-result' }),
+  } })
+  assert.equal(commands.length, 1)
+  const args = commands[0], argument = key => args[args.indexOf(key) + 1]
+  assert.equal(argument('--group'), 'group')
+  assert.equal(argument('--ref-msg-id'), 'origin')
+  assert.equal(argument('--ref-sender'), 'user')
+  assert.equal(argument('--at-open-dingtalk-ids'), 'user,open-reviewer')
+  assert.equal(argument('--content'), notice.payload.text)
+  assert.equal(args.includes('--at-all'), false)
+  assert.equal(args.includes('--at-user-ids'), false)
+  const delivered = await f.query('notification.get', { notificationId: notice.id })
+  assert.equal(delivered.state, 'delivered')
+  assert.equal(delivered.receipt.mentionVerification, 'verified')
+  await projectTaskNotification({ residentStore: f.resident, notification: delivered })
+  const outbound = f.resident.getGroup('group').outbox[0]
+  assert.equal(outbound.replyToMessageId, 'origin')
+  assert.deepEqual(outbound.atOpenDingTalkIds, ['user', 'open-reviewer'])
+})
+
 test('旧事实请求不能覆盖已到达补充或任务新版本，新结论允许再回复', async t => {
   const f = await fixture(t), a = await f.task('alpha')
   await f.finish(a)
@@ -136,7 +210,7 @@ test('事实轮拒绝任何任务动作，引用已送达回复能反查 Topic',
   assert.equal(envelopes().length, 1)
   assert.equal(request.trigger, 'task-facts')
   const submit = decision => tools.get('group_decision_submit').execute({ requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision })
-  const decision = { actions: [], topicUpdate: { summary: '结果已核验' }, reason: '新结果', reply: '核对完成。' }
+  const decision = { actions: [], topicUpdate: { summary: '结果已核验' }, reason: '新结果', reply: '核对完成。', replyToMessageId: 'origin', atOpenDingTalkIds: ['user'] }
   assert.equal((await submit({ ...decision, actions: [{ kind: 'new-task' }] })).status, 'invalid-arguments')
   assert.equal((await submit(decision)).status, 'accepted')
   assert.equal(actions.length, 0)

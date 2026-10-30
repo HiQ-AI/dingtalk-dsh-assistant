@@ -12,7 +12,14 @@ export const factDecisionSchema = z.strictObject({
   decision: z.strictObject({ actions: z.tuple([]),
     topicUpdate: z.strictObject({ summary: z.string().trim().min(1).max(4000), openQuestions: z.array(z.string().max(500)).max(12).optional() }),
     reply: z.string().trim().min(1).max(6000).optional(), reason: z.string().trim().min(1).max(1000),
+    replyToMessageId: z.string().min(1).optional().describe('结合Topic原始需求、验收反馈及明确交付对象，选择本话题内真人消息作为引用目标；不是默认最后一个来源。'),
+    atOpenDingTalkIds: z.array(z.string().min(1)).min(1).optional().describe('本次结果应通知的受信群成员ID集合，可多人；从话题原文身份选择，不按姓名猜ID，不自动包含全部参与者。回复时显式填写，正文@姓名不能替代原生提及。'),
   }),
+}).superRefine(({ decision }, ctx) => {
+  if (!decision.reply) return
+  for (const field of ['replyToMessageId', 'atOpenDingTalkIds']) if (!decision[field]) {
+    ctx.addIssue({ code: 'custom', path: ['decision', field], message: '非空回复必须明确选择话题内引用目标和收件人；身份不确定时不猜测。' })
+  }
 })
 export const factDecisionJsonSchema = toToolJsonSchema(factDecisionSchema)
 
@@ -121,6 +128,11 @@ export function topicFactLedger({ db, get, put }) {
         substr(json_extract(body,'$.text'),1,800) text, length(json_extract(body,'$.text')) textLength
         FROM dynamic_sources WHERE id IN (SELECT value FROM json_each(?)) LIMIT 32`).all(JSON.stringify(q.sourceIds))
     }
+    if (q.kind === 'topic.fact.reply-source') return db.prepare(`SELECT id sourceId FROM dynamic_sources
+      WHERE json_extract(body,'$.groupId')=? AND json_extract(body,'$.messageId')=?
+        AND json_extract(body,'$.actorId')=? AND json_extract(body,'$.version')=?
+        AND json_extract(body,'$.channel') NOT IN ('internal','web') LIMIT 1`)
+      .get(q.groupId, q.messageId, q.actorId, q.version)
     if (q.kind === 'topic.fact.replies') return db.prepare(`WITH reply_rows AS (SELECT id,body,rowid sequence FROM dynamic_notifications
       UNION ALL SELECT id,body,sequence FROM dynamic_archived_notifications)
       SELECT id outboundId,
@@ -146,7 +158,11 @@ export function topicFactLedger({ db, get, put }) {
       let notification = null
       if (decision.reply) {
         const source = get('dynamic_sources', a.sourceId)
-        if (!source || !facts.some(f => f.sourceIds.includes(a.sourceId)) || source.groupId !== a.groupId) fail('TOPIC_REPLY_SOURCE_INVALID')
+        // Topic membership is checked against the frozen resident revision by the Host.
+        // A recipient can be the original requester or reviewer, outside this fact's trigger sources.
+        if (!source || source.groupId !== a.groupId || source.messageId !== decision.replyToMessageId
+          || a.reply.replyToMessageId !== source.messageId || a.reply.replyToSenderOpenDingTalkId !== source.actorId
+          || JSON.stringify(a.reply.atOpenDingTalkIds) !== JSON.stringify(decision.atOpenDingTalkIds)) fail('TOPIC_REPLY_SOURCE_INVALID')
         notification = { id: `fact-reply:${hash([a.submission.requestId, a.factIds])}`, kind: 'topic-reply', taskId: facts[0].taskId,
           requirementRevision: facts[0].requirementRevision, state: 'prepared', createdAt: stamp, updatedAt: stamp,
           payload: { ...a.reply, text: a.reply.text, conversationId: a.groupId, replyTopicId: a.topicId,
@@ -228,17 +244,20 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
       ])
       const group = residentStore.getGroup(groupId)
       const total = topicMessageCount(group, topic, topic.revision)
+      const projectMessage = ({ messageId, senderName, senderOpenDingTalkId, sourceKind, text, messageVersion }) => ({
+        messageId, senderName, senderOpenDingTalkId, sourceKind, text: text.slice(0, 800), messageVersion,
+        ...(text.length > 800 ? { textTruncated: true } : {}) })
+      const originMessages = topicMessages(group, topic, topic.revision, { limit: 3 }).map(projectMessage)
       const recent = topicMessages(group, topic, topic.revision, { offset: Math.max(0, total - 8), limit: 8 })
-        .map(message => ({ messageId: message.messageId, senderName: message.senderName,
-          text: message.text.slice(0, 800), messageVersion: message.messageVersion }))
+        .map(projectMessage)
       const sourceId = facts.at(-1).sourceIds.at(-1)
       const queryResultBytes = Buffer.byteLength(JSON.stringify([facts, sources, tasks, replies]), 'utf8')
       const taskSnapshot = hash(tasks)
       const replySnapshot = replyFingerprint(replies)
-      const actorIds = [...new Set(sources.map(source => source.actorId))]
       const sourceIdentities = sources.flatMap(source => [source.sourceId, source.messageId, source.actorId])
       const input = { title: topic.title, summary: topic.summary.slice(0, 4000), openQuestions: topic.openQuestions.slice(0, 12),
-        facts: factContextProjection(facts, tasks), sources, recentMessages: recent, tasks, replies,
+        facts: factContextProjection(facts, tasks), sources, originMessages, recentMessages: recent, tasks, replies,
+        totalMessages: total, readCall: { name: 'group_topic_context_get', arguments: { topicId: topic.topicId, revision: topic.revision } },
         contextIsBounded: true, detailRead: { name: 'group_decision_context_get', section: 'facts' } }
       // All database queries already select bounded rows/fields. Reduce only this
       // small presentation when UTF-8 expands; exact evidence remains an on-demand read.
@@ -250,14 +269,14 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
       if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 22 * 1024) {
         input.summary = input.summary.slice(0, 1200)
         input.openQuestions = input.openQuestions.map(question => question.slice(0, 200))
-        for (const item of [...input.facts, ...input.sources, ...input.tasks, ...input.replies]) {
+        for (const item of [...input.facts, ...input.sources, ...input.originMessages, ...input.tasks, ...input.replies]) {
           for (const key of ['text', 'summary', 'question']) if (typeof item[key] === 'string') item[key] = item[key].slice(0, 240)
           for (const key of ['evidence', 'limitations']) if (Array.isArray(item[key])) item[key] = item[key].map(text => text.slice(0, 100))
         }
       }
       if (Buffer.byteLength(JSON.stringify(input), 'utf8') > 22 * 1024) fail('TOPIC_FACT_CONTEXT_BUDGET')
-      return { eventIds: facts.map(fact => fact.id), generation: hash(facts.map(fact => [fact.id, fact.lastSupersededNotificationId])), sourceId, expectedSummary: topic.summary,
-        replySnapshot, taskSnapshot, taskIds, actorIds, sourceIdentities, input,
+      return { eventIds: facts.map(fact => fact.id), generation: hash(facts.map(fact => [fact.id, fact.lastSupersededNotificationId])), expectedSummary: topic.summary,
+        replySnapshot, taskSnapshot, taskIds, sourceIdentities, input,
         metrics: { trigger: 'task-facts', queryCount: 4, factCount: facts.length, sourceCount: sources.length,
           recentCount: recent.length, taskCount: tasks.length, replyCount: replies.length,
           queryResultBytes, contextBytes: Buffer.byteLength(JSON.stringify(input), 'utf8'), queryAndContextMs: performance.now() - started } }
@@ -265,19 +284,34 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
     read: eventIds => Promise.all(eventIds.map(factId => query('topic.fact.get', { factId }))),
     async submit(request, submission) {
       const context = request.factContext
-      const [source] = await query('topic.fact.sources', { sourceIds: [context.sourceId] })
-      if (!source) fail('TOPIC_REPLY_SOURCE_INVALID')
-      const reply = submission.decision.reply ? formatTaskGroupReply({
-        source: { groupId: source.groupId, messageId: source.messageId, senderOpenDingTalkId: source.actorId, senderName: source.senderName, text: source.text },
-        summary: submission.decision.reply, evidence: [], limitations: [], signature: signature(),
-        internalIds: [request.groupId, request.topicId, request.requestId, ...context.eventIds, ...context.input.tasks.map(task => task.taskId), ...context.sourceIdentities],
-      }) : undefined
-      if (reply) reply.atOpenDingTalkIds = context.actorIds
+      submission = factDecisionSchema.parse(submission)
+      let reply, sourceId
+      if (submission.decision.reply) {
+        const group = residentStore.getGroup(request.groupId), topic = residentStore.getTopic(request.groupId, request.topicId)
+        if (!topic || topic.revision !== request.revision) return { status: 'topic-stale' }
+        const participants = topicMessages(group, topic, request.revision)
+          .filter(message => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
+        const target = participants.find(message => message.messageId === submission.decision.replyToMessageId)
+        if (!target) fail('group_reply_target_not_in_topic')
+        const recipients = [...new Set(submission.decision.atOpenDingTalkIds)]
+        if (recipients.some(id => !participants.some(message => message.senderOpenDingTalkId === id))) fail('group_reply_recipient_not_in_topic')
+        const source = await query('topic.fact.reply-source', { groupId: request.groupId, messageId: target.messageId,
+          actorId: target.senderOpenDingTalkId, version: target.messageVersion })
+        if (!source) fail('TOPIC_REPLY_SOURCE_INVALID')
+        sourceId = source.sourceId
+        submission = { ...submission, decision: { ...submission.decision, atOpenDingTalkIds: recipients } }
+        reply = formatTaskGroupReply({ source: { ...target, groupId: request.groupId },
+          summary: submission.decision.reply, evidence: [], limitations: [], signature: signature(),
+          internalIds: [request.groupId, request.topicId, request.requestId, sourceId, target.messageId, ...recipients,
+            ...context.eventIds, ...context.input.tasks.map(task => task.taskId), ...context.sourceIdentities],
+        })
+        reply.atOpenDingTalkIds = recipients
+      }
       const result = await residentStore.commitTopicFactDecision({ groupId: request.groupId, topicId: request.topicId,
         revision: request.revision, expectedSummary: context.expectedSummary, commit: async () => {
           const receipt = await commit('topic.fact.accept', { groupId: request.groupId, topicId: request.topicId,
             taskIds: context.taskIds, taskSnapshot: context.taskSnapshot, replySnapshot: context.replySnapshot,
-            factIds: context.eventIds, sourceId: context.sourceId, expectedSummary: context.expectedSummary, submission, ...(reply ? { reply } : {}) }, `fact-decision:${request.requestId}`)
+            factIds: context.eventIds, expectedSummary: context.expectedSummary, submission, ...(reply ? { reply, sourceId } : {}) }, `fact-decision:${request.requestId}`)
           return { status: receipt.result.status ?? 'accepted', receipt }
         } })
       if (result.status === 'accepted') {
