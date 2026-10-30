@@ -10,6 +10,24 @@
 
 没有将文件移出 Release、删除历史文件、提高原生超时或放松沙箱及路径检查。新夹具仍由递归映射纳入；最终分类以 `test/suite-map.json` 及合同审查为准。
 
+下表按原失败所属合同列出迁移去向。文件仍保留在原测试目录，不用文件数量或总测试数证明旧算法仍存在。
+
+| 原测试类别 | 当前实际验证 | 明确保留的边界 |
+| --- | --- | --- |
+| source-dispatch、message-projections、migration | 真实启动退役、来源群/消息/版本与 unit 的精确对应、原审计不变、新版本不能继承旧完成 | 退役结算不是业务完成，不制造 Topic 决策或启动旧工作 |
+| concurrency、execution-proof、effective-graph、trigger-commands | Task 的版本/租约、真实资源互斥、执行排空、人答、完成事务与原命令幂等 | 原 DAG、重排和按日/周执行旧 Task 模板不再受支持；历史模板只读且不得重放 |
+| ledger、final-fault-matrix | 真实 SQLite 事务故障、COMMIT 回执丢失、子进程 SIGKILL、重启后查原回执 | 未完成事务没有完成事实；未知外部效果只回读，不能再次取得发送许可；杀进程后等 close 再清理库 |
+| artifact-correction、archive | 原产物 scope、纠正命令的当前版本授权、终态归档资格 | 不能由旧协调状态授权当前写入，不能用归档移除在途效果 |
+| notification-freshness、summary、observed-prerequisites、schedule-revisions、recovery | 当前 Topic 事实版本、冻结通知的内容/受众/附件、精确来源、恢复幂等、历史日程不重放 | 已移除的 freshness timer、旧 planner 重试预算和自动观察续办没有等价算法；脚本时钟测试不充当真实原生定时 |
+| observer、node-control-display | 当前 Topic/Task 的有界查询、异步请求归属、展开/分页、真实待办原因与旧记录只读投影 | 原协调管理 UI 不再存在；组件测试不等于浏览器视觉或真实渠道验证 |
+| final/observed/fairness/model/workspace/reorder/background 原生用例 | 真 Host、Route/Topic/Owner 工具、原 Task 身份与工作区、受信多人受众、一次持久通知与恢复 | 以明确新输入续办当前 Task；保留旧引用及审计，不假称旧调度已执行 |
+| 当前 Task clean-start/human/service/reply-identity/http/handoff | 原始消息与账本保留、仅注册既有两类固定话题、人答与事实来源、共享通知、读回与发送独立进行 | 来源依据不必成为原生引用；已冻结/已送通知不能因恢复而重新拼装或发送 |
+| artifact-scope 原生用例 | 执行会话的真实 FS/shell 权限、一个 Task 的三阶段依赖、明确 reopen 后同身份续办 | Owner 不直接获得执行工具；目录外零写、未知操作阻止完成，Linux 缺沙箱不得换全权限冒充通过 |
+
+测试夹具只从关闭的合成 SQLite 库插入匿名旧行，再走真实启动退役。当前命令仍经正式 Store/Host；没有重新开放退役写入口。故障注入针对实际事务或子进程，不把普通 JSON 回执当作外部发送证明。
+
+展开数并非逐文件守恒：`independent-coordination-changes` 从原实际 52 项变为 42 项，退役的 admission、三方 handoff、ordinal/clarification/allTogether、周期及 time/proof join 变体归入上述历史保留与不重放验证，并补充当前 Topic 的 CAS、并发、受众和输入范围断言；不能把减少的 10 项计作修复通过。`coordination-observer` 实跑 68 项，其 HTTP 路径数组的 spread 展开使静态目录计数少 4 项。原 202 注册/220 变体的混合合同守恒另由下一节独立约束，不能混同这些非混合文件的迁移。
+
 ## 混合测试的显式复审
 
 固定来源 `7ca36c26ad1c52e8b1896fdc76a7e8aed1c9a697`、202 个原注册、220 个原展开变体及现有 Release/history 分类不变。原语句 SHA256 继续保存并从 Git 原文核对。本次以下变更另外记录 `review`，包含原摘要、现摘要、变更前 commit、具体理由及证据；不能只更新文件摘要绕过注册守恒。
@@ -27,6 +45,7 @@
 
 - Resident 读取无 topics 的旧群记录时不尝试遍历不存在的字段，旧数据保留。
 - 消息列表只投影两个已定义的公开恢复提示代码；原始 Host 错误正文留在决策账，不直接放入消息列表。
+- 精确回复来源缺失时查询返回 `null`，由原有 `TOPIC_REPLY_SOURCE_INVALID` 校验拒绝；不再将 `undefined` 送入 JSON 克隆而抛解析错误。缺少正确来源版本或当前 Topic 尚未处理完成时均不落通知。
 - 归档交互测试补齐真实页面/AbortController 上下文，SQLite 测试先关闭再清理。
 - 生成的设置脚本与现有源码同步，没有页面行为改动。
 - PowerShell AST 大脚本通过临时文件调用，保留原断言，避免 Windows 命令长度限制。
@@ -36,3 +55,5 @@
 ## 验证边界
 
 本地相关检查与最终 Windows Release 分开记录。Linux 无可用原生沙箱时，真实受限 shell 验收不能记为通过，也不能改为无约束执行。静态提示词或合成模型测试不证明自然语言判断完美；适配器检查不代表真实钉钉群投递。发布成功仍须同 SHA 的六组 Release、打包、npm 三包 integrity 和 GitHub Release 资产独立核验。
+
+本轮本地证据包括核心通知/HTTP/Topic 相关 252 项、当前单元合同 125 项、正式 alpha.2 原生定时 12 项、final/observed 原生 9 项、通知与来源变更 27 项（其中 14 项真实原生 Host）、故障子进程最终清理 5 项，以及 `pnpm test:release-smoke` 14 项。部分文件先有失败，再仅补跑修正用例；这些数字分别表示对应最终路径有通过证据，不是一次整套全绿，也不能跨组相加。独立审查发现并恢复了 fairness 用例原有的必需环境断言，未允许缺环境跳过；未知产物操作场景加强为真实完成请求被拒绝，再等待。
