@@ -111,8 +111,8 @@ test('执行后端沿用唯一Agent保存入口并在部分失败时准确说明
   assert.match(source, /if \(!taskDirty.current\) setExecutionBackend/)
   assert.equal((source.match(/request\('\/config\/agent'/g) ?? []).length, 1)
   const desired = { model: 'sol', reasoningEffort: '', agentNames: [], replySignature: '', proxyUrl: '', executionBackend: 'claude-code' }
-  assert.match(agentSaveSummary(desired, { ...desired, executionBackend: 'dsh' }), /插件设置（含统筹、协调和执行后端）：未全部生效/)
-  assert.match(agentSaveSummary(desired, desired), /插件设置（含统筹、协调和执行后端）：已生效/)
+  assert.match(agentSaveSummary(desired, { ...desired, executionBackend: 'dsh' }), /插件设置（含统筹和执行后端）：未全部生效/)
+  assert.match(agentSaveSummary(desired, desired), /插件设置（含统筹和执行后端）：已生效/)
   assert.match(agentSaveSummary(desired, undefined), /保存结果未知.*草稿已保留/)
 })
 

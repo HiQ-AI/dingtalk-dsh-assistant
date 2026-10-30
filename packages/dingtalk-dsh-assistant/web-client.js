@@ -141,7 +141,7 @@ window.__ModuleLoader__.load({
       const pluginSaved = equal([...new Set(desired.agentNames)], actual.agentNames) && desired.replySignature.trim() === (actual.replySignature || '')
         && desired.proxyUrl.trim() === (actual.proxyUrl || '') && equal(desired.taskSessionModel, actual.taskSessionModel)
         && (desired.executionBackend ?? 'dsh') === (actual.executionBackend ?? 'dsh')
-      return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹、协调和执行后端）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
+      return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹和执行后端）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
     }
 
     function Environment({ value }) {
