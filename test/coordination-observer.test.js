@@ -28,150 +28,6 @@ function createCoordinationObserver(query){
  })
 }
 
-async function fixture(t) {
-  const directory = await mkdtemp(join(tmpdir(), 'coordination-observer-'))
-  const dbPath = join(directory, 'task.sqlite')
-  const store = await openDynamicTaskStore({ dbPath, instanceId: 'observer-test', initialize: true })
-  const observer = createCoordinationObserver((kind, args = {}) => store.query({ kind, ...args }))
-  const server = createServer((request, response) => handleRequest(request, response, observer))
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); await store.close(); await rm(directory, { recursive: true, force: true }) })
-  const command = (kind, args = {}) => store.command({ id: randomUUID(), kind, args })
-  const reserve = async (unitId, groupId = 'group') => (await command('coordination.reserve', { unitId, revision: 1, groupId, original: `Synthetic input ${unitId}` })).result.source
-  const member = (id, dependencies = []) => ({ instructionId: id, taskId: id, progressImpact: 'preserve', dependencies,
-    command: { id: `coordination-command:batch:${id}`, kind: 'task.supplement', args: { taskId: id, expectedRequirementRevision: 1,
-      expectedControlRevision: 1, messageId: `input:${id}`, text: `Requirement ${id}`, request: `${id} requirement` } } })
-  const read = async path => { const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`); return { status: response.status, body: await response.json() } }
-  const durableState = () => {
-    const db = new DatabaseSync(dbPath, { readOnly: true })
-    try { return db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({ name }) => ({ name,
-      rows: db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all() })) } finally { db.close() }
-  }
-  return { store, observer, command, reserve, member, read, durableState }
-}
-
-test('source-driven real SQLite HTTP view includes unattached, rejected and dependent accepted inputs without writes', async t => {
-  const f = await fixture(t)
-  for (const taskId of ['A', 'B']) await f.command('task.create', { taskId, groupId: 'group', request: taskId })
-  const accepted = await f.reserve('accepted'), reserved = await f.reserve('reserved'), rejected = await f.reserve('rejected')
-  await f.reserve('foreign', 'other')
-  await f.command('coordination.source.reject', { sourceId: rejected.id, fence: 1, reason: 'Not a supported arrangement' })
-  await f.command('coordination.accept', { sourceId: accepted.id, fence: 1, coordinationId: 'batch', members: [{ ...f.member('A'), impactReason: 'Preserve the authorized objective' }, f.member('B', ['A'])],
-    proposal: { answerText: 'Recorded business answer', secret: 'must-not-leak', actorId: 'private-actor', prompt: 'private-prompt' } })
-  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
-  const before = f.durableState()
-  const listing = await f.read('/state/coordination-sources?groupId=group&offset=0&limit=2')
-  assert.equal(listing.status, 200); assert.equal(listing.body.total, 3); assert.equal(listing.body.sources.length, 2)
-  assert.ok(listing.body.observedAt)
-  const detail = await f.read(`/state/coordination-sources/${accepted.id}`)
-  assert.equal(detail.status, 200)
-  assert.equal(detail.body.members[0].state, 'applied')
-  assert.equal(detail.body.members[0].progressImpact, 'preserve')
-  assert.equal(detail.body.members[0].impactReason, 'Preserve the authorized objective')
-  assert.equal(detail.body.members[0].observation, false)
-  assert.equal(detail.body.source.answerText, 'Recorded business answer')
-  assert.equal(detail.body.members[0].completionProof, null)
-  assert.notEqual(detail.body.snapshot.state, 'completed', 'accepted command is not formal completion')
-  assert.deepEqual(detail.body.members[1].dependencies, ['A'])
-  assert.equal(detail.body.members[1].waitingReason.code, 'waiting_dependency')
-  assert.equal(detail.body.members[1].requirement, 'Requirement B')
-  assert.equal(detail.body.collections.members.truncated, false)
-  assert.equal((await f.read(`/state/coordination-sources/${reserved.id}`)).body.coordination, null)
-  assert.equal((await f.read(`/state/coordination-sources/${rejected.id}`)).body.source.rejectionReason, 'Not a supported arrangement')
-  const serialized = JSON.stringify(detail.body)
-  for (const secret of ['must-not-leak', 'private-actor', 'private-prompt', 'acceptedProposal', 'sourceRefs', 'workspaceDir', 'command"', 'receipt"']) assert.ok(!serialized.includes(secret), secret)
-  assert.deepEqual(f.durableState(), before, 'GET must not append receipts, mutate members or change any durable table')
-  const owner = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  await f.command('task.wait', { binding: owner, action: 'blocked', summary: 'Waiting for authorized access', evidence: ['recorded-proof'], limitations: ['Not verified externally'] })
-  const blocked = await f.observer.coordinationSourceDetail(accepted.id)
-  assert.equal(blocked.members[0].blocker, 'Waiting for authorized access')
-  assert.deepEqual(blocked.members[0].decision.evidence, ['recorded-proof'])
-  assert.deepEqual(blocked.members[0].decision.limitations, ['Not verified externally'])
-  assert.ok(blocked.members[0].decision.at)
-  await f.command('task.complete', { binding: owner, summary: 'Completed A', result: { evidence: ['proof:A'] } })
-  await f.command('coordination.apply', { instructionId: 'B', expectedRevision: 1 })
-  const refreshed = await f.observer.coordinationSourceDetail(accepted.id)
-  assert.equal(refreshed.members[0].state, 'fulfilled')
-  assert.ok(refreshed.members[0].completionProof.commandId)
-  assert.equal(refreshed.members[1].state, 'applied')
-})
-
-test('real clarification and scheduled delivery keep action success separate from task completion', async t => {
-  const f = await fixture(t), clarification = await f.reserve('clarification')
-  await f.command('coordination.source.clarify', { sourceId: clarification.id, fence: 1, coordinationId: 'question', question: 'Which target?' })
-  const clarified = await f.observer.coordinationSourceDetail(clarification.id)
-  assert.equal(clarified.source.question, 'Which target?'); assert.equal(clarified.snapshot.state, 'needs_attention')
-  const source = await f.reserve('reminder')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'reminder', members: [], readOnly: true })
-  await f.command('coordination.schedule.create', { coordinationId: 'reminder', scheduleId: 'schedule', timezone: 'Asia/Shanghai',
-    rule: { kind: 'once', at: new Date(Math.floor(Date.now() / 1000) * 1000 - 1000).toISOString() }, action: { kind: 'message-reminder', text: 'Synthetic reminder' },
-    target: { conversationId: 'group', recipientIds: ['private-recipient'] } })
-  const occurrence = (await f.command('coordination.schedule.scan')).result.occurrences[0]
-  const job = (await f.command('coordination.job.claim', { jobId: occurrence.jobId })).result.job
-  await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence })
-  const detail = await f.observer.coordinationSourceDetail(source.id)
-  assert.equal(detail.snapshot.schedules[0].reminderText, 'Synthetic reminder')
-  assert.equal(detail.snapshot.occurrences[0].actionKind, 'message-reminder')
-  assert.equal(detail.snapshot.occurrences[0].actionState, 'succeeded')
-  assert.equal(detail.snapshot.occurrences[0].deliveryState, 'pending')
-  assert.equal(detail.snapshot.occurrences[0].resultRef, `${occurrence.id}:result:1`)
-  assert.notEqual(detail.snapshot.state, 'completed')
-  assert.equal(detail.snapshot.jobs[0].state, 'completed')
-  assert.ok(!JSON.stringify(detail).includes('private-recipient'))
-  assert.ok(!JSON.stringify(detail).includes('recipientIds'))
-})
-
-test('detail truncation is explicit and aggregate computation includes records outside presentation bounds', async t => {
-  const f = await fixture(t), source = await f.reserve('bounded')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'bounded', members: [], readOnly: true })
-  const at = new Date(Math.floor(Date.now() / 1000) * 1000 + 60000).toISOString()
-  for (let index = 0; index < 101; index++) await f.command('coordination.schedule.create', { coordinationId: 'bounded', scheduleId: `schedule-${index}`,
-    timezone: 'Asia/Shanghai', rule: { kind: 'once', at }, action: { kind: 'message-reminder', text: 'Synthetic reminder' },
-    target: { conversationId: 'group', recipientIds: [] } })
-  const detail = await f.observer.coordinationSourceDetail(source.id)
-  assert.equal(detail.snapshot.schedules.length, 100)
-  assert.deepEqual(detail.collections.schedules, { total: 101, returned: 100, truncated: true })
-  assert.equal(detail.snapshot.state, 'active')
-})
-
-test('reorder assessment is projected as a recorded decision and freeform failures use a neutral flag', async t => {
-  const f = await fixture(t)
-  for (const taskId of ['A', 'B']) await f.command('task.create', { taskId, groupId: 'group', request: taskId })
-  const accepted = await f.reserve('reorder-original'), failed = await f.reserve('failed')
-  await f.command('coordination.source.failed', { sourceId: failed.id, fence: 1, code: 'freeform diagnostic from internal path' })
-  await f.command('coordination.accept', { sourceId: accepted.id, fence: 1, coordinationId: 'batch', members: [f.member('A'), f.member('B')] })
-  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
-  const reorder = await f.reserve('reorder')
-  await f.command('coordination.change', { sourceId: reorder.id, fence: 1, coordinationId: 'batch', expectedRevision: 1,
-    change: { action: 'reorder', reason: 'Synthetic reorder request', dependencies: [{ instructionId: 'A', afterInstructionIds: ['B'] }] } })
-  const pending = (await f.store.query({ kind: 'coordination.get', coordinationId: 'batch' })).members[0].reorderAssessment
-  const binding = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  await f.command('coordination.reorder.assess', { binding, instructionId: 'A', assessmentId: pending.id,
-    decision: 'needs_clarification', summary: 'Recorded reorder question', evidence: ['Recorded evidence'] })
-  const detail = await f.observer.coordinationSourceDetail(reorder.id)
-  assert.equal((await f.observer.coordinationSourceDetail(failed.id)).source.failureCode, 'coordination_processing_failed')
-  assert.deepEqual(detail.members[0].reorderAssessment, { id: pending.id, state: 'needs_clarification', decision: 'needs_clarification', summary: 'Recorded reorder question', evidence: ['Recorded evidence'] })
-  assert.ok(!JSON.stringify(detail).includes('ownerBinding'))
-})
-
-test('observation and replan expose only their recorded safe scalar impact fields', async t => {
-  const f = await fixture(t)
-  for (const taskId of ['A', 'B']) await f.command('task.create', { taskId, groupId: 'group', request: taskId })
-  const source = await f.reserve('impact')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [
-    { instructionId: 'A', taskId: 'A', observation: true, dependencies: [], command: { id: 'coordination-command:batch:A', kind: 'coordination.observe',
-      args: { taskId: 'A', expectedRequirementRevision: 1, expectedControlRevision: 1, expectedContextRevision: 0, expectedRunSequence: 1 } } },
-    { ...f.member('B'), progressImpact: 'replan', impactReason: 'Recorded requirement change',
-      command: { ...f.member('B').command, kind: 'task.revise' } },
-  ] })
-  const detail = await f.observer.coordinationSourceDetail(source.id)
-  assert.equal(detail.source.answerText, null)
-  assert.equal(detail.members[0].observation, true)
-  assert.equal(detail.members[0].progressImpact, null)
-  assert.equal(detail.members[1].progressImpact, 'replan')
-  assert.equal(detail.members[1].impactReason, 'Recorded requirement change')
-})
-
 test('identifier-like raw diagnostics are never echoed as source, occurrence or job failure codes', async () => {
   const observer = createCoordinationObserver(async kind => {
     if (kind === 'coordination.source.list') return [{ id: 'source', groupId: 'group', original: 'Synthetic input',
@@ -196,21 +52,6 @@ test('identifier-like raw diagnostics are never echoed as source, occurrence or 
   assert.ok(!JSON.stringify(detail).includes('Private'))
 })
 
-test('HTTP validates paging, filters and paths, returns missing/unsupported and never exposes raw read failures', async t => {
-  const f = await fixture(t)
-  for (const query of ['limit=0', 'limit=101', 'offset=-1', 'offset=1.5', 'groupId=', 'unknown=1', 'limit=1&limit=2'])
-    assert.equal((await f.read(`/state/coordination-sources?${query}`)).status, 400, query)
-  assert.equal((await f.read('/state/coordination-sources/missing')).status, 404)
-  assert.equal((await f.read('/state/coordination-sources/%ZZ')).status, 400)
-  assert.equal((await f.read('/state/coordination-sources/missing?limit=1')).status, 400)
-  await assert.rejects(f.observer.coordinationSources({ limit: 0 }), /coordination_query_invalid/u)
-  const server = createServer((request, response) => handleRequest(request, response, {}))
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  try {
-    for (const suffix of ['', '/missing']) assert.equal((await fetch(`http://127.0.0.1:${server.address().port}/state/coordination-sources${suffix}`)).status, 503)
-  } finally { await new Promise(resolve => server.close(resolve)) }
-})
-
 function workFixture({ members = [], tasks = [], schedules = [], occurrences = [], jobs = [], notifications = [], sources = [], executions = [], coordination = {}, receipts } = {}) {
   const batch = { id: 'batch', revision: 1, state: 'active', groupId: 'group', createdAt: '2026-10-25T00:00:00Z', ...coordination }
   return createCoordinationObserver(async (kind, args = {}) => {
@@ -229,36 +70,6 @@ const workOccurrence = (overrides = {}) => ({ id: 'occurrence', coordinationId: 
   actionState: 'succeeded', deliveryState: 'failed', ...overrides })
 const workMember = (id, overrides = {}) => ({ effectiveVersion: { requirementRevision: 1, controlRevision: 1, contextRevision: 0, runSequence: 1 }, id, taskId: id, coordinationId: 'batch', state: 'ready', control: 'active',
   dependencies: [], command: { id: `command:${id}`, args: { text: `Requirement ${id}` } }, ...overrides })
-
-test('work HTTP uses durable schedule identity across changes and preserves exact failed delivery without SQLite writes', async t => {
-  const f = await fixture(t), source = await f.reserve('reminder-work')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [], readOnly: true })
-  const at = new Date(Math.floor(Date.now() / 1000) * 1000 - 1000).toISOString()
-  await f.command('coordination.schedule.create', { coordinationId: 'batch', scheduleId: 'schedule', timezone: 'Asia/Shanghai',
-    rule: { kind: 'once', at }, action: { kind: 'message-reminder', text: 'Synthetic reminder' }, target: { conversationId: 'group', recipientIds: ['private-recipient'] } })
-  const change = await f.reserve('reminder-change')
-  await f.command('coordination.change', { sourceId: change.id, fence: 1, coordinationId: 'batch', expectedRevision: 1,
-    change: { action: 'schedule', reason: 'Recorded adjustment', scheduleChange: { scheduleId: 'schedule', expectedRevision: 1, state: 'active' } } })
-  const occurrence = (await f.command('coordination.schedule.scan')).result.occurrences[0]
-  const job = (await f.command('coordination.job.claim', { jobId: occurrence.jobId })).result.job
-  await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence })
-  const notification = (await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
-  const started = (await f.command('notification.start', { notificationId: notification.id })).result.notification
-  await f.command('notification.receipt', { notificationId: notification.id, dispatchToken: started.dispatchToken, state: 'failed' })
-  const before = f.durableState()
-  const list = await f.read('/state/coordination-work?groupId=group&limit=1')
-  assert.equal(list.status, 200); assert.equal(list.body.total, 1)
-  const work = list.body.works[0]
-  assert.equal(work.id, 'schedule:schedule'); assert.equal(work.result.label, '提醒发送失败')
-  assert.equal(work.plan.state, 'active'); assert.equal(work.nextStep.triggerAt, null)
-  assert.equal(work.nextStep.sendRetryAt, null); assert.match(work.nextStep.label, /无后续触发安排；无重试安排/)
-  const detail = await f.read('/state/coordination-work/schedule%3Aschedule')
-  assert.equal(detail.status, 200); assert.equal(detail.body.history.sources.length, 2)
-  assert.equal(detail.body.history.jobs[0].occurrenceId, occurrence.id)
-  assert.equal(detail.body.history.jobs[0].state, 'completed')
-  assert.deepEqual(f.durableState(), before)
-  assert.doesNotMatch(JSON.stringify(detail.body), /private-recipient|payload|sendPermit|dispatchToken|deliveryError/)
-})
 
 for (const [actionState, deliveryState, expected] of [
   ['succeeded', 'failed', 'delivery_failed'], ['succeeded', 'unknown', 'delivery_unknown'], ['succeeded', 'pending', 'delivery_pending'],
@@ -341,26 +152,6 @@ test('work full-collection result precedes bounded history and superseded replac
   assert.doesNotMatch(JSON.stringify(detail), /PrivateInternalPath/)
 })
 
-test('work HTTP validates paging IDs and unavailable readers without disclosing diagnostics', async t => {
-  const f = await fixture(t)
-  for (const query of ['limit=0', 'limit=101', 'offset=-1', 'offset=1.5', 'offset=9007199254740992', 'groupId=', 'unexpected=1', 'offset=0&offset=1'])
-    assert.equal((await f.read(`/state/coordination-work?${query}`)).status, 400, query)
-  for (const id of ['%ZZ', 'arbitrary', 'schedule%3A'])
-    assert.equal((await f.read(`/state/coordination-work/${id}`)).status, 400, id)
-  for (const id of ['schedule%3A%2Fprivate', 'schedule%3A%00', 'schedule%3Awith%20space', 'schedule%3Amissing'])
-    assert.equal((await f.read('/state/coordination-work/' + id)).status, 404)
-  assert.equal((await f.read('/state/coordination-work/schedule%3Amissing?limit=1')).status, 400)
-  await assert.rejects(f.observer.coordinationWork({ limit: 0 }), /coordination_query_invalid/)
-  const server = createServer((request, response) => handleRequest(request, response, { coordinationWork: async () => { throw new Error('PrivateDatabasePath') } }))
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  try {
-    for (const suffix of ['', '/schedule%3Amissing']) {
-      const response = await fetch(`http://127.0.0.1:${server.address().port}/state/coordination-work${suffix}`)
-      assert.equal(response.status, 503); assert.deepEqual(await response.json(), { error: 'coordination_observer_unavailable' })
-    }
-  } finally { await new Promise(resolve => server.close(resolve)) }
-})
-
 test('work cancellation of a later queued slot cannot hide a prior failed effect and notification recovery truth wins', async () => {
   const observer = workFixture({ schedules: [workSchedule({ state: 'cancelled', rule: { kind: 'daily', time: '09:00' } })], occurrences: [
     workOccurrence({ id: 'prior-failed' }), workOccurrence({ id: 'later-cancelled', plannedAt: '2026-10-26T00:00:00Z', actionState: 'cancelled', deliveryState: 'none', cancelledAt: '2026-10-25T12:00:00Z' }),
@@ -393,51 +184,6 @@ test('work schedule without occurrences only promises actual nextDue and paused 
   }
 })
 
-test('real SQLite direct dispatch completion is version-proven and survives a read without writes', async t => {
-  const f = await fixture(t)
-  await f.command('task.create', { taskId: 'A', groupId: 'group', request: 'A' })
-  const source = await f.reserve('direct-proof')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('A')] })
-  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
-  assert.equal((await f.observer.coordinationWork()).works[0].result.code, 'dispatched')
-  const binding = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  await f.command('task.complete', { binding, summary: 'Completed A', result: { evidence: ['proof:A'] } })
-  const before = f.durableState()
-  const detail = await f.observer.coordinationWorkDetail('dispatch:batch')
-  assert.equal(detail.work.result.code, 'dispatched')
-  assert.equal(detail.work.counts.fulfilled, 1); assert.ok(detail.members[0].completionProof.commandId)
-  assert.deepEqual(f.durableState(), before)
-})
-
-test('real SQLite cancellation preserves known failed notification as primary result without changing the state machine', async t => {
-  const f = await fixture(t)
-  const source = await f.reserve('cancel-failed-reminder')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'cancel-failed', members: [], readOnly: true })
-  const occurrence = (await f.command('coordination.schedule.create', { coordinationId: 'cancel-failed', scheduleId: 'cancel-failed-schedule', timezone: 'Asia/Shanghai',
-    rule: { kind: 'once', at: new Date(Math.floor(Date.now() / 1000) * 1000 - 1000).toISOString() }, action: { kind: 'message-reminder', text: 'Synthetic cancellation failure' },
-    target: { conversationId: 'group', recipientIds: ['recipient'] } }).then(() => f.command('coordination.schedule.scan'))).result.occurrences[0]
-  const job = (await f.command('coordination.job.claim', { jobId: occurrence.jobId })).result.job
-  await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence })
-  const notification = (await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
-  const started = (await f.command('notification.start', { notificationId: notification.id })).result.notification
-  await f.command('notification.receipt', { notificationId: notification.id, dispatchToken: started.dispatchToken, state: 'failed', error: { phase: 'send', knownNotSent: true, retryable: false } })
-  const beforeCancel = await f.observer.coordinationWorkDetail('schedule:cancel-failed-schedule')
-  assert.equal(beforeCancel.work.result.code, 'delivery_failed')
-  await f.command('coordination.schedule.change', { scheduleId: 'cancel-failed-schedule', expectedRevision: 1, state: 'cancelled' })
-  const afterCancel = await f.observer.coordinationWorkDetail('schedule:cancel-failed-schedule')
-  assert.equal(afterCancel.work.plan.state, 'cancelled')
-  assert.equal(afterCancel.work.result.code, 'delivery_failed')
-  assert.equal(afterCancel.history.occurrences[0].deliveryState, 'cancelled')
-})
-
-test('accepted coordination with no members and no schedule does not invent a work row', async t => {
-  const f = await fixture(t), source = await f.reserve('empty-work')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'empty-work', members: [], readOnly: true })
-  const list = await f.observer.coordinationWork()
-  assert.equal(list.total, 0)
-  assert.deepEqual(list.works, [])
-})
-
 test('work members do not expose stale completion proof as current and schedule history includes safe revisions', async () => {
   const version = { requirementRevision: 1, controlRevision: 1, contextRevision: 0, runSequence: 1 }
   const observer = workFixture({ members: [workMember('A', { state: 'fulfilled', effectiveVersion: version,
@@ -454,30 +200,6 @@ test('work members do not expose stale completion proof as current and schedule 
   assert.equal(revision.nextDueAt, '2026-10-24T01:00:00Z')
 })
 
-for (const control of ['coordination-cancel', 'cancel', 'pause']) test(`real fulfilled member remains formally complete after ${control}`, async t => {
-  const f = await fixture(t)
-  await f.command('task.create', { taskId: 'A', groupId: 'group', request: 'A' })
-  const source = await f.reserve('cancel-after-complete')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('A')] })
-  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
-  const binding = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  await f.command('task.complete', { binding, summary: 'Completed A', result: { evidence: ['proof:A'] } })
-  if (control === 'coordination-cancel') await f.command('coordination.cancel', { coordinationId: 'batch', expectedRevision: 1 })
-  else {
-    const change = await f.reserve('control-member')
-    await f.command('coordination.change', { sourceId: change.id, fence: 1, coordinationId: 'batch', expectedRevision: 1,
-      change: { action: control, instructionIds: ['A'] } })
-  }
-  const detail = await f.observer.coordinationWorkDetail('dispatch:batch')
-  assert.equal(detail.work.result.code, 'dispatched')
-  assert.equal(detail.work.counts.fulfilled, 1)
-  assert.equal(detail.members[0].completionProofCurrent, true)
-  const task = await f.store.query({ kind: 'task.get', taskId: 'A' })
-  assert.equal(task.status, 'completed')
-  assert.equal(detail.members[0].completionProof.commandId, task.completion.commandId)
-
-})
-
 test('unknown raw schedule state is not reported as a no-trigger record without an actual effect', async () => {
   const observer = workFixture({ schedules: [workSchedule({ state: 'future-state', nextDueAt: null })] })
   const { works } = await observer.coordinationWork()
@@ -487,7 +209,6 @@ test('unknown raw schedule state is not reported as a no-trigger record without 
     occurrences: [workOccurrence({ actionState: 'succeeded', deliveryState: 'failed' })] })
   assert.equal((await concrete.coordinationWork()).works[0].result.code, 'delivery_failed')
 })
-
 
 test('unknown raw coordination or member state stays unconfirmed without overriding a concrete delivery result', async () => {
   for (const input of [
@@ -500,34 +221,6 @@ test('unknown raw coordination or member state stays unconfirmed without overrid
     occurrences: [workOccurrence({ deliveryState: 'delivered' })] })
   assert.equal((await concrete.coordinationWork()).works[0].result.code, 'delivered')
 })
-
-
-test('real cancellation before send is not a failed send when notification start denies the permit', async t => {
-  const f = await fixture(t), source = await f.reserve('cancel-before-send')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'cancel-unsent', members: [], readOnly: true })
-  await f.command('coordination.schedule.create', { coordinationId: 'cancel-unsent', scheduleId: 'cancel-unsent-plan', timezone: 'Asia/Shanghai',
-    rule: { kind: 'once', at: new Date(Math.floor(Date.now() / 1000) * 1000 - 1000).toISOString() }, action: { kind: 'message-reminder', text: 'Never sent' },
-    target: { conversationId: 'group', recipientIds: [] } })
-  const occurrence = (await f.command('coordination.schedule.scan')).result.occurrences[0]
-  const job = (await f.command('coordination.job.claim', { jobId: occurrence.jobId })).result.job
-  await f.command('coordination.job.remind', { jobId: job.id, fence: job.fence })
-  const notification = (await f.command('coordination.notification.freeze', { occurrenceId: occurrence.id })).result.notification
-  await f.command('coordination.schedule.change', { scheduleId: 'cancel-unsent-plan', expectedRevision: 1, state: 'cancelled' })
-  const pendingCancellation = await f.observer.coordinationWorkDetail('schedule:cancel-unsent-plan')
-  assert.equal(pendingCancellation.work.result.code, 'cancelled')
-  assert.equal((await f.store.query({ kind: 'notification.get', notificationId: notification.id })).sendPermit, undefined)
-  const denied = await f.command('notification.start', { notificationId: notification.id })
-  assert.equal(denied.dispatchEligible, false)
-  assert.equal(denied.result.notification.state, 'failed')
-  assert.equal(denied.result.notification.reason, 'coordination_cancelled')
-  assert.equal(denied.result.notification.sendPermit, undefined)
-  assert.equal(denied.result.notification.sendAttemptCount ?? 0, 0)
-  const before = f.durableState(), detail = await f.observer.coordinationWorkDetail('schedule:cancel-unsent-plan')
-  assert.equal(detail.work.result.code, 'cancelled')
-  assert.equal(detail.work.nextStep.sendRetryAt, null)
-  assert.deepEqual(f.durableState(), before)
-})
-
 
 test('cancelled unsent result notice cannot erase current formal completion of a scheduled task', async () => {
   const version = { requirementRevision: 1, controlRevision: 1, contextRevision: 0, runSequence: 1 }
@@ -543,114 +236,6 @@ test('cancelled unsent result notice cannot erase current formal completion of a
   assert.equal(detail.work.result.code, 'dispatched')
   assert.equal(detail.work.plan.state, 'cancelled')
   assert.equal(detail.work.nextStep.sendRetryAt, null)
-})
-
-test('real dependency relation waits for all formal prerequisites, stays pending without receipt and records dispatch once', async t => {
-  const f = await fixture(t)
-  for (const taskId of ['A', 'B', 'C']) await f.command('task.create', { taskId, groupId: 'group', title: `Synthetic ${taskId}`, request: taskId })
-  const source = await f.reserve('relations-all')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch',
-    members: [f.member('A'), f.member('B', ['A', 'C']), f.member('C')] })
-  const relation = async () => (await f.observer.coordinationWorkDetail('dispatch:batch')).relations.find(item => item.target.taskId === 'B')
-  assert.equal((await relation()).state, 'waiting')
-  assert.equal((await f.observer.coordinationWorkDetail('dispatch:batch')).work.result.code, 'waiting')
-  assert.equal((await relation()).condition, 'all')
-  assert.equal((await relation()).prerequisites.filter(item => !item.fulfilled).length, 2)
-  for (const taskId of ['A', 'C']) {
-    await f.command('coordination.apply', { instructionId: taskId, expectedRevision: 1 })
-    const binding = (await f.command('task.claim', { taskId })).result.binding
-    await f.command('task.complete', { binding, summary: `Accepted ${taskId}` })
-    await f.command('task.drained', { binding })
-    assert.equal((await relation()).state, taskId === 'A' ? 'waiting' : 'pending')
-  }
-  assert.equal((await f.observer.coordinationWorkDetail('dispatch:batch')).work.result.code, 'pending')
-  assert.equal((await relation()).dispatch.receipt, 'absent')
-  const first = await f.command('coordination.apply', { instructionId: 'B', expectedRevision: 1 })
-  await f.command('coordination.apply', { instructionId: 'B', expectedRevision: 1 })
-  const before = f.durableState(), dispatched = await relation()
-  assert.equal(dispatched.state, 'dispatched')
-  assert.equal(dispatched.dispatch.receipt, 'accepted')
-  assert.equal(dispatched.dispatch.commandId, 'coordination-command:batch:B')
-  assert.equal(dispatched.target.title, 'Synthetic B')
-  assert.deepEqual(dispatched.prerequisites.map(item => item.title), ['Synthetic A', 'Synthetic C'])
-  assert.equal(first.result.member.receipt.result.task.taskId, 'B')
-  assert.equal((await f.store.query({ kind: 'task.get', taskId: 'B' })).contextRevision, 1)
-  assert.deepEqual(f.durableState(), before)
-  const binding = (await f.command('task.claim', { taskId: 'B' })).result.binding
-  await f.command('task.complete', { binding, summary: 'B complete, not a dispatch proof' })
-  assert.deepEqual((await relation()).dispatch, dispatched.dispatch)
-  await f.command('task.drained', { binding })
-  await f.command('task.reopen', { taskId: 'A', request: 'Changed A goal' })
-  const changed = await relation()
-  assert.equal(changed.state, 'dispatched', 'recorded acceptance survives later prerequisite version changes')
-  assert.equal(changed.prerequisites[0].state, 'stale')
-  assert.equal(changed.prerequisites[0].fulfilled, false)
-})
-
-test('real event-backed chain resolves prerequisite titles outside each trigger entity without leaking frozen commands', async t => {
-  const f = await fixture(t)
-  for (const taskId of ['A', 'B', 'C']) await f.command('task.create', { taskId, groupId: 'group', title: `Synthetic chain ${taskId}`, request: taskId })
-  const source = await f.reserve('cross-trigger-chain')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch',
-    members: [f.member('A'), f.member('B', ['A']), f.member('C', ['B'])] })
-  let completed
-  for (const taskId of ['A', 'B', 'C']) {
-    const trigger = completed ? { triggerKind: 'business-event', eventSource: 'task-ledger', eventId: completed.completionEvent.id, actionId: taskId }
-      : { triggerKind: 'message', sourceUnitId: 'cross-trigger-chain', sourceUnitRevision: 1, actionId: taskId }
-    const occurrence = (await f.command('coordination.occurrence.accept', { coordinationId: 'batch', trigger,
-      action: { kind: 'task-command', instructionIds: [taskId] }, target: { conversationId: 'group', recipientIds: [], summaryOnly: true } })).result.occurrence
-    const job = (await f.command('coordination.job.claim', { jobId: occurrence.jobId })).result.job
-    await f.command('coordination.job.command', { jobId: job.id, fence: job.fence })
-    const detail = await f.observer.coordinationWorkDetail('trigger:' + occurrence.id)
-    assert.equal(detail.members.length, 1)
-    assert.equal(detail.relations[0].state, 'dispatched')
-    assert.equal(detail.relations[0].target.title, `Synthetic chain ${taskId}`)
-    if (completed) {
-      assert.equal(detail.relations[0].trigger.eventId, completed.completionEvent.id)
-      assert.equal(detail.relations[0].prerequisites[0].taskId, completed.taskDecision.taskId)
-      assert.equal(detail.relations[0].prerequisites[0].title, `Synthetic chain ${completed.taskDecision.taskId}`)
-    }
-    assert.doesNotMatch(JSON.stringify(detail.relations), /commandDigest|dispatchToken|sendPermit|frozenInstructions/)
-    const binding = (await f.command('task.claim', { taskId })).result.binding
-    completed = await f.command('task.complete', { binding, summary: `Completed ${taskId}` })
-    await f.command('task.drained', { binding })
-  }
-  const before = f.durableState()
-  const detail = await f.observer.taskCoordination('B', 'group')
-  assert.equal(detail.relations.length, 1)
-  assert.equal(detail.relations[0].prerequisites[0].taskId, 'A')
-  assert.equal(detail.relations[0].dispatch.status, 'dispatched')
-  assert.deepEqual(f.durableState(), before)
-})
-
-for (const identity of ['schedule/with/slash', 'schedule with space', 'schedule\\with\\backslash', 'schedule-' + 'x'.repeat(1100), 'schedule:\u0000record']) {
-  test(`legal durable identity survives encoded HTTP list-detail roundtrip (${identity.length} bytes)`, async t => {
-    const f = await fixture(t), source = await f.reserve('opaque-id')
-    await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [], readOnly: true })
-    await f.command('coordination.schedule.create', { coordinationId: 'batch', scheduleId: identity, timezone: 'Asia/Shanghai',
-      rule: { kind: 'daily', time: '09:00' }, action: { kind: 'message-reminder', text: 'Synthetic identity fixture' },
-      target: { conversationId: 'group', recipientIds: [] } })
-    const before = f.durableState()
-    const listing = await f.read('/state/coordination-work?groupId=group')
-    assert.equal(listing.body.works[0].id, 'schedule:' + identity)
-    const detail = await f.read('/state/coordination-work/' + encodeURIComponent(listing.body.works[0].id))
-    assert.equal(detail.status, 200)
-    assert.equal(detail.body.work.id, listing.body.works[0].id)
-    assert.deepEqual(f.durableState(), before)
-  })
-}
-
-test('real rejected stale command has no receipt and is not misreported as successful or failed dispatch', async t => {
-  const f = await fixture(t)
-  await f.command('task.create', { taskId: 'B', groupId: 'group', request: 'B' })
-  const source = await f.reserve('stale-target')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('B')] })
-  await f.command('task.revise', { taskId: 'B', request: 'New target' })
-  await assert.rejects(f.command('coordination.apply', { instructionId: 'B', expectedRevision: 1 }), { code: 'DYNAMIC_COORDINATION_VERSION_STALE' })
-  const detail = await f.observer.coordinationWorkDetail('dispatch:batch')
-  assert.equal(detail.relations[0].state, 'stale')
-  assert.equal(detail.relations[0].dispatch.receipt, 'absent')
-  assert.equal(await f.store.query({ kind: 'receipt.get', id: 'coordination-command:batch:B' }), null)
 })
 
 test('relation projection keeps paused cancelled stale and recorded failure guards separate from target completion', async () => {
@@ -675,59 +260,6 @@ test('relation projection keeps paused cancelled stale and recorded failure guar
     assert.equal(relation.dispatch.receipt, 'absent')
     assert.doesNotMatch(JSON.stringify(relation), /sensitive raw failure/)
   }
-})
-
-test('real task detail HTTP includes named prerequisite relations from the service read DTO without writes or runs', async t => {
-  const f = await fixture(t)
-  const { openTaskSessionService } = await import('../packages/dingtalk-dsh-assistant/task-session-service.js')
-  const workspace = await mkdtemp(join(tmpdir(), 'coordination-task-detail-'))
-  for (const taskId of ['A', 'B']) await f.command('task.create', { taskId, groupId: 'group', title: `Synthetic task detail ${taskId}`, request: taskId })
-  const source = await f.reserve('task-detail-dependency')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('A'), f.member('B', ['A'])] })
-  const forbidden = async () => { throw new Error('Read-only detail must never run a model or send') }
-  const noop = async () => {}
-  const sessions = { run: forbidden, cancel: forbidden, close: noop }
-  const residentStore = { getGroup: () => ({ groupId: 'group', messages: [] }), listGroups: () => [], listTopics: () => [] }
-  const service = await openTaskSessionService({ ctx: { agents: { get() {} }, sessions: { get() {} } },
-    config: { dbPath: f.store.info.dbPath, workspaceDir: workspace, instanceId: 'observer-test' },
-    legacy: { getAgentConfig: () => ({ workspaceDir: workspace }), getGroup: residentStore.getGroup }, residentStore,
-    store: f.store, persistence: { register: noop, close: noop }, taskSessions: sessions, executionSessions: sessions, claudeExecutionSessions: sessions })
-  const server = createServer((request, response) => handleRequest(request, response, { getTaskSessionDetail: id => service.taskDetail(id) }))
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  try {
-    const before = f.durableState()
-    const response = await fetch(`http://127.0.0.1:${server.address().port}/state/tasks/B/detail`)
-    assert.equal(response.status, 200)
-    const detail = await response.json()
-    assert.equal(detail.coordination.condition, 'all')
-    assert.equal(detail.coordination.relations[0].state, 'waiting')
-    assert.equal(detail.coordination.relations[0].prerequisites[0].title, 'Synthetic task detail A')
-    assert.equal(detail.coordination.relations[0].prerequisites[0].taskHref, '/state/tasks/A/detail')
-    assert.equal(detail.coordination.relations[0].target.taskId, 'B')
-    assert.deepEqual(f.durableState(), before)
-  } finally {
-    await new Promise(resolve => server.close(resolve))
-    await service.close()
-    await rm(workspace, { recursive: true, force: true })
-  }
-})
-
-test('real cross-coordination prerequisite remains resolvable under a group-filtered read', async t => {
-  const f = await fixture(t)
-  for (const taskId of ['A', 'B']) await f.command('task.create', { taskId, groupId: 'group', title: `Synthetic cross ${taskId}`, request: taskId })
-  const parent = await f.reserve('cross-parent')
-  await f.command('coordination.accept', { sourceId: parent.id, fence: 1, coordinationId: 'batch', members: [f.member('A')] })
-  const source = await f.reserve('cross-child'), b = f.member('B', ['A'])
-  b.command.id = 'coordination-command:child:B'
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'child', members: [b] })
-  const waiting = await f.observer.taskCoordination('B', 'group')
-  assert.equal(waiting.relations[0].prerequisites[0].title, 'Synthetic cross A')
-  assert.equal(waiting.relations[0].state, 'waiting')
-  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
-  const binding = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  await f.command('task.complete', { binding, summary: 'A accepted' })
-  assert.equal((await f.observer.taskCoordination('B', 'group')).relations[0].state, 'pending')
-  assert.equal((await f.observer.coordinationWork({ groupId: 'group', limit: 1 })).total, 2)
 })
 
 test('relations aggregate the complete collection before bounding and cannot use a proof without its formal receipt', async () => {
@@ -839,103 +371,6 @@ test('a durable command receipt cannot turn a cancelled older trigger into a suc
   }
 })
 
-test('official blocked prerequisite decision cannot release a dependent relation or create a dispatch receipt', async t => {
-  const f = await fixture(t)
-  for (const taskId of ['A', 'B']) await f.command('task.create', { taskId, groupId: 'group', request: taskId })
-  const source = await f.reserve('blocked-prerequisite')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('A'), f.member('B', ['A'])] })
-  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
-  const binding = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  await f.command('task.wait', { binding, action: 'blocked', summary: 'Synthetic recorded blocker', evidence: ['synthetic-proof'], limitations: [] })
-  const attempt = await f.command('coordination.apply', { instructionId: 'B', expectedRevision: 1 })
-  assert.deepEqual(attempt.result.waiting, ['A'])
-  const before = f.durableState(), relation = (await f.observer.taskCoordination('B', 'group')).relations[0]
-  assert.equal(relation.state, 'waiting')
-  assert.equal(relation.prerequisites[0].fulfilled, false)
-  assert.equal(relation.dispatch.receipt, 'absent')
-  assert.equal(await f.store.query({ kind: 'receipt.get', id: 'coordination-command:batch:B' }), null)
-  assert.deepEqual(f.durableState(), before)
-})
-
-for (const control of ['paused', 'cancelled']) test(`official task ${control} on A preserves the formal gate against dispatching B`, async t => {
-  const f = await fixture(t)
-  for (const taskId of ['A', 'B']) await f.command('task.create', { taskId, groupId: 'group', request: taskId })
-  const source = await f.reserve('task-control-prerequisite')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('A'), f.member('B', ['A'])] })
-  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
-  await f.command('task.control', { taskId: 'A', expectedControlRevision: 1, control })
-  assert.deepEqual((await f.command('coordination.apply', { instructionId: 'B', expectedRevision: 1 })).result.waiting, ['A'])
-  const relation = (await f.observer.taskCoordination('B', 'group')).relations[0]
-  assert.equal(relation.prerequisites[0].fulfilled, false)
-  assert.equal(relation.state, 'stale', 'the stored task control revision invalidates the accepted prerequisite version')
-  assert.equal(relation.dispatch.receipt, 'absent')
-})
-
-for (const action of ['pause', 'cancel']) test(`official prerequisite instruction ${action} cannot release B despite a retained formal completion proof`, async t => {
-  const f = await fixture(t)
-  for (const taskId of ['A', 'B']) await f.command('task.create', { taskId, groupId: 'group', request: taskId })
-  const source = await f.reserve('member-control-prerequisite')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('A'), f.member('B', ['A'])] })
-  await f.command('coordination.apply', { instructionId: 'A', expectedRevision: 1 })
-  const binding = (await f.command('task.claim', { taskId: 'A' })).result.binding
-  await f.command('task.complete', { binding, summary: 'A formally completed before control' })
-  const change = await f.reserve('member-control')
-  await f.command('coordination.change', { sourceId: change.id, fence: 1, coordinationId: 'batch', expectedRevision: 1, change: { action, instructionIds: ['A'] } })
-  assert.deepEqual((await f.command('coordination.apply', { instructionId: 'B', expectedRevision: 2 })).result.waiting, ['A'])
-  const relation = (await f.observer.taskCoordination('B', 'group')).relations[0]
-  assert.equal(relation.state, 'waiting')
-  assert.equal(relation.prerequisites[0].state, action === 'pause' ? 'paused' : 'cancelled')
-  assert.ok(relation.prerequisites[0].proof.commandId, 'retained formal proof remains evidence, not release authorization')
-  assert.equal(relation.prerequisites[0].fulfilled, false)
-  assert.equal(relation.dispatch.receipt, 'absent')
-})
-
-test('official duplicate trigger and command receipts preserve one relation and one target mutation', async t => {
-  const f = await fixture(t)
-  await f.command('task.create', { taskId: 'B', groupId: 'group', request: 'B' })
-  const source = await f.reserve('duplicate-trigger')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [{ ...f.member('B'), requiresTrigger: true }] })
-  const waiting = (await f.observer.taskCoordination('B', 'group')).relations[0]
-  assert.equal(waiting.state, 'blocked')
-  assert.equal(waiting.dispatch.reason, 'waiting_trigger')
-  const args = { coordinationId: 'batch', trigger: { triggerKind: 'message', sourceUnitId: 'duplicate-trigger', sourceUnitRevision: 1, actionId: 'B' },
-    action: { kind: 'task-command', instructionIds: ['B'] }, target: { conversationId: 'group', recipientIds: [], summaryOnly: true } }
-  const occurrence = (await f.command('coordination.occurrence.accept', args)).result.occurrence
-  const duplicate = await f.command('coordination.occurrence.accept', args)
-  assert.equal(duplicate.result.replayed, true)
-  assert.equal(duplicate.result.occurrence.id, occurrence.id)
-  const job = (await f.command('coordination.job.claim', { jobId: occurrence.jobId })).result.job
-  const command = { id: 'exact-trigger-command', kind: 'coordination.job.command', args: { jobId: job.id, fence: job.fence } }
-  await f.store.command(command)
-  const before = (await f.observer.coordinationWorkDetail('trigger:' + occurrence.id)).relations[0]
-  assert.equal(before.state, 'dispatched')
-  const replay = await f.store.command(command)
-  assert.equal(replay.replayed, true)
-  assert.deepEqual((await f.observer.coordinationWorkDetail('trigger:' + occurrence.id)).relations[0], before)
-  assert.equal((await f.store.query({ kind: 'task.get', taskId: 'B' })).contextRevision, 1)
-  assert.equal((await f.store.query({ kind: 'coordination.occurrence.list' })).length, 1)
-})
-
-test('official occurrence command rejection rolls back without inventing failed dispatch evidence', async t => {
-  const f = await fixture(t)
-  await f.command('task.create', { taskId: 'B', groupId: 'group', request: 'B' })
-  const source = await f.reserve('rejected-occurrence-command')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('B')] })
-  const occurrence = (await f.command('coordination.occurrence.accept', { coordinationId: 'batch',
-    trigger: { triggerKind: 'message', sourceUnitId: 'rejected-occurrence-command', sourceUnitRevision: 1, actionId: 'B' },
-    action: { kind: 'task-command', instructionIds: ['B'] }, target: { conversationId: 'group', recipientIds: [], summaryOnly: true } })).result.occurrence
-  const job = (await f.command('coordination.job.claim', { jobId: occurrence.jobId })).result.job
-  await f.command('task.revise', { taskId: 'B', request: 'Changed frozen target' })
-  await assert.rejects(f.command('coordination.job.command', { jobId: job.id, fence: job.fence }), { code: 'DYNAMIC_COORDINATION_VERSION_STALE' })
-  const detail = await f.observer.coordinationWorkDetail('trigger:' + occurrence.id)
-  assert.equal(detail.relations[0].state, 'stale')
-  assert.equal(detail.relations[0].dispatch.reason, 'target_version_changed')
-  assert.equal(detail.relations[0].dispatch.receipt, 'absent')
-  assert.equal(await f.store.query({ kind: 'receipt.get', id: 'coordination-command:batch:B' }), null)
-  const raw = await f.store.query({ kind: 'coordination.occurrence.get', occurrenceId: occurrence.id })
-  assert.notEqual(raw.actionState, 'failed', 'failed command transaction has no durable failure record to project')
-})
-
 test('task relation selection follows occurrence attempt time instead of work updatedAt or entity ID order', async () => {
   const version = { requirementRevision: 1, contextRevision: 0, controlRevision: 1, runSequence: 1 }
   const accepted = { result: { task: { taskId: 'B', ...version } } }
@@ -957,55 +392,192 @@ test('task relation selection follows occurrence attempt time instead of work up
   }
 })
 
-test('official cancelled trigger followed by successful trigger stays successful on task detail after target update', async t => {
-  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-25T01:00:00Z') })
-  const f = await fixture(t)
-  await f.command('task.create', { taskId: 'B', groupId: 'group', request: 'B' })
-  const source = await f.reserve('attempt-order')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('B')] })
-  const args = { coordinationId: 'batch', action: { kind: 'task-command', instructionIds: ['B'] }, target: { conversationId: 'group', recipientIds: [], summaryOnly: true } }
-  const first = (await f.command('coordination.occurrence.accept', { ...args,
-    trigger: { triggerKind: 'message', sourceUnitId: 'attempt-order', sourceUnitRevision: 1, actionId: 'first' } })).result.occurrence
-  await f.command('coordination.occurrence.control', { occurrenceId: first.id, expectedControlRevision: 1, control: 'cancel' })
-  t.mock.timers.tick(3600000)
-  const second = (await f.command('coordination.occurrence.accept', { ...args,
-    trigger: { triggerKind: 'message', sourceUnitId: 'attempt-order', sourceUnitRevision: 1, actionId: 'second' } })).result.occurrence
-  t.mock.timers.tick(3600000)
-  const job = (await f.command('coordination.job.claim', { jobId: second.jobId })).result.job
-  await f.command('coordination.job.command', { jobId: job.id, fence: job.fence })
-  const target = await f.store.query({ kind: 'task.get', taskId: 'B' })
-  assert.equal(target.updatedAt, '2026-10-25T03:00:00.000Z')
-  const before = f.durableState(), relation = (await f.observer.taskCoordination('B', 'group')).relations[0]
-  assert.equal(relation.dispatch.occurrenceId, second.id)
-  assert.equal(relation.state, 'dispatched')
-  assert.equal((await f.observer.coordinationWorkDetail('trigger:' + first.id)).relations[0].state, 'cancelled')
-  assert.deepEqual(f.durableState(), before)
+
+// The public coordination work pages are gone. Historical rows below are loaded
+// directly as upgrade fixtures, never created by a retired production command.
+async function fixture(t,{sources=[],members=[],schedules=[],occurrences=[],jobs=[],notifications=[],coords=[],taskState='active'}={}){
+  const directory=await mkdtemp(join(tmpdir(),'coordination-audit-')),dbPath=join(directory,'tasks.sqlite')
+  const options={dbPath,instanceId:'observer-test',initialize:true}
+  let store=await openDynamicTaskStore(options),counter=0
+  const command=(kind,args)=>store.command({id:'current-'+(++counter),kind,args})
+  for(const taskId of ['A','B']){
+    await command('task.create',{taskId,groupId:'group',title:'Task '+taskId,request:'Authorized '+taskId})
+    if(taskId==='A'&&taskState==='completed'){
+      const binding=(await command('task.claim',{taskId})).result.binding
+      await command('task.complete',{binding,summary:'Actual Owner acceptance',result:{evidence:['owner-proof']}})
+      await command('task.drained',{binding})
+    }else if(taskId==='A'&&taskState!=='active')await command('task.control',{taskId,expectedControlRevision:1,control:taskState,reason:'Explicit user control'})
+  }
+  const tasksBefore=await store.query({kind:'task.list'})
+  await store.close()
+  const db=new DatabaseSync(dbPath)
+  db.prepare("DELETE FROM dynamic_meta WHERE key='independentCoordinationRetired'").run()
+  const batch={id:'batch',groupId:'group',state:'active',revision:1,memberIds:members.map(row=>row.id)}
+  for(const [table,rows] of Object.entries({coordination:[batch,...coords],coordination_sources:sources,coordination_members:members,
+    coordination_schedules:schedules,coordination_occurrences:occurrences,coordination_jobs:jobs,notifications}))
+    for(const row of rows)db.prepare(`INSERT INTO dynamic_${table}(id,body) VALUES (?,?)`).run(row.id,JSON.stringify(row))
+  db.close();store=await openDynamicTaskStore(options)
+  const observer=createCoordinationObserver((kind,args={})=>store.query({kind,...args}))
+  const server=createServer((request,response)=>handleRequest(request,response,{}))
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));await store.close();await rm(directory,{recursive:true,force:true})})
+  const read=async path=>{const response=await fetch(`http://127.0.0.1:${server.address().port}${path}`);return{status:response.status,body:await response.json()}}
+  const durableState=()=>{
+    const db=new DatabaseSync(dbPath,{readOnly:true})
+    try{return db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>({
+      name,rows:db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()}))}finally{db.close()}
+  }
+  return{store,observer,command,read,durableState,tasksBefore,query:(kind,args={})=>store.query({kind,...args}),
+    async restart(){await store.close();store=await openDynamicTaskStore(options)}}
+}
+const historicalSource=(state,extra={})=>({id:'source-'+state,groupId:'group',unitId:'unit-'+state,revision:1,dispatchOwner:'coordination',state,
+  sourceMessageId:'original',original:'Full original request',coordinationId:'batch',question:'Recorded question',...extra})
+const historicalMember=(id,extra={})=>({id,taskId:id,coordinationId:'batch',state:'ready',dependencies:[],command:{id:'historical-'+id,kind:'task.supplement',args:{text:'Recorded material'}},...extra})
+const withoutRetirement=row=>{const{retirement,...rest}=row;return rest}
+
+for(const state of ['reserved','rejected','accepted','needs_clarification'])
+test(`historical ${state} source stays intact and group scoped without dispatching or revealing it over retired HTTP`,async t=>{
+  const source=historicalSource(state,state==='rejected'?{rejectionReason:'Recorded rejection'}:{})
+  const foreign={...historicalSource('accepted'),id:'foreign',unitId:'foreign',groupId:'other',original:'Other group private text'}
+  const f=await fixture(t,{sources:[source,foreign],members:[historicalMember('A'),historicalMember('B',{dependencies:['A']})]})
+  const before=f.durableState(),[saved]=await f.query('coordination.source.list',{groupId:'group'})
+  assert.deepEqual(withoutRetirement(saved),source);assert.equal(saved.retirement.previousState,state)
+  const detail=await f.query('coordination.get',{coordinationId:'batch'})
+  assert.deepEqual(detail.members[1].dependencies,['A']);assert.ok(detail.members.every(member=>member.eligible===false))
+  assert.deepEqual(await f.query('task.list'),f.tasksBefore)
+  assert.deepEqual(await f.read('/state/coordination-sources?groupId=group'),{status:410,body:{error:'INDEPENDENT_COORDINATION_RETIRED'}})
+  assert.deepEqual(f.durableState(),before)
 })
 
-test('official later cancelled trigger is current without erasing an earlier accepted command', async t => {
-  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-25T01:00:00Z') })
-  const f = await fixture(t)
-  await f.command('task.create', { taskId: 'B', groupId: 'group', request: 'B' })
-  const source = await f.reserve('success-before-cancellation')
-  await f.command('coordination.accept', { sourceId: source.id, fence: 1, coordinationId: 'batch', members: [f.member('B')] })
-  const args = { coordinationId: 'batch', action: { kind: 'task-command', instructionIds: ['B'] }, target: { conversationId: 'group', recipientIds: [], summaryOnly: true } }
-  const first = (await f.command('coordination.occurrence.accept', { ...args,
-    trigger: { triggerKind: 'message', sourceUnitId: 'success-before-cancellation', sourceUnitRevision: 1, actionId: 'first' } })).result.occurrence
-  const job = (await f.command('coordination.job.claim', { jobId: first.jobId })).result.job
-  await f.command('coordination.job.command', { jobId: job.id, fence: job.fence })
-  t.mock.timers.tick(3600000)
-  const second = (await f.command('coordination.occurrence.accept', { ...args,
-    trigger: { triggerKind: 'message', sourceUnitId: 'success-before-cancellation', sourceUnitRevision: 1, actionId: 'second' } })).result.occurrence
-  await f.command('coordination.occurrence.control', { occurrenceId: second.id, expectedControlRevision: 1, control: 'cancel' })
-  t.mock.timers.tick(3600000)
-  await f.command('task.supplement', { taskId: 'B', messageId: 'later-update', expectedRequirementRevision: 1, expectedControlRevision: 1, text: 'Later synthetic target update' })
-  const before = f.durableState(), relation = (await f.observer.taskCoordination('B', 'group')).relations[0]
-  assert.equal(relation.dispatch.occurrenceId, second.id)
-  assert.equal(relation.state, 'cancelled')
-  assert.equal(relation.dispatch.receipt, 'absent', 'the cancelled attempt did not record command acceptance')
-  const earlier = (await f.observer.coordinationWorkDetail('trigger:' + first.id)).relations[0]
-  assert.equal(earlier.state, 'dispatched', 'later cancellation and task update do not erase the earlier acceptance')
-  assert.equal(earlier.dispatch.receipt, 'accepted')
-  assert.ok(await f.store.query({ kind: 'receipt.get', id: 'coordination-command:batch:B' }))
-  assert.deepEqual(f.durableState(), before)
+test('read-only historical coordination index keeps real bounded pagination and all record identities',async t=>{
+  const coords=Array.from({length:204},(_,index)=>({id:'coord-'+index,groupId:'group',state:'active',revision:1}))
+  const f=await fixture(t,{coords}),before=f.durableState(),items=[];let after=0
+  do{const page=await f.query('coordination.index',{groupId:'group',limit:100,after});assert.ok(page.items.length<=100);items.push(...page.items);after=page.nextAfter}while(after!==null)
+  assert.equal(items.length,205);assert.equal(new Set(items.map(item=>item.id)).size,205)
+  await assert.rejects(f.query('coordination.index',{limit:101}),{code:'DYNAMIC_ARGUMENT_INVALID'})
+  assert.deepEqual(f.durableState(),before)
+})
+
+test('recorded reorder assessment and evidence survive retirement without changing Task revisions',async t=>{
+  const assessment={id:'assess',state:'needs_clarification',summary:'Recorded question',decision:'needs_clarification',evidence:['Recorded proof']}
+  const member=historicalMember('A',{state:'applied',reorderAssessment:assessment})
+  const f=await fixture(t,{members:[member],sources:[historicalSource('accepted',{lastError:'PrivateDiagnostic123'})]})
+  const before=f.durableState(),saved=(await f.query('coordination.get',{coordinationId:'batch'})).members[0]
+  assert.deepEqual(saved.reorderAssessment,assessment);assert.equal(saved.state,'applied');assert.equal(saved.eligible,false)
+  const detail=await f.observer.coordinationSourceDetail('source-accepted')
+  assert.equal(detail.source.failureCode,'coordination_processing_failed');assert.doesNotMatch(JSON.stringify(detail),/PrivateDiagnostic123/)
+  assert.deepEqual(await f.query('task.list'),f.tasksBefore);assert.deepEqual(f.durableState(),before)
+})
+
+test('historical observation and replan retain recorded impact without reopening or revising linked Tasks',async t=>{
+  const members=[historicalMember('A',{observation:true}),historicalMember('B',{progressImpact:'replan',impactReason:'Recorded requirement change'})]
+  const f=await fixture(t,{members}),before=f.durableState()
+  const saved=(await f.query('coordination.get',{coordinationId:'batch'})).members
+  assert.equal(saved[0].observation,true);assert.equal(saved[1].progressImpact,'replan')
+  assert.equal(saved[1].impactReason,members[1].impactReason)
+  assert.deepEqual(await f.query('task.list'),f.tasksBefore);assert.deepEqual(await f.query('execution.list'),[])
+  assert.deepEqual(f.durableState(),before)
+})
+
+for(const path of ['/state/coordination-sources?limit=0&limit=2','/state/coordination-work?groupId=&unknown=1',
+  '/state/coordination-sources/%ZZ','/state/coordination-work/missing',
+  ...['schedule/with/slash','schedule with space','schedule\\with\\backslash','schedule-'+'x'.repeat(1100),'schedule:\u0000record'].map(id=>'/state/coordination-work/'+encodeURIComponent(id))])
+test(`retired HTTP path does not decode or query private history: ${path.length} bytes ${path.slice(0,44)}`,async t=>{
+  const f=await fixture(t),before=f.durableState()
+  assert.deepEqual(await f.read(path),{status:410,body:{error:'INDEPENDENT_COORDINATION_RETIRED'}})
+  assert.deepEqual(f.durableState(),before)
+})
+
+for(const control of ['coordination-cancel','cancel','pause'])
+test(`historical ${control} cannot erase genuine Owner completion or turn receipt metadata into new work`,async t=>{
+  const member=historicalMember('A',{state:'fulfilled',control,completionProof:{commandId:'historical-claim-only',runSequence:1}})
+  const f=await fixture(t,{members:[member],taskState:'completed'}),before=f.durableState()
+  const task=await f.query('task.get',{taskId:'A'})
+  assert.equal(task.status,'completed');assert.equal(task.completion.summary,'Actual Owner acceptance')
+  assert.notEqual(task.completion.commandId,member.completionProof.commandId)
+  const saved=(await f.query('coordination.get',{coordinationId:'batch'})).members[0]
+  assert.deepEqual(saved.completionProof,member.completionProof);assert.equal(saved.eligible,false)
+  assert.deepEqual(await f.query('execution.list'),[]);assert.deepEqual(f.durableState(),before)
+})
+
+for(const state of ['prepared','starting','failed','unknown','delivered'])
+test(`historical ${state} notification preserves actual delivery evidence while retired views stay inaccessible`,async t=>{
+  const notice={id:'notice',kind:'coordination',state,payload:{conversationId:'group',text:'Frozen old result',fact:{coordinationId:'batch',eventId:'old'}},
+    ...(state==='starting'||state==='unknown'?{dispatchToken:'previous-permit',sendAttemptCount:1,ack:{openTaskId:'accepted'}}:{}),
+    ...(state==='delivered'?{receipt:{messageId:'visible-message'}}:{}),...(state==='failed'?{deliveryError:{phase:'send',message:'Recorded failure'}}:{})}
+  const f=await fixture(t,{notifications:[notice]}),before=f.durableState(),saved=await f.query('notification.get',{notificationId:'notice'})
+  assert.equal(saved.state,state==='prepared'?'superseded':state==='starting'?'unknown':state)
+  assert.deepEqual(saved.payload,notice.payload);assert.deepEqual(saved.receipt,notice.receipt);assert.deepEqual(saved.ack,notice.ack)
+  assert.deepEqual(await f.read('/state/coordination-work'),{status:410,body:{error:'INDEPENDENT_COORDINATION_RETIRED'}})
+  assert.deepEqual(await f.query('task.list'),f.tasksBefore);assert.deepEqual(f.durableState(),before)
+})
+
+for(const taskState of ['active','paused','cancelled'])
+test(`historical dependent relation cannot dispatch against a current ${taskState} prerequisite`,async t=>{
+  const members=[historicalMember('A',{state:'fulfilled',completionProof:{commandId:'unproven-old-complete'}}),historicalMember('B',{dependencies:['A']})]
+  const f=await fixture(t,{members,taskState}),before=f.durableState()
+  const saved=await f.query('coordination.get',{coordinationId:'batch'})
+  assert.deepEqual(saved.members[1].dependencies,['A']);assert.equal(saved.members[1].eligible,false)
+  assert.equal(await f.query('receipt.get',{id:'historical-B'}),null)
+  assert.deepEqual(await f.query('task.list'),f.tasksBefore);assert.deepEqual(await f.query('execution.list'),[])
+  assert.deepEqual(f.durableState(),before)
+})
+
+for(const state of ['waiting','rejected','cancelled','succeeded'])
+test(`historical ${state} occurrence cannot manufacture a current dispatch receipt or Task completion`,async t=>{
+  const occurrence={id:'old-trigger',coordinationId:'batch',actionState:state,acceptedCommand:{id:'uncommitted',taskId:'B'},plannedAt:'2026-10-21T00:00:00Z'}
+  const f=await fixture(t,{members:[historicalMember('B')],occurrences:[occurrence]}),before=f.durableState()
+  assert.deepEqual(await f.query('coordination.occurrence.list'),[occurrence])
+  assert.equal(await f.query('receipt.get',{id:'uncommitted'}),null)
+  assert.equal((await f.query('task.get',{taskId:'B'})).status,'active')
+  assert.deepEqual((await f.query('task.events')).events,[]);assert.deepEqual(f.durableState(),before)
+})
+
+test('current Task detail remains readable without restarting models, exposing legacy relations or writing the ledger',async t=>{
+  const f=await fixture(t,{members:[historicalMember('A'),historicalMember('B',{dependencies:['A']})]})
+  const {openTaskSessionService}=await import('../packages/dingtalk-dsh-assistant/task-session-service.js')
+  const workspace=await mkdtemp(join(tmpdir(),'current-task-detail-'))
+  const forbidden=async()=>assert.fail('read-only detail must never run a model or send'),noop=async()=>{}
+  const sessions={run:forbidden,cancel:forbidden,close:noop}
+  const residentStore={getGroup:()=>({groupId:'group',messages:[]}),listGroups:()=>[],listTopics:()=>[]}
+  const service=await openTaskSessionService({ctx:{agents:{get(){}},sessions:{get(){}}},config:{dbPath:f.store.info.dbPath,workspaceDir:workspace,instanceId:'observer-test'},
+    legacy:{getAgentConfig:()=>({workspaceDir:workspace}),getGroup:residentStore.getGroup},residentStore,store:f.store,
+    persistence:{register:noop,close:noop},taskSessions:sessions,executionSessions:sessions,claudeExecutionSessions:sessions})
+  const server=createServer((request,response)=>handleRequest(request,response,{getTaskSessionDetail:id=>service.taskDetail(id)}))
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+  try{
+    const before=f.durableState(),response=await fetch(`http://127.0.0.1:${server.address().port}/state/tasks/B/detail`)
+    assert.equal(response.status,200);const detail=await response.json()
+    assert.equal(detail.taskId,'B');assert.equal(detail.coordination,undefined)
+    assert.deepEqual(f.durableState(),before)
+  }finally{await new Promise(resolve=>server.close(resolve));await service.close();await rm(workspace,{recursive:true,force:true})}
+})
+
+test('cross-group historical coordination index retains only requested group and cannot apply linked members',async t=>{
+  const f=await fixture(t,{coords:[{id:'other-batch',groupId:'other',state:'active',revision:1}],members:[historicalMember('A'),historicalMember('B',{coordinationId:'other-batch',dependencies:['A']})]})
+  const before=f.durableState(),page=await f.query('coordination.index',{groupId:'group'})
+  assert.deepEqual(page.items.map(item=>item.id),['batch'])
+  assert.equal((await f.query('coordination.get',{coordinationId:'other-batch'})).members[0].eligible,false)
+  assert.deepEqual(await f.query('task.list'),f.tasksBefore);assert.deepEqual(f.durableState(),before)
+})
+
+test('repeated historical reads and cold reopen preserve the same accepted-command audit without duplicate mutations',async t=>{
+  const occurrence={id:'old-trigger',coordinationId:'batch',actionState:'succeeded',commandId:'old-accepted',recordedAt:'2026-10-21T00:00:00Z'}
+  const f=await fixture(t,{occurrences:[occurrence],members:[historicalMember('B',{state:'applied'})]})
+  for(let i=0;i<3;i++){
+    assert.deepEqual(await f.query('coordination.occurrence.list'),[occurrence])
+    assert.equal((await f.query('task.get',{taskId:'B'})).contextRevision??0,0)
+    assert.equal(await f.query('receipt.get',{id:'old-accepted'}),null)
+    if(i<2)await f.restart()
+  }
+})
+
+for(const newest of ['succeeded','cancelled'])
+test(`historical trigger chronology preserves both outcomes when newest is ${newest}, without inferring a current Task result`,async t=>{
+  const occurrences=['cancelled','succeeded'].map((state,index)=>({id:'trigger-'+index,coordinationId:'batch',actionState:state,
+    acceptedAt:state===newest?'2026-10-22T00:00:00Z':'2026-10-21T00:00:00Z',commandId:state==='succeeded'?'old-success':null}))
+  const f=await fixture(t,{occurrences}),before=f.durableState()
+  assert.deepEqual(await f.query('coordination.occurrence.list'),occurrences)
+  assert.deepEqual(await f.query('task.list'),f.tasksBefore);assert.deepEqual((await f.query('task.events')).events,[])
+  assert.deepEqual(f.durableState(),before)
 })
