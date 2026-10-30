@@ -1,5 +1,5 @@
 import { FIXED_TOPICS, manuallySettled } from './fixed-topics.js'
-import {isPendingDecision,topicDecisionRecovery} from './topic-model.js'
+import {isPendingDecision,topicDecisionRecovery,topicDecisionCoversEntry} from './topic-model.js'
 const instant = value => typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' && value.trim() ? Date.parse(value) : NaN
 const timing = (start, end) => {
   const duration = instant(end) - instant(start)
@@ -16,7 +16,7 @@ export function messageProcessingProjection(message, topics, source, requests, s
     return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === message.messageVersion && currentUnit(entry) && !retired(entry)).map(entry => ({ topic, entry }))
   })
   const records = related.map(({ topic, entry }) => [...(topic.decisions ?? [])]
-    .filter(record => record.status === 'completed' && record.revision >= entry.revision)
+    .filter(record => record.status === 'completed' && topicDecisionCoversEntry(record, entry))
     .sort((a, b) => a.revision - b.revision)[0])
   const topicPending = related.some(({ topic, entry }, i) => !(topic.processedRevision >= entry.revision) || !records[i])
   const reasons = [...new Set((message.ignoredRanges ?? []).map(range => range.reason).filter(reason => typeof reason === 'string' && reason.trim()))]

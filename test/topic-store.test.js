@@ -675,6 +675,64 @@ test('Web取消复用原话题，保留仅阻塞保留项可取消的语义且�
  await store.close()
 })
 
+test('completed Web input cannot consume an earlier routed input with no submitted decision', async t => {
+ const {store,current,target}=await legacyWebContinuationFixture();t.after(()=>store.close());current.state='waiting'
+ await ingest(store,'unjudged-input',{messageVersion:2,text:'补充空状态验收要求'})
+ await route(store,'unjudged-route',[['unjudged-input',target]])
+ assert.equal(store.getTopic('g',target).revision,2)
+ for(const requestId of ['web-followup','another-web-followup']){
+  const topic=store.getTopic('g',target)
+  const accepted=await store.submitWebTaskInput({groupId:'g',requestId,text:'保留现有执行',topicRefs:[{topicId:target,revision:topic.revision}],
+   action:{kind:'task-context',taskId:current.taskId,inputVersion:1,runSequence:1,context:'保留现有执行'}})
+  assert.equal(accepted.status,'accepted','explicit Web input still applies while the group input awaits judgment')
+  await store.updateTopicDecision({groupId:'g',topicId:target,decisionId:accepted.record.decisionId,
+   patch:{operations:accepted.record.operations.map(item=>({...item,status:'applied'}))}})
+  await store.completeTopicDecision({groupId:'g',topicId:target,decisionId:accepted.record.decisionId})
+  assert.equal(store.getTopic('g',target).processedRevision,1,'Web completion covers its own input only')
+  assert.notEqual(store.getGroup('g').messages.find(item=>item.messageId==='unjudged-input').agentDeliveryStatus,'delivered')
+ }
+ const topic=store.getTopic('g',target)
+ await store.acceptTopicDecision(decision('real-input-judgment',target,topic.revision,{decision:{actions:[],basisMessageIds:['unjudged-input'],reason:'验收要求已核对',topicUpdate:{summary:'已保留空状态验收要求'}}}))
+ await store.completeTopicDecision({groupId:'g',topicId:target,decisionId:'real-input-judgment'})
+ assert.equal(store.getTopic('g',target).processedRevision,topic.revision)
+ assert.equal(store.getTopic('g',target).summary,'已保留空状态验收要求')
+ assert.equal(store.getGroup('g').messages.find(item=>item.messageId==='unjudged-input').agentDeliveryStatus,'delivered')
+})
+
+test('restart recovers only current inputs skipped by Web completion and preserves applied receipts', async t => {
+ const {store,snapshot,current,target}=await legacyWebContinuationFixture();current.state='waiting'
+ await ingest(store,'pending-version',{text:'核对初稿'})
+ await route(store,'route-version-one',[['pending-version',target]])
+ await ingest(store,'pending-version',{messageVersion:2,text:'核对更新后的验收要求'})
+ await route(store,'route-version-two',[['pending-version',target]])
+ const revision=store.getTopic('g',target).revision
+ const accepted=await store.submitWebTaskInput({groupId:'g',requestId:'maintenance-followup',text:'恢复原任务',topicRefs:[{topicId:target,revision}],
+  action:{kind:'task-context',taskId:current.taskId,inputVersion:1,runSequence:1,context:'恢复原任务'}})
+ await store.updateTopicDecision({groupId:'g',topicId:target,decisionId:accepted.record.decisionId,
+  patch:{operations:accepted.record.operations.map(item=>({...item,status:'applied'}))}})
+ await store.completeTopicDecision({groupId:'g',topicId:target,decisionId:accepted.record.decisionId})
+ await store.close()
+ // Persist the previous release's overrun, as it would appear after a restart.
+ const topic=snapshot.tables.groups.g.topics.find(item=>item.topicId===target)
+ topic.processedRevision=topic.revision
+ const before=structuredClone(snapshot.tables.groups.g),taskRows=structuredClone(snapshot.tables.tasks)
+ let reopened=await openResidentStore(facility(snapshot));t.after(()=>reopened.close())
+ let recovered=reopened.getTopic('g',target)
+ const latest=recovered.entries.findLast(entry=>entry.messageId==='pending-version')
+ assert.equal(latest.messageVersion,2)
+ assert.equal(recovered.processedRevision,latest.revision-1,'superseded message versions do not become fresh input')
+ assert.deepEqual(recovered.decisions,topic.decisions,'all effects, intent identities and completion clocks remain intact')
+ assert.deepEqual(reopened.getGroup('g').taskReservations,before.taskReservations)
+ assert.deepEqual(snapshot.tables.tasks,taskRows)
+ await reopened.close();reopened=await openResidentStore(facility(snapshot))
+ assert.deepEqual(reopened.getTopic('g',target),recovered,'repeated startup is idempotent')
+ await reopened.acceptTopicDecision(decision('review-recovered-input',target,recovered.revision,{decision:{actions:[],basisMessageIds:['pending-version'],reason:'更新后的要求已核对'}}))
+ await reopened.completeTopicDecision({groupId:'g',topicId:target,decisionId:'review-recovered-input'})
+ await reopened.close();reopened=await openResidentStore(facility(snapshot))
+ recovered=reopened.getTopic('g',target)
+ assert.equal(recovered.processedRevision,recovered.revision,'a real Topic judgment covers its snapshot without citing every historical source')
+})
+
 test('reopen only releases proven-unapplied inactive context and excludes concurrent retry', async t => {
  const {store,current,target}=await legacyWebContinuationFixture();t.after(()=>store.close())
  Object.assign(current,{state:'cancelled',control:'cancelled',restartRecoveryEligible:true,appliedOperations:[]})

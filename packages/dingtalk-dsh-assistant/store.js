@@ -10,7 +10,7 @@ import { correctOutOfScope } from './fixed-topic-correction.js'
 import { personAliasesSchema } from './group-person-aliases.js'
 import { taskPlanSchema } from './task-plan.js'
 import { storedTaskCheckpointBaseSchema, storedTaskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan, replyTopicForMessage } from './topic-model.js'
+import { topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, isWebTaskDecision, topicDecisionCoversEntry, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan, replyTopicForMessage } from './topic-model.js'
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 import { PERFORMANCE_EVENT_TYPES, performanceProjectionSchema, performanceChunkKey, hasPerformanceFirstStream, projectPerformanceEvent, listPerformance, workflowPerformance, coordinationCosts } from './performance.js'
 
@@ -307,6 +307,30 @@ function settleCompletedMessageDeliveries(messages, topics, sourceDispatchOwners
   })
 }
 
+function recoverWebSkippedTopicInputs(group) {
+  const messages = new Map(group.messages.map(message => [message.messageId, message]))
+  const topics = group.topics.map(topic => {
+    if (topic.mergedInto) return topic
+    const completed = topic.decisions.filter(record => record.status === 'completed')
+    const web = completed.filter(isWebTaskDecision)
+    if (!web.length) return topic
+    const latest = new Map()
+    for (const entry of topic.entries) latest.set(entry.unitId ?? `legacy:${entry.messageId}`, entry)
+    const skipped = [...latest.values()].filter(entry => {
+      const message = messages.get(entry.messageId)
+      return entry.action === 'add' && entry.reason !== 'migration-baseline' && entry.revision <= topic.processedRevision
+        && message?.messageVersion === entry.messageVersion && !manuallySettled(message)
+        && (!message.activeUnitRefs || message.activeUnitRefs.some(ref => ref.unitId === entry.unitId && ref.unitRevision === entry.unitRevision))
+        && !group.sourceDispatchOwnership?.some(ref => ref.unitId === entry.unitId && ref.unitRevision === entry.unitRevision && ref.dispatchOwner === 'coordination')
+        && web.some(record => record.revision >= entry.revision) && !completed.some(record => topicDecisionCoversEntry(record, entry))
+    })
+    // Repair only a provable Web overrun. Keep all decisions/effects and let the
+    // normal coordinator judge the current inputs; never manufacture a conclusion.
+    return skipped.length ? { ...topic, processedRevision: Math.min(...skipped.map(entry => entry.revision)) - 1 } : topic
+  })
+  return topics.some((topic, index) => topic !== group.topics[index]) ? { ...group, topics } : group
+}
+
 export function taskSessionId(taskId) {
   if (typeof taskId !== 'string' || !taskId.startsWith('task-')) throw new Error(`task_id_invalid:${taskId}`)
   return `session-${taskId}`
@@ -415,7 +439,8 @@ export async function openResidentStore(storageDomain) {
     return Reflect.get(target, name)
   } })
   for (const [key, group] of groups.entries()) {
-    if (ensureFixedTopics(group) !== group) await groups.update(key, ensureFixedTopics)
+    const recovered = recoverWebSkippedTopicInputs(ensureFixedTopics(group))
+    if (recovered !== group) await groups.update(key, () => recovered)
     else fixedTopicPages.update(group)
   }
   const topicPages = new ObserverMemoryPages(),topicPageScopes=new Map()
@@ -1166,7 +1191,9 @@ export async function openResidentStore(storageDomain) {
         result = { ...record, status: 'completed', completedAt, updatedAt: completedAt }
         const update = record.decision.topicUpdate ?? {}
         const stillPending = topic.decisions.some(item => item.decisionId !== decisionId && isPendingDecision(item))
-        const processedRevision = stillPending ? topic.processedRevision : Math.max(topic.processedRevision, record.revision)
+        const uncovered = topic.entries.some(entry => entry.revision > topic.processedRevision && entry.revision <= record.revision
+          && !topicDecisionCoversEntry(record, entry))
+        const processedRevision = stillPending || uncovered ? topic.processedRevision : Math.max(topic.processedRevision, record.revision)
         const topics = latest.topics.map(item => ({ ...item, decisions: item.decisions.map(value => reconsiderable.has(value.decisionId)
           ? { ...value, status: 'rejected', recoveryReason: '任务已恢复；原补充未写入，保留消息按当前任务版本重新判断。', nextRetryAt: undefined, updatedAt: completedAt } : value) }))
           .map((item) => item.topicId !== topicId ? item : {
