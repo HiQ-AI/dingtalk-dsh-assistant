@@ -5,7 +5,7 @@ import { createNativeDwsObserver, nativeDwsCommands, nativeDwsObservation, nativ
 const binding = { sessionId: 'session' }
 const send = (type = 'file') => type === 'reply'
   ? `dws chat message reply --group 'group' --ref-msg-id 'source' --ref-sender 'actor' --content 'result' --uuid 'key' --yes --format json`
-  : `dws chat +messages-send --as user --group 'group' ${type === 'text' ? "--text 'result'" : '--file "C:\\evidence folder\\accepted.png"'} --msg-type ${type} --idempotency-key 'key' --yes --format json`
+  : `dws chat +messages-send --as user --group 'group' ${type === 'text' ? "--text 'result'" : type === 'markdown' ? "--markdown '[PR 101](https://example.com/pull/101)'" : '--file "C:\\evidence folder\\accepted.png"'} --msg-type ${type} --idempotency-key 'key' --yes --format json`
 const query = `dws chat message send-status --open-task-id 'send-task' --format json`
 const mget = `dws chat +messages-mget --msg-ids 'message' --no-reactions --no-threads --format json`
 const ack = { ok: true, result: { success: true, result: { openTaskId: 'send-task' } }, sendReceipt: { openTaskId: 'send-task' } }
@@ -16,8 +16,8 @@ const event = (...values) => ({ binding, result: { value: { kind: 'foreground', 
   stdout: { text: values.map(value => JSON.stringify(value)).join('\n') }, stderr: { text: '' } } } })
 const observation = (command, ...values) => nativeDwsObservation(event(...values), nativeDwsCommands('pwsh', { command }))
 
-test('literal native text, file, image and reply sends retain the original accepted task identity', () => {
-  for (const type of ['text', 'file', 'image', 'reply']) {
+test('literal native text, Markdown, file, image and reply sends retain the original accepted task identity', () => {
+  for (const type of ['text', 'markdown', 'file', 'image', 'reply']) {
     const commands = nativeDwsCommands('pwsh', { command: send(type) })
     assert.equal(commands.length, 1); assert.equal(commands[0].messageType, type)
     const observed = nativeDwsObservation(event(ack), commands)
@@ -33,6 +33,7 @@ test('ordinary shell text, files, computed commands and mget results never becom
     assert.deepEqual(observation(command, ack), {})
   }
   assert.deepEqual(observation(mget, status()), {})
+  assert.deepEqual(observation(`${send('markdown')} --text 'ambiguous'`, ack), {})
   assert.deepEqual(observation(`${query}; ${mget}`, status({ result: { sendStatus: 'PROCESSING' } }), status()), {})
   assert.deepEqual(observation(`${query}\n${mget}`, status(), { messages: [status({ openTaskId: 'other' })] }).nativeDwsStatuses,
     [{ openTaskId: 'send-task', conversationId: 'group', messageId: 'message', profile: null }])
@@ -100,6 +101,23 @@ test('a stalled send or status cannot freeze ingress, startup or shutdown', { ti
   const waiting = observer.beforeIngress('group')
   observer.close(); await waiting
   assert.equal(outbox.length, 0, 'A timeout never manufactures a sent message identity')
+})
+
+test('late successful status still attributes the exact send after ingress has timed out', { timeout: 2000 }, async () => {
+  const original = { id: 'send-op', taskId: 'task', state: 'succeeded', result: observation(send(), ack) }
+  const operations = new Map([[original.id, original]]), outbox = [], response = Promise.withResolvers()
+  const residentStore = { getGroup: () => ({ outbox }), projectTaskNotification: async ({ outbound }) => outbox.push(outbound) }
+  let queries = 0
+  const observer = createNativeDwsObserver({ operations, residentStore, ingressWaitMs: 10, probeWaitMs: 20,
+    querySendStatus: () => { queries++; return response.promise } })
+  await observer.beforeIngress('group')
+  assert.equal(outbox.length, 0, 'An earlier message must remain unclassified without an exact identity')
+  response.resolve(status())
+  await observer.beforeIngress('group')
+  assert.equal(queries, 1, 'Reuse the original pending status query')
+  assert.equal(outbox.length, 1); assert.equal(outbox[0].deliveredMessageId, 'message')
+  assert.equal(outbox[0].sendReceipt.openTaskId, 'send-task')
+  observer.close()
 })
 
 test('original CLI profile is preserved for status lookup and cross-profile status evidence is rejected', async () => {

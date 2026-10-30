@@ -77,8 +77,8 @@ test('Task完成通知使用DWS原生引用回复并@提出人', async () => {
   assert.equal(request.replyToMessageId, 'm-source')
 })
 
-test('普通群发仅传输正文编码原生提及，引用交由DWS补齐且持久业务正文不变', async () => {
-  const commands = [], text = '提醒你查看云端专家的开发进度。'
+test('普通群发显式使用Markdown保留链接段落列表与签名，原生多人提及不改持久业务正文', async () => {
+  const commands = [], text = '## 验收完成\n\n- UAT 已核验。\n\n- 修改：[PR 101](https://example.com/app/pull/101)\n\n请查收附件。\n\n- 验收助理'
   const recipients = ['open-person-a', 'open-person-b'], before = [...recipients]
   const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, profile: 'corp:user', runner: { run: async args => {
     commands.push(args); return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'open' } }) }
@@ -89,7 +89,7 @@ test('普通群发仅传输正文编码原生提及，引用交由DWS补齐且�
     await sendWorkflowNotification(adapter, notification)
     const args = commands.at(-1)
     assert.equal(args[args.indexOf('--at-open-dingtalk-ids') + 1], recipients.join(','))
-    assert.equal(args[args.indexOf(quoted ? '--content' : '--text') + 1], quoted ? text : `<@open-person-a> <@open-person-b> ${text}`)
+    assert.equal(args[args.indexOf(quoted ? '--content' : '--markdown') + 1], quoted ? text : `<@open-person-a> <@open-person-b>\n\n${text}`)
     assert.equal(args.includes('--at-user-ids'), false)
     assert.equal(args.includes('--at-all'), false)
     assert.deepEqual(args.slice(-2), ['--profile', 'corp:user'])
@@ -97,7 +97,11 @@ test('普通群发仅传输正文编码原生提及，引用交由DWS补齐且�
     if (quoted) {
       assert.equal(args[args.indexOf('--ref-msg-id') + 1], 'source-message')
       assert.equal(args[args.indexOf('--ref-sender') + 1], recipients[0])
-    } else assert.equal(args[args.indexOf('--as') + 1], 'user')
+    } else {
+      assert.equal(args[args.indexOf('--as') + 1], 'user')
+      assert.equal(args[args.indexOf('--msg-type') + 1], 'markdown')
+      assert.equal(args.includes('--text'), false)
+    }
     assert.equal(notification.payload.text, text)
   }
   assert.deepEqual(recipients, before)
@@ -114,7 +118,7 @@ test('当前DWS引用通道保留作者的显式mention，作者和其他成员�
       atOpenDingTalkIds: recipients, ...(quoted ? { sourceMessageId: 'source', actorId: 'open-author' } : {}) } })
     const args = commands.at(-1)
     assert.equal(args[args.indexOf('--at-open-dingtalk-ids') + 1], 'open-author,open-reviewer,open-observer')
-    assert.equal(args[args.indexOf(quoted ? '--content' : '--text') + 1], quoted ? '请查收核验结果。' : '<@open-author> <@open-reviewer> <@open-observer> 请查收核验结果。')
+    assert.equal(args[args.indexOf(quoted ? '--content' : '--markdown') + 1], quoted ? '请查收核验结果。' : '<@open-author> <@open-reviewer> <@open-observer>\n\n请查收核验结果。')
     assert.equal(args.includes('--at-all'), false)
   }
   // The CLI only maps explicit IDs to mentions; ref-sender is a quote identity.
@@ -132,7 +136,7 @@ test('普通与引用发送空提及不添加任何@参数，非法列表在调�
     for (const atOpenDingTalkIds of [undefined, []]) {
       const args = compile({ ...request, atOpenDingTalkIds })
       assert.equal(args.some(arg => arg.startsWith('--at-')), false)
-      assert.equal(args[args.indexOf(args.includes('--content') ? '--content' : '--text') + 1], request.text)
+      assert.equal(args[args.indexOf(args.includes('--content') ? '--content' : '--markdown') + 1], request.text)
     }
   }
   for (const atOpenDingTalkIds of [null, 'open-person-a', {}, [null], [42], [''], [' '], ['open,a'], ['open a'], ['open\na'], ['"open"'], ['open>'], ['<open'], ['open@all']]) {

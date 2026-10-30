@@ -17,7 +17,7 @@ import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter
 import { sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/group-message.js'
 import { verifyTaskNotificationReadback } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
 
-async function fixture(t) {
+async function fixture(t, { signature = '' } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'topic-facts-')), snapshot = { tables: {}, global: null }
   const facility = new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
     loadAll: async () => structuredClone(snapshot), close: async () => {},
@@ -39,7 +39,7 @@ async function fixture(t) {
     decision: { basisMessageIds: ['origin'], actions: [], reason: '记录需求', topicUpdate: { summary: '等待结果' } } })
   await resident.completeTopicDecision({ groupId: 'group', topicId, decisionId: 'user-decision' })
   await commit('source.record', { sourceId: 'source', groupId: 'group', messageId: 'origin', actorId: 'user', text: '请核对两个结果' })
-  const handler = createTopicFactHandler({ residentStore: resident, query, commit, signature: () => '',
+  const handler = createTopicFactHandler({ residentStore: resident, query, commit, signature: () => signature,
     onNotification: notification => projectTaskNotification({ residentStore: resident, notification }) })
   const context = () => handler.context('group', resident.getTopic('group', topicId))
   const submission = (ctx, id, reply) => ({ requestId: id, groupId: 'group', topicId, revision: resident.getTopic('group', topicId).revision,
@@ -137,7 +137,7 @@ test('完成与事实同事务，回复失败不影响完成；重启复用结�
 })
 
 for (const contextReference of [true, false]) test('事实回复保留多人原生提及并在冻结时消除引用叠加 contextReference=' + contextReference, async t => {
-  const f = await fixture(t)
+  const f = await fixture(t, { signature: '验收助理' })
   const additions = [{ messageId: 'review', actorId: 'open-reviewer', senderName: '测试成员甲', text: '我来验收，请把核验结果也同步给我。' },
     ...Array.from({ length: 10 }, (_, i) => ({ messageId: `progress-${i}`, actorId: 'open-helper', senderName: '测试成员甲一',
       text: i === 9 ? '访问条件已恢复，完成后把截图发群里。' : '补充核验材料。' })),
@@ -161,7 +161,8 @@ for (const contextReference of [true, false]) test('事实回复保留多人原�
   assert.ok(ctx.input.originMessages.some(message => message.messageId === 'review' && message.senderOpenDingTalkId === 'open-reviewer'))
   assert.ok(!ctx.input.recentMessages.some(message => message.messageId === 'origin'))
   assert.ok(ctx.metrics.contextBytes <= 22 * 1024)
-  const sub = f.submission(ctx, 'selected-audience', '核验已完成，结果和截图已整理。')
+  const markdown = '## 核验完成\n\n- 环境：UAT\n\n- 已验证：[PR 101](https://example.com/client/pull/101)、[PR 102](https://example.com/server/pull/102)\n\n截图与结果已整理。'
+  const sub = f.submission(ctx, 'selected-audience', markdown)
   sub.decision.reason = '原需求人接收交付，验收人明确要求同步；后续材料提供者不自动替换或加入收件人。'
   sub.decision.atOpenDingTalkIds = ['user', 'open-reviewer', 'user']
   if (contextReference) sub.decision.replyToMessageId = 'progress-9'
@@ -177,6 +178,7 @@ for (const contextReference of [true, false]) test('事实回复保留多人原�
   assert.equal(notice.payload.sourceMessageId, undefined)
   assert.equal(notice.payload.actorId, undefined)
   assert.deepEqual(notice.payload.atOpenDingTalkIds, ['user', 'open-reviewer'])
+  assert.equal(notice.payload.text, markdown + '\n\n- 验收助理', 'Freeze the complete linked Markdown and configured signature')
   await f.reopen(); await f.handler.recover()
   const persisted = await f.query('notification.get', { notificationId: notice.id })
   assert.deepEqual(persisted.payload, notice.payload)
@@ -200,7 +202,10 @@ for (const contextReference of [true, false]) test('事实回复保留多人原�
   assert.ok(args.includes('+messages-send'))
   assert.equal(argument('--as'), 'user')
   assert.equal(argument('--at-open-dingtalk-ids'), 'user,open-reviewer')
-  assert.equal(argument('--text'), '<@user> <@open-reviewer> ' + notice.payload.text)
+  assert.equal(argument('--msg-type'), 'markdown')
+  assert.equal(argument('--markdown'), '<@user> <@open-reviewer>\n\n' + markdown + '\n\n- 验收助理')
+  assert.equal(args.includes('--text'), false, 'The DWS plain-text branch loses Markdown rendering')
+  assert.equal(argument('--format'), 'json', 'Output serialization is independent of the Markdown message type')
   assert.equal(args.includes('--at-all'), false)
   assert.equal(args.includes('--at-user-ids'), false)
   const delivered = await f.query('notification.get', { notificationId: notice.id })

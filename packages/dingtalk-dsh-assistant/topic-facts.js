@@ -335,7 +335,7 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
         submission = { ...submission, decision: { ...submission.decision, atOpenDingTalkIds: recipients } }
         const attachments = context.artifactFiles?.length ? '\n\n附件与验收对应：\n' + context.artifactFiles
           .map((file, index) => `${index + 1}. ${file.artifact.fileName}：${file.caption}`).join('\n') : ''
-        // Freeze the actual final delivery as plain text + selected native mentions.
+        // Freeze the actual final delivery as unquoted Markdown + selected native mentions.
         // Keeping a model's optional context reference must not add an implicit recipient
         // or duplicate a mention through the native quote transport.
         reply = formatTaskGroupReply({ source: { groupId: request.groupId }, allowUnrouted: true,

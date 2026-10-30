@@ -39,7 +39,7 @@ export function nativeDwsCommands(toolName, args) {
     else if (values[0] === 'chat' && values[1] === '+messages-mget') { kind = 'read'; count = 2 }
     else return []
     const flags = {}, switches = new Set(['--yes', '--no-reactions', '--no-threads'])
-    const allowed = new Set(kind === 'send' ? ['--as','--group','--text','--file','--msg-type','--idempotency-key','--yes','--format','--profile','--at-open-dingtalk-ids']
+    const allowed = new Set(kind === 'send' ? ['--as','--group','--text','--markdown','--file','--msg-type','--idempotency-key','--yes','--format','--profile','--at-open-dingtalk-ids']
       : kind === 'reply' ? ['--group','--ref-msg-id','--ref-sender','--content','--uuid','--yes','--format','--profile','--at-open-dingtalk-ids']
         : kind === 'status' ? ['--open-task-id','--format','--profile'] : ['--msg-ids','--no-reactions','--no-threads','--format','--profile'])
     for (let i = count; i < values.length; i++) {
@@ -50,13 +50,14 @@ export function nativeDwsCommands(toolName, args) {
     }
     if (flags['--format'] !== 'json') return []
     if (kind === 'send' || kind === 'reply') {
-      const text = flags[kind === 'send' ? '--text' : '--content'], file = flags['--file']
+      const text = kind === 'send' ? flags['--markdown'] ?? flags['--text'] : flags['--content'], file = flags['--file']
       const key = flags[kind === 'send' ? '--idempotency-key' : '--uuid']
       if (!flags['--group'] || !key || !flags['--yes'] || kind === 'send' && flags['--as'] !== 'user'
+        || flags['--text'] && flags['--markdown']
         || !text && !file || text && file || kind === 'reply' && (!flags['--ref-msg-id'] || !flags['--ref-sender'])) return []
       commands.push({ kind: 'send', conversationId: flags['--group'], idempotencyKey: key,
         profile: flags['--profile'] ?? null,
-        messageType: kind === 'reply' ? 'reply' : flags['--msg-type'] ?? 'text',
+        messageType: kind === 'reply' ? 'reply' : flags['--msg-type'] ?? (flags['--markdown'] ? 'markdown' : file ? 'file' : 'text'),
         text: text ?? `[文件] ${basename(file.replaceAll('\\', '/'))}` })
     } else if (kind === 'status') {
       if (!flags['--open-task-id']) return []

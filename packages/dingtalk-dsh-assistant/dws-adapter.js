@@ -184,9 +184,13 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
     },
     compileGroupSend({ groupId, text, idempotencyKey, atOpenDingTalkIds = [] }) {
       const mentions = nativeMentionIds(atOpenDingTalkIds)
-      // 普通发送要求原生占位符；仅编码传输正文，不改持久业务正文。引用回复由 DWS 原生补齐。
-      const content = mentions ? `${mentions.split(',').map(id => `<@${id}>`).join(' ')} ${assertStableId(text, 'text')}` : assertStableId(text, 'text')
-      const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--text', content, '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
+      // DWS v1.0.63 --text sends msgType=text; --markdown preserves the same
+      // formatted body as native replies, without adding a quote recipient.
+      // https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/blob/v1.0.63/internal/shortcut/chat/unified_send.go
+      // 提及独立成段，保留正文首行标题/列表/围栏的 Markdown 块边界。
+      // 原生占位符只编码传输正文，不改持久业务正文。
+      const content = mentions ? `${mentions.split(',').map(id => `<@${id}>`).join(' ')}\n\n${assertStableId(text, 'text')}` : assertStableId(text, 'text')
+      const args = ['chat', '+messages-send', '--as', 'user', '--group', assertStableId(groupId, 'group_id'), '--msg-type', 'markdown', '--markdown', content, '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       if (mentions) args.push('--at-open-dingtalk-ids', mentions)
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
