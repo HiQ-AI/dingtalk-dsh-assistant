@@ -862,9 +862,9 @@
         "sha256": "40813b19955082ab93708dfb5ec88703f602c23a2c0601fb1556b0fbdbb032a2",
         "review": {
           "fromSha256": "40813b19955082ab93708dfb5ec88703f602c23a2c0601fb1556b0fbdbb032a2",
-          "sha256": "f225c0b59dcdd82833303a2a48293e1374f7a46c1778781ccd513be8341ca9e3",
+          "sha256": "3c06c6b882e0d9249d753d8df548ffa3892bb72b55c97e25cd2c112a39399511",
           "basisCommit": "fa14be0f5f571d0740081c65da372c5456220545",
-          "reason": "复审共享合成模型decide：仅根据本测试声明的依据作者填写显式接收人；原helper的控制、回执、等待及全部断言不变。历史相关路径单独验证。",
+          "reason": "复审共享合成模型decide与statusReply：仅根据本测试声明的依据作者填写显式接收人；原helper的控制、回执、等待及全部断言不变。原fixture摘要与复审前fa14be0继续固定，历史相关路径单独验证。",
           "evidence": [
             "docs/ops/release-230-test-recovery.md",
             "test/runtime.test.js",
@@ -2741,7 +2741,17 @@
             "packages/dingtalk-dsh-assistant/resident.js",
             "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
             "docs/ops/task-session-clean-start.md"
-          ]
+          ],
+          "review": {
+            "fromSha256": "6a74a1c2830fbeb61a0ad894e27cda403f6c314c44453f8e41809086ce6df913",
+            "sha256": "44e843c23cbed229983d2c83fdec01e5b7a48d2301359309bed591dba1217dd7",
+            "basisCommit": "a88a82ea17ab99fced30ce925e90a776fffcada3",
+            "reason": "复审原#124：合成确认显式指定本例受信作者od-a；慢创建与其他Topic独立完成的断言、原超时和历史分类均不变。",
+            "evidence": [
+              "docs/ops/release-230-test-recovery.md",
+              "test/runtime-history.test.js"
+            ]
+          }
         },
         {
           "originalId": 125,
@@ -3131,7 +3141,7 @@
       ],
       "destinationSha256": {
         "test/runtime.test.js": "84a0f722c97b475155b8627e9b2686a59e7c9342d9c0abe0983f142a7b307efe",
-        "test/runtime-history.test.js": "2c8ddaa590dad5698bd77f1f90aa66757537db126576dd6f8fa80f1741a6bbdc"
+        "test/runtime-history.test.js": "f8fd4f6836ab31c4f55bd7679ae2ff03c1c4e45c5b8ceb08cf7c2925111cdbcc"
       }
     }
   ]
