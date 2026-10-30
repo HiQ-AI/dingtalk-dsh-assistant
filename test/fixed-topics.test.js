@@ -29,10 +29,11 @@ async function fixture(t, { tasks = [], decide = async () => {}, timezone = 'Asi
     const agent = { session: { id: options.sessionId }, steer(message) { pending = Promise.resolve().then(() => decide({ message, tools, exec: { agent } })) }, whenIdle: () => pending, cancel() {} }
     const record = { options, tools }; created.push(record)
     await options.setup({
-      get: name => name === 'agentPresets' ? { mount: async () => ({ id: 'preset' }) } : undefined,
-      tools: { register(tool) { tools.set(tool.name, tool) }, restrict(value) { record.allowed = value.allow }, guard(fn) { record.guard = fn } },
+      get: name => name === 'agentPresets' ? { mount: async () => ({ id: 'preset' }) }
+        : name === 'permissionPresets' ? { set(session, preset) { assert.equal(session, agent.session); record.permissionPreset = preset } } : undefined,
+      tools: { register(tool) { tools.set(tool.name, tool) }, restrict() { assert.fail('platform must inherit native tools') }, guard() { assert.fail('platform must use host permissions') } },
       on: (event, fn) => hooks.set(event, fn), systemPrompt: { section: section => sections.push(section) },
-    })
+    }, agent)
     return { agent, async dispose() {} }
   } } }
   const handler = createFixedTopicHandler({ ctx, store, root, legacy: { getAgentConfig: () => ({ agentPreset: 'preset' }) },
@@ -279,7 +280,7 @@ test('native mention lookup used when event metadata is absent', async t => {
   assert.equal(lookups, 1); assert.equal(f.replies.length, 1)
 })
 
-for (const state of ['running', 'completed']) test('platform readonly session queries all pages including archived, submits once: ' + state, async t => {
+for (const state of ['running', 'completed']) test('platform full-access session queries all pages including archived, submits once: ' + state, async t => {
   const tasks = Array.from({ length: 103 }, (_, i) => ({ taskId: `t${String(i).padStart(3, '0')}`, title: '本群任务' + i, groupId: 'g', state, completedAt: '2026-10-27T10:00:00Z', archivedAt: i % 2 ? '2026-10-27T11:00:00Z' : null }))
   tasks.push({ taskId: 'secret', title: '其他群不可见', groupId: 'other', state })
   let seen = 0
@@ -300,21 +301,42 @@ for (const state of ['running', 'completed']) test('platform readonly session qu
   f.handler.schedule('g'); await f.handler.whenIdle(); f.handler.schedule('g'); await f.handler.whenIdle()
   assert.deepEqual(f.errors, []); assert.equal(seen, 103); assert.equal(f.created.length, 1); assert.equal(f.replies.length, 1)
   assert.equal(f.store.listTasks().length, 0); assert.equal(f.store.getGroup('g').topics.length, 0)
-  assert.deepEqual(f.created[0].allowed, ['platform_task_query', 'platform_reply_submit'])
-  for (const name of ['task_wake', 'task_create', 'pwsh', 'write', 'group_decision_submit']) assert.equal(f.created[0].guard({ name }), 'platform_query_readonly')
+  assert.equal(f.created[0].permissionPreset, 'danger-full-access')
 })
 
-test('platform empty list and explicit management boundary need no business task', async t => {
+test('platform empty list uses host permissions and needs no business task', async t => {
   const f = await fixture(t, { decide: async ({ tools, exec }) => {
     const page = tools.get('platform_task_query').execute({ state: 'running' }, exec)
     assert.equal(page.total, 0); assert.equal(page.hasMore, false); assert.equal(page.complete, true)
     await assert.rejects(tools.get('platform_reply_submit').execute({ text: '' }, exec), /platform_reply_empty/)
-    await tools.get('platform_reply_submit').execute({ text: '当前没有执行中任务。这里只能查询，不能取消任务。' }, exec)
+    await tools.get('platform_reply_submit').execute({ text: '当前没有执行中任务。' }, exec)
   } })
-  await f.route('取消所有任务并告诉我运行列表', [unit('platform', '取消所有任务并告诉我运行列表', 'agent-platform')])
+  await f.route('告诉我运行列表', [unit('platform', '告诉我运行列表', 'agent-platform')])
   f.handler.schedule('g'); await f.handler.whenIdle()
   assert.deepEqual(f.errors, []); assert.equal(f.replies.length, 1); assert.equal(f.store.listTasks().length, 0)
-  assert.ok(f.sections.some(section => section.text.includes('没有创建、补充、唤醒、取消、完成')))
+  assert.ok(f.sections.some(section => section.text.includes('插件不额外限制工具')))
+})
+
+for (const expiredReminder of [false, true]) test('platform overdue request explicitly settles once: ' + (expiredReminder ? 'expired reminder' : 'late report'), async t => {
+  const text = expiredReminder ? '八点十分提醒我打开会议' : '八点十分汇报今天工作成果'
+  const f = await fixture(t, { decide: async ({ message, tools, exec }) => {
+    const input = JSON.parse(message.content[0].text.slice(message.content[0].text.indexOf('\n') + 1))
+    assert.equal(input.messageTime, '2026-10-28T00:00:00Z')
+    assert.equal(input.asOf, '2026-10-28T00:30:00.000Z')
+    assert.equal(input.timezone, 'Asia/Shanghai')
+    if (!expiredReminder) tools.get('platform_task_query').execute({ state: 'completed', day: 'today' }, exec)
+    const result = await tools.get('platform_reply_submit').execute({ text: expiredReminder ? null : '现于 08:30 补报，较约定延迟 20 分钟：当前范围没有完成记录。' }, exec)
+    assert.equal(result.status, expiredReminder ? 'expired' : 'accepted')
+  } })
+  await f.route(text, [unit('timed', text, 'agent-platform')])
+  f.handler.schedule('g'); await f.handler.whenIdle(); f.handler.schedule('g'); await f.handler.whenIdle()
+  assert.deepEqual(f.errors, []); assert.equal(f.created.length, 1)
+  assert.equal(f.replies.length, expiredReminder ? 0 : 1)
+  assert.equal(f.store.listTasks().length, 0)
+  assert.ok(f.store.getGroup('g').messages[0].units[0].fixedTopicHandledAt)
+  // Prompt contract only: scripted decisions above do not prove model time interpretation.
+  const instruction = f.sections.find(section => section.name === 'dingtalk-platform').text
+  for (const phrase of ['用户明确的时区', '实际执行时刻', '不得照原值创建过去的 schedule', '不得擅自顺延明天', '补报一次', '失去意义的定点提醒', '真实创建成功']) assert.ok(instruction.includes(phrase))
 })
 
 test('mixed source units keep business topic pending while fixed units finish', async t => {
