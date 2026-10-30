@@ -1724,7 +1724,7 @@ test('慢叶子创建期间同群其他 Topic 仍可完成', async (t) => {
   t.after(() => release())
   await ingest(h, 'slow-a')
   const a = (await route(h)).pendingDecisions[0]
-  const result = await h.call('group_decision_submit', { requestId: a.requestId, topicId: a.topicId, revision: a.revision, decision: { basisMessageIds: ['slow-a'], actions: [{ kind: 'new-task', title: 'A', objective: '核验 A', acceptanceCriteria: ['可查'], topicRefs: [{ topicId: a.topicId, revision: a.revision }] }], reply: '开始核验。', replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })
+  const result = await h.call('group_decision_submit', { requestId: a.requestId, topicId: a.topicId, revision: a.revision, decision: { basisMessageIds: ['slow-a'], actions: [{ kind: 'new-task', title: 'A', objective: '核验 A', acceptanceCriteria: ['可查'], topicRefs: [{ topicId: a.topicId, revision: a.revision }] }], reply: '开始核验。', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })
   assert.equal(result.status, 'accepted')
   await until(() => entered)
   try {

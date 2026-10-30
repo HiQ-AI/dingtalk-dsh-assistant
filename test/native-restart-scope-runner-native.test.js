@@ -2,10 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile, utimes, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, dirname, resolve } from 'node:path'
+import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
-import { createRequire } from 'node:module'
-import { available, reason, nativeTaskHost } from './fixtures/task-session-native-host.js'
+import { fileURLToPath } from 'node:url'
+import { loadNativeTestProfile, nativeTaskHost as createNativeTaskHost } from './fixtures/task-session-native-host.js'
 import { sessionPersistenceFixture } from './fixtures/session-persistence.js'
 import { restartScopeProbePlan, readRestartScopeProbe, restartScopeProbeToolName } from '../packages/dingtalk-dsh-assistant/native-restart-scope-probe.js'
 import { isolationDigest as hash } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
@@ -14,7 +14,11 @@ import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persi
 import { readNativeOperationContext } from '../packages/dingtalk-dsh-assistant/dynamic-operation-readback.js'
 
 const digest = text => createHash('sha256').update(text).digest('hex')
-const skip = process.platform !== 'win32' ? 'Windows native pwsh required' : !available ? reason : false
+// The reviewed restart evidence contract requires rc.2's producer-bound job journal.
+// Keep the ordinary alpha.2 fixture intact; never synthesize missing native receipts.
+const nativeProfile = loadNativeTestProfile(fileURLToPath(new URL('./fixtures/native-rc2-profile/package.json', import.meta.url)))
+const nativeTaskHost = (root, decide, options) => createNativeTaskHost(root, decide, { ...options, nativeProfile })
+const skip = process.platform !== 'win32' ? 'Windows native pwsh required' : false
 
 // 全部保留物均为新建夹具；运行的只是生产只读探针，不启动 PostgreSQL / Maven，不读取历史业务账本。
 async function fixturePlan(root, observedExit = false, wrapper = false) {
@@ -40,8 +44,8 @@ async function fixturePlan(root, observedExit = false, wrapper = false) {
   sessionId: 'original-session', jobId: 'original-job', startedAt, callId: 'original-call', argumentsDigest: 'b'.repeat(64) }
  const plan = restartScopeProbePlan({ command: wrapper ? `pwsh -NoProfile -File "${script}" -Action serve` : `& D:\\fixture\\postgres.exe -D ${source} -h 127.0.0.1 -p 25429`, binding, evidence: scopeEvidence, dshHome, workspaceRoot: root })
  assert.ok(plan)
- const profile = createRequire(resolve(process.env.DSH_NATIVE_TEST_PROFILE ?? 'D:/dsh_home/profiles/web/package.json'))
- const native = createRequire(profile.resolve('@deepseek-ai/dsh-base'))
+ assert.ok(nativeProfile.available, nativeProfile.reason)
+ const { native } = nativeProfile
  for (const file of plan.spec.providerFiles) {
   const parts = file.path.slice(join(dshHome, 'profiles', 'web', 'node_modules').length + 1).split(/[\\/]/u)
   const manifest = native.resolve(parts.splice(0, 2).join('/') + '/package.json')

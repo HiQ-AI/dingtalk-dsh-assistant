@@ -32,7 +32,7 @@ test('three actual tgz and source identity round-trip; publish retry reuses iden
 })
 test('different run/SHA/tag, lock/profile/environment and manifest hashes all fail closed', async t => {
   const f = await fixture(t)
-  for (const [key, value] of Object.entries({ sha: 'a'.repeat(40), runId: '98765', tag: 'v999.0.0', lockSha256: 'b'.repeat(64), profileSha256: 'c'.repeat(64), node: 'v22.13.0', pnpm: '0', platform: 'foreign' })) {
+  for (const [key, value] of Object.entries({ sha: 'a'.repeat(40), runId: '98765', tag: 'v999.0.0', lockSha256: 'b'.repeat(64), profileSha256: 'c'.repeat(64), rc2ProfileSha256: 'd'.repeat(64), rc2LockSha256: 'e'.repeat(64), node: 'v22.13.0', pnpm: '0', platform: 'foreign' })) {
     await writeFile(join(f.packages, 'release-manifest.json'), JSON.stringify({ ...f.manifest, [key]: value }))
     await assert.rejects(verifyArtifacts(f.packages, f.identity), /verified_release_artifact_mismatch/)
   }

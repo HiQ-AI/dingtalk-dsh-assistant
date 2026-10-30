@@ -2,9 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, access, rm, mkdir, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { isAbsolute, join, relative, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
+import { canonicalPath, writableRoots } from '@deepseek-ai/dsh-sandbox'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { installTaskSessionPersistence } from '../packages/dingtalk-dsh-assistant/task-session-persistence.js'
@@ -17,9 +18,18 @@ import { available, reason, nativeTaskHost, nativeShell, latestInput } from './f
 
 const quote = value => `'${value.replaceAll("'", "''")}'`
 async function createOwnedFixture(prefix) {
-  const root = await mkdtemp(join(tmpdir(), prefix))
-  if (process.platform !== 'win32') return root
+  // Workspace-write also admits platform temp areas. A sibling Task there is
+  // not an outside-write probe, so use a disposable root inside this repository.
+  const root = await mkdtemp(join(fileURLToPath(new URL('../', import.meta.url)), '.' + prefix))
   try {
+    const canonicalRoot = canonicalPath(root)
+    for (const writable of writableRoots({ mode: 'workspace-write', workspaceRoot: root })) {
+      if (writable === canonicalRoot) continue
+      const path = relative(writable, canonicalRoot)
+      assert.ok(path === '..' || path.startsWith('..' + sep) || isAbsolute(path),
+        `Artifact fixture must be outside the platform temp grant: ${writable}`)
+    }
+    if (process.platform !== 'win32') return root
     // Only this freshly created disposable root is assigned to the test user;
     // hosted Windows administrators may otherwise create it owned by their group.
     execFileSync('pwsh', ['-NoProfile', '-Command', `$ErrorActionPreference='Stop';$p=${quote(root)};$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$acl=Get-Acl -LiteralPath $p;$acl.SetOwner($sid);$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow));Set-Acl -LiteralPath $p -AclObject $acl;if((Get-Acl -LiteralPath $p).GetOwner([Security.Principal.SecurityIdentifier]).Value-ne$sid.Value){throw 'FIXTURE_OWNER'}`], { windowsHide: true })
@@ -78,8 +88,12 @@ test('受信原生完整模式允许原临时Git工作树及MSYS，默认模式�
   })
 test('原生Host已授权完整模式在恢复绑定时保留，原生逐次模式与只读模式均不改历史身份',
   { skip: !available ? reason : false, timeout: 30000 }, async t => {
+    const started = performance.now(), phases = [{ phase: 'begin', elapsedMs: 0 }]
+    const mark = phase => phases.push({ phase, elapsedMs: Math.round(performance.now() - started) })
+    t.after(() => t.diagnostic('Permission recovery phases: ' + JSON.stringify(phases)))
     const root = await createOwnedFixture('artifact-mode-')
     const host = await nativeTaskHost(root, () => { assert.fail('权限恢复不得调用模型') })
+    mark('host-ready')
     let handle
     t.after(async () => { await handle?.dispose(); await host.close(); await rm(root, { recursive: true, force: true }) })
     const taskId = 'historical-owner', sessionId = 'original-owner', cwd = await taskWorkspace(root, taskId)
@@ -90,9 +104,11 @@ test('原生Host已授权完整模式在恢复绑定时保留，原生逐次模�
       setSandboxMode(agent.session, 'danger-full-access')
       host.ctx.sandboxPolicy.bindArtifactRoot(agent.session, { ownerId: scope.ownerId, artifactRoot: scope.artifactRoot })
     } }))
+    mark('created')
     await host.ctx.sessions.flush(handle.agent.session)
     const before = await inspectSession(host.ctx.sessionPersistence, sessionId)
     await handle.dispose(); handle = undefined
+    mark('disposed')
     handle = await router.runOwned(binding, () => host.ctx.agents.resume({ resumeSessionId: sessionId, setup: async (ctx, agent) => {
       const session = agent.session, args = { root, scope, taskId, session }
       const seq = session.seq
@@ -110,8 +126,10 @@ test('原生Host已授权完整模式在恢复绑定时保留，原生逐次模�
       assert.equal(session.seq, readonlySeq)
       assert.equal(host.ctx.sandboxPolicy.resolve({ session }).mode, 'read-only')
     } }))
+    mark('resumed')
     await host.ctx.sessions.flush(handle.agent.session)
     const after = await inspectSession(host.ctx.sessionPersistence, sessionId)
+    mark('readback')
     assert.deepEqual(after.events.slice(0, before.events.length), before.events)
     assert.equal(handle.agent.session.id, sessionId)
     assert.equal(after.meta.cwd, before.meta.cwd)
@@ -136,16 +154,17 @@ test('official execution artifact binding makes native FS and shell share one ro
       const step = steps.get(task.taskId) ?? 0
       steps.set(task.taskId, step + 1)
       const role = task.taskId.at(-1), cwd = join(root, 'tasks', task.taskId)
-      const shared = join(scope.artifactRoot, role + '.txt'), outside = join(cwd, 'forbidden.txt')
+      const shared = join(scope.artifactRoot, role + '.txt')
+      const outsideFs = join(cwd, 'forbidden-fs.txt'), outsideShell = join(cwd, 'forbidden-shell.txt')
       if (step === 0) return [{ name: nativeShell, args: { description: 'Write inside the formal artifact root', command: process.platform === 'win32'
         ? `[IO.File]::WriteAllText(${quote(shared)},'native-${role}')`
         : `printf 'native-${role}' > ${quote(shared)}` } }]
       if (step === 1) return [{ name: 'write', args: { file_path: join(scope.artifactRoot, role + '-fs.txt'), content: `native-fs-${role}` } }]
       if (step === 2) return [{ name: 'read', args: { file_path: join(scope.artifactRoot, 'a.txt') } }]
-      if (step === 3) return [{ name: 'write', args: { file_path: outside, content: 'forbidden' } }]
+      if (step === 3) return [{ name: 'write', args: { file_path: outsideFs, content: 'forbidden' } }]
       if (step === 4) return [{ name: nativeShell, args: { description: 'Verify shell rejects writing outside artifacts', command: process.platform === 'win32'
-        ? `$ErrorActionPreference='Stop'; [IO.File]::WriteAllText(${quote(outside)},'forbidden')`
-        : `printf 'forbidden' > ${quote(outside)}` } }]
+        ? `$ErrorActionPreference='Stop'; [IO.File]::WriteAllText(${quote(outsideShell)},'forbidden')`
+        : `printf 'forbidden' > ${quote(outsideShell)}` } }]
       return [{ name: 'execution_submit', args: { output: { answer: 'Scoped native filesystem and shell evidence retained.' } } }]
     }, { resident: true, fsSandbox: true, artifactPolicyEntry: policyEntry })
     manager = createExecutionSessions({ ctx: host.ctx, isCurrent: async () => true,
@@ -162,7 +181,10 @@ test('official execution artifact binding makes native FS and shell share one ro
       const role = taskId.at(-1)
       assert.equal(await readFile(join(scope.artifactRoot, role + '.txt'), 'utf8'), 'native-' + role)
       assert.equal(await readFile(join(scope.artifactRoot, role + '-fs.txt'), 'utf8'), 'native-fs-' + role)
-      await assert.rejects(access(join(root, 'tasks', taskId, 'forbidden.txt')), { code: 'ENOENT' })
+      for (const name of ['forbidden-fs.txt', 'forbidden-shell.txt']) {
+        const file = join(root, 'tasks', taskId, name)
+        await assert.rejects(access(file), { code: 'ENOENT' }, `Outside file must remain absent: ${file}`)
+      }
     }
     assert.equal(host.toolResults.filter(item => item.name === 'write' && item.result.isError).length, 3, JSON.stringify(host.toolResults))
     assert.equal(host.toolResults.filter(item => item.name === nativeShell && item.result.value?.sandbox?.denied && item.result.value?.exitCode !== 0).length, 3, JSON.stringify(host.toolResults))
@@ -292,7 +314,7 @@ for (const denyOutside of [false, true]) test(`one Task Owner preserves retained
       assert.equal(await readFile(join(artifactRoot, `stage-${stage}-shell.txt`), 'utf8'), `shell-${stage}`)
     }
     assert.ok(host.toolResults.filter(item => item.name === 'read').every(item => !item.result.isError))
-    for (const file of [outsideFs, outsideShell]) await assert.rejects(access(file), { code: 'ENOENT' })
+    for (const file of [outsideFs, outsideShell]) await assert.rejects(access(file), { code: 'ENOENT' }, `Outside file must remain absent: ${file}`)
     const task = await host.query('task.get', { taskId: 'A' })
     if (denyOutside) {
       assert.equal(completionAttempted, true)
@@ -370,7 +392,7 @@ test('explicit Task reopen preserves original Owner, retained artifact scope and
       assert.equal(await readFile(join(artifactRoot, `round-${round}.txt`), 'utf8'), `round-${round}`)
       assert.equal(await readFile(join(artifactRoot, `round-${round}-shell.txt`), 'utf8'), `shell-${round}`)
     }
-    for (const file of [outsideFs, outsideShell]) await assert.rejects(access(file), { code: 'ENOENT' })
+    for (const file of [outsideFs, outsideShell]) await assert.rejects(access(file), { code: 'ENOENT' }, `Outside file must remain absent: ${file}`)
     assert.equal(host.toolResults.filter(item => item.name === 'write' && item.result.isError).length, 1)
     assert.equal(host.toolResults.filter(item => item.name === nativeShell && item.result.value?.sandbox?.denied && item.result.value?.exitCode !== 0).length, 1)
     assert.ok((await host.query('operation.list', { taskId: 'A' })).some(operation => operation.state === 'unknown'))

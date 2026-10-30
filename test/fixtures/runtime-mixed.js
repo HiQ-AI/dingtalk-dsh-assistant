@@ -216,6 +216,7 @@ function statusLlm(answer, calls) {
 }
 const statusReply = input => ({ kind: 'reply', decision: {
   basisMessageIds: input.sourceMessageIds, actions: [], reply: '已有部署证据；尚未独立核验业务结果。',
+  atOpenDingTalkIds: [...new Set(input.sourceMessages.map(message => message.senderOpenDingTalkId).filter(Boolean))],
   replyReview: { kind: 'substantive', reviewedOutboundIds: input.replyCandidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
 } })
 

@@ -276,8 +276,9 @@ for (const taskCount of [17, 41]) test(`current Topic reads ${taskCount} task su
   { skip: !available ? reason : false, timeout: 20000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'topic-directory-query-'))
     let host, decisionTurns = 0, ownerCalls = 0
+    const startedAt = performance.now(), phases = {}
     const observed = new Set(), offsets = []
-    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    t.after(async () => { t.diagnostic(JSON.stringify({ taskCount, phases, ownerCalls, elapsedMs: performance.now() - startedAt })); await host?.close(); await rm(root, { recursive: true, force: true }) })
     host = await nativeTaskHost(root, request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
       if (input.trigger === 'task-facts') return topicTaskCalls(request)
@@ -306,13 +307,34 @@ for (const taskCount of [17, 41]) test(`current Topic reads ${taskCount} task su
       return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '保持原任务',
         evidence: [], limitations: [] } } }]
     })
-    for (let i = 0; i < taskCount; i++) await host.service.store.command({ id: 'seed:' + i, kind: 'task.create',
-      args: { taskId: 'T' + i, groupId: 'native-group', request: '原任务' + i } })
+    phases.hostReadyMs = performance.now() - startedAt
+    for (let i = 0; i < taskCount; i++) {
+      const taskId = 'T' + i
+      await host.service.store.command({ id: 'seed:' + i, kind: 'task.create',
+        args: { taskId, groupId: 'native-group', request: '原任务' + i } })
+      if (i === 0) continue
+      // These are already-waiting directory entries, not new work to execute.
+      // Use real ledger transitions for their setup; one native Owner below
+      // remains the live guard against a read-only query restarting work.
+      const { binding, wakeIds } = (await host.service.store.command({ id: 'seed-claim:' + i,
+        kind: 'task.claim', args: { taskId } })).result
+      await host.service.store.command({ id: 'seed-wait:' + i, kind: 'task.wait',
+        args: { binding, action: 'wait', summary: '保持原任务', evidence: [], limitations: [] } })
+      await host.service.store.command({ id: 'seed-ack:' + i, kind: 'wake.ack', args: { binding, wakeIds } })
+      await host.service.store.command({ id: 'seed-drained:' + i, kind: 'task.drained', args: { binding } })
+    }
+    phases.tasksSeededMs = performance.now() - startedAt
     await host.service.recover(); await host.service.whenIdle()
+    phases.ownersIdleMs = performance.now() - startedAt
     const before = await host.query('task.list'), wakes = await host.query('wake.list'), calls = ownerCalls
+    assert.equal(calls, 1, 'one original Owner must really run and settle before the query')
+    assert.equal(before.length, taskCount)
+    assert.ok(before.every(task => task.drained && task.status === 'active' && task.lastDecision.action === 'wait'))
+    assert.equal(wakes.length, taskCount); assert.ok(wakes.every(wake => wake.state === 'acked'))
     await host.service.ingest({ groupId: 'native-group', messageId: 'directory-query', senderOpenDingTalkId: 'native-user',
       text: '测试助手，查询当前群所有任务进度，通知我。', timestamp: '2026-10-21T00:00:00Z' })
     await host.service.whenIdle()
+    phases.queryCompleteMs = performance.now() - startedAt
     assert.equal(observed.size, taskCount)
     assert.deepEqual(offsets, Array.from({ length: Math.ceil(taskCount / 10) }, (_, i) => i * 10))
     assert.equal(host.toolResults.some(tool => tool.name === 'group_task_context_get'), false)
@@ -326,8 +348,9 @@ test('current native source retry preserves failed attempt evidence and clears t
   { skip: !available ? reason : false, timeout: 20000 }, async t => {
     const root = await mkdtemp(join(tmpdir(), 'topic-recovered-alert-'))
     const agentConfig = { agentPreset: 'missing-fixture-preset' }
-    let host, decisions = 0
-    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+    const releaseFailureWrite = Promise.withResolvers()
+    let host, decisions = 0, delayedFailure
+    t.after(async () => { releaseFailureWrite.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
     host = await nativeTaskHost(root, request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
       if (names.includes('group_topic_route_submit')) return routeMatter(input, '查询对象待确认')
@@ -337,12 +360,30 @@ test('current native source retry preserves failed attempt evidence and clears t
       }
       return topicTaskCalls(request) ?? []
     }, { agentConfig })
+    const updateRequest = host.residentStore.updateCoordinationRequest
+    host.residentStore.updateCoordinationRequest = async (groupId, requestId, patch, ...rest) => {
+      if (patch.status === 'exhausted' && patch.failurePhase === 'startup') {
+        delayedFailure = { groupId, requestId }
+        await releaseFailureWrite.promise
+      }
+      return updateRequest(groupId, requestId, patch, ...rest)
+    }
     await host.service.ingest({ groupId: 'native-group', messageId: 'retry-query', senderOpenDingTalkId: 'native-user',
       text: '测试助手，查那个任务。', timestamp: '2026-10-21T00:00:00Z' })
     await host.service.whenIdle()
-    await waitUntil(() => host.service.messageProcessingRequests('native-group').some(item => item.status === 'exhausted'), 'native startup failure')
-    const failed = host.service.messageProcessingRequests('native-group').find(item => item.status === 'exhausted')
-    const recorded = structuredClone(host.residentStore.getCoordinationRequest('native-group', failed.requestId))
+    // The native monitor exposes exhaustion before its asynchronous record write
+    // completes. Exercise that window explicitly rather than racing Windows I/O.
+    await waitUntil(() => delayedFailure, 'native startup failure reached persistence')
+    assert.equal(host.service.messageProcessingRequests('native-group').find(item => item.requestId === delayedFailure.requestId)?.status, 'exhausted')
+    assert.notEqual(host.residentStore.getCoordinationRequest('native-group', delayedFailure.requestId)?.startupAttempt, 1)
+    releaseFailureWrite.resolve()
+    const { failed, recorded } = await waitUntil(() => {
+      const failed = host.service.messageProcessingRequests('native-group').find(item => item.requestId === delayedFailure.requestId && item.status === 'exhausted')
+      const recorded = failed && host.residentStore.getCoordinationRequest('native-group', failed.requestId)
+      return recorded?.status === 'exhausted' && recorded.startupAttempt === 1 && recorded.failurePhase === 'startup'
+        ? { failed, recorded: structuredClone(recorded) } : null
+    }, 'durable native startup failure')
+    host.residentStore.updateCoordinationRequest = updateRequest
     assert.equal(recorded.startupAttempt, 1); assert.equal(recorded.failurePhase, 'startup')
     assert.ok(host.service.listAlerts().length > 0)
     const original = (await host.query('source.list'))[0], stages = structuredClone(original.stages)

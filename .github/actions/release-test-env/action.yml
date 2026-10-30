@@ -27,6 +27,8 @@ runs:
     - shell: pwsh
       run: pnpm install --frozen-lockfile
     - shell: pwsh
+      run: pnpm --dir test/fixtures/native-rc2-profile install --frozen-lockfile --ignore-workspace
+    - shell: pwsh
       run: node scripts/verify-native-test-profile.mjs
     - shell: pwsh
       run: |

@@ -36,7 +36,9 @@ export async function inspectArtifacts(directory, identity) {
   }
   return { schema: 1, ...identity, node: process.version, platform: process.platform, pnpm: '10.13.1',
     lockSha256: hash(await readFile(resolve(root, 'pnpm-lock.yaml'))),
-    profileSha256: hash(await readFile(resolve(root, 'test/fixtures/native-profile/package.json'))), files }
+    profileSha256: hash(await readFile(resolve(root, 'test/fixtures/native-profile/package.json'))),
+    rc2ProfileSha256: hash(await readFile(resolve(root, 'test/fixtures/native-rc2-profile/package.json'))),
+    rc2LockSha256: hash(await readFile(resolve(root, 'test/fixtures/native-rc2-profile/pnpm-lock.yaml'))), files }
 }
 export async function verifyArtifacts(directory, identity) {
   const saved = JSON.parse(await readFile(resolve(directory, 'release-manifest.json'), 'utf8'))

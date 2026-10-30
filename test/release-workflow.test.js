@@ -57,6 +57,7 @@ test('release exact SHA validates all lanes before immutable build and same-run 
   assert.doesNotMatch(source, /NODE_AUTH_TOKEN|NPM_PUBLISH_TOKEN|NPM_TOKEN|--provenance/)
   const env = await readFile(new URL('../.github/actions/release-test-env/action.yml', import.meta.url), 'utf8')
   assert.match(env, /pnpm install --frozen-lockfile/)
+  assert.match(env, /pnpm --dir test\/fixtures\/native-rc2-profile install --frozen-lockfile --ignore-workspace/)
   assert.match(env, /node-version: 24\.19\.0/)
   assert.match(env, /cache: pnpm/)
   assert.match(env, /cache: maven/)
