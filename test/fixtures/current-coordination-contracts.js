@@ -22,7 +22,9 @@ export async function currentCoordinationFixture(t) {
   const resident = await openResidentStore(facility)
   const options = { dbPath: join(root, 'ledger.sqlite'), instanceId: 'current-contract', initialize: true, webActorId: 'operator' }
   let ledger = await openDynamicTaskStore(options)
-  t.after(async () => { await ledger.close(); await resident.close(); await rm(root, { recursive: true, force: true }) })
+  const finalizers = new Set()
+  const close = async () => { for (const finalize of finalizers) await finalize(); await ledger.close() }
+  t.after(async () => { await close(); await resident.close(); await rm(root, { recursive: true, force: true }) })
   const command = (kind, args = {}, id = randomUUID()) => ledger.command({ id, kind, args })
   const query = (kind, args = {}) => ledger.query({ kind, ...args })
   await resident.subscribe({ groupId: 'group' })
@@ -56,7 +58,7 @@ export async function currentCoordinationFixture(t) {
     binding, summary, result: { summary, evidence: ['fixture:readback'], limitations: [] }, topicFacts: true,
   }, id)
   const inspect = callback => { const db = new DatabaseSync(options.dbPath, { readOnly: true }); try { return callback(db) } finally { db.close() } }
-  const reopen = async () => { await ledger.close(); ledger = await openDynamicTaskStore({ ...options, initialize: false }) }
+  const reopen = async () => { await close(); ledger = await openDynamicTaskStore({ ...options, initialize: false }) }
   const historical = async rows => {
     await ledger.close()
     const db = new DatabaseSync(options.dbPath)
@@ -71,5 +73,5 @@ export async function currentCoordinationFixture(t) {
     ledger = await openDynamicTaskStore({ ...options, initialize: false })
   }
   return { root, options, resident, handler, topicId, command, query, create, wait, finish, context, submission, submit, inspect, reopen, historical,
-    close: () => ledger.close() }
+    close, beforeClose: finalize => { finalizers.add(finalize); return () => finalizers.delete(finalize) } }
 }

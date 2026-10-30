@@ -1,9 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, rename, rm } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { spawn } from 'node:child_process'
-import { once } from 'node:events'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { currentCoordinationFixture as fixture } from './fixtures/current-coordination-contracts.js'
 
@@ -182,7 +181,7 @@ test('source admission and Task supplement survive restart without replaying the
   assert.deepEqual(await f.query('wake.list'), wakes); assert.equal(task.contextRevision, 1)
 })
 
-async function crash(t, f, script, args = []) {
+async function crash(t, f, script, args = [], { signal = t.signal, onSpawn = () => {} } = {}) {
   await f.close()
   const moduleUrl = new URL('../packages/dingtalk-dsh-assistant/dynamic-task-store.js', import.meta.url).href
   const code = `import {openDynamicTaskStore} from ${JSON.stringify(moduleUrl)}; import {writeFileSync} from 'node:fs';
@@ -190,13 +189,49 @@ async function crash(t, f, script, args = []) {
     ${script}
     process.stderr.write('kill-ready',()=>process.kill(process.pid,'SIGKILL'));`
   const child = spawn(process.execPath, ['--input-type=module', '-e', code, JSON.stringify(f.options), ...args], { stdio: ['ignore', 'ignore', 'pipe'] })
-  t.after(() => child.kill('SIGKILL'))
+  const closed = new Promise(resolve => child.once('close', (code, signal) => resolve([code, signal])))
+  let launchError
+  child.once('error', error => { launchError = error })
   let errors = ''; child.stderr.on('data', chunk => { errors += chunk })
-  const [exitCode, signal] = await once(child, 'exit')
-  assert.ok(errors.includes('kill-ready'), errors)
-  assert.deepEqual([exitCode, signal], process.platform === 'win32' ? [1, null] : [null, 'SIGKILL'], errors)
+  const stop = async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    await closed
+  }
+  // Fixture cleanup also awaits this on timeout, before SQLite close/rm. A later
+  // t.after(kill) would run after the fixture has already tried to remove its DB.
+  const unregister = f.beforeClose(stop), abort = () => { void stop() }
+  signal.addEventListener('abort', abort, { once: true })
+  try {
+    onSpawn(child)
+    if (signal.aborted) abort()
+    const result = await closed
+    if (launchError) throw launchError
+    if (signal.aborted) throw signal.reason
+    assert.ok(errors.includes('kill-ready'), errors)
+    assert.deepEqual(result, process.platform === 'win32' ? [1, null] : [null, 'SIGKILL'], errors)
+  } finally {
+    await stop()
+    unregister(); signal.removeEventListener('abort', abort)
+  }
   await f.reopen()
 }
+
+test('SIGKILL fixture abort before kill-ready waits for child close before database cleanup', { timeout: 15000 }, async t => {
+  const f = await fixture(t), controller = new AbortController()
+  let childClosed = false
+  await assert.rejects(crash(t, f, "setInterval(()=>{},1000); process.stderr.write('holding-db'); await new Promise(()=>{});", [], {
+    signal: controller.signal,
+    onSpawn: child => {
+      child.once('close', () => { childClosed = true })
+      child.stderr.on('data', chunk => { if (String(chunk).includes('holding-db')) controller.abort(new Error('synthetic timeout')) })
+    },
+  }), /synthetic timeout/)
+  assert.equal(childClosed, true, 'the process must release SQLite before fixture cleanup starts')
+  await f.close()
+  const moved = `${f.options.dbPath}.released`
+  await rename(f.options.dbPath, moved)
+  await rm(moved)
+})
 
 test('real SIGKILL after third Task supplement resumes six original receipts without replay', { timeout: 15000 }, async t => {
   const f = await fixture(t), ids = ['A', 'B', 'C', 'D', 'E', 'F']
