@@ -2,6 +2,8 @@ import { fixedUnitRequestId, platformTaskPage, platformScheduleSessionId as sess
 import { sessionWorkspace, nameSession } from './session-workspaces.js'
 import { groupReplyInstructions } from './group-message.js'
 import { z } from 'zod'
+import { createPlatformNotifier, platformNotificationContext, platformReplyParameters } from './platform-notification.js'
+import { groupNotificationInstructions } from './group-notification.js'
 
 const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
 const deliveryPrompt = binding => `执行原群已授权的一次平台事项：${binding.prompt}\n约定时间 ${binding.at}，原群 ${binding.groupId}。必须先使用 platform_task_query 核对本群事实，再用 platform_reply_submit 提交；这两个工具未就绪时等待宿主恢复，不自行发群、不改排时间、不创建业务任务。已过期时判断补报或失去意义而静默，不能把入站提醒当已交付。`
@@ -10,7 +12,7 @@ const matchesNative = (binding, record) => record?.kind === 'at' && record.sessi
 
 // Native Schedule owns timing, storage and cold-session delivery. This bridge
 // owns only the accepted source binding and its existing outbox identity.
-export function createPlatformSchedules({ ctx, store, legacy, root, models, readTasks, appendOutbox, now = Date.now }) {
+export function createPlatformSchedules({ ctx, store, legacy, root, models, readTasks, appendOutbox, notify = createPlatformNotifier({ store, root, appendOutbox }), now = Date.now }) {
   let closed = false
   const flights = new Map(), mounted = new Map(), recovered = new Set()
   let recovery = Promise.resolve()
@@ -22,16 +24,12 @@ export function createPlatformSchedules({ ctx, store, legacy, root, models, read
       && fixedUnitRequestId(binding.groupId, message, unit) === binding.requestId ? { message, unit } : null
   }
   const settle = (binding, outcome) => store.updatePlatformSchedule(binding.sessionId, { outcome, completedAt: new Date(now()).toISOString() })
-  async function deliver(binding, text) {
+  async function deliver(binding, decision) {
     const current = source(binding)
     if (!current) throw new Error('platform_schedule_source_stale')
     const outboundId = outboundKey(binding.requestId), message = current.message
-    await appendOutbox({ groupId: binding.groupId, outboundId, sourceMessageId: outboundId, topicRefs: [], taskIds: [],
-      fixedTopic: 'agent-platform', sourceVersion: message.messageVersion,
-      preflight: () => { if (!source(binding)) throw new Error('platform_schedule_source_stale') },
-      matterSourceMessageIds: [message.messageId], matterUnitRefs: [{ unitId: binding.unitId, unitRevision: binding.unitRevision }],
-      text, replyKind: 'substantive', replyToMessageId: message.messageId, replyToSenderOpenDingTalkId: message.senderOpenDingTalkId,
-      atOpenDingTalkIds: [message.senderOpenDingTalkId] })
+    await notify({ groupId: binding.groupId, outboundId, message, unit: current.unit, decision, sessionId: binding.sessionId,
+      preflight: () => { if (!source(binding)) throw new Error('platform_schedule_source_stale') } })
     await settle(binding, 'replied')
   }
   const mount = async agent => {
@@ -55,15 +53,16 @@ export function createPlatformSchedules({ ctx, store, legacy, root, models, read
         return page
       } }))
     disposers.push(agentCtx.tools.register({ name: 'platform_reply_submit', description: '提交本次到期结果到原群可靠发件箱。仅失去意义的过期提醒用 text=null 静默结清；有价值的汇报仍补报并注明实际时间。',
-      parameters: { type: 'object', properties: { text: { type: ['string', 'null'], minLength: 1 } }, required: ['text'], additionalProperties: false }, output,
-      execute: ({ text }, exec) => submission = submission.catch(() => {}).then(async () => {
+      parameters: platformReplyParameters, output,
+      execute: (decision, exec) => submission = submission.catch(() => {}).then(async () => {
+        const { text } = decision
         assert(exec)
         const saved = store.getPlatformSchedule(binding.sessionId)
         if (saved.outcome) return { status: saved.outcome }
         if (text === null) { await settle(binding, 'expired'); return { status: 'expired' } }
         if (typeof text !== 'string' || !text.trim()) throw new Error('platform_reply_empty')
         if ([...pages.values()].some(page => page.consumed < page.total)) throw new Error('platform_task_pages_unread')
-        await deliver(binding, text.trim())
+        await deliver(binding, decision)
         return { status: 'accepted', outboundId: outboundKey(binding.requestId) }
       }) }))
     disposers.push(agentCtx.on('agent/pre-step', async (_event, next) => {
@@ -77,11 +76,13 @@ export function createPlatformSchedules({ ctx, store, legacy, root, models, read
       }
       if (!saved.scheduleId) await store.updatePlatformSchedule(binding.sessionId, { scheduleId: native.id })
       const previous = store.getGroup(binding.groupId).outbox.find(item => item.outboundId === outboundKey(binding.requestId))
-      if (previous) { await deliver(binding, previous.text); return { kind: 'reject' } }
+      if (previous) { await deliver(binding); return { kind: 'reject' } }
       return next()
     }))
     disposers.push(agentCtx.systemPrompt.section({ name: 'dingtalk-platform-schedule', order: 120, text: `这是宿主持有的独立平台定时会话，仅执行原用户已交办的一次事项，不创建业务任务，不重新安排同一提醒。原群=${binding.groupId}；约定时间=${binding.at}；默认时区=${binding.timezone}；本次恢复时刻=${new Date(now()).toISOString()}。原消息=${JSON.stringify(source(binding)?.unit.sourceRanges ?? [])}。事项：${binding.prompt}。到期汇报先调用 platform_task_query 读取本群最新事实，分页读全，再调用 platform_reply_submit 提交原群答复，普通自然语言不会发送。结合原消息的明确时区与实际执行时刻重新核对目标；已过期的有价值汇报补报一次并注明实际时间和延迟，失去意义的定点提醒可 text=null 静默结清，不得改排明天。只有不确定且影响执行才澄清。宿主的 schedule 送入会话回执不代表汇报已发送；只有原群通知账确认才称送达。` }))
     disposers.push(agentCtx.systemPrompt.section({ name: 'dingtalk-group-reply', order: 119, text: groupReplyInstructions }))
+    disposers.push(agentCtx.systemPrompt.section({ name: 'dingtalk-notification', order: 121,
+      text: `${groupNotificationInstructions}\n受信原请求与近期群上下文（不代表全部都要通知）：${JSON.stringify(platformNotificationContext(store.getGroup(binding.groupId), source(binding)?.message ?? {}))}` }))
     mounted.set(agent, disposers)
   }
   const stopCreated = ctx.on?.('agent/created', ({ agent }) => mount(agent))

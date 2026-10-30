@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { toToolJsonSchema } from './tool-schema.js'
 import { topicMessageCount, topicMessages } from './topic-model.js'
-import { formatTaskGroupReply } from './group-reply-format.js'
+import { finalNotificationFields, finalNotificationRouting, prepareGroupNotification, groupNotificationParts } from './group-notification.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const replyFingerprint = replies => hash(replies.map(({ updatedAt, ...reply }) => reply))
@@ -12,12 +12,11 @@ export const factDecisionSchema = z.strictObject({
   decision: z.strictObject({ actions: z.tuple([]),
     topicUpdate: z.strictObject({ summary: z.string().trim().min(1).max(4000), openQuestions: z.array(z.string().max(500)).max(12).optional() }),
     reply: z.string().trim().min(1).max(6000).optional(), reason: z.string().trim().min(1).max(1000),
-    replyToMessageId: z.string().min(1).optional().describe('可省略的本话题上下文来源；兼容旧决策并校验来源身份。最终事实通知固定发送普通群消息，不作原生引用，避免引用隐式@与显式@叠加；本字段不改变实际通知对象。'),
-    atOpenDingTalkIds: z.array(z.string().min(1)).min(1).optional().describe('本次结果应通知的受信群成员ID集合，可多人；从话题原文身份选择，不按姓名猜ID，不自动包含全部参与者。回复时显式填写，正文@姓名不能替代原生提及。'),
+    ...finalNotificationFields,
   }),
 }).superRefine(({ decision }, ctx) => {
   if (!decision.reply) return
-  if (!decision.atOpenDingTalkIds) {
+  if (!decision.atOpenDingTalkIds && !decision.atAll) {
     ctx.addIssue({ code: 'custom', path: ['decision', 'atOpenDingTalkIds'], message: '非空回复必须明确选择受信收件人；引用可省略，身份不确定时不猜测。' })
   }
 })
@@ -162,7 +161,7 @@ export function topicFactLedger({ db, get, put }) {
         const source = decision.replyToMessageId ? get('dynamic_sources', a.sourceId) : null
         // Topic membership is checked against the frozen resident revision by the Host.
         // A recipient can be the original requester or reviewer, outside this fact's trigger sources.
-        if (JSON.stringify(a.reply.atOpenDingTalkIds) !== JSON.stringify(decision.atOpenDingTalkIds)
+        if (JSON.stringify(a.reply.atOpenDingTalkIds) !== JSON.stringify(decision.atOpenDingTalkIds) || !!a.reply.atAll !== !!decision.atAll
           || a.reply.replyToMessageId || a.reply.replyToSenderOpenDingTalkId
           || (decision.replyToMessageId ? !source || source.groupId !== a.groupId || source.messageId !== decision.replyToMessageId
             : a.sourceId)) fail('TOPIC_REPLY_SOURCE_INVALID')
@@ -176,20 +175,7 @@ export function topicFactLedger({ db, get, put }) {
         notification.notificationId = notification.id
         const files = [...new Map(facts.filter(fact => fact.kind === 'completed').flatMap(fact => fact.result.artifactFiles ?? [])
           .map(file => [file.artifact.artifactId, file])).values()]
-        if (files.length) notification.payload.deliveryId = notification.id
-        put('dynamic_notifications', notification)
-        notifications.push(notification)
-        for (const file of files) {
-          const id = `${notification.id}:file:${file.artifact.artifactId}`
-          const part = { id, notificationId: id, kind: 'topic-reply', taskId: file.artifact.taskId,
-            requirementRevision: file.artifact.requirementRevision, state: 'prepared', createdAt: stamp, updatedAt: stamp,
-            payload: { conversationId: a.groupId, replyTopicId: a.topicId, topicRefs: notification.payload.topicRefs,
-              taskIds: notification.payload.taskIds, coveredEventIds: a.factIds, replyKind: 'substantive',
-              deliveryId: notification.id, afterNotificationId: notifications.at(-1).id,
-              text: `${file.artifact.fileName}：${file.caption}`, artifact: file.artifact,
-              fact: notification.payload.fact } }
-          put('dynamic_notifications', part); notifications.push(part)
-        }
+        for (const part of groupNotificationParts(notification, files)) { put('dynamic_notifications', part); notifications.push(part) }
       }
       for (const [index, fact] of facts.entries()) put('dynamic_topic_facts', { ...fact, state: 'accepted', processedAt: stamp,
         decisionId: a.submission.requestId, notificationId: notification?.id ?? null,
@@ -322,10 +308,7 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
         if (!topic || topic.revision !== request.revision) return { status: 'topic-stale' }
         const participants = topicMessages(group, topic, request.revision)
           .filter(message => message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind))
-        const target = participants.find(message => message.messageId === submission.decision.replyToMessageId)
-        if (submission.decision.replyToMessageId && !target) fail('group_reply_target_not_in_topic')
-        const recipients = [...new Set(submission.decision.atOpenDingTalkIds)]
-        if (recipients.some(id => !participants.some(message => message.senderOpenDingTalkId === id))) fail('group_reply_recipient_not_in_topic')
+        const { target, recipients } = finalNotificationRouting(participants, submission.decision)
         if (target) {
           const source = await query('topic.fact.reply-source', { groupId: request.groupId, messageId: target.messageId,
             actorId: target.senderOpenDingTalkId, version: target.messageVersion })
@@ -333,17 +316,11 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
           sourceId = source.sourceId
         }
         submission = { ...submission, decision: { ...submission.decision, atOpenDingTalkIds: recipients } }
-        const attachments = context.artifactFiles?.length ? '\n\n附件与验收对应：\n' + context.artifactFiles
-          .map((file, index) => `${index + 1}. ${file.artifact.fileName}：${file.caption}`).join('\n') : ''
-        // Freeze the actual final delivery as unquoted Markdown + selected native mentions.
-        // Keeping a model's optional context reference must not add an implicit recipient
-        // or duplicate a mention through the native quote transport.
-        reply = formatTaskGroupReply({ source: { groupId: request.groupId }, allowUnrouted: true,
-          summary: submission.decision.reply + attachments, evidence: [], limitations: [], signature: signature(),
+        reply = prepareGroupNotification({ groupId: request.groupId, text: submission.decision.reply,
+          atOpenDingTalkIds: recipients, atAll: submission.decision.atAll, artifactFiles: context.artifactFiles, signature: signature(),
           internalIds: [request.groupId, request.topicId, request.requestId, sourceId, target?.messageId, ...recipients,
             ...context.eventIds, ...context.input.tasks.map(task => task.taskId), ...context.sourceIdentities],
         })
-        reply.atOpenDingTalkIds = recipients
       }
       const result = await residentStore.commitTopicFactDecision({ groupId: request.groupId, topicId: request.topicId,
         revision: request.revision, expectedSummary: context.expectedSummary, commit: async () => {

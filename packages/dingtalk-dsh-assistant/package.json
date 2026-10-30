@@ -49,6 +49,8 @@
     "host-context.js",
     "model-context.js",
     "group-reply-format.js",
+    "group-notification.js",
+    "platform-notification.js",
     "http.js",
     "observer-pagination.js",
     "observer-work-index.js",

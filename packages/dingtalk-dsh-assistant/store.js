@@ -104,7 +104,9 @@ const outboundSchema = z.object({
   deliveredMessageId: z.string().min(1).optional(), deliveredAt: z.string().min(1).optional(), sentAt: z.string().datetime().optional(),
   sendReceipt: z.object({ openTaskId: z.string().min(1), conversationId: z.string().min(1), messageId: z.string().min(1) }).strict().optional(),
   replyToMessageId: z.string().min(1).optional(), replyToSenderOpenDingTalkId: z.string().min(1).optional(),
-  atOpenDingTalkIds: z.array(z.string().min(1)).optional(),
+  atOpenDingTalkIds: z.array(z.string().min(1)).optional(), atAll: z.boolean().optional(),
+  sourceRef: z.object({ messageId: z.string().min(1), actorId: z.string().min(1), messageVersion: z.number().int().positive() }).strict().optional(),
+  artifactFiles: z.array(z.object({ artifact: z.record(z.string(), z.unknown()), caption: z.string().min(1) })).optional(),
   replyKind: z.enum(['confirmation', 'substantive', 'correction']).optional(),
   matterSourceMessageIds: z.array(z.string().min(1)).optional(), matterUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(), taskIds: z.array(z.string().min(1)).optional(),
   replacesOutboundIds: z.array(z.string().min(1)).optional(),
@@ -1346,14 +1348,17 @@ export async function openResidentStore(storageDomain) {
       return groups.update(entry[0], latest => ({ ...latest,
         outbox: previous ? latest.outbox.map(item => item.outboundId === value.outboundId ? next : item) : [...latest.outbox, next] }))
     }),
-    appendOutbox: ({ groupId, preflight, outboundId, topicRefs, decisionId, resultFingerprint, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, replyKind, matterSourceMessageIds, matterUnitRefs, taskIds, taskInputVersion, taskRunSequence, replacesOutboundIds }) => serialize(groupId, async () => {
+    appendOutbox: ({ groupId, preflight, outboundId, topicRefs, decisionId, resultFingerprint, sourceMessageId, text, replyToMessageId, replyToSenderOpenDingTalkId, atOpenDingTalkIds, atAll, sourceRef, artifactFiles, replyKind, matterSourceMessageIds, matterUnitRefs, taskIds, taskInputVersion, taskRunSequence, replacesOutboundIds }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (entry === undefined) throw new Error(`group_not_subscribed:${groupId}`)
       const [storageKey, current] = entry
       const sameId = outboundId && current.outbox.find(item => item.outboundId === outboundId)
       if (sameId) {
         if (sameId.text !== text || sameId.decisionId !== decisionId || sameId.replyToMessageId !== replyToMessageId
-          || sameId.replyToSenderOpenDingTalkId !== replyToSenderOpenDingTalkId) throw new Error('outbox_identity_conflict')
+          || sameId.replyToSenderOpenDingTalkId !== replyToSenderOpenDingTalkId || !!sameId.atAll !== !!atAll
+          || JSON.stringify(sameId.atOpenDingTalkIds ?? []) !== JSON.stringify(atOpenDingTalkIds ?? [])
+          || ['messageId', 'actorId', 'messageVersion'].some(key => sameId.sourceRef?.[key] !== sourceRef?.[key])
+          || !isDeepStrictEqual(sameId.artifactFiles ?? [], artifactFiles ?? [])) throw new Error('outbox_identity_conflict')
         return current
       }
       const existing = current.outbox.find((item) => item.sourceMessageId === sourceMessageId)
@@ -1377,6 +1382,7 @@ export async function openResidentStore(storageDomain) {
           ...(replyToSenderOpenDingTalkId ? { replyToSenderOpenDingTalkId } : {}),
           ...(Array.isArray(atOpenDingTalkIds) && atOpenDingTalkIds.length > 0 ? { atOpenDingTalkIds } : {}),
           ...(replyKind ? { replyKind } : {}),
+          ...(atAll ? { atAll: true } : {}), ...(sourceRef ? { sourceRef } : {}), ...(artifactFiles?.length ? { artifactFiles } : {}),
           ...(Array.isArray(matterSourceMessageIds) && matterSourceMessageIds.length > 0 ? { matterSourceMessageIds: [...new Set(matterSourceMessageIds)] } : {}),
           ...(Array.isArray(matterUnitRefs) && matterUnitRefs.length > 0 ? { matterUnitRefs: [...new Map(matterUnitRefs.map((ref) => [`${ref.unitId}:${ref.unitRevision}`, ref])).values()] } : {}),
           ...(taskInputVersion ? { taskInputVersion } : {}), ...(taskRunSequence ? { taskRunSequence } : {}),

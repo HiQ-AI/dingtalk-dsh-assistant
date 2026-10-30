@@ -48,6 +48,7 @@
       "packages/dingtalk-dsh-assistant/fixed-topics.js",
       "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
       "packages/dingtalk-dsh-assistant/group-message.js",
+      "packages/dingtalk-dsh-assistant/group-notification.js",
       "packages/dingtalk-dsh-assistant/group-person-aliases.js",
       "packages/dingtalk-dsh-assistant/group-reply-format.js",
       "packages/dingtalk-dsh-assistant/host-context.js",
@@ -74,6 +75,7 @@
       "packages/dingtalk-dsh-assistant/observer-trace-pages.js",
       "packages/dingtalk-dsh-assistant/observer-work-index.js",
       "packages/dingtalk-dsh-assistant/performance.js",
+      "packages/dingtalk-dsh-assistant/platform-notification.js",
       "packages/dingtalk-dsh-assistant/platform-schedule.js",
       "packages/dingtalk-dsh-assistant/resident.js",
       "packages/dingtalk-dsh-assistant/resource-close.js",
@@ -144,6 +146,7 @@
       "packages/dingtalk-dsh-assistant/fixed-topics.js",
       "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
       "packages/dingtalk-dsh-assistant/group-message.js",
+      "packages/dingtalk-dsh-assistant/group-notification.js",
       "packages/dingtalk-dsh-assistant/group-person-aliases.js",
       "packages/dingtalk-dsh-assistant/group-reply-format.js",
       "packages/dingtalk-dsh-assistant/host-context.js",
@@ -170,6 +173,7 @@
       "packages/dingtalk-dsh-assistant/observer-trace-pages.js",
       "packages/dingtalk-dsh-assistant/observer-work-index.js",
       "packages/dingtalk-dsh-assistant/performance.js",
+      "packages/dingtalk-dsh-assistant/platform-notification.js",
       "packages/dingtalk-dsh-assistant/platform-schedule.js",
       "packages/dingtalk-dsh-assistant/resident.js",
       "packages/dingtalk-dsh-assistant/resource-close.js",
@@ -603,6 +607,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -636,6 +641,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -667,6 +673,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -710,6 +717,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -741,6 +749,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -787,6 +796,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -806,6 +816,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -857,6 +868,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -912,6 +924,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -931,6 +944,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -995,6 +1009,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -1031,6 +1046,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -1067,6 +1083,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -1155,6 +1172,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -1174,6 +1192,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -1252,6 +1271,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -1298,6 +1318,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -1317,6 +1338,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -1365,6 +1387,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -1417,6 +1440,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -1437,6 +1461,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -1504,6 +1529,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -1523,6 +1549,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -1586,6 +1613,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -1605,6 +1633,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -1683,6 +1712,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -1702,6 +1732,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -1751,6 +1782,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -1815,6 +1847,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -1859,6 +1892,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -1905,6 +1939,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -1924,6 +1959,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -2044,6 +2080,9 @@
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/tool-schema.js",
         "packages/dingtalk-dsh-assistant/topic-model.js"
@@ -2148,6 +2187,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -2169,6 +2209,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/resident.js",
         "packages/dingtalk-dsh-assistant/resource-close.js",
@@ -2371,6 +2412,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -2459,6 +2501,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -2556,6 +2599,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -2770,6 +2815,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -3576,6 +3623,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -4255,6 +4304,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -4360,6 +4411,9 @@
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/fake-llm.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-plan.js",
         "packages/dingtalk-dsh-assistant/task-result.js",
@@ -4398,6 +4452,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -4417,6 +4472,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -4468,6 +4524,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -4476,10 +4533,12 @@
         "packages/dingtalk-dsh-assistant/observer-memory-pages.js",
         "packages/dingtalk-dsh-assistant/observer-message-projection.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
         "packages/dingtalk-dsh-assistant/store.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
@@ -4558,6 +4617,9 @@
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/tool-schema.js",
         "packages/dingtalk-dsh-assistant/topic-model.js"
@@ -4566,8 +4628,30 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/group-reply-format.test.js",
+      "file": "test/group-notification.test.js",
       "lane": "compat-2",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
+        "packages/dingtalk-dsh-assistant/dws-adapter.js",
+        "packages/dingtalk-dsh-assistant/dws-bridge.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
+        "packages/dingtalk-dsh-assistant/notification-delivery.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
+        "packages/dingtalk-dsh-assistant/task-notification-readback.js",
+        "packages/dingtalk-dsh-assistant/tool-schema.js"
+      ],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/group-reply-format.test.js",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4626,6 +4710,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -4645,6 +4730,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -4681,7 +4767,7 @@
     },
     {
       "file": "test/independent-coordination-changes.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4697,6 +4783,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
@@ -4761,6 +4848,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -4781,6 +4869,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -4821,7 +4910,7 @@
     },
     {
       "file": "test/independent-coordination-recovery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4836,6 +4925,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -4864,7 +4954,7 @@
     },
     {
       "file": "test/investigation-continuation.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -4881,6 +4971,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -4979,7 +5071,7 @@
     },
     {
       "file": "test/investigation-domain-contract.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5019,7 +5111,7 @@
     },
     {
       "file": "test/jsonl-module-compat.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -5028,7 +5120,7 @@
     },
     {
       "file": "test/legacy-development-migration.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5076,7 +5168,7 @@
     },
     {
       "file": "test/local-acceptance-activity-merge.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -5085,7 +5177,7 @@
     },
     {
       "file": "test/local-acceptance-background.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -5094,7 +5186,7 @@
     },
     {
       "file": "test/local-acceptance-dataset-merge-ui.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -5103,7 +5195,7 @@
     },
     {
       "file": "test/local-acceptance-merge.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -5112,15 +5204,6 @@
     },
     {
       "file": "test/local-acceptance-project.test.js",
-      "lane": "compat-1",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [],
-      "retainedCompatibilityImports": [],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/local-acceptance-readonly.test.js",
       "lane": "compat-2",
       "category": "compat",
       "release": true,
@@ -5129,7 +5212,7 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/local-acceptance-review.test.js",
+      "file": "test/local-acceptance-readonly.test.js",
       "lane": "compat-0",
       "category": "compat",
       "release": true,
@@ -5138,8 +5221,17 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/maintenance-held-stop.test.js",
+      "file": "test/local-acceptance-review.test.js",
       "lane": "compat-1",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/maintenance-held-stop.test.js",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -5160,7 +5252,7 @@
     },
     {
       "file": "test/message-agent-controller.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5216,7 +5308,7 @@
     },
     {
       "file": "test/message-agent-ledger.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5238,7 +5330,7 @@
     },
     {
       "file": "test/message-context-repair.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5255,6 +5347,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -5353,7 +5447,7 @@
     },
     {
       "file": "test/message-impact.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5391,7 +5485,7 @@
     },
     {
       "file": "test/message-repair-coordination.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5423,7 +5517,7 @@
     },
     {
       "file": "test/message-workflow.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5438,7 +5532,7 @@
     },
     {
       "file": "test/migrate-execution-dependency-index.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5462,7 +5556,7 @@
     },
     {
       "file": "test/migrate-execution-events-index.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5587,6 +5681,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -5606,6 +5701,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -5669,7 +5765,7 @@
     },
     {
       "file": "test/native-maintenance-backup.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -5678,7 +5774,7 @@
     },
     {
       "file": "test/native-restart-http-drain.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5705,6 +5801,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -5725,6 +5822,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -5780,7 +5878,7 @@
     },
     {
       "file": "test/native-restart-maintenance.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5795,7 +5893,7 @@
     },
     {
       "file": "test/native-restart-scope-probe.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5840,6 +5938,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -5859,6 +5958,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -5895,7 +5995,7 @@
     },
     {
       "file": "test/native-store-reload.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -5946,6 +6046,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -5965,6 +6066,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -6001,7 +6103,7 @@
     },
     {
       "file": "test/notification-recovery-tool.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6064,7 +6166,7 @@
     },
     {
       "file": "test/notification-retirement.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6118,7 +6220,7 @@
     },
     {
       "file": "test/observer-client.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6135,6 +6237,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -6235,7 +6339,7 @@
     },
     {
       "file": "test/observer-file-pages.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6277,7 +6381,7 @@
     },
     {
       "file": "test/observer-legacy-execution-pages.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6309,7 +6413,7 @@
     },
     {
       "file": "test/observer-pagination-migration.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6321,6 +6425,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -6363,7 +6468,7 @@
     },
     {
       "file": "test/observer-trace-pages.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6380,6 +6485,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -6478,7 +6585,7 @@
     },
     {
       "file": "test/outbox-audit-classification.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -6489,7 +6596,7 @@
     },
     {
       "file": "test/outbox-stale-blockers.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6524,7 +6631,7 @@
     },
     {
       "file": "test/owned-test-service.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -6533,7 +6640,7 @@
     },
     {
       "file": "test/owner-delivery-release-proof.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6555,7 +6662,7 @@
     },
     {
       "file": "test/paused-task-contract-replay.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6577,7 +6684,7 @@
     },
     {
       "file": "test/performance-runtime.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6591,6 +6698,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -6662,7 +6770,7 @@
     },
     {
       "file": "test/platform-host.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6693,7 +6801,7 @@
     },
     {
       "file": "test/prepare-task-directories.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -6711,7 +6819,7 @@
     },
     {
       "file": "test/pty-package-upgrade.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -6720,7 +6828,7 @@
     },
     {
       "file": "test/read-uat-delivery.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6751,7 +6859,7 @@
     },
     {
       "file": "test/reconcile-data-change-approval.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6819,7 +6927,7 @@
     },
     {
       "file": "test/reconcile-prepare-failure.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6842,7 +6950,7 @@
     },
     {
       "file": "test/reconcile-workspace-collision.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6869,7 +6977,7 @@
     },
     {
       "file": "test/recover-quarantined-echo.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6923,7 +7031,7 @@
     },
     {
       "file": "test/recover-verification-drain.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -6979,15 +7087,6 @@
     },
     {
       "file": "test/release-artifacts.test.js",
-      "lane": "compat-1",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [],
-      "retainedCompatibilityImports": [],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/release-preflight.test.js",
       "lane": "compat-2",
       "category": "compat",
       "release": true,
@@ -6996,7 +7095,7 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/release-workflow.test.js",
+      "file": "test/release-preflight.test.js",
       "lane": "compat-0",
       "category": "compat",
       "release": true,
@@ -7005,8 +7104,17 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/repair-release-target-policy.test.js",
+      "file": "test/release-workflow.test.js",
       "lane": "compat-1",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [],
+      "retainedCompatibilityImports": [],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/repair-release-target-policy.test.js",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7030,7 +7138,7 @@
     },
     {
       "file": "test/report-native-lifecycle.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7048,7 +7156,7 @@
     },
     {
       "file": "test/restart-web.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -7071,6 +7179,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -7112,7 +7221,7 @@
     },
     {
       "file": "test/runtime-startup-observation.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7134,7 +7243,7 @@
     },
     {
       "file": "test/runtime.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7148,6 +7257,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -7189,7 +7299,7 @@
     },
     {
       "file": "test/sandbox-artifact-policy-upgrade.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -7231,7 +7341,7 @@
     },
     {
       "file": "test/sg20-planner-correction.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7253,7 +7363,7 @@
     },
     {
       "file": "test/sg20-real-http-evidence.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -7262,7 +7372,7 @@
     },
     {
       "file": "test/single-task-run-scope.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7305,6 +7415,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -7329,12 +7440,15 @@
     },
     {
       "file": "test/status-query.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
         "packages/dingtalk-dsh-assistant/decision.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/tool-schema.js",
         "packages/dingtalk-dsh-assistant/topic-model.js"
@@ -7372,7 +7486,7 @@
     },
     {
       "file": "test/task-actions.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7385,7 +7499,7 @@
     },
     {
       "file": "test/task-archive-scheduling.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7412,6 +7526,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -7431,6 +7546,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -7467,7 +7583,7 @@
     },
     {
       "file": "test/task-archive-store.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7479,6 +7595,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -7543,6 +7660,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -7562,6 +7680,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -7610,7 +7729,7 @@
     },
     {
       "file": "test/task-artifact-write.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7661,6 +7780,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -7680,6 +7800,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -7717,7 +7838,7 @@
     },
     {
       "file": "test/task-checks.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7759,6 +7880,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -7778,6 +7900,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -7814,7 +7937,7 @@
     },
     {
       "file": "test/task-completion-context.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7849,7 +7972,7 @@
     },
     {
       "file": "test/task-completion-notification.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7871,7 +7994,7 @@
     },
     {
       "file": "test/task-delivery-manifest.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7901,7 +8024,7 @@
     },
     {
       "file": "test/task-delivery-project-evidence.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7923,7 +8046,7 @@
     },
     {
       "file": "test/task-delivery-review.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -7980,6 +8103,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -7999,6 +8123,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -8035,7 +8160,7 @@
     },
     {
       "file": "test/task-discovery.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8083,7 +8208,7 @@
     },
     {
       "file": "test/task-execution-backends.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8110,6 +8235,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -8129,6 +8255,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -8192,6 +8319,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -8211,6 +8339,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -8247,7 +8376,7 @@
     },
     {
       "file": "test/task-execution-timeline.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8274,6 +8403,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -8294,6 +8424,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -8331,7 +8462,7 @@
     },
     {
       "file": "test/task-file-storage.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8414,6 +8545,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -8433,6 +8565,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -8483,7 +8616,7 @@
     },
     {
       "file": "test/task-general-workflow.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8526,7 +8659,7 @@
     },
     {
       "file": "test/task-group-file-delivery.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8543,6 +8676,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -8641,7 +8776,7 @@
     },
     {
       "file": "test/task-group-file-runtime.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -8650,7 +8785,7 @@
     },
     {
       "file": "test/task-ingress-epoch.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8662,6 +8797,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -8696,7 +8832,7 @@
     },
     {
       "file": "test/task-installed-profile-entry.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -8705,7 +8841,7 @@
     },
     {
       "file": "test/task-maintenance-constraint.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8735,7 +8871,7 @@
     },
     {
       "file": "test/task-message-projections.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8823,6 +8959,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -8842,6 +8979,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -8905,6 +9043,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -8924,6 +9063,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -8960,7 +9100,7 @@
     },
     {
       "file": "test/task-notification-delivery.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -8974,6 +9114,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -8994,7 +9135,7 @@
     },
     {
       "file": "test/task-notification-readback.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9036,6 +9177,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -9055,6 +9197,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -9091,7 +9234,7 @@
     },
     {
       "file": "test/task-operator-notification-recall.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9133,6 +9276,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -9152,6 +9296,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -9188,7 +9333,7 @@
     },
     {
       "file": "test/task-owner-context.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9213,7 +9358,7 @@
     },
     {
       "file": "test/task-owner-delivery-manifest.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9251,7 +9396,7 @@
     },
     {
       "file": "test/task-owner-paused-delivery-review.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9290,7 +9435,7 @@
     },
     {
       "file": "test/task-owner-recovery.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9328,7 +9473,7 @@
     },
     {
       "file": "test/task-owner-store.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9366,7 +9511,7 @@
     },
     {
       "file": "test/task-permits.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9406,7 +9551,7 @@
     },
     {
       "file": "test/task-purge-start.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9448,7 +9593,7 @@
     },
     {
       "file": "test/task-readonly-workflows.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9465,6 +9610,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -9563,7 +9710,7 @@
     },
     {
       "file": "test/task-release-workflows.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9603,7 +9750,7 @@
     },
     {
       "file": "test/task-reports.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9618,7 +9765,7 @@
     },
     {
       "file": "test/task-requirement-notifications.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9697,6 +9844,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -9717,6 +9865,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/resident.js",
         "packages/dingtalk-dsh-assistant/resource-close.js",
@@ -9758,44 +9907,6 @@
     },
     {
       "file": "test/task-session-control-host-admission.test.js",
-      "lane": "compat-1",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [
-        "packages/dingtalk-dsh-assistant/artifact-json.js",
-        "packages/dingtalk-dsh-assistant/group-message.js",
-        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
-        "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js"
-      ],
-      "retainedCompatibilityImports": [
-        "packages/dingtalk-dsh-assistant/agent-work.js",
-        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
-        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
-        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
-        "packages/dingtalk-dsh-assistant/execution-candidate.js",
-        "packages/dingtalk-dsh-assistant/execution-check-job.js",
-        "packages/dingtalk-dsh-assistant/execution-controller.js",
-        "packages/dingtalk-dsh-assistant/execution-delivery.js",
-        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
-        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
-        "packages/dingtalk-dsh-assistant/execution-store.js",
-        "packages/dingtalk-dsh-assistant/execution-workspace.js",
-        "packages/dingtalk-dsh-assistant/node-output-readout.js",
-        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
-        "packages/dingtalk-dsh-assistant/task-owner-context.js",
-        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
-        "packages/dingtalk-dsh-assistant/task-owner-session.js",
-        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
-        "packages/dingtalk-dsh-assistant/task-workflow.js",
-        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
-        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
-      ],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/task-session-control-six-scenarios.test.js",
       "lane": "compat-2",
       "category": "compat",
       "release": true,
@@ -9833,8 +9944,46 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/task-session-control.test.js",
+      "file": "test/task-session-control-six-scenarios.test.js",
       "lane": "compat-0",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js"
+      ],
+      "retainedCompatibilityImports": [
+        "packages/dingtalk-dsh-assistant/agent-work.js",
+        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
+        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
+        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
+        "packages/dingtalk-dsh-assistant/execution-candidate.js",
+        "packages/dingtalk-dsh-assistant/execution-check-job.js",
+        "packages/dingtalk-dsh-assistant/execution-controller.js",
+        "packages/dingtalk-dsh-assistant/execution-delivery.js",
+        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
+        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
+        "packages/dingtalk-dsh-assistant/execution-store.js",
+        "packages/dingtalk-dsh-assistant/execution-workspace.js",
+        "packages/dingtalk-dsh-assistant/node-output-readout.js",
+        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
+        "packages/dingtalk-dsh-assistant/task-owner-context.js",
+        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
+        "packages/dingtalk-dsh-assistant/task-owner-session.js",
+        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
+        "packages/dingtalk-dsh-assistant/task-workflow.js",
+        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
+        "packages/dingtalk-dsh-assistant/workflow-notifications.js"
+      ],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/task-session-control.test.js",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -9899,6 +10048,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -9918,6 +10068,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -9981,6 +10132,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10000,6 +10152,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10036,7 +10189,7 @@
     },
     {
       "file": "test/task-session-http-integration.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -10063,6 +10216,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10083,6 +10237,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10147,6 +10302,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10167,6 +10323,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10231,6 +10388,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10251,6 +10409,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10315,6 +10474,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10334,6 +10494,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10397,6 +10558,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10417,6 +10579,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10488,6 +10651,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10507,6 +10671,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10570,6 +10735,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10589,6 +10755,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10679,6 +10846,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10698,6 +10866,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10734,7 +10903,7 @@
     },
     {
       "file": "test/task-session-persistence-native.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -10774,6 +10943,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10793,6 +10963,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10856,6 +11027,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10875,6 +11047,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -10911,7 +11084,7 @@
     },
     {
       "file": "test/task-session-real-model-isolated.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -10976,6 +11149,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -10996,6 +11170,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -11064,6 +11239,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -11084,6 +11260,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/resident.js",
         "packages/dingtalk-dsh-assistant/resource-close.js",
@@ -11152,6 +11329,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -11171,6 +11349,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -11234,6 +11413,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -11253,6 +11433,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -11289,7 +11470,7 @@
     },
     {
       "file": "test/task-stage-contracts.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11306,6 +11487,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -11431,6 +11614,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -11450,6 +11634,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -11486,7 +11671,7 @@
     },
     {
       "file": "test/task-stage-target.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11522,6 +11707,7 @@
         "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -11599,6 +11785,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -11619,6 +11806,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -11683,6 +11871,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -11702,6 +11891,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
@@ -11738,7 +11928,7 @@
     },
     {
       "file": "test/task-workflow-contracts.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11755,6 +11945,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -11853,7 +12045,7 @@
     },
     {
       "file": "test/task-workflow.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11870,6 +12062,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -11968,7 +12162,7 @@
     },
     {
       "file": "test/task-worktree-archive.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -11979,7 +12173,7 @@
     },
     {
       "file": "test/test-suite-contracts.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -11992,7 +12186,7 @@
     },
     {
       "file": "test/tool-schema.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12001,6 +12195,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
@@ -12031,7 +12227,7 @@
     },
     {
       "file": "test/topic-facts.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12049,6 +12245,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
@@ -12082,7 +12279,7 @@
     },
     {
       "file": "test/topic-migration.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12117,6 +12314,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/notification-delivery.js",
@@ -12167,7 +12365,7 @@
     },
     {
       "file": "test/uat-acceptance-policy.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12192,7 +12390,7 @@
     },
     {
       "file": "test/verify-dataset-unit-tests.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12250,7 +12448,7 @@
     },
     {
       "file": "test/web-client-build.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -12259,7 +12457,7 @@
     },
     {
       "file": "test/workflow-agent-service.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12276,6 +12474,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -12374,7 +12574,7 @@
     },
     {
       "file": "test/workflow-approval.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12398,7 +12598,7 @@
     },
     {
       "file": "test/workflow-bytebase-platform.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12451,6 +12651,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -12471,6 +12672,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/resident.js",
         "packages/dingtalk-dsh-assistant/resource-close.js",
@@ -12514,7 +12716,7 @@
     },
     {
       "file": "test/workflow-cutover.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12558,7 +12760,7 @@
     },
     {
       "file": "test/workflow-data-change-external.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12622,7 +12824,7 @@
     },
     {
       "file": "test/workflow-data-change.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12708,7 +12910,7 @@
     },
     {
       "file": "test/workflow-engineering.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12756,7 +12958,7 @@
     },
     {
       "file": "test/workflow-entry.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12786,6 +12988,7 @@
         "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
         "packages/dingtalk-dsh-assistant/group-person-aliases.js",
         "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
@@ -12807,6 +13010,7 @@
         "packages/dingtalk-dsh-assistant/observer-pagination.js",
         "packages/dingtalk-dsh-assistant/observer-work-index.js",
         "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
         "packages/dingtalk-dsh-assistant/platform-schedule.js",
         "packages/dingtalk-dsh-assistant/resident.js",
         "packages/dingtalk-dsh-assistant/resource-close.js",
@@ -12860,7 +13064,7 @@
     },
     {
       "file": "test/workflow-file-delivery-integration.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12877,6 +13081,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -12975,7 +13181,7 @@
     },
     {
       "file": "test/workflow-managed-query-native.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -12992,6 +13198,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -13091,7 +13299,7 @@
     },
     {
       "file": "test/workflow-migration.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13119,7 +13327,7 @@
     },
     {
       "file": "test/workflow-notification-obligations.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13141,7 +13349,7 @@
     },
     {
       "file": "test/workflow-platform-clients.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13167,7 +13375,7 @@
     },
     {
       "file": "test/workflow-postgres-production-host.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13192,7 +13400,7 @@
     },
     {
       "file": "test/workflow-postgres-uat-host.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13215,7 +13423,7 @@
     },
     {
       "file": "test/workflow-postgres-uat-platform.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13237,7 +13445,7 @@
     },
     {
       "file": "test/workflow-recovery.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13254,6 +13462,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -13352,7 +13562,7 @@
     },
     {
       "file": "test/workflow-release-platform.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13374,7 +13584,7 @@
     },
     {
       "file": "test/workflow-source-evidence.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -13385,7 +13595,7 @@
     },
     {
       "file": "test/workflow-source-upload.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [],
@@ -13396,7 +13606,7 @@
     },
     {
       "file": "test/workflow-trusted-platforms.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13450,7 +13660,7 @@
     },
     {
       "file": "test/workflow-uat-build-authorization.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13504,7 +13714,7 @@
     },
     {
       "file": "test/workflow-uat-failure-continuation.test.js",
-      "lane": "compat-2",
+      "lane": "compat-0",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13521,6 +13731,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/model-context.js",
         "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
@@ -13625,7 +13837,7 @@
     },
     {
       "file": "test/workflow-uat-merge-platform.test.js",
-      "lane": "compat-0",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13681,60 +13893,6 @@
     },
     {
       "file": "test/workflow-uat-proof.test.js",
-      "lane": "compat-1",
-      "category": "compat",
-      "release": true,
-      "publishedImports": [
-        "packages/dingtalk-dsh-assistant/artifact-json.js",
-        "packages/dingtalk-dsh-assistant/group-message.js",
-        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
-        "packages/dingtalk-dsh-assistant/session-persistence.js",
-        "packages/dingtalk-dsh-assistant/session-workspaces.js",
-        "packages/dingtalk-dsh-assistant/task-input-contract.js"
-      ],
-      "retainedCompatibilityImports": [
-        "packages/dingtalk-dsh-assistant/agent-work.js",
-        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
-        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
-        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
-        "packages/dingtalk-dsh-assistant/execution-candidate.js",
-        "packages/dingtalk-dsh-assistant/execution-check-job.js",
-        "packages/dingtalk-dsh-assistant/execution-controller.js",
-        "packages/dingtalk-dsh-assistant/execution-delivery.js",
-        "packages/dingtalk-dsh-assistant/execution-development-branch.js",
-        "packages/dingtalk-dsh-assistant/execution-edit.js",
-        "packages/dingtalk-dsh-assistant/execution-git.js",
-        "packages/dingtalk-dsh-assistant/execution-inline-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
-        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-pr.js",
-        "packages/dingtalk-dsh-assistant/execution-project-config.js",
-        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
-        "packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js",
-        "packages/dingtalk-dsh-assistant/execution-workspace.js",
-        "packages/dingtalk-dsh-assistant/execution-worktree-acceptance.js",
-        "packages/dingtalk-dsh-assistant/node-output-readout.js",
-        "packages/dingtalk-dsh-assistant/task-delivery-review.js",
-        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
-        "packages/dingtalk-dsh-assistant/task-owner-context.js",
-        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
-        "packages/dingtalk-dsh-assistant/task-owner-session.js",
-        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
-        "packages/dingtalk-dsh-assistant/task-workflow.js",
-        "packages/dingtalk-dsh-assistant/uat-acceptance-policy.js",
-        "packages/dingtalk-dsh-assistant/workflow-bytebase-platform.js",
-        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
-        "packages/dingtalk-dsh-assistant/workflow-engineering.js",
-        "packages/dingtalk-dsh-assistant/workflow-notifications.js",
-        "packages/dingtalk-dsh-assistant/workflow-release-platform.js",
-        "packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js",
-        "packages/dingtalk-dsh-assistant/workflow-uat-merge-platform.js",
-        "packages/dingtalk-dsh-assistant/workflow-uat-schema-migration.js"
-      ],
-      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
-    },
-    {
-      "file": "test/workflow-uat-rebuild-proof.test.js",
       "lane": "compat-2",
       "category": "compat",
       "release": true,
@@ -13788,8 +13946,62 @@
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },
     {
-      "file": "test/workflow-uat-schema-migration.test.js",
+      "file": "test/workflow-uat-rebuild-proof.test.js",
       "lane": "compat-0",
+      "category": "compat",
+      "release": true,
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js"
+      ],
+      "retainedCompatibilityImports": [
+        "packages/dingtalk-dsh-assistant/agent-work.js",
+        "packages/dingtalk-dsh-assistant/engineering-output-contract.js",
+        "packages/dingtalk-dsh-assistant/execution-artifacts.js",
+        "packages/dingtalk-dsh-assistant/execution-authorization-session.js",
+        "packages/dingtalk-dsh-assistant/execution-candidate.js",
+        "packages/dingtalk-dsh-assistant/execution-check-job.js",
+        "packages/dingtalk-dsh-assistant/execution-controller.js",
+        "packages/dingtalk-dsh-assistant/execution-delivery.js",
+        "packages/dingtalk-dsh-assistant/execution-development-branch.js",
+        "packages/dingtalk-dsh-assistant/execution-edit.js",
+        "packages/dingtalk-dsh-assistant/execution-git.js",
+        "packages/dingtalk-dsh-assistant/execution-inline-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-input-lineage.js",
+        "packages/dingtalk-dsh-assistant/execution-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-pr.js",
+        "packages/dingtalk-dsh-assistant/execution-project-config.js",
+        "packages/dingtalk-dsh-assistant/execution-recovery-policy.js",
+        "packages/dingtalk-dsh-assistant/execution-task-local-acceptance.js",
+        "packages/dingtalk-dsh-assistant/execution-workspace.js",
+        "packages/dingtalk-dsh-assistant/execution-worktree-acceptance.js",
+        "packages/dingtalk-dsh-assistant/node-output-readout.js",
+        "packages/dingtalk-dsh-assistant/task-delivery-review.js",
+        "packages/dingtalk-dsh-assistant/task-group-file-delivery.js",
+        "packages/dingtalk-dsh-assistant/task-owner-context.js",
+        "packages/dingtalk-dsh-assistant/task-owner-controller.js",
+        "packages/dingtalk-dsh-assistant/task-owner-session.js",
+        "packages/dingtalk-dsh-assistant/task-workflow-contracts.js",
+        "packages/dingtalk-dsh-assistant/task-workflow.js",
+        "packages/dingtalk-dsh-assistant/uat-acceptance-policy.js",
+        "packages/dingtalk-dsh-assistant/workflow-bytebase-platform.js",
+        "packages/dingtalk-dsh-assistant/workflow-data-change.js",
+        "packages/dingtalk-dsh-assistant/workflow-engineering.js",
+        "packages/dingtalk-dsh-assistant/workflow-notifications.js",
+        "packages/dingtalk-dsh-assistant/workflow-release-platform.js",
+        "packages/dingtalk-dsh-assistant/workflow-trusted-platforms.js",
+        "packages/dingtalk-dsh-assistant/workflow-uat-merge-platform.js",
+        "packages/dingtalk-dsh-assistant/workflow-uat-schema-migration.js"
+      ],
+      "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
+    },
+    {
+      "file": "test/workflow-uat-schema-migration.test.js",
+      "lane": "compat-1",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13855,7 +14067,7 @@
     },
     {
       "file": "test/workspace-terminal-reconciliation.test.js",
-      "lane": "compat-1",
+      "lane": "compat-2",
       "category": "compat",
       "release": true,
       "publishedImports": [
@@ -13873,6 +14085,8 @@
         "packages/dingtalk-dsh-assistant/fixed-topics.js",
         "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
         "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
         "packages/dingtalk-dsh-assistant/host-context.js",
         "packages/dingtalk-dsh-assistant/http.js",
         "packages/dingtalk-dsh-assistant/model-context.js",

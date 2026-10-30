@@ -22,7 +22,7 @@ mentions 读取兼容标准 `result.conversationMessagesList[].messages`（`open
 
 时间型请求同时提供原消息 `messageTime`、执行快照 `asOf` 和群时区。判断结合用户明确时区和实际执行时刻重新核对目标，不把过去时间照原值安排，也不擅自顺延明天。仍有价值的状态汇报补报一次并说明实际时间与延迟；已失去意义的定点提醒可通过 `platform_reply_submit({text:null})` 静默结清。空字符串仍拒绝，普通自然语言输出仍不发送。未来请求只能使用宿主实际提供的 schedule 能力，真实创建成功后才确认已安排；确认不等于定时汇报已经完成。
 
-即时平台会话仍为插件拥有的子会话（`origin=subagent`、`delegationDepth=1`），答复后释放。DSH `0.2.1-rc.2` 的原生 `schedule_create` 对该身份返回 `subagent_session`，这个宿主限制保留。一次未来事项改用 `platform_schedule_submit({title,prompt,at})` 提交意图，`at` 必须包含完整日期和时区偏移；Host 从当前来源固定原群、原消息版本、unit 和接收者，不接受模型指定目标会话或群。Host 创建新的普通持久平台会话，经正式 `ScheduleService.create(sessionId, request)` 创建原生 `at` 记录；不篡改原子会话身份或伪装 parent。新会话使用同一可信 preset 和会话级完全权限，其他会话权限保持。
+即时平台会话仍为插件拥有的子会话（`origin=subagent`、`delegationDepth=1`），答复后释放。DSH `0.2.1-rc.2` 的原生 `schedule_create` 对该身份返回 `subagent_session`，这个宿主限制保留。一次未来事项改用 `platform_schedule_submit({title,prompt,at})` 提交意图，`at` 必须包含完整日期和时区偏移；Host 从当前来源固定原群、原消息版本和 unit，不接受模型指定目标会话或群。通知受众由到期会话结合原请求与受信群上下文选择，不固定为发起人。Host 创建新的普通持久平台会话，经正式 `ScheduleService.create(sessionId, request)` 创建原生 `at` 记录；不篡改原子会话身份或伪装 parent。新会话使用同一可信 preset 和会话级完全权限，其他会话权限保持。
 
 原生 schedule 服务继续负责唯一的定时器、持久化、自动化列表和到期会话恢复。本插件只在现有 Resident `scheduler` 表增加可选的来源绑定及交付结果，按稳定来源 ID 复用接收会话。原生 create 已提交而本地回执未保存时，回读同会话原生记录再确认；并发重复提交只创建一个记录，删除后重试不重建。到期恢复重新注册平台查询/回复工具，读取当时的新事实，稳定交付 ID 沿原群现有 outbox/notification 发送；准备成功不冒称实际送达。原生入站提醒可能在崩溃后重复，已有 outbox 或交付结果阻止重复模型处理和重复发送。
 
@@ -37,5 +37,13 @@ mentions 读取兼容标准 `result.conversationMessagesList[].messages`（`open
 固定类别回复使用独立的 `fixed-topic-reply` 通知类型，`topicRefs=[]`，不伪造业务 Topic。Host 从真实 Resident 消息、版本、当前固定 unit 和发送人生成事实绑定，通知账本校验已接纳来源及稳定通知 ID；准备和发送前核对冻结来源。普通 `topic-reply` 仍必须携带非空业务 Topic 引用。若旧版本已写入 pending outbox、但因空 topicRefs 未能准备通知，恢复沿用原 outbox ID、正文、引用和 mentions 补齐账本，不重新查询生成或创建另一条补报。ACK 后只回读，不重发；真实送达仍以通知回执为准。
 
 原生集成回归经过 `openTaskSessionService`、真实 SQLite 通知账本和原生平台工具，覆盖两类固定回复、业务 Topic 校验、非法来源拒绝及冻结 outbox 跨重启恢复。仅最后的外部发送/回读适配器为合成实现，未发送真实群消息。
+
+普通 Topic、任务事实和平台通知共用 `group-notification.js` 的接收人契约、准备格式与附件分项构造。`platform_reply_submit` 接受 `text`、`atOpenDingTalkIds`、`atAll`、可选上下文 `replyToMessageId` 和 `files:[{path,caption}]`。非空回复须明确选择接收人集合（可多人，明确不提及时为 `[]`）或 `atAll:true`。ID 仅取受信本群消息身份，近似姓名不能充当 ID；平台输入只附原请求与最近 20 条真人消息的简短身份/上下文，不把所有历史作者自动加入受众。首包不足时可按需核对较早原文；接纳仍核验 ID 存在于本群受信消息身份中，不能猜 ID，也不因首包滚动截断而排除已经核实的旧参与者。全群提及只用于明确面向全群的意图，与成员提及互斥，经同一通知持久化和 DWS `--at-all` 发送；正文“@所有人”不是原生提及。
+
+平台最终说明与普通任务事实采用同一最终回复策略：普通 Markdown、所选原生提及、完整链接和段落、配置签名一次；可选来源引用只用于判断，不发送原生引用，从而不因引用额外提醒原请求者或重复提及。普通 Topic 对话的显式引用仍按既有契约校验引用作者属于受众。`sourceRef` 独立保存平台通知的因果来源，`sourceMessageId/actorId` 仍仅表示实际发送引用；旧冻结回复缺少 `sourceRef` 时保持旧契约及正文/引用/mentions，不升级重发或重新选择对象。
+
+平台文件从会话工作目录按显式 path/caption 冻结，沿现有文件准入校验路径、普通文件、大小和摘要；使用包含群、原消息版本、unit、平台 session、稳定通知 ID 的 `platformSource` 描述符，不伪造业务 Task 或执行。业务任务文件原有完成执行准入保持。两类文件复用同一不可变文件存储与发送适配器；父说明及逐项附件在原通知账本同事务准备，按原 `afterNotificationId` 连续投递。文件与说明的冻结元数据同时留在 outbox，准备账本前崩溃可按原 ID 恢复；已获 ACK 的项只回读，已送项不重发，后续附件等前项确认送达。没有新增队列、定时器或判断轮次。
+
+回归使用 rc2 真实宿主、原生 schedule 和通知账本，覆盖发起人、指定多人、全群、附件未知回执后重启、原来源失效及旧冻结回复；模型为脚本化，DWS runner 为合成。准确 SUCCESS 回执仍仅证明送达；查询未暴露原生 all 元数据时明确记为 `mentionVerification=unavailable`，不能宣称客户端全群提及已核验。部署后仍需在获准测试群核对真实 Markdown、@所有人权限/显示及附件连续呈现。
 
 验证覆盖真实 DomainFacility 的持久化/重启、固定类别分页与失败/沉默/回复状态、mentions 契约和静默人工纠正；浏览器使用合成 React 宿主验证键盘、空态、分页、409/503 与窄屏。相关原生回归使用 native profile 与确定性模型；`fixed-topics-native.test.js` 实际调用宿主注册的查询、回复及文件工具，检查会话权限隔离，并在提供 rc2 schedule 包时验证子会话拒绝、宿主一次调度、真实到期、重启、新事实查询、先于桥接恢复、原生记录及入站回执、交付去重和过期不误排。用 `DSH_NATIVE_TEST_PROFILE` 指向已安装 `@deepseek-ai/dsh-base`、`dsh-schedule`、`dsh-tool-schedule`、`dsh-api-session-controller` 的 rc2 profile 运行；缺少调度包的旧 profile 会明确跳过这些集成用例。时间指导断言与脚本化过期分支不等于真实模型语义验证。真实 DingTalk、生产库上的纠正和实际模型判断由部署后的独立验证负责，不能用隔离测试代替。
