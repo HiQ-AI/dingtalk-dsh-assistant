@@ -5,6 +5,7 @@ import { deliverTaskNotification, recallTaskOperatorNotification, retryTaskNotif
 import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspectFailedNativeWebRead, inspectFailedNativeFileMutation, inspectFailedNativeJobRead, readNativeOperationContext, readExecutionProgress } from './dynamic-operation-readback.js'
 import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
 import { inspectIsolatedHostRestart, prepareRestartScopeProbe } from './dynamic-operation-readback.js'
+import { readMaintenanceDrainProof } from './native-maintenance-drain.js'
 import { hasRestartIsolation, operationBlocksRecovery, verifyRestartIsolation, readAuditedRestartDrain } from './native-restart-isolation.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -214,6 +215,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     observationTail = observationTail.then(() => observation.observe(session, event)).catch(error => failures.set('observability', { id: 'observability', code: error.code ?? error.message }))
   })
   residentStore?.setTaskSessionReader?.({ getTask: id => taskCache.get(id), listTasks: () => [...taskCache.values()],
+    hasAppliedOperation: async operationId => !!await query('receipt.get', { id: `topic-operation:${operationId}` }),
     isTaskQuiescent: taskId => [...executionCache.values()].filter(item => item.taskId === taskId).every(item => item.drained && !item.recovering) })
   const models = () => { const { provider, model, reasoningEffort } = legacy.getAgentConfig(); return { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } }
   const currentTask = async binding => {
@@ -229,6 +231,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     isRecoveryCurrent: binding => query('execution.recovery-current', { binding }),
     getWorkspaceDir: ({ binding }) => taskExecutionWorkspace(root, binding.taskId, binding.sessionId),
     readRestartDrainProof: args => readAuditedRestartDrain({ ctx, query, ...args }),
+    readMaintenanceDrainProof: async args => readMaintenanceDrainProof({ workspace: root, ...args, operations: await query('operation.list', { taskId: args.binding.taskId }) }),
   })
   const claudeExecutionSessions = suppliedClaudeExecutionSessions ?? createClaudeExecutionSessions({ ctx,
     isCurrent: binding => query('execution.current', { binding }),
@@ -1539,6 +1542,20 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (previousRecord?.status === 'completed') return requireTask(previousRecord.operations[0].taskId)
     if (!previous && task && (args.expectedRequirementRevision !== undefined && args.expectedRequirementRevision !== task.requirementRevision
       || args.expectedControlRevision !== undefined && args.expectedControlRevision !== task.controlRevision)) fail('DYNAMIC_TASK_REVISION_STALE')
+    if (kind === 'task-reopen' && args.maintenanceEvidence) {
+      if (task.archivedAt || task.status !== 'cancelled' || task.control !== 'cancelled' || !task.drained || task.recovering) fail('DYNAMIC_TASK_NOT_QUIESCENT')
+      const executions = await query('execution.list', { taskId: task.taskId })
+      for (const execution of executions.filter(item => !item.drained)) {
+        if (!execution.recovering || !execution.cancelRequested || !execution.drainFailure || executionBackend(execution) !== 'dsh'
+          || inflightExecutions.has(execution.executionId)) fail('DYNAMIC_TASK_NOT_QUIESCENT')
+        const binding = await query('execution.binding', { executionId: execution.executionId })
+        const proof = await executionSessions.recoverDrained({ binding, input: execution.input, drainFailure: execution.drainFailure, maintenanceEvidence: args.maintenanceEvidence })
+        if (!proof?.maintenanceDrainAudit) fail('DYNAMIC_EXECUTION_MAINTENANCE_UNPROVEN')
+        await command('execution.drained', { binding, maintenanceDrainAudit: proof.maintenanceDrainAudit }, `maintenance-drained:${execution.executionId}:${binding.leaseEpoch}:${args.maintenanceEvidence.expectedProposalDigest}`)
+        executionSessions.confirmDrained(binding)
+        failures.delete(execution.executionId)
+      }
+    }
     const text = args.context?.trim() || args.objective || args.reason || ''
     const messageId = stableId('web', `${groupId}:${args.requestId}`)
     await refreshTasks()

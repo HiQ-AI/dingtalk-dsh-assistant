@@ -4,8 +4,80 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { available, reason, nativeTaskHost, latestInput } from './fixtures/task-session-native-host.js'
+import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import { available, reason, nativeTaskHost, latestInput, waitUntil } from './fixtures/task-session-native-host.js'
 const call = (name, args) => ({ name, args })
+
+test('reopen reconsiders all five unapplied context messages at the current task version without replay', { timeout: 20000, ...(!available ? { skip: reason } : {}) }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'web-context-recovery-'))
+  let store, topicId, sequence = 0, reviewed = []
+  const command = (kind, args) => store.command({ id: 'setup-' + ++sequence, kind, args })
+  const texts = ['请保留完整审核历史', '两条记录都显示第一轮', '打回修改一次才算一轮', '请核实轮次', '验收时覆盖这些要求']
+  const ids = texts.map((_, index) => 'supplement-' + index)
+  const h = await nativeTaskHost(root, async (request, host) => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request)
+    if (names.includes('group_decision_submit')) {
+      if (input.trigger === 'task-facts') return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: { actions: [], reason: '保留内部恢复事实' } })]
+      reviewed.push(input)
+      const basis = input.messages.filter(message => ids.includes(message.messageId))
+      assert.deepEqual(basis.map(message => message.messageId), ids)
+      assert.deepEqual(input.ownedDeltaMessageIds, ids, 'completed reopen authorization is already consumed; the entire old batch remains')
+      const task = await host.query('task.get', { taskId: 'original-task' })
+      assert.equal(task.requirementRevision, 2)
+      const basisUnitRefs = basis.map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
+      return [call('group_decision_submit', { requestId: input.requestId, topicId, revision: input.revision, decision: {
+        basisMessageIds: ids, basisUnitRefs, actions: [{ kind: 'task-context', taskId: task.taskId, inputVersion: task.requirementRevision, runSequence: task.runSequence,
+          context: texts.join('\n'), progressImpact: 'preserve', authorizationChange: 'none', basisUnitRefs, topicRefs: [{ topicId, revision: input.revision }] }],
+        reply: '补充已并入原事项。', replyToMessageId: ids.at(-1), replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
+    }
+    assert.ok(names.includes('task_session_submit'), 'no execution or routing is created by recovery')
+    return [call('task_session_submit', { decision: { action: 'wait', summary: '保留补充，等待原业务继续', evidence: [], limitations: [] } })]
+  }, { serviceFactory: async options => {
+    store = await openDynamicTaskStore({ ...options.config, initialize: true })
+    const resident = options.residentStore
+    await resident.ingest({ groupId: 'native-group', messageId: 'original-request', text: '核对审核历史', senderOpenDingTalkId: 'native-user', occurredAt: '2026-01-01T00:00:00Z' })
+    topicId = (await resident.routeMessages({ groupId: 'native-group', routeId: 'original-route', routingRevision: 0,
+      routes: [{ messageId: 'original-request', messageVersion: 1, topics: [{ newTopicKey: 'history', title: '审核历史' }] }] })).topicIdsByKey.history
+    await resident.acceptTopicDecision({ groupId: 'native-group', topicId, revision: 1, decisionId: 'original-decision', decision: { actions: [], basisMessageIds: ['original-request'], reason: '原业务' } })
+    await resident.completeTopicDecision({ groupId: 'native-group', topicId, decisionId: 'original-decision' })
+    await command('source.record', { sourceId: 'original-source', groupId: 'native-group', messageId: 'original-request', actorId: 'native-user', text: '核对审核历史', channel: 'im' })
+    await command('task.create', { taskId: 'original-task', groupId: 'native-group', ownerActorId: 'native-user', title: '审核历史', request: '核对审核历史', topicRefs: [{ topicId, revision: 1 }], sourceRefs: ['original-source'] })
+    await command('task.control', { taskId: 'original-task', control: 'cancelled', expectedControlRevision: 1 })
+    return openTaskSessionService({ ...options, store })
+  } })
+  t.after(async () => { await h.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+  for (const [index, text] of texts.entries()) {
+    await h.residentStore.ingest({ groupId: 'native-group', messageId: ids[index], text, senderOpenDingTalkId: 'native-user', occurredAt: `2026-01-01T00:00:0${index + 1}Z` })
+    await command('source.record', { sourceId: 'source-' + index, groupId: 'native-group', messageId: ids[index], actorId: 'native-user', text, channel: 'im' })
+  }
+  await h.residentStore.routeMessages({ groupId: 'native-group', routeId: 'supplements', routingRevision: h.residentStore.getGroup('native-group').routingRevision,
+    routes: ids.map(messageId => ({ messageId, messageVersion: 1, topics: [{ topicId }] })) })
+  const topic = h.residentStore.getTopic('native-group', topicId), before = await h.query('task.get', { taskId: 'original-task' })
+  const action = { kind: 'task-context', taskId: before.taskId, inputVersion: before.requirementRevision, runSequence: before.runSequence, context: texts.join('\n'), progressImpact: 'preserve', authorizationChange: 'none', topicRefs: [{ topicId, revision: topic.revision }] }
+  const old = await h.residentStore.acceptTopicDecision({ groupId: 'native-group', topicId, revision: topic.revision, decisionId: 'blocked-batch',
+    expectedTaskVersions: [{ taskId: before.taskId, inputVersion: before.requirementRevision, runSequence: before.runSequence }], decision: { basisMessageIds: ids, actions: [action] } })
+  assert.equal(old.status, 'accepted')
+  await h.residentStore.updateTopicDecision({ groupId: 'native-group', topicId, decisionId: old.record.decisionId,
+    patch: { status: 'blocked', attempt: 1, error: 'DYNAMIC_TASK_NOT_ACTIVE', failureOperationId: old.record.operations[0].operationId,
+      operations: old.record.operations.map(operation => ({ ...operation, status: 'blocked', lastError: 'DYNAMIC_TASK_NOT_ACTIVE' })) } })
+  const failedPage = await h.service.observerGroupPage('native-group', { filter: 'failed', limit: 10 })
+  assert.equal(failedPage.total, 5); assert.ok(failedPage.items.every(message => message.processingFailureCode === 'DYNAMIC_TASK_NOT_ACTIVE'))
+  const args = { taskId: before.taskId, requestId: 'resume-original', context: '恢复原任务，保留全部补充要求', expectedRequirementRevision: before.requirementRevision, expectedControlRevision: before.controlRevision }
+  await h.service.reopenTask(args); await h.service.whenIdle()
+  await waitUntil(() => { const topic=h.residentStore.getTopic('native-group',topicId);return topic.processedRevision===topic.revision }, 'all original supplements applied')
+  await h.service.whenIdle()
+  assert.equal(reviewed.length, 1, JSON.stringify({ alerts: h.service.listAlerts(), results: h.toolResults.slice(-1) }))
+  const current = await h.query('task.get', { taskId: before.taskId }), completed = h.residentStore.getTopic('native-group', topicId)
+  assert.equal(completed.decisions.find(record => record.decisionId === old.record.decisionId).status, 'rejected')
+  assert.deepEqual(completed.decisions.find(record => record.decisionId === old.record.decisionId).decision, old.record.decision)
+  assert.equal(completed.processedRevision, completed.revision, JSON.stringify({ decisions: completed.decisions.map(({status,error,operations})=>({status,error,operations})), alerts:h.service.listAlerts() }))
+  assert.ok(current.request.includes(texts.join('\n')))
+  assert.equal(current.requirementRevision, 2, 'context supplement preserves the reopened goal and revision')
+  assert.equal((await h.query('task.list')).length, 1); assert.equal((await h.query('execution.list')).length, 0)
+  assert.equal(await h.query('receipt.get', { id: 'topic-operation:' + old.record.operations[0].operationId }), null)
+  assert.equal(h.sent.length, 1)
+  await h.service.reopenTask(args); await h.service.whenIdle(); assert.equal(reviewed.length, 1); assert.equal(h.sent.length, 1)
+})
 
 test('web acceptance reuses existing topic and captures exact enriched source version with real image execution material', { timeout: 20000, ...(!available ? { skip: reason } : {}) }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'web-topic-reuse-')), image = Buffer.from('actual-image-bytes')

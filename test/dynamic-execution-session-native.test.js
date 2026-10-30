@@ -25,6 +25,8 @@ import { createAgentQueryTools, verifyAgentEvidence, readExecutedAgentQueryRefs 
 import { createAgentResourceReadCapability } from '../packages/dingtalk-dsh-assistant/agent-query-resources.js'
 import { openExecutionArtifacts } from '../packages/dingtalk-dsh-assistant/execution-artifacts.js'
 import { validateAgentWorkResult, agentWorkResultSchema, createInvestigationWorkflow } from '../packages/dingtalk-dsh-assistant/agent-work.js'
+import { readMaintenanceDrainProof } from '../packages/dingtalk-dsh-assistant/native-maintenance-drain.js'
+import { maintenanceEvidenceFixture } from './fixtures/native-maintenance-drain.js'
 
 const requireLoop = createRequire(import.meta.resolve('@deepseek-ai/dsh-agent-loop'))
 const { SessionProjectionRegistry } = requireLoop('@deepseek-ai/dsh-session-projection')
@@ -513,6 +515,23 @@ test('native recovery validates durable identity and refuses missing bound sessi
   await assert.rejects(next.manager.recoverDrained({ binding: dynamic({ sessionBound: true }), drainFailure: { error: { code: 'execution_session_drain_failed' } } }), { code: 'execution_recovery_process_scope_missing' })
   await assert.rejects(next.manager.recoverDrained({ binding: dynamic({ taskId: 'wrong', sessionBound: true }) }), { code: 'execution_session_identity_mismatch' })
   await assert.rejects(next.manager.recoverDrained({ binding: dynamic({ sessionId: 'missing-session', sessionBound: true }) }), { code: 'execution_session_missing' })
+})
+
+test('maintenance proof accepts actual native v4 history after cold inspection without another model or tool run', async t => {
+  const root = await temp(), first = await host({ root, script: [dynamicSubmit('original result')] })
+  await dynamicDrive(first)
+  const events = (await inspectSession(first.ctx.sessionPersistence, dynamic().sessionId)).events
+  await first.close()
+  const raw = await readFile(await findSessionLog(root, dynamic().sessionId), 'utf8')
+  const audit = await maintenanceEvidenceFixture(root, dynamic(), events, raw)
+  const next = await host({ root, script: () => { throw new Error('must not replay') } })
+  t.after(() => next.close())
+  const current = (await inspectSession(next.ctx.sessionPersistence, dynamic().sessionId)).events
+  const proof = await readMaintenanceDrainProof({ workspace: root, binding: dynamic(), events: current,
+    evidence: audit.evidence, observeProcesses: async () => [] })
+  assert.equal(proof.processesExited, true); assert.equal(proof.noReplay, true)
+  assert.equal(next.requests.length, 0)
+  assert.deepEqual((await inspectSession(next.ctx.sessionPersistence, dynamic().sessionId)).events, events)
 })
 
 for (const fixture of [

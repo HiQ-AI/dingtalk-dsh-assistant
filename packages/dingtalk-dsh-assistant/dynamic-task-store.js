@@ -218,8 +218,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     const unresolved = ops(task.taskId).filter(operationBlocksRecovery)
     const interrupted = operation => operation.state === 'unknown' && operation.recoveryReason === 'host_restart'
               && operation.result == null && ['running','stopping'].includes(operation.job?.status) && ['pwsh','bash'].includes(operation.definition?.toolName)
-              && executions.some(execution => execution.executionId === operation.executionId && execution.sessionBound && execution.cancelRequested
-                && operation.job.owner === execution.sessionId && operation.dispatchBinding?.sessionId === execution.sessionId)
+              && executions.some(execution => execution.executionId === operation.executionId && execution.sessionBound
+                && (execution.drained && terminalExecutions.has(execution.status) || execution.cancelRequested && execution.recovering)
+                && operation.job.owner === execution.sessionId && operation.dispatchBinding?.sessionId === execution.sessionId
+                && operation.dispatchBinding.taskId === task.taskId && operation.dispatchBinding.executionId === execution.executionId)
     const terminalIdentityFailure = operation => operation.state === 'unknown'
       && operation.result?.isError === true && operation.result.errorCode === 'execution_background_identity_missing'
       && ['pwsh','bash'].includes(operation.definition?.toolName) && operation.result.toolName === operation.definition.toolName
@@ -240,7 +242,12 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         && operation.dispatchBinding.sessionId === execution.sessionId)
     // Explicit reopen never resumes an old execution. Outstanding observations
     // keep the existing bound-readback-only gate until the operator audits them.
-    return unresolved.every(operation => interrupted(operation) || terminalIdentityFailure(operation) || terminalJobObservation(operation))
+    const maintenanceObservation = operation => operation.state === 'unknown' && executions.some(execution =>
+      execution.executionId === operation.executionId && execution.drained && terminalExecutions.has(execution.status)
+      && execution.recoveryDrainAudit?.kind === 'native-maintenance-drain'
+      && operation.dispatchBinding?.taskId === task.taskId && operation.dispatchBinding.executionId === execution.executionId
+      && operation.dispatchBinding.sessionId === execution.sessionId)
+    return unresolved.every(operation => interrupted(operation) || terminalIdentityFailure(operation) || terminalJobObservation(operation) || maintenanceObservation(operation))
       && executions.every(execution => execution.drained && terminalExecutions.has(execution.status)
         || execution.cancelRequested && execution.recovering
           && unresolved.some(operation => operation.executionId === execution.executionId && interrupted(operation)))
@@ -1135,6 +1142,19 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       if (kind === 'execution.cancel') { execution.cancelRequested = true; if (execution.drained) execution.status = 'cancelled' }
       if (kind === 'execution.drained') {
+        if (a.maintenanceDrainAudit !== undefined) {
+          const proof = record(a.maintenanceDrainAudit)
+          if (!execution.recovering || !execution.cancelRequested || !execution.drainFailure || proof.kind !== 'native-maintenance-drain'
+            || !matchesExecutionBinding(execution, proof.binding) || proof.noReplay !== true || proof.partialEffectsPossible !== true
+            || proof.processesExited !== true || !proof.proposalDigest || !proof.evidenceDigest || !proof.nativeLogDigest
+            || !Number.isFinite(Date.parse(proof.observedAt))) fail('DYNAMIC_EXECUTION_MAINTENANCE_UNPROVEN')
+          for (const ref of array(proof.pendingOperations)) {
+            const operation = get('dynamic_operations', ref.operationId)
+            if (operation.state !== 'unknown' || operation.taskId !== execution.taskId || operation.executionId !== execution.executionId
+              || digest(operation) !== ref.operationDigest) fail('DYNAMIC_EXECUTION_MAINTENANCE_UNPROVEN')
+          }
+          execution.recoveryDrainAudit = { ...clone(proof), recordedAt: stamp }
+        }
         if (a.isolationAuditRefs !== undefined) {
           const refs = array(a.isolationAuditRefs)
           if (!refs.length || new Set(refs.map(item => item.operationId)).size !== refs.length || refs.some(ref => {

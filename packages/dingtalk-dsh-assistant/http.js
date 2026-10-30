@@ -136,7 +136,8 @@ const contextTaskInputSchema = z.strictObject({ requestId: requiredText.max(200)
   .superRefine((value, ctx) => { const message = taskContextSemanticsProblem(value); if (message) ctx.addIssue({ code: 'custom', path: ['progressImpact'], message }) })
 const cancelTaskInputSchema = z.strictObject({ requestId: requiredText.max(200), reason: requiredText.max(2000), expectedControlRevision: z.number().int().positive() })
 const reopenTaskInputSchema = z.strictObject({ requestId: requiredText.max(200), context: requiredText.max(32000),
-  expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive() })
+  expectedRequirementRevision: z.number().int().positive(), expectedControlRevision: z.number().int().positive(),
+  maintenanceEvidence: z.strictObject({ directory: requiredText, expectedProposalDigest: z.string().regex(/^[a-f0-9]{64}$/u) }).optional() })
 
 export function residentErrorStatus(error) {
   if(['OBSERVER_PAGE_PROVIDER_REQUIRED','OBSERVER_PAGINATION_MIGRATION_REQUIRED','OBSERVER_TEXT_MIGRATION_REQUIRED'].includes(error?.code))return 503

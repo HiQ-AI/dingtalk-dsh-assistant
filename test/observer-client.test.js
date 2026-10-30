@@ -5,6 +5,17 @@ import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/wor
 import { runInNewContext } from 'node:vm'
 import { taskNotificationOutbound } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 
+test('inbox failure copy distinguishes inactive task context from unknown side effects', async () => {
+ const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+ const code = source.slice(source.indexOf('    const messageFailureHint ='), source.indexOf('    const traceReason ='))
+ const hint = runInNewContext(`${code}; messageFailureHint`)
+ assert.match(hint('DYNAMIC_TASK_NOT_ACTIVE'), /补充尚未应用.*恢复原任务/)
+ assert.doesNotMatch(hint('DYNAMIC_TASK_NOT_ACTIVE'), /未知/)
+ assert.match(hint('DYNAMIC_OPERATION_UNRESOLVED'), /效果未知.*不得重放/)
+ assert.doesNotMatch(hint('unexpected'), /效果未知/)
+ assert.match(source, /messageFailureHint\(message.processingFailureCode\)/)
+})
+
 test('the complete board renders its initial loading state before any collection exists',async()=>{
  const original=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
  const source=original.replace("module.exports = { name: 'dingtalk-dsh-observer-client'","module.exports = { ObserverContent, name: 'dingtalk-dsh-observer-client'")

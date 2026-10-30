@@ -424,6 +424,25 @@ export async function openResidentStore(storageDomain) {
   let taskSessionReader
   const currentTask = id => taskSessionReader ? taskSessionReader.getTask(id) : tasks.get(id)
   const currentTasks = () => taskSessionReader ? taskSessionReader.listTasks() : [...tasks.entries()].map(([, task]) => task)
+  // A cancelled task can reject context before any write. Reopen may supersede
+  // only that proven-unapplied decision; its original messages still need review.
+  async function inactiveTaskContexts(group, taskId) {
+    if (!taskSessionReader?.hasAppliedOperation) return new Set()
+    const task = currentTask(taskId), ids = new Set()
+    if (!task || task.groupId !== group.groupId) return ids
+    for (const topic of group.topics) for (const record of topic.decisions) {
+      const operation = record.operations[0], action = record.decision.actions?.[0]
+      if (record.status !== 'blocked' || record.error !== 'DYNAMIC_TASK_NOT_ACTIVE' || record.operations.length !== 1
+        || record.decision.actions.length !== 1 || action.kind !== 'task-context' || action.taskId !== taskId
+        || operation.taskId !== taskId || operation.actionIndex !== 0 || operation.status !== 'blocked'
+        || record.failureOperationId !== operation.operationId || Object.keys(record.progress ?? {}).length
+        || task.appliedOperations?.includes(operation.operationId)
+        || group.outbox.some(item => item.outboundId === record.outboundId || item.decisionId === record.decisionId || item.sourceMessageId === `topic-decision:${record.decisionId}`)
+        || await taskSessionReader.hasAppliedOperation(operation.operationId)) continue
+      ids.add(record.decisionId)
+    }
+    return ids
+  }
   const alerts = domain.table('alerts')
   const activities = domain.table('activities')
   for (const [key, alert] of alerts.entries()) {
@@ -997,6 +1016,7 @@ export async function openResidentStore(storageDomain) {
       const reuseTopics = !!taskSessionReader && topicRefs.length > 0
       const topicId = reuseTopics ? topicRefs[0].topicId : stableId('topic', `web:${identity}`)
       const digest = fingerprint({ text, action, topicRefs })
+      const reconsiderable = action.kind === 'task-reopen' ? await inactiveTaskContexts(entry[1], action.taskId) : new Set()
       let result
       await groups.update(entry[0], (latest) => {
         const previous = latest.topics.flatMap((topic) => topic.decisions).find((record) => record.decisionId === decisionId)
@@ -1007,10 +1027,12 @@ export async function openResidentStore(storageDomain) {
         if (latest.messages.some((message) => message.routingStatus !== 'routed')) { result = { status: 'routing-required' }; return latest }
         if (new Set(topicRefs.map((ref) => ref.topicId)).size !== topicRefs.length) throw new Error('task_topic_duplicate')
         const task = action.taskId ? currentTask(action.taskId) : undefined
+        const reopenBlockedContext = action.kind === 'task-reopen' && task?.state === 'cancelled' && task.restartRecoveryEligible === true
+          && latest.taskReservations.filter(item => item.taskId === task.taskId).every(item => reconsiderable.has(item.decisionId))
         for (const ref of topicRefs) {
           const topic = latest.topics.find((item) => item.topicId === ref.topicId)
           if (!topic || topic.mergedInto || topic.revision !== ref.revision) { result = { status: 'topic-stale', topicId: ref.topicId }; return latest }
-          if (reuseTopics && topic.decisions.some(isPendingDecision) && !(action.kind === 'task-cancel' && task
+          if (reuseTopics && topic.decisions.some(isPendingDecision) && !(reopenBlockedContext && topic.decisions.filter(isPendingDecision).every(record => reconsiderable.has(record.decisionId))) && !(action.kind === 'task-cancel' && task
             && blockedReservationsOnly(latest, task.taskId) && topic.decisions.filter(isPendingDecision).every(record => record.status === 'blocked'
               && record.operations.length === 1 && record.operations[0].taskId === task.taskId
               && latest.taskReservations.filter(item => item.decisionId === record.decisionId).every(item => item.taskId === task.taskId)))) { result = { status: 'topic-busy', topicId: ref.topicId }; return latest }
@@ -1018,7 +1040,7 @@ export async function openResidentStore(storageDomain) {
         if (action.kind === 'new-task') taskSessionReader ? validateTaskMetadata(action) : assertNewTaskMetadata(action)
         if (action.kind !== 'new-task') {
           if (!task || task.groupId !== groupId || task.inputVersion !== action.inputVersion || task.runSequence !== action.runSequence) { result = { status: 'task-stale', taskId: action.taskId }; return latest }
-          if (latest.taskReservations.some((reservation) => reservation.taskId === task.taskId) && !(action.kind === 'task-cancel' && blockedReservationsOnly(latest, task.taskId))) { result = { status: 'task-busy', taskId: task.taskId }; return latest }
+          if (latest.taskReservations.some((reservation) => reservation.taskId === task.taskId) && !reopenBlockedContext && !(action.kind === 'task-cancel' && blockedReservationsOnly(latest, task.taskId))) { result = { status: 'task-busy', taskId: task.taskId }; return latest }
           if ((action.kind === 'task-reopen' && task.state !== 'completed' && !(taskSessionReader && task.state === 'cancelled' && task.restartRecoveryEligible === true)) || (['task-context', 'task-cancel'].includes(action.kind) && task.state === 'completed')) { result = { status: 'task-state-invalid', taskId: task.taskId }; return latest }
           const basisIds = new Set([messageId, ...taskRevisionBasis(latest, task, { ...action, topicRefs })])
           if (!taskSessionReader) assertTaskContextRevision(task, action, basisIds)
@@ -1054,6 +1076,10 @@ export async function openResidentStore(storageDomain) {
         if (record.decisionId !== decisionId) return record
         if (expectedStatus !== undefined && record.status !== expectedStatus) throw new Error('decision_recovery_status_changed')
         if (!isPendingDecision(record)) { result = record; return record }
+        if (record.status === 'blocked' && patch.status === 'accepted' && latest.taskReservations.some(reservation =>
+          reservation.decisionId !== decisionId && record.operations.some(operation => operation.taskId === reservation.taskId)
+          && latest.topics.some(item => item.decisions.some(pending => pending.decisionId === reservation.decisionId && isPendingDecision(pending)
+            && pending.decision.actions.some(action => action.kind === 'task-reopen' && action.taskId === reservation.taskId))))) throw new Error('decision_recovery_task_reopening')
         if (patch.operations && (patch.operations.length !== record.operations.length || record.operations.some((operation, index) => {
           const next = patch.operations[index]
           return next.operationId !== operation.operationId || next.actionIndex !== operation.actionIndex || next.taskId !== operation.taskId || operation.status === 'applied' && next.status !== 'applied'
@@ -1126,6 +1152,9 @@ export async function openResidentStore(storageDomain) {
       const previous = entry[1].topics.find(item => item.topicId === topicId)?.decisions.find(item => item.decisionId === decisionId)
       // 重复恢复不是新的语义完成；历史缺少首次时钟也不能以本次恢复时间补写。
       if (previous?.status === 'completed') return previous
+      const reopened = previous?.decision.actions?.length === 1 && previous.decision.actions[0].kind === 'task-reopen'
+        && previous.operations.length === 1 && previous.operations[0].status === 'applied' ? currentTask(previous.operations[0].taskId) : undefined
+      const reconsiderable = reopened?.control === 'active' ? await inactiveTaskContexts(entry[1], reopened.taskId) : new Set()
       let result
       await groups.update(entry[0], (latest) => {
         const topic = latest.topics.find((item) => item.topicId === topicId)
@@ -1136,10 +1165,14 @@ export async function openResidentStore(storageDomain) {
         const completedAt = new Date().toISOString()
         result = { ...record, status: 'completed', completedAt, updatedAt: completedAt }
         const update = record.decision.topicUpdate ?? {}
-        const topics = latest.topics.map((item) => item.topicId !== topicId ? item : {
+        const stillPending = topic.decisions.some(item => item.decisionId !== decisionId && isPendingDecision(item))
+        const processedRevision = stillPending ? topic.processedRevision : Math.max(topic.processedRevision, record.revision)
+        const topics = latest.topics.map(item => ({ ...item, decisions: item.decisions.map(value => reconsiderable.has(value.decisionId)
+          ? { ...value, status: 'rejected', recoveryReason: '任务已恢复；原补充未写入，保留消息按当前任务版本重新判断。', nextRetryAt: undefined, updatedAt: completedAt } : value) }))
+          .map((item) => item.topicId !== topicId ? item : {
           ...item, ...(update.summary !== undefined ? { summary: update.summary, summaryRevision: record.revision } : {}), ...(update.status && item.revision === record.revision ? { status: update.status } : {}), ...(update.openQuestions ? { openQuestions: update.openQuestions } : {}),
-          processedRevision: Math.max(item.processedRevision, record.revision), decisions: item.decisions.map((previous) => previous.decisionId === decisionId ? result : previous), updatedAt: result.updatedAt })
-        return { ...latest, taskReservations: latest.taskReservations.filter((item) => item.decisionId !== decisionId), topics,
+          processedRevision, decisions: item.decisions.map((previous) => previous.decisionId === decisionId ? result : previous), updatedAt: result.updatedAt })
+        return { ...latest, taskReservations: latest.taskReservations.filter((item) => item.decisionId !== decisionId && !reconsiderable.has(item.decisionId)), topics,
           messages: settleCompletedMessageDeliveries(latest.messages, topics, latest.sourceDispatchOwnership) }
       })
       return result

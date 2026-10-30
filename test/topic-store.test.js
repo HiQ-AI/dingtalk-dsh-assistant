@@ -675,6 +675,33 @@ test('Web取消复用原话题，保留仅阻塞保留项可取消的语义且�
  await store.close()
 })
 
+test('reopen only releases proven-unapplied inactive context and excludes concurrent retry', async t => {
+ const {store,current,target}=await legacyWebContinuationFixture();t.after(()=>store.close())
+ Object.assign(current,{state:'cancelled',control:'cancelled',restartRecoveryEligible:true,appliedOperations:[]})
+ let appliedReceipt=true
+ store.setTaskSessionReader({getTask:id=>id===current.taskId?current:undefined,listTasks:()=>[current],hasAppliedOperation:async()=>appliedReceipt})
+ const old=await store.submitWebTaskInput({groupId:'g',requestId:'blocked-context',text:'保留原要求',topicRefs:[{topicId:target,revision:1}],
+  action:{kind:'task-context',taskId:current.taskId,inputVersion:1,runSequence:1,context:'保留原要求'}})
+ const identity={groupId:'g',topicId:target,decisionId:old.record.decisionId}
+ await store.updateTopicDecision({...identity,patch:{status:'blocked',error:'DYNAMIC_TASK_NOT_ACTIVE',failureOperationId:old.record.operations[0].operationId,
+  operations:old.record.operations.map(item=>({...item,status:'blocked'}))}})
+ const args={groupId:'g',requestId:'resume-original',text:'恢复原任务',topicRefs:[{topicId:target,revision:2}],
+  action:{kind:'task-reopen',taskId:current.taskId,inputVersion:1,runSequence:1,context:'恢复原任务'}}
+ assert.equal((await store.submitWebTaskInput(args)).status,'topic-busy','a durable receipt prevents automatic reconsideration')
+ appliedReceipt=false
+ const accepted=await store.submitWebTaskInput(args);assert.equal(accepted.status,'accepted')
+ await assert.rejects(store.updateTopicDecision({...identity,expectedStatus:'blocked',patch:{status:'accepted'}}),/task_reopening/)
+ Object.assign(current,{state:'waiting',control:'active',inputVersion:2,runSequence:2})
+ await store.updateTopicDecision({groupId:'g',topicId:target,decisionId:accepted.record.decisionId,
+  patch:{operations:accepted.record.operations.map(item=>({...item,status:'applied'}))}})
+ await store.completeTopicDecision({groupId:'g',topicId:target,decisionId:accepted.record.decisionId})
+ const topic=store.getTopic('g',target),oldRecord=topic.decisions.find(item=>item.decisionId===old.record.decisionId)
+ assert.equal(oldRecord.status,'rejected');assert.deepEqual(oldRecord.decision,old.record.decision)
+ assert.equal(topic.processedRevision,1,'reopen does not consume the original blocked context')
+ assert.deepEqual(store.getGroup('g').taskReservations,[])
+ await assert.rejects(store.updateTopicDecision({...identity,expectedStatus:'blocked',patch:{status:'accepted'}}),/status_changed/)
+})
+
 
 test('Web取消不能借同一blocked决策中的本任务保留项越过其他任务',async()=>{
  const {store,current,target}=await legacyWebContinuationFixture();current.state='waiting'

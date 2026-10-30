@@ -28,6 +28,7 @@
     "dynamic-process-scope.js",
     "dynamic-native-job.js",
     "native-restart-isolation.js",
+    "native-maintenance-drain.js",
     "native-restart-scope-probe.js",
     "dynamic-operation-readback.js",
     "dynamic-task-store.js",

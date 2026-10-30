@@ -206,7 +206,7 @@ function validateHistory(events, binding) {
  * 补充递增 inputVersion；原生 step 事件累计预算，已结束执行间的等待不计耗时。
  * outputSchema 使用 dsh-tools 支持的 JSON Schema。工具仅提交 { output }，不接受模型身份。
  */
-export function createExecutionSessions({ ctx, isCurrent, isRecoveryCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, contentRoot, readRestartDrainProof, withPersistenceWriter = (_binding, action) => action() }) {
+export function createExecutionSessions({ ctx, isCurrent, isRecoveryCurrent, repositoryInspect, tools = [], getWorkspaceDir, registerPersistence, onNativeExecution, contentRoot, readRestartDrainProof, readMaintenanceDrainProof, withPersistenceWriter = (_binding, action) => action() }) {
   if (typeof isCurrent !== 'function') throw failure('execution_current_check_required')
   if (getWorkspaceDir !== undefined && typeof getWorkspaceDir !== 'function') throw failure('execution_workspace_provider_invalid')
   if (!Array.isArray(tools)) throw failure('execution_tool_registry_invalid')
@@ -976,29 +976,29 @@ export function createExecutionSessions({ ctx, isCurrent, isRecoveryCurrent, rep
     entries.delete(executionKey(binding)); sessions.delete(binding.sessionId)
   }
 
-  async function recoverDrained({ binding, input = {}, drainFailure }) {
+  async function recoverDrained({ binding, input = {}, drainFailure, maintenanceEvidence }) {
     validateBinding(binding)
     if (!dynamicExecution(binding)) throw failure('execution_binding_invalid', 'task-execution required')
     const key = executionKey(binding)
     const active = recoveryFlights.get(key)
     if (active) {
-      if (!sameRecoveryBinding(active.binding, binding)) throw failure('execution_session_identity_mismatch')
+      if (!sameRecoveryBinding(active.binding, binding) || JSON.stringify(active.maintenanceEvidence) !== JSON.stringify(maintenanceEvidence)) throw failure('execution_session_identity_mismatch')
       return active.promise
     }
-    const promise = recoverSessionDrain(binding, input, drainFailure)
-    recoveryFlights.set(key, { binding, promise })
+    const promise = recoverSessionDrain(binding, input, drainFailure, maintenanceEvidence)
+    recoveryFlights.set(key, { binding, maintenanceEvidence, promise })
     try { return await promise }
     finally { recoveryFlights.delete(key) }
   }
 
-  async function recoverSessionDrain(binding, input, drainFailure) {
+  async function recoverSessionDrain(binding, input, drainFailure, maintenanceEvidence) {
     const entry = entries.get(executionKey(binding)) ?? sessions.get(binding.sessionId)
     if (entry) await retryOwnedDrain(entry, binding)
     const proof = recoveredScopes.get(executionKey(binding))
     if (proof) {
       if (!sameRecoveryBinding(proof, binding)) throw failure('execution_session_identity_mismatch')
       if (!await isRecoveryCurrent?.(binding)) throw notDrained('execution_recovery_lease_unverified')
-    } else if (drainFailure && !drainFailure.recoveredAt) throw notDrained('execution_recovery_process_scope_missing')
+    } else if (drainFailure && !drainFailure.recoveredAt && !maintenanceEvidence) throw notDrained('execution_recovery_process_scope_missing')
     assertDrained(binding)
     const cwd = getWorkspaceDir ? await getWorkspaceDir({ binding, input }) : undefined
     await registerPersistence?.({ taskId: binding.taskId, sessionId: binding.sessionId, cwd })
@@ -1010,19 +1010,29 @@ export function createExecutionSessions({ ctx, isCurrent, isRecoveryCurrent, rep
       return { drained: true, sessionBound: false }
     }
     validateHistory(stored.events, { ...binding, leaseEpoch: binding.leaseEpoch + 1 })
-    const inputEvent = stored.events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
+    const inputEvent = stored.events.findLast(event => event.type === 'user/message' && Object.hasOwn(event.data.source ?? {}, 'executionSession')
+      || event.type === 'agent/inbox/spliced' && event.data.inserted?.some(message => Object.hasOwn(message.source ?? {}, 'executionSession')))
     const events = stored.events.filter(event => event.seq > (inputEvent?.seq ?? -1))
     const calls = events.filter(event => event.type === 'tool/call')
     const pendingCalls = calls.filter(call => !events.some(event => event.type === 'tool/result' && event.seq > call.seq
       && toolResults(event).some(item => item.toolCallId === call.data.callId)))
+    let maintenanceDrainAudit
+    if (maintenanceEvidence) {
+      if (!drainFailure || drainFailure.recoveredAt || !await isRecoveryCurrent?.(binding)
+        || typeof readMaintenanceDrainProof !== 'function') throw notDrained('execution_recovery_lease_unverified')
+      const jobs = ctx.get?.('jobs')
+      if (!jobs?.list || jobs.list(binding.sessionId).some(job => ['running', 'stopping'].includes(job.status))) throw notDrained('execution_recovery_job_unresolved')
+      maintenanceDrainAudit = await readMaintenanceDrainProof({ binding, events: stored.events, calls: pendingCalls, evidence: maintenanceEvidence })
+      if (maintenanceDrainAudit?.kind !== 'native-maintenance-drain') throw notDrained('execution_recovery_process_scope_missing')
+    }
     let isolationAuditRefs
-    if (pendingCalls.length) {
+    if (pendingCalls.length && !maintenanceDrainAudit) {
       isolationAuditRefs = await readRestartDrainProof?.({ binding, calls: pendingCalls })
       if (!Array.isArray(isolationAuditRefs) || isolationAuditRefs.length !== pendingCalls.length) throw notDrained('execution_recovery_tool_unresolved')
     }
     assertDrained(binding)
-    if (recoveredScopes.has(executionKey(binding)) && !await isRecoveryCurrent?.(binding)) throw notDrained('execution_recovery_lease_unverified')
-    return { drained: true, sessionBound: true, ...(isolationAuditRefs ? { isolationAuditRefs } : {}) }
+    if ((recoveredScopes.has(executionKey(binding)) || maintenanceDrainAudit) && !await isRecoveryCurrent?.(binding)) throw notDrained('execution_recovery_lease_unverified')
+    return { drained: true, sessionBound: true, ...(isolationAuditRefs ? { isolationAuditRefs } : {}), ...(maintenanceDrainAudit ? { maintenanceDrainAudit } : {}) }
   }
 
   return { run, cancel, async feedback(executionId) { const entry = entries.get(`task-execution:${executionId}`); if (entry) await deliverFeedback(entry) }, assertDrained, recoverDrained,

@@ -354,9 +354,14 @@ window.__ModuleLoader__.load({
           : '先解除网络、鉴权或其他阻塞；仅恢复原请求，不重做已完成效果。'),
         feedback ? React.createElement('div', { role: 'status', style: { marginTop: 3 } }, feedback) : null)
     }
+    const messageFailureHint = (code) => code === 'DYNAMIC_TASK_NOT_ACTIVE'
+      ? '关联任务已暂停或取消，补充尚未应用；恢复原任务后按当前版本重新判断。'
+      : code === 'DYNAMIC_OPERATION_UNRESOLVED' ? '原操作效果未知，需先核实；不得重放该操作。'
+        : '消息处理未完成，请核对原错误后恢复；已完成的动作不会重做。'
     const traceReason = (reason) => {
       if (!reason) return null
       const text = typeof reason === 'string' ? reason : JSON.stringify(reason)
+      if (['DYNAMIC_TASK_NOT_ACTIVE', 'DYNAMIC_OPERATION_UNRESOLVED'].includes(text)) return messageFailureHint(text)
       if (/MESSAGE_MODEL_CONTEXT_WINDOW_EXCEEDED/.test(text)) return '模型报告容量不足，已暂停处理；系统维护人员排查后继续，无需重复提交材料。'
       if (/MESSAGE_(?:CONTEXT|MATERIAL|REFERENCED_CANDIDATES)_CAPACITY|context_capacity_blocked/.test(text)) return '上下文容量受阻：必要材料未能完整提供，后续判断已停止。'
       return ({ LOCAL_ACCEPTANCE_CONFIG_REQUIRED: '尚未配置本地验收环境与固定验收命令，请补齐后继续', LOCAL_ACCEPTANCE_CRITERIA_REQUIRED: '缺少明确的业务验收条件，请补充预期结果', LOCAL_ACCEPTANCE_PLAN_INVALID: '验收方案未覆盖任务要求或包含无效用例，请修订方案', LOCAL_ACCEPTANCE_PENDING_RECONCILIATION: '上次本地验收结果待核对，暂停重试以避免重复写入共享 UAT 数据', LOCAL_ACCEPTANCE_FAILED: '本地业务验收未通过，请查看实际结果并修复', LOCAL_ACCEPTANCE_CLEANUP_UNCONFIRMED: '测试数据清理或本地服务停止尚未确认，后续提交已停止', LOCAL_ACCEPTANCE_RECEIPT_INVALID: '验收回执与当前代码或方案不一致，后续提交已停止', ENGINEERING_UAT_ENVIRONMENT_REQUIRED: '请明确指定 uat1～uat9 中的一个环境，不能默认选择', ENGINEERING_UAT_BRANCH_REQUIRED: '开发 PR 只能提交到明确指定的 UAT 分支，main 合并需独立上线任务', ENGINEERING_UAT_BRANCH_NOT_FOUND: '指定 UAT 环境对应的分支不存在，请核对', ENGINEERING_ACCEPTANCE_REQUIRED: '缺少业务验收用例与预期结果，后续提交已停止', ENGINEERING_ACCEPTANCE_FAILED: '业务验收未通过或未取得实际结果，后续提交已停止', ENGINEERING_VERIFICATION_FAILED: '构建检查未通过，后续步骤已停止' })[text] ?? text
@@ -1787,7 +1792,7 @@ const previousAuthorization=pageSnapshots.current.authorizations
             React.createElement('div', { 'aria-label': '处理结论与历时', style: { display: 'flex', gap: 12, minWidth: 0, marginTop: 4, height: 20, lineHeight: '20px', fontSize: 12, color: colors.muted } },
               React.createElement('span', { title: conclusion, tabIndex: 0, 'aria-label': conclusion, style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, conclusion),
               React.createElement('span', { title: '消息发生至本轮语义决策结束，不是业务执行耗时', style: { flex: '0 0 auto', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, ['processed', 'needs_clarification'].includes(workflowState) ? messageProcessingElapsed(message) : '—'))),
-          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, recovery && workflowState !== 'processed' ? React.createElement(MessageRecovery, { key: recovery.requestId, path: `/config/groups/${encodeURIComponent(selectedGroup.groupId)}/messages/${encodeURIComponent(message.messageId)}/retry`, body: recoveryBody, token: recovery.token, onChanged: refresh }) : workflowState === 'failed' ? React.createElement('div', { style: { marginTop: 6, fontSize: 11, color: colors.muted } }, '需先核实并解除原操作阻塞；未知效果不允许重放。') : null, messageFacts))
+          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, recovery && workflowState !== 'processed' ? React.createElement(MessageRecovery, { key: recovery.requestId, path: `/config/groups/${encodeURIComponent(selectedGroup.groupId)}/messages/${encodeURIComponent(message.messageId)}/retry`, body: recoveryBody, token: recovery.token, onChanged: refresh }) : workflowState === 'failed' ? React.createElement('div', { style: { marginTop: 6, fontSize: 11, color: colors.muted } }, messageFailureHint(message.processingFailureCode)) : null, messageFacts))
       })
       const outboxCollection=data?.groupCollections?.outbox
       const selectedOutbox=outboxCollection&&outboxCollection.groupId===selectedGroup?.groupId&&outboxCollection.filter===outboxStatusFilter?outboxCollection.items:[]
