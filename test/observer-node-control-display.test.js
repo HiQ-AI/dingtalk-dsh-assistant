@@ -34,6 +34,27 @@ function harness(componentName, initialProps = {}) {
 const button = (tree, label) => elements(tree).find(item => item.type === 'button' && text(item) === label)
 const input = (tree, label) => elements(tree).find(item => item.type === 'label' && item.children[0] === label)?.children.find(item => typeof item === 'object')
 
+test('execution card keeps a compact loading state and preserves visible records during slow refreshes', async () => {
+  const props = { task: { taskId: 'task', executionCount: 2 }, updatedAt: 'one', navigate() {} }
+  const h = harness('CardExecutionPage', props)
+  let tree = h.render()
+  const loading = elements(tree).find(item => item.props.role === 'status')
+  assert.equal(loading.props.style.fontSize, 11); assert.equal(loading.props['aria-label'], '正在加载执行会话')
+  assert.equal(tree.props.style.minHeight, 56); assert.doesNotMatch(text(tree), /正在读取执行记录/)
+  h.render({ ...props, updatedAt: 'two' }); h.render({ ...props, updatedAt: 'three' })
+  assert.equal(h.requests.length, 1, 'Updates share the in-flight summary request')
+  h.requests[0].resolve({ executions: [{ executionId: 'e', sessionId: 's', title: '验收记录', status: 'succeeded' }], total: 1, nextOffset: null }); await settle()
+  tree = h.render({ ...props, updatedAt: 'four' })
+  assert.match(text(tree), /验收记录/); assert.equal(h.requests.length, 2)
+  assert.equal(elements(tree).filter(item => item.props.role === 'status').length, 0, 'A refresh keeps the loaded content')
+  h.render({ ...props, task: { taskId: 'other', executionCount: 1 }, updatedAt: 'four' })
+  assert.equal(h.requests[1].options.signal.aborted, true)
+  h.requests[1].resolve({ executions: [{ title: '迟到的旧任务' }], total: 1 }); await settle()
+  tree = h.render({ ...props, task: { taskId: 'other', executionCount: 1 }, updatedAt: 'four' })
+  assert.doesNotMatch(text(tree), /迟到的旧任务|验收记录/)
+  h.unmount()
+})
+
 const workFixture = (id, overrides = {}) => ({ id, kind: 'schedule', groupId: 'g', title: `安排 ${id}`, updatedAt: '2026-10-25T00:00:00Z', result: { code: 'delivery_failed', label: '提醒发送失败', tone: 'danger' }, plan: { label: '单次计划已启用', state: 'active', rule: { kind: 'once', at: '2026-10-25T00:00:00Z' }, timezone: 'Asia/Shanghai' }, nextStep: { label: '无后续触发安排；无重试安排', triggerAt: null, sendRetryAt: null, readbackAt: null }, ...overrides })
 const detailFixture = (work, overrides = {}) => ({ work, members: [], history: { sources: [], changes: [], occurrences: [], jobs: [] }, observedAt: '2026-10-25T00:00:00Z', ...overrides })
 const relationFixture = (overrides = {}) => ({ id: 'relation-b', instructionId: 'i-b', coordinationId: 'coord', condition: 'all', target: { taskId: 'task-b', title: '后续任务' }, prerequisites: [{ instructionId: 'i-a', taskId: 'task-a', title: '前置任务', fulfilled: false, state: 'observing', reason: '等待前置正式完成' }], state: 'waiting', dispatch: { status: 'waiting', receipt: 'absent', reason: '前置尚未满足', nextStep: '等待前置任务完成后调度后续任务' }, trigger: null, ...overrides })
@@ -110,7 +131,8 @@ test('混排记录分页经过普通决定仍可续读，失败保留、重试�
   assert.match(h.requests[0].url, /\/decisions\?limit=20$/)
   h.requests[0].resolve({ decisions: [{ id: 'ordinary', triggers: [], decision: { summary: '不能混入' } }], nextBefore: 10 }); await settle()
   tree = h.render(); assert.doesNotMatch(text(tree), /不能混入/); assert.match(text(tree), /还有更早/)
-  button(tree, '读取更早记录').props.onClick(); button(tree, '读取更早记录').props.onClick(); h.render()
+  assert.equal(button(tree, '读取更早记录'), undefined)
+  button(tree, '展开更早记录').props.onClick(); button(tree, '展开更早记录').props.onClick(); h.render()
   assert.equal(h.requests.length, 2); assert.match(h.requests[1].url, /before=10/)
   h.requests[1].reject(new Error('offline')); await settle(); tree = h.render()
   assert.match(text(tree), /已有成果/); assert.match(text(tree), /未全部读取/)
@@ -120,11 +142,35 @@ test('混排记录分页经过普通决定仍可续读，失败保留、重试�
   h.requests[2].resolve({ decisions: [review, review], nextBefore: null }); await settle(); tree = h.render()
   assert.equal(text(tree).split('无新动作，继续等待').length - 1, 1)
   assert.match(text(tree), /统筹巡查/); assert.match(text(tree), /阶段成果/)
-  assert.equal(button(tree, '读取更早记录'), undefined)
+  assert.equal(button(tree, '展开更早记录'), undefined)
   button(tree, '刷新记录').props.onClick(); h.render(); h.unmount()
   assert.equal(h.requests[3].options.signal.aborted, true)
   h.requests[3].resolve({ decisions: [{ ...review, decision: { summary: '过期响应' } }], nextBefore: null }); await settle()
   assert.doesNotMatch(text(h.render()), /过期响应/)
+})
+
+test('成果与巡查保留主要结论，依据限制产物使用默认关闭的原生详情', async () => {
+  const timeline = { executions: [{ id: 'e', conclusions: [{ id: 'final', summary: '主要完成结论',
+    evidence: ['https://example.com/evidence'], limitations: ['仅本轮核对'], artifacts: ['result.md'] }],
+    milestones: [{ id: 'stage', summary: '主要阶段成果', evidence: ['阶段依据'], activity: '验证中' },
+      { id: 'empty', summary: '没有附加明细的成果' }] }] }
+  const h = harness('TaskOutcomeRecords', { taskId: 't', timeline })
+  h.render(); h.requests[0].resolve({ decisions: [{ id: 'review', triggers: [{ kind: 'execution.progress.review' }],
+    decision: { summary: '主要巡查结论', action: 'wait', evidence: ['巡查依据'], limitations: ['尚未验收'] } }], nextBefore: null })
+  await settle()
+  const tree = h.render(), disclosures = elements(tree).filter(node => node.type === 'details')
+  assert.equal(disclosures.length, 3, '无明细的成果不增加空折叠入口')
+  for (const detail of disclosures) {
+    assert.equal(detail.props.open, undefined)
+    assert.equal(detail.children[0].type, 'summary')
+    assert.equal(text(detail.children[0]), '依据、限制与产物')
+    assert.doesNotMatch(text(detail), /主要完成结论|主要阶段成果|主要巡查结论|处理决定/)
+  }
+  assert.match(text(tree), /主要完成结论/); assert.match(text(tree), /主要巡查结论/)
+  assert.match(text(tree), /报告时活动：/); assert.match(text(tree), /继续等待/)
+  assert.ok(disclosures.some(detail => /result.md/.test(text(detail)) && /仅本轮核对/.test(text(detail))))
+  assert.ok(elements(tree).some(node => node.type === 'a' && node.props.href === 'https://example.com/evidence'))
+  h.unmount()
 })
 
 test('时间泳道图保留多区段、并行、人工介入底行以及触屏可读的完整明细', () => {
@@ -817,11 +863,15 @@ test('三类记录统一取最新十条，展开刷新及续页保留、切任�
   assert.match(text(rows(tree)[1]), /统筹巡查/)
   assert.doesNotMatch(text(tree), /阶段0/)
   assert.match(text(tree), /还有更早的统筹决定/)
-  assert.ok(button(tree, '读取更早记录'))
+  assert.equal(button(tree, '读取更早记录'), undefined)
+  assert.equal(elements(tree).filter(item => item.type === 'button' && text(item).startsWith('展开更早记录')).length, 1)
   button(tree, '展开更早记录（1 条）').props.onClick(); tree = h.render()
   assert.equal(rows(tree).length, 11)
+  assert.equal(h.requests.length, 1, '先展开已加载的记录，不重复请求最近页')
   assert.equal(button(tree, '收起更早记录').props['aria-expanded'], true)
-  button(tree, '读取更早记录').props.onClick(); h.render()
+  button(tree, '展开更早记录').props.onClick(); button(tree, '展开更早记录').props.onClick(); h.render()
+  assert.equal(h.requests.length, 2, '单一展开入口继续按游标读下一页，重复点击不并发读取')
+  assert.match(h.requests[1].url, /limit=20&before=20/)
   const older = { ...review, id: 'older', recordedAt: at(-1), decision: { summary: '更早巡查' } }
   h.requests[1].resolve({ decisions: [older], nextBefore: 5 }); await settle(); tree = h.render()
   assert.equal(rows(tree).length, 12)

@@ -9,7 +9,14 @@ function harness() {
   let module
   const boundaries = new Map(), entries = [], calls = [], addresses = new Map()
   // Expose the closure's existing close action without changing the shipped module.
-  runInNewContext(source.replace('return module.exports', 'return { ...module.exports, close: () => setOpen(false) }'), {
+  const navigation = source.slice(source.indexOf('      const navigate = async'), source.indexOf('      const copyId = async'))
+  runInNewContext(source.replace('return module.exports', `return { ...module.exports, close: () => setOpen(false),
+    navigationHarness: (openSession, trace) => {
+      const setNavigationError = value => trace.push(['error', value]), setNavigatingSessionId = () => {},
+        setSelectedTaskId = value => trace.push(['task', value]), setActivePage = value => { sessionNavigationVersion++; trace.push(['page', value]) };
+      ${navigation}
+      return { navigate, openTask, returnFromTask };
+    } }`), {
     document: { querySelector: () => null },
     window: { __ModuleLoader__: { load: options => { module = options.factory(() => ({})) } } },
   })
@@ -94,4 +101,39 @@ test('alpha.2 observer propagates discovery failures without navigating to the w
   await assert.rejects(h.content()[0].options.inject().openSession('child', 'parent'), /projection unavailable/)
   assert.deepEqual(h.calls, [])
   assert.equal(h.content().length, 1)
+})
+
+test('late session discovery cannot leave a newly opened task, returned board, or reopened observer', async () => {
+  for (const change of ['task', 'back', 'reopen']) for (const child of [false, true]) {
+    const h = harness(), trace = []
+    h.mount('main.conversation'); h.open(); h.calls.length = 0
+    let resolve
+    h.ctx.sessions[child ? 'refreshProjections' : 'refresh'] = () => new Promise(yes => { resolve = yes })
+    const nav = h.module.navigationHarness(h.content()[0].options.inject().openSession, trace)
+    const pending = nav.navigate('old-session', child ? 'old-parent' : undefined)
+    if (change === 'task') nav.openTask({ taskId: 'new-task' })
+    else if (change === 'back') nav.returnFromTask()
+    else h.open()
+    if (child) h.addresses.set('old-session', { parentSessionId: 'old-parent', childSessionId: 'old-session' })
+    resolve(); await pending
+    assert.equal(h.calls.some(call => call[0] === 'openSession'), false, `${change}/${child}`)
+    assert.equal(h.content().length, 1, '取消的导航不得卸载看板或任务详情')
+    assert.equal(trace.some(([kind, value]) => kind === 'error' && value), false)
+    h.ctx.sessions.refresh = async () => {}
+    await nav.navigate('explicit-session')
+    assert.ok(h.calls.some(call => call[0] === 'openSession' && call[1] === 'explicit-session'))
+    assert.equal(h.content().length, 0, '仍可通过明确会话入口离开看板')
+  }
+})
+
+test('a superseded session request cannot overwrite the latest explicit session or surface its late failure', async () => {
+  const h = harness(), trace = [], pending = []
+  h.mount('main.conversation'); h.open(); h.calls.length = 0
+  h.ctx.sessions.refresh = () => new Promise((resolve, reject) => pending.push({ resolve, reject }))
+  const nav = h.module.navigationHarness(h.content()[0].options.inject().openSession, trace)
+  const old = nav.navigate('old'), latest = nav.navigate('latest')
+  pending[1].resolve(); await latest
+  pending[0].reject(new Error('late failure')); await old
+  assert.deepEqual(h.calls, [['openSession', 'latest']])
+  assert.equal(trace.some(([kind, value]) => kind === 'error' && value), false)
 })

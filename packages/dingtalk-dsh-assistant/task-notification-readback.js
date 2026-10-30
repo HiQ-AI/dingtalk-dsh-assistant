@@ -25,7 +25,8 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
     atOpenDingTalkIds: [], mentionVerification: 'unavailable', observedAt: new Date().toISOString(),
   }
   const quote = observed.quotedMessage
-  if (quote?.messageId !== payload.sourceMessageId || quote?.conversationId !== payload.conversationId) return undefined
+  if (payload.sourceMessageId ? quote?.messageId !== payload.sourceMessageId || quote?.conversationId !== payload.conversationId
+    : quote != null) return undefined
   const expected = payload.atOpenDingTalkIds ?? []
   // userId 与 openDingTalkId 不是同一身份类型，不能据前者宣称原生提及已核验。
   const actual = observed.atOpenDingTalkIds ?? observed.at?.atOpenDingTalkIds
@@ -40,10 +41,10 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
   // 这不证明 @ 已核验；历史匹配仍须提供原生 @，显式错误的 @ 始终拒绝。
   const unavailableMention = expected.length > 0 && actual === undefined
   if (expected.length && (unavailableMention ? !(exactReceipt && sendStatusConfirmed && ownSender)
-    : !Array.isArray(actual) || expected.some(id => !actual.includes(id)))) return undefined
+    : !Array.isArray(actual) || expected.some(id => !actual.includes(id)) || actual.some(id => !expected.includes(id)))) return undefined
   if (!exactReceipt && !exactUuid && !ownSender) return undefined
   if (!sameDeliveredText(observed.text, payload.text, quote)) return undefined
-  return { messageId, conversationId: payload.conversationId, quoteMessageId: quote.messageId,
+  return { messageId, conversationId: payload.conversationId, ...(quote ? { quoteMessageId: quote.messageId } : {}),
     ...(Number.isFinite(sentTime) ? { sentAt: new Date(sentTime).toISOString() } : {}),
     atOpenDingTalkIds: unavailableMention ? [] : [...expected], mentionVerification: unavailableMention ? 'unavailable' : 'verified',
     identity: exactReceipt ? 'send-receipt' : exactUuid ? 'idempotency-key' : 'configured-sender', observedAt: new Date().toISOString() }

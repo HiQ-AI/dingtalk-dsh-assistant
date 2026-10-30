@@ -239,7 +239,8 @@ export function topicTaskCalls(request, { title = '原消息交办', objective }
   if (input.trigger === 'task-facts') return [{ name: 'group_decision_submit', args: {
     requestId: input.requestId, topicId: input.topicId, revision: input.revision,
     decision: { actions: [], topicUpdate: { summary: input.facts.map(fact => fact.summary).join('\n') },
-      ...(input.facts.some(fact => fact.audience !== 'operator') ? { reply: input.facts.filter(fact => fact.audience !== 'operator').map(fact => fact.question || fact.summary).join('\n') } : {}), reason: '任务新增了可向用户说明的结果。' },
+      ...(input.facts.some(fact => fact.audience !== 'operator') ? { reply: input.facts.filter(fact => fact.audience !== 'operator').map(fact => fact.question || fact.summary).join('\n'),
+        replyToMessageId: input.sources.at(-1).messageId, atOpenDingTalkIds: [input.sources.at(-1).actorId] } : {}), reason: '任务新增了可向用户说明的结果。' },
   } }]
   if (input.requestId?.startsWith('coord-summary-')) return [{ name: 'group_topic_summary_submit', args: {
     requestId: input.requestId, topicId: input.topicId, summary: title,

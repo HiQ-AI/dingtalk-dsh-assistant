@@ -17,6 +17,7 @@ window.__ModuleLoader__.load({
       warning: 'var(--dsw-alias-state-warn-primary, #a56500)'
     }
     let open = false
+    let sessionNavigationVersion = 0
     let selectedSessionSnapshot
     const openListeners = new Set()
     const clearSessionSelection = () => {
@@ -36,6 +37,7 @@ window.__ModuleLoader__.load({
       for (const name of snapshot.selectedClasses) snapshot.element.classList.add(name)
     }
     const setOpen = (value) => {
+      sessionNavigationVersion++
       if (value === open) return
       if (value) clearSessionSelection()
       else restoreSessionSelection()
@@ -1212,9 +1214,15 @@ window.__ModuleLoader__.load({
         }, cause => { if (active) setError(cause.message) }).finally(() => { if (active) { pending.current = false; setLoading(false) } })
         return () => { active = false; controller.abort() }
       }, [taskId, readonly, request])
-      const load = before => { if (!pending.current) { pending.current = true; setRequest(previous => ({ before, retainHistory: expanded, revision: previous.revision + 1 })) } }
+      const load = (before, retainHistory = expanded) => { if (!pending.current) { pending.current = true; setRequest(previous => ({ before, retainHistory, revision: previous.revision + 1 })) } }
       const records = taskOutcomeRecords(timeline, page.decisions)
       const visibleRecords = expanded ? records : records.slice(0, 10)
+      const hasMore = !readonly && page.nextBefore !== null
+      const expandEarlier = () => {
+        if (pending.current) return
+        setExpanded(true)
+        if (hasMore && (expanded || records.length <= 10)) load(page.nextBefore, true)
+      }
       const actions = { wait: '继续等待', blocked: '需要介入', complete: '提交完成判断' }
       return React.createElement('div', { className: 'timeline-outcomes', 'aria-label': '阶段成果与统筹巡查' },
         React.createElement('div', { className: 'detail-section-heading' }, React.createElement('h3', null, '阶段成果与统筹巡查'),
@@ -1228,12 +1236,14 @@ window.__ModuleLoader__.load({
           React.createElement('p', null, ...linkedTaskText(item.summary)),
           item.activity ? React.createElement('p', { className: 'detail-muted' }, '报告时活动：', ...linkedTaskText(item.activity)) : null,
           item.action ? React.createElement('p', { className: 'detail-muted' }, `处理决定：${actions[item.action] || item.action}`) : null,
-          ...(item.evidence || []).map((value, index) => React.createElement('p', { key: `e:${index}` }, '依据：', ...linkedTaskText(value))),
-          ...(item.limitations || []).map((value, index) => React.createElement('p', { key: `l:${index}` }, '限制：', ...linkedTaskText(value))),
-          ...(item.artifacts || []).map((value, index) => React.createElement('p', { key: `a:${index}` }, '产物：', ...linkedTaskText(value))))))
+          [item.evidence, item.limitations, item.artifacts].some(values => values?.length) ? React.createElement('details', { className: 'detail-disclosure timeline-details' },
+            React.createElement('summary', null, '依据、限制与产物'),
+            ...(item.evidence || []).map((value, index) => React.createElement('p', { key: `e:${index}` }, '依据：', ...linkedTaskText(value))),
+            ...(item.limitations || []).map((value, index) => React.createElement('p', { key: `l:${index}` }, '限制：', ...linkedTaskText(value))),
+            ...(item.artifacts || []).map((value, index) => React.createElement('p', { key: `a:${index}` }, '产物：', ...linkedTaskText(value)))) : null)))
           : React.createElement('p', { className: 'detail-muted' }, readonly ? '历史记录未提供阶段成果、执行完成结论与巡查结论。' : page.loaded ? '已加载范围内暂无阶段成果或巡查结论，也无执行完成结论。' : '阶段成果、执行完成结论与巡查结论尚未完整读取。'),
-        records.length > 10 ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', 'aria-expanded': expanded, onClick: () => setExpanded(value => !value) }, expanded ? '收起更早记录' : `展开更早记录（${records.length - 10} 条）`) : null,
-        !readonly && page.nextBefore !== null ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', disabled: loading, onClick: () => load(page.nextBefore) }, '读取更早记录') : null)
+        !expanded && records.length > 10 || hasMore ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', 'aria-expanded': expanded, disabled: loading, onClick: expandEarlier }, !expanded && records.length > 10 ? `展开更早记录（${records.length - 10} 条）` : '展开更早记录') : null,
+        expanded && records.length > 10 ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', 'aria-expanded': true, onClick: () => setExpanded(false) }, '收起更早记录') : null)
     }
     function TaskExecutionTimeline({ timeline, taskId, readonly = false }) {
       const [now, setNow] = useState(Date.now)
@@ -1593,9 +1603,9 @@ window.__ModuleLoader__.load({
       },[task.taskId,offset,updatedAt,retry])
       const visiblePage = page?.key === pageKey ? page : undefined
       const sessions = visiblePage?.executions || [], session = taskSession(task)
-      return React.createElement(React.Fragment,null,
-        error ? React.createElement('p',{role:'alert'},`读取执行记录失败：${error}`, React.createElement(Button,{type:'button',variant:'outline',size:'sm',onClick:()=>setRetry(value=>value+1)},'重试')) : !visiblePage ? React.createElement('p',{role:'status'},'正在读取执行记录…') : null,
-        visiblePage && !sessions.length ? React.createElement('p',{role:'status'},'暂无执行记录') : null,
+      return React.createElement('div', { 'aria-busy': !visiblePage && !error, style: { minHeight: Math.max(1, Math.min(10, Number(task.executionCount) || sessions.length)) * 28, fontSize: 11 } },
+        error ? React.createElement('p',{role:'alert',style:{margin:'6px 0',color:colors.danger}},`读取执行记录失败：${error}`, React.createElement(Button,{type:'button',variant:'outline',size:'sm',onClick:()=>setRetry(value=>value+1)},'重试')) : !visiblePage ? React.createElement('span',{role:'status','aria-label':'正在加载执行会话',style:{display:'inline-flex',alignItems:'center',gap:6,minHeight:28,color:colors.muted,fontSize:11}},React.createElement(StateDot,{state:'ongoing',size:7}),'加载中') : null,
+        visiblePage && !sessions.length ? React.createElement('p',{role:'status',style:{margin:'6px 0',color:colors.muted}},'暂无执行记录') : null,
         React.createElement('div', { style: { display: 'grid', gap: 2, paddingTop: 6 } }, ...sessions.map(execution => {
               const done = ['succeeded', 'completed'].includes(execution.status)
               const running = execution.status === 'running'
@@ -1619,6 +1629,8 @@ window.__ModuleLoader__.load({
     function ObserverContent({ openSession }) {
       const [activePage, updateActivePage] = useState(readActivePage)
       const setActivePage = useCallback(page => {
+        sessionNavigationVersion++
+        setNavigatingSessionId('')
         updateActivePage(page)
         // 导航属于看板，不能随宿主 conversation 插槽重挂载而丢失。
         try { window.sessionStorage.setItem(activePageStorageKey, page) }
@@ -1756,7 +1768,7 @@ const previousAuthorization=pageSnapshots.current.authorizations
           if (event.target instanceof Element && event.target.closest('[role="treeitem"]')) setOpen(false)
         }
         document.addEventListener('click', closeForSession, true)
-        return () => document.removeEventListener('click', closeForSession, true)
+        return () => { sessionNavigationVersion++; document.removeEventListener('click', closeForSession, true) }
       }, [])
       useEffect(()=>{
         const identity=authorizationIdentity.current
@@ -1769,12 +1781,17 @@ const previousAuthorization=pageSnapshots.current.authorizations
       const tasksById = new Map((data?.tasks || []).map(task => [task.taskId, task]))
       const topicsById = new Map((data?.topics || []).map((topic) => [`${topic.groupId}:${topic.topicId}`, topic]))
       const navigate = async (sessionId, parentSessionId) => {
-        try { setNavigationError(undefined); setNavigatingSessionId(sessionId); await openSession(sessionId, parentSessionId); setOpen(false) }
-        catch (cause) { setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
-        finally { setNavigatingSessionId('') }
+        const version = ++sessionNavigationVersion
+        const isCurrent = () => open && version === sessionNavigationVersion
+        try {
+          setNavigationError(undefined); setNavigatingSessionId(sessionId)
+          await openSession(sessionId, parentSessionId, { isCurrent })
+          if (isCurrent()) setOpen(false)
+        } catch (cause) { if (isCurrent()) setNavigationError(cause instanceof Error ? cause.message : String(cause)) }
+        finally { if (version === sessionNavigationVersion || !open) setNavigatingSessionId('') }
       }
       const openTask = task => { setSelectedTaskId(task.taskId); setActivePage('tasks') }
-      const returnFromTask = () => setSelectedTaskId('')
+      const returnFromTask = () => { sessionNavigationVersion++; setNavigatingSessionId(''); setSelectedTaskId('') }
       const copyId = async (value) => {
         let copied = false
         try {
@@ -1887,12 +1904,12 @@ const previousAuthorization=pageSnapshots.current.authorizations
       const renderTaskCard = task => {
         const sourceGroup = groupsById.get(task.sourceGroupId || task.groupId)
         const groupLabel = sourceGroup?.name || (task.groupId?.startsWith('web:') ? 'Web 任务' : task.groupId) || '未关联群聊'
-        const session = taskSession(task)
+        const historical = task.legacyReadonly || task.archivedAt
         const hovered = hoveredTaskId === task.taskId
         const queued = task.state === 'queued'
-        const sessions = task.executionSessions || []
-        const completedSessions = task.completedExecutionCount ?? sessions.filter(item => ['succeeded', 'completed'].includes(item.status)).length
-        const sessionCount = task.executionCount ?? sessions.length
+        const sessions = historical ? [] : task.executionSessions || []
+        const completedSessions = historical ? 0 : task.completedExecutionCount ?? sessions.filter(item => ['succeeded', 'completed'].includes(item.status)).length
+        const sessionCount = historical ? 0 : task.executionCount ?? sessions.length
         const displayObjective = String(task.objective || '').startsWith('[TASK_SOURCE_EVIDENCE]') ? (task.title || task.objective) : task.objective
         return React.createElement('article', { key: task.taskId, onClick: event => { if (!event.target.closest('button, summary, details')) openTask(task) }, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
           React.createElement('button', { type: 'button', onClick: () => openTask(task), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', textAlign: 'left', display: 'grid', gap: 6, fontFamily: 'inherit' } },
@@ -1902,12 +1919,12 @@ const previousAuthorization=pageSnapshots.current.authorizations
             task.legacyReadonly ? React.createElement('span', { style: { color: colors.muted, fontSize: 10.5, whiteSpace: 'nowrap' } }, '历史只读') : null,
             ...(task.topicRefs || []).map(ref => {
               const groupId = ref.groupId || task.sourceGroupId || task.groupId
-              const label = topicsById.get(`${groupId}:${ref.topicId}`)?.title || ref.title || `话题 ${short(ref.topicId)}`
-              return React.createElement('button', { key: ref.topicId, type: 'button', title: label, 'aria-label': `话题 ${label}`, onClick: event => { event.stopPropagation(); setTopicTarget({ groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', border: 0, fontFamily: 'inherit', flex: '0 1 auto', minWidth: 0, maxWidth: 96, padding: '2px 7px', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' } }, label)
+              const label = ref.title || topicsById.get(`${groupId}:${ref.topicId}`)?.title || '话题名称未记录'
+              return React.createElement('button', { key: `${groupId}:${ref.topicId}`, type: 'button', title: label, 'aria-label': `话题 ${label}`, onClick: event => { event.stopPropagation(); setTopicTarget({ groupId, topicId: ref.topicId, revision: ref.revision }); setActivePage('topics') }, style: { ...pill(colors.accent), display: 'inline-block', border: 0, fontFamily: 'inherit', flex: '0 1 auto', minWidth: 0, maxWidth: 96, padding: '2px 7px', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' } }, label)
             })),
           React.createElement('button', { type: 'button', title: displayObjective, 'aria-label': '查看完整任务目标', onClick: () => openTask(task), style: { border: 0, padding: 0, background: 'transparent', color: 'inherit', textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer', minWidth: 0, display: 'block', maxHeight: '4.5em', overflow: 'hidden', overflowWrap: 'anywhere', fontSize: 11, lineHeight: 1.5 } },
             React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, style: { display: 'inline-block', verticalAlign: -2, marginRight: 5, color: colors.muted } }, React.createElement('circle', { cx: 8, cy: 8, r: 5.5 }), React.createElement('circle', { cx: 8, cy: 8, r: 2 }), React.createElement('path', { d: 'M8 1v2M15 8h-2' })), displayObjective),
-          !task.legacyReadonly && sessionCount ? React.createElement('details', { className: 'observer-card-sessions', open: expandedTaskId === task.taskId, 'aria-label': '全部执行会话', style: { minWidth: 0, padding: '8px 9px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2 } },
+          !historical && sessionCount ? React.createElement('details', { className: 'observer-card-sessions', open: expandedTaskId === task.taskId, 'aria-label': '全部执行会话', style: { minWidth: 0, padding: '8px 9px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2 } },
             React.createElement('summary', { onClick: event => { event.preventDefault(); event.stopPropagation(); setExpandedTaskId(id => id === task.taskId ? '' : task.taskId) }, style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer', fontSize: 11, color: colors.muted, listStyle: 'none' } },
               React.createElement('svg', { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, 'aria-hidden': true }, React.createElement('path', { d: 'M2 3h2v2H2zM6 4h8M2 7h2v2H2zM6 8h8M2 11h2v2H2zM6 12h8' })),
               React.createElement('span', null, '执行会话'),
@@ -2090,14 +2107,15 @@ const previousAuthorization=pageSnapshots.current.authorizations
         let disposeContent
         const syncContent = (visible) => {
           if (visible && !disposeContent) {
-            disposeContent = ctx.slots.register({ name: 'main.conversation', priority: -10, inject: () => ({ openSession: async (sessionId, parentSessionId) => {
+            disposeContent = ctx.slots.register({ name: 'main.conversation', priority: -10, inject: () => ({ openSession: async (sessionId, parentSessionId, { isCurrent = () => true } = {}) => {
+              if (!isCurrent()) return
               if (parentSessionId) {
                 let address = ctx.sessions.subagentAddress(sessionId)
-                if (!address) { await ctx.sessions.refreshProjections(parentSessionId); address = ctx.sessions.subagentAddress(sessionId) }
+                if (!address) { await ctx.sessions.refreshProjections(parentSessionId); if (!isCurrent()) return; address = ctx.sessions.subagentAddress(sessionId) }
                 if (address) { ctx.uiWorkspace.openSession(address); return }
               }
               await ctx.sessions.refresh()
-              ctx.uiWorkspace.openSession(sessionId)
+              if (isCurrent()) ctx.uiWorkspace.openSession(sessionId)
             } }) }, ObserverContent)
           } else if (!visible && disposeContent) {
             disposeContent()
