@@ -91,5 +91,6 @@ Observer 依执行记录的 executionBackend 决定会话入口，缺失按历�
 
 合成 React 宿主浏览器验证只能证明页面请求和交互；真实 DSH 宿主、安装版本及真实库性能须另验。逐入口实现、读取边界与限制见 docs/spec/observer-pagination-coverage.md。
 任务卡片执行会话加载只占轻量状态行并保持面板高度；刷新保留现有结果，同一摘要请求未结束时不并发重复读取。切换任务中止旧请求，迟到响应不能显示在新任务上。错误保留原内容和重试入口。
+历史任务沿用 `legacyReadonly || archivedAt` 分类：卡片不渲染执行会话区、不挂载执行列表或发起执行摘要请求；历史列表不统计执行数量或构造会话导航。分页、任务详情入口及详情内按页读取执行记录保留；未归档的当前任务（含等待、已结束）保持既有执行区。
 
 Coordinator trace 的 unit 有独立unitCursor/pageRevision和总数/完整性，SQL先排除superseded再取页。超过100个有效unit必须显示续读控件，不能借trace事件nextCursor=null暗示证据完整；跨消息/事件和409重置独立游标。

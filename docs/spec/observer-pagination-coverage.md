@@ -6,7 +6,7 @@
 
 | 页面/集合 | 实际读取边界 | 验证 |
 |---|---|---|
-| 任务列、归档、主题关联任务 | observer_task_index/observer_task_topics 计数与排序；MATERIALIZED 页内 ID 后读取任务正文；移除 dialogue；每页默认 10/20/10 | 1000 条合成任务、稳定同时间排序、跨页修改拒绝、归档/取消/人工等待/执行状态触发器、SQL covering count |
+| 任务列、归档、主题关联任务 | observer_task_index/observer_task_topics 计数与排序；MATERIALIZED 页内 ID 后读取任务正文；移除 dialogue；归档页不统计执行数量，混合页只统计未归档项；每页默认 10/20/10 | 1000 条合成任务、稳定同时间排序、跨页修改拒绝、归档/取消/人工等待/执行状态触发器、SQL covering count、归档页禁止读取执行索引而详情仍按页可达 |
 | 卡片执行历史 | observer_execution_index 顺序+ID；先页内 ID 后提取摘要，不返回 prompt/result | 22 条选择末页；真实卡片下一页浏览器交互 |
 | 群消息 | 持久 SQLite 展示行；SQL WHERE/ORDER BY/LIMIT/OFFSET，GET 不查询来源/日志/决策历史；提交后更新相关 message IDs | 1000 条 SQL 分页与状态筛选、单条增量、重启持久性、失败对账、过期页拒绝 |
 | outbox | 独立 ID/状态索引，选页后返回；不查询群消息 source 表 | 125 条分页；服务端分类与原 UI 多组合语义一致 |

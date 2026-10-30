@@ -33,12 +33,16 @@ test('执行行仅使用最新轮次投影，运行时更新、结束固定，�
  const nodes = flatten(card({ taskId: 't', title: '任务', executionSessions: [{ executionId: 'e', sessionId: 's', latestRoundTiming: timing, runTiming: { elapsedMs: 99999 } }] }).tree)
  assert.ok(nodes.some(node => node.props.timing === timing), 'card wires latest round, not accumulated runTiming')
 })
-function card(task) {
- const actions = []
+function card(task, {runEffects=false} = {}) {
+ const actions = [], effects = [], requests = []
+ let executionMounts = 0
  const render = runInNewContext(`(()=>{${durationComponent}\n${source.slice(source.indexOf('    function CardExecutionPage('),source.indexOf('    function ObserverContent('))}\n${source.slice(source.indexOf('      const renderTaskCard ='), source.indexOf('      const alertCategories ='))};return renderTaskCard})()`, {
-  expandedTaskId:task.taskId,setExpandedTaskId(){},updatedAt:0,useEffect(){},useState:initial=>[initial===undefined?{executions:(task.executionSessions||[]).slice(0,10),total:task.executionCount??task.executionSessions?.length??0,nextOffset:(task.executionSessions?.length||0)>10?10:null}:initial, value=>actions.push(['page',value])],Button:'button',archivingIds:[],archiveTask:task=>actions.push(['archive',task.taskId]),copyButton:(id,label)=>({type:'button',props:{onClick:()=>actions.push(['copy',id])},children:[`复制${label}`]}),React: {createElement:(type, props,...children)=>typeof type==='function'&&type.name==='CardExecutionPage'?type(props||{}):({type,props:props||{},children:children.flat()})}, groupsById:new Map([['g',{name:'运维群'}]]),topicsById:new Map([['g:topic',{title:'服务上线'}]]), taskSession:task=>task.session||{},hoveredTaskId:'',setHoveredTaskId(){},colors:{border:'gray',cardSurface:'white',muted:'gray',accent:'blue',warning:'orange'},pill:()=>({}),taskDisplayTitle:task=>task.title,short:value=>value.slice(0,14),taskStateTone:()=> 'ongoing',taskStateLabel:state=>state,StateDot:'dot',fmt:value=>value,
+  expandedTaskId:task.taskId,setExpandedTaskId(){},updatedAt:0,useEffect:fn=>{if(runEffects)effects.push(fn)},useRef:()=>({current:undefined}),AbortController,get:url=>{requests.push(url);return new Promise(()=>{})},useState:initial=>[initial===undefined?{key:`${task.taskId}:0`,executions:(task.executionSessions||[]).slice(0,10),total:task.executionCount??task.executionSessions?.length??0,nextOffset:(task.executionSessions?.length||0)>10?10:null}:initial, value=>actions.push(['page',value])],Button:'button',archivingIds:[],archiveTask:task=>actions.push(['archive',task.taskId]),copyButton:(id,label)=>({type:'button',props:{onClick:()=>actions.push(['copy',id])},children:[`复制${label}`]}),React: {createElement:(type, props,...children)=>typeof type==='function'&&type.name==='CardExecutionPage'?(executionMounts++,type(props||{})):({type,props:props||{},children:children.flat()})}, groupsById:new Map([['g',{name:'运维群'}]]),topicsById:new Map([['g:topic',{title:'服务上线'}]]), taskSession:task=>task.session||{},hoveredTaskId:'',setHoveredTaskId(){},colors:{border:'gray',cardSurface:'white',muted:'gray',accent:'blue',warning:'orange'},pill:()=>({}),taskDisplayTitle:task=>task.title,short:value=>value.slice(0,14),taskStateTone:()=> 'ongoing',taskStateLabel:state=>state,StateDot:'dot',fmt:value=>value,
   navigatingSessionId:'',navigate:(id,parent)=>actions.push(['session',id,parent]), statusTag:(label)=>({type:'span',props:{},children:[label]}),openTask:task=>actions.push(['task',task.taskId]),setTopicTarget:value=>actions.push(['topic',value.topicId]),setActivePage:value=>actions.push(['page',value])
- }); return {tree:render(task),actions}
+ });
+ const tree=render(task)
+ for(const effect of effects)effect()
+ return {tree,actions,requests,executionMounts}
 }
 
 test('只有已结束桶的未归档当前任务显示归档按钮',()=>{
@@ -68,6 +72,25 @@ test('历史卡片保留只读状态，不恢复旧归档或工作流写入口',
  assert.match(source,/repeat\(4, minmax\(300px, 1fr\)\)/)
  assert.match(source,/padding: '8px 4px'/)
  assert.match(source,/overflowY: 'auto', scrollbarWidth: 'none'/)
+})
+test('历史卡片不挂载或请求执行会话，仍可打开任务详情；当前任务保持执行入口',()=>{
+ for(const history of [{archivedAt:'time'},{legacyReadonly:true}]) {
+  const result=card({taskId:'history',title:'历史事项',state:'completed',...history,
+   get executionSessions(){throw new Error('history card must not read sessions')},
+   get executionCount(){throw new Error('history card must not read session counts')},
+   get completedExecutionCount(){throw new Error('history card must not read completed counts')},
+   get session(){throw new Error('history card must not read session navigation')}}, {runEffects:true})
+  assert.equal(result.executionMounts,0);assert.deepEqual(result.requests,[])
+  assert.equal(flatten(result.tree).some(node=>node.props['aria-label']==='全部执行会话'),false)
+  flatten(result.tree).find(node=>node.type==='button'&&node.children.some(child=>child?.type==='strong')).props.onClick()
+  assert.deepEqual(result.actions,[['task','history']])
+ }
+ for(const state of ['running','waiting','completed']) {
+  const result=card({taskId:'current',title:'当前事项',state,executionCount:1,executionSessions:[{executionId:'e',sessionId:'s',title:'执行记录',status:'succeeded'}]}, {runEffects:true})
+  assert.equal(result.executionMounts,1,state)
+  assert.deepEqual(result.requests,['/state/tasks/current/executions?summary=true&offset=0&limit=10'],state)
+  assert.ok(flatten(result.tree).some(node=>node.props['aria-label']==='全部执行会话'),state)
+ }
 })
 test('任务卡片优先显示当前页投影名称，多话题与缺名仍保留正确入口',()=>{
  const {tree,actions}=card({taskId:'names',title:'任务',groupId:'g',topicRefs:[{topicId:'topic',title:'更新后的事项名'},{groupId:'other',topicId:'topic',title:'另一群事项'},{topicId:'unresolved-id'}]})

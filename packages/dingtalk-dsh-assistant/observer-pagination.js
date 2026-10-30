@@ -180,9 +180,12 @@ export function observerPage(db, q, instance) {
  const prefix = indexed ? `WITH page_ids AS MATERIALIZED (SELECT i.* FROM ${countFrom} ${where} ORDER BY ${order} LIMIT ? OFFSET ?) ` : ''
  const pageFrom = indexed ? from.replace(countFrom,'page_ids i') : from
  const suffix = indexed ? `ORDER BY ${order}` : `${where} ORDER BY ${order} LIMIT ? OFFSET ?`
- const rows = db.prepare(`${prefix}SELECT ${body} AS body${q.collection === 'tasks' ? ",i.state AS board_state,(SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id) AS execution_count,(SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id AND e.state IN ('succeeded','completed')) AS completed_count" : ''} FROM ${pageFrom} ${suffix}`).all(...args,limit,offset)
+ // Historical cards have no execution panel. Mixed task pages only count sessions for unarchived rows.
+ const executionCounts = q.collection === 'tasks' && q.archived !== true
+  ? ",CASE WHEN i.archived=0 THEN (SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id) END AS execution_count,CASE WHEN i.archived=0 THEN (SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id AND e.state IN ('succeeded','completed')) END AS completed_count" : ''
+ const rows = db.prepare(`${prefix}SELECT ${body} AS body${q.collection === 'tasks' ? ',i.state AS board_state' : ''}${executionCounts} FROM ${pageFrom} ${suffix}`).all(...args,limit,offset)
  if(rows.some(row=>row.body==null))throw error('OBSERVER_PAGE_DATA_MISSING')
- return { items: rows.map(row => ({...JSON.parse(row.body), ...(q.summary ? {drained:!!JSON.parse(row.body).drained,recovering:!!JSON.parse(row.body).recovering} : row.board_state ? {state:row.board_state,executionCount:row.execution_count,completedExecutionCount:row.completed_count} : {})})), total,offset,limit,revision:currentRevision,nextOffset:offset+rows.length<total?offset+rows.length:null }
+ return { items: rows.map(row => ({...JSON.parse(row.body), ...(q.summary ? {drained:!!JSON.parse(row.body).drained,recovering:!!JSON.parse(row.body).recovering} : row.board_state ? {state:row.board_state,...(row.execution_count == null ? {} : {executionCount:row.execution_count,completedExecutionCount:row.completed_count})} : {})})), total,offset,limit,revision:currentRevision,nextOffset:offset+rows.length<total?offset+rows.length:null }
 }
 
 export function observerGroupQuery(db,q) {

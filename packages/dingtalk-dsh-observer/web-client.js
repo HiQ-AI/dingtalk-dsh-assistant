@@ -1846,12 +1846,12 @@ const previousAuthorization=pageSnapshots.current.authorizations
       const renderTaskCard = task => {
         const sourceGroup = groupsById.get(task.sourceGroupId || task.groupId)
         const groupLabel = sourceGroup?.name || (task.groupId?.startsWith('web:') ? 'Web 任务' : task.groupId) || '未关联群聊'
-        const session = taskSession(task)
+        const historical = task.legacyReadonly || task.archivedAt
         const hovered = hoveredTaskId === task.taskId
         const queued = task.state === 'queued'
-        const sessions = task.executionSessions || []
-        const completedSessions = task.completedExecutionCount ?? sessions.filter(item => ['succeeded', 'completed'].includes(item.status)).length
-        const sessionCount = task.executionCount ?? sessions.length
+        const sessions = historical ? [] : task.executionSessions || []
+        const completedSessions = historical ? 0 : task.completedExecutionCount ?? sessions.filter(item => ['succeeded', 'completed'].includes(item.status)).length
+        const sessionCount = historical ? 0 : task.executionCount ?? sessions.length
         const displayObjective = String(task.objective || '').startsWith('[TASK_SOURCE_EVIDENCE]') ? (task.title || task.objective) : task.objective
         return React.createElement('article', { key: task.taskId, onClick: event => { if (!event.target.closest('button, summary, details')) openTask(task) }, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
           React.createElement('button', { type: 'button', onClick: () => openTask(task), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', textAlign: 'left', display: 'grid', gap: 6, fontFamily: 'inherit' } },
@@ -1866,7 +1866,7 @@ const previousAuthorization=pageSnapshots.current.authorizations
             })),
           React.createElement('button', { type: 'button', title: displayObjective, 'aria-label': '查看完整任务目标', onClick: () => openTask(task), style: { border: 0, padding: 0, background: 'transparent', color: 'inherit', textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer', minWidth: 0, display: 'block', maxHeight: '4.5em', overflow: 'hidden', overflowWrap: 'anywhere', fontSize: 11, lineHeight: 1.5 } },
             React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, style: { display: 'inline-block', verticalAlign: -2, marginRight: 5, color: colors.muted } }, React.createElement('circle', { cx: 8, cy: 8, r: 5.5 }), React.createElement('circle', { cx: 8, cy: 8, r: 2 }), React.createElement('path', { d: 'M8 1v2M15 8h-2' })), displayObjective),
-          !task.legacyReadonly && sessionCount ? React.createElement('details', { className: 'observer-card-sessions', open: expandedTaskId === task.taskId, 'aria-label': '全部执行会话', style: { minWidth: 0, padding: '8px 9px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2 } },
+          !historical && sessionCount ? React.createElement('details', { className: 'observer-card-sessions', open: expandedTaskId === task.taskId, 'aria-label': '全部执行会话', style: { minWidth: 0, padding: '8px 9px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface2 } },
             React.createElement('summary', { onClick: event => { event.preventDefault(); event.stopPropagation(); setExpandedTaskId(id => id === task.taskId ? '' : task.taskId) }, style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer', fontSize: 11, color: colors.muted, listStyle: 'none' } },
               React.createElement('svg', { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, 'aria-hidden': true }, React.createElement('path', { d: 'M2 3h2v2H2zM6 4h8M2 7h2v2H2zM6 8h8M2 11h2v2H2zM6 12h8' })),
               React.createElement('span', null, '执行会话'),
