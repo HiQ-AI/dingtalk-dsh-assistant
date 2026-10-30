@@ -2,12 +2,14 @@ import { randomUUID } from 'node:crypto'
 import { activeFixedUnits, fixedUnitRequestId, platformTaskPage } from './fixed-topics.js'
 import { sessionWorkspace, nameSession } from './session-workspaces.js'
 import { groupReplyInstructions } from './group-message.js'
+import { createPlatformSchedules } from './platform-schedule.js'
 
 const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
 
 // Fixed routes have no business Topic, Owner, or execution. Reply preparation uses the existing outbox.
 export function createFixedTopicHandler({ ctx, store, legacy, root, models, appendOutbox, readTasks, readMentioned, onSettled = () => {}, onError = () => {}, now = Date.now }) {
   const flights = new Map(), handles = new Set()
+  const schedules = createPlatformSchedules({ ctx, store, legacy, root, models, readTasks, appendOutbox, now })
   let closed = false
   const current = (groupId, message, unit) => !closed && store.getGroup(groupId)?.messages.some(item => item.messageId === message.messageId
     && item.messageVersion === message.messageVersion && activeFixedUnits(item).some(value => value.unitId === unit.unitId && value.unitRevision === unit.unitRevision))
@@ -82,9 +84,15 @@ export function createFixedTopicHandler({ ctx, store, legacy, root, models, appe
               await reply(text.trim()); submitted = true
               return { status: 'accepted' }
             } })
+          agentCtx.tools.register({ name: 'platform_schedule_submit', description: '提交原用户交办的一次未来平台事项，由宿主持有普通持久会话并调用原生 schedule。at 必须为含时区偏移的完整日期时间；返回 scheduled 才可确认已安排，expired 应重新判断补报或过期静默。无需业务任务。',
+            parameters: { type: 'object', properties: { title: { type: 'string', minLength: 1, maxLength: 120 }, prompt: { type: 'string', minLength: 1, maxLength: 8000 }, at: { type: 'string' } }, required: ['title', 'prompt', 'at'], additionalProperties: false }, output,
+            execute: (args, exec) => {
+              assert(exec)
+              return schedules.submit({ groupId, requestId, messageId: message.messageId, messageVersion: message.messageVersion, unitId: unit.unitId, unitRevision: unit.unitRevision, timezone }, args)
+            } })
           agentCtx.on('agent/pre-step', (_event, next) => submitted || !current(groupId, message, unit) ? { kind: 'reject' } : next())
           agentCtx.systemPrompt.section({ name: 'dingtalk-platform', order: 120, text: `你在独立的 Agent 平台会话中，已通过宿主正式权限预设选择 danger-full-access。插件不额外限制工具；使用宿主实际提供的工具，仍遵守宿主权限、安全策略和用户授权。只处理当前 source unit，不处理同消息其他业务事项，不为平台问询或定时汇报创建业务任务。查询本群任务状态与历史完成列表时先调用 platform_task_query 获取事实；跨页使用 nextCall 读全后答复。日期以 ${timezone} 为准，当前快照 ${new Date(asOf).toISOString()}（查询工具返回本地日期范围），答复注明范围、时区和快照时刻，不得假称拥有其他群数据。用 platform_reply_submit 显式提交答复；自然语言输出不会发送。零结果应说明当前范围没有记录，不能编造。
-时间型事项须结合原消息时间、用户明确的时区（未另行指定时使用上述群时区）和实际执行时刻重新核对目标。未来请求使用宿主已有 schedule 工具及其正式字段；确认真实创建成功后才能承诺已安排，立即确认不等于已完成定时汇报。目标时间已过时，不得照原值创建过去的 schedule，也不得擅自顺延明天。仍有价值的状态汇报补报一次并注明实际时间和延迟；失去意义的定点提醒可记为过期不打扰。只有不确定且会影响执行时才澄清，不统一丢弃或立即执行所有过期事项。` })
+时间型事项须结合原消息时间、用户明确的时区（未另行指定时使用上述群时区）和实际执行时刻重新核对目标。一次未来请求调用 platform_schedule_submit，由宿主沿原生 schedule 服务接纳，当前子会话直接调用 schedule_create 会被宿主拒绝。确认真实创建成功后才能承诺已安排，立即确认不等于已完成定时汇报。目标时间已过时，不得照原值创建过去的 schedule，也不得擅自顺延明天。仍有价值的状态汇报补报一次并注明实际时间和延迟；失去意义的定点提醒可记为过期不打扰。只有不确定且会影响执行时才澄清，不统一丢弃或立即执行所有过期事项。` })
           agentCtx.systemPrompt.section({ name: 'dingtalk-group-reply', order: 119, text: groupReplyInstructions })
         },
       })
@@ -112,5 +120,5 @@ export function createFixedTopicHandler({ ctx, store, legacy, root, models, appe
     }
   }
   return { schedule, async whenIdle() { while (flights.size) await Promise.all([...flights.values()]) },
-    async close() { closed = true; for (const handle of handles) handle.agent.cancel({ kind: 'user' }); await Promise.all([...flights.values()]) } }
+    async close() { closed = true; for (const handle of handles) handle.agent.cancel({ kind: 'user' }); await Promise.all([...flights.values()]); await schedules.close() } }
 }

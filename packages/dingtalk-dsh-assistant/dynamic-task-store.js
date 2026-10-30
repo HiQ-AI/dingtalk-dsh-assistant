@@ -10,7 +10,7 @@ import { taskNotificationRecovery } from './notification-delivery.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
-import { fixedTopicIds, fixedUnitRequestId } from './fixed-topics.js'
+import { fixedTopicIds, fixedUnitRequestId, platformScheduleOutboundId } from './fixed-topics.js'
 import { createExecutionResourceCatalog } from './execution-resource-catalog.js'
 import { DatabaseSync } from 'node:sqlite'
 import { retireIndependentCoordination, coordinationSchema, scheduleSchema } from './coordination-retirement.js'
@@ -1474,10 +1474,13 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (a.kind === 'fixed-topic-reply') {
         const p = record(a.payload), fact = record(p.fact), source = get('dynamic_sources', text(p.sourceId, 'sourceId'))
         integer(p.sourceVersion, 'sourceVersion'); text(fact.unitId, 'unitId'); integer(fact.unitRevision, 'unitRevision')
+        const requestId = fixedUnitRequestId(source.groupId, { messageId: source.messageId, messageVersion: source.version }, fact)
+        if (fact.scheduleId !== undefined && (!text(fact.scheduleId, 'scheduleId') || fact.fixedTopic !== 'agent-platform'
+          || !Number.isFinite(Date.parse(fact.scheduledAt)))) fail('DYNAMIC_ARGUMENT_INVALID', 'platformSchedule')
         if (!fixedTopicIds.includes(fact.fixedTopic) || a.taskId || p.taskIds?.length || p.topicRefs?.length || fact.topicRefs?.length
           || source.groupId !== p.conversationId || source.messageId !== p.sourceMessageId || source.version !== p.sourceVersion || source.actorId !== p.actorId
           || p.replyToMessageId !== source.messageId || p.replyToSenderOpenDingTalkId !== source.actorId
-          || id !== fixedUnitRequestId(source.groupId, { messageId: source.messageId, messageVersion: source.version }, fact))
+          || id !== (fact.scheduleId === undefined ? requestId : platformScheduleOutboundId(requestId)))
           fail('DYNAMIC_ARGUMENT_INVALID', 'fixedTopicSource')
       }
       const body = { taskId: task?.taskId ?? null, requirementRevision: a.requirementRevision, kind: a.kind, payload: clone(record(a.payload)) }

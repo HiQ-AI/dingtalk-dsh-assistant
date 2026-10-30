@@ -215,7 +215,14 @@ const taskSchema = z.object({
   stateHistory: z.array(taskStateEventSchema).optional(),
   reopenContext: z.string().min(1).optional(), resumeContext: z.string().min(1).optional(), archivedAt: z.string().min(1).optional(), createdAt: z.string().min(1), updatedAt: z.string().min(1),
 })
+const platformScheduleSchema = z.object({
+  sessionId: z.string().min(1), requestId: z.string().min(1), groupId: z.string().min(1), messageId: z.string().min(1),
+  messageVersion: z.number().int().positive(), unitId: z.string().min(1), unitRevision: z.number().int().positive(),
+  timezone: z.string().min(1), title: z.string().min(1).max(120), prompt: z.string().min(1).max(8000), at: z.string().datetime(),
+  scheduleId: z.string().optional(), outcome: z.enum(['replied', 'expired', 'superseded']).optional(), completedAt: z.string().optional(),
+})
 const schedulerSchema = z.object({
+  platformSchedule: platformScheduleSchema.optional(),
   executionBackend: z.enum(['dsh', 'claude-code']).optional(),
   taskSessionModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
   coordinationModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
@@ -615,6 +622,23 @@ export async function openResidentStore(storageDomain) {
     getAgentWorkspaceDir: () => scheduler.get('runtime')?.agentWorkspaceDir,
     getTaskWorkspaceDir: () => scheduler.get('runtime')?.taskWorkspaceDir,
     getTimezone: () => scheduler.get('runtime')?.timezone,
+    getPlatformSchedule: sessionId => scheduler.get(`platform-schedule:${sessionId}`)?.platformSchedule,
+    preparePlatformSchedule: input => serialize(`platform-schedule:${input.sessionId}`, async () => {
+      const value = platformScheduleSchema.parse(input), key = `platform-schedule:${value.sessionId}`
+      const current = scheduler.get(key)?.platformSchedule
+      if (current) {
+        const { scheduleId, outcome, completedAt, ...identity } = current
+        if (!isDeepStrictEqual(identity, value)) throw new Error('platform_schedule_identity_conflict')
+      } else await scheduler.put(key, { tasks: [], platformSchedule: value })
+      return scheduler.get(key).platformSchedule
+    }),
+    updatePlatformSchedule: async (sessionId, changes) => {
+      if (Object.keys(changes).some(key => !['scheduleId', 'outcome', 'completedAt'].includes(key))) throw new Error('platform_schedule_update_invalid')
+      await scheduler.update(`platform-schedule:${sessionId}`, current => {
+        if (!current?.platformSchedule) throw new Error('platform_schedule_missing')
+        return { ...current, platformSchedule: platformScheduleSchema.parse({ ...current.platformSchedule, ...changes }) }
+      })
+    },
     setAgentSettings: async patch => {
       await scheduler.update('runtime', current => ({ ...current, ...patch }))
     },

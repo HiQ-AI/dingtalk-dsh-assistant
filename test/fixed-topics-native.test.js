@@ -5,11 +5,31 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { available, reason, nativeTaskHost, latestInput } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, modelToolValues, waitUntil } from './fixtures/task-session-native-host.js'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { fixedUnitRequestId } from '../packages/dingtalk-dsh-assistant/fixed-topics.js'
+import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { createFixedTopicHandler } from '../packages/dingtalk-dsh-assistant/fixed-topic-handler.js'
+import { createPlatformSchedules } from '../packages/dingtalk-dsh-assistant/platform-schedule.js'
+import { fixedUnitRequestId } from '../packages/dingtalk-dsh-assistant/fixed-topics.js'
+
+async function nativeSchedule(h, t) {
+  const profile = createRequire(pathToFileURL(resolve(process.env.DSH_NATIVE_TEST_PROFILE ?? '.dsh/profiles/resident/package.json')))
+  let schedulePath, toolPath
+  try { schedulePath = profile.resolve('@deepseek-ai/dsh-schedule'); toolPath = profile.resolve('@deepseek-ai/dsh-tool-schedule') }
+  catch { t.skip('Requires the installed rc2 native schedule service and tools'); return false }
+  const native = createRequire(profile.resolve('@deepseek-ai/dsh-base'))
+  for (const name of ['session-query', 'typert-registry']) { const module = await import(pathToFileURL(native.resolve('@deepseek-ai/dsh-' + name))); await h.ctx.plugin(module.default ?? module) }
+  const controllerRoot = dirname(profile.resolve('@deepseek-ai/dsh-api-session-controller'))
+  const { ApiSessionAgentController } = await import(pathToFileURL(join(controllerRoot, 'types', 'agent.js')))
+  const { installModelSelectionProjection } = await import(pathToFileURL(join(controllerRoot, 'types', 'model-selection-projection.js')))
+  installModelSelectionProjection(h.ctx)
+  h.ctx.provide('sessionController', new ApiSessionAgentController(h.ctx))
+  const schedule = await import(pathToFileURL(schedulePath)), tool = await import(pathToFileURL(toolPath))
+  await h.ctx.plugin(schedule.default ?? schedule, {})
+  await h.ctx.plugin(tool.default ?? tool)
+  return true
+}
 
 function fixedReplyModel(category) {
   let queried = false, submitted = false
@@ -58,7 +78,8 @@ for (const category of ['agent-platform', 'out-of-scope']) test(`fixed ${categor
   const prepare = { notificationId: notification.id, taskId: null, requirementRevision: 1, kind: notification.kind, payload: notification.payload }
   await assert.rejects(command({ ...prepare, kind: 'topic-reply', payload: { ...notification.payload, fact: { topicRefs: [] } } }, 'empty-business-topic'), { code: 'DYNAMIC_ARGUMENT_INVALID', message: 'topicRefs' })
   const changes = [p => { p.fact.fixedTopic = 'invented-category' }, p => { p.actorId = 'other-actor' }, p => { p.conversationId = 'other-group' },
-    p => { p.sourceVersion = 2 }, p => { p.fact.unitRevision++ }, p => { p.topicRefs = [{ topicId: 'invented-topic', revision: 1 }] }, p => { p.taskIds = ['invented-task'] }]
+    p => { p.sourceVersion = 2 }, p => { p.fact.unitRevision++ }, p => { p.topicRefs = [{ topicId: 'invented-topic', revision: 1 }] }, p => { p.taskIds = ['invented-task'] },
+    p => { p.fact.scheduleId = 'invented-schedule'; p.fact.scheduledAt = '2026-10-28T00:00:00.000Z' }]
   for (const [index, change] of changes.entries()) {
     const payload = structuredClone(notification.payload); change(payload)
     await assert.rejects(command({ ...prepare, payload }, `invalid-fixed-source-${index}`), { code: 'DYNAMIC_ARGUMENT_INVALID' })
@@ -135,11 +156,6 @@ test('native platform tools coexist with preset tools and full access stays sess
 })
 
 test('rc2 native schedule tool remains visible and reports its delegated-session boundary truthfully', { skip: !available ? reason : false, timeout: 20000 }, async t => {
-  const profile = createRequire(pathToFileURL(resolve(process.env.DSH_NATIVE_TEST_PROFILE ?? '.dsh/profiles/resident/package.json')))
-  let schedulePath, toolPath
-  try { schedulePath = profile.resolve('@deepseek-ai/dsh-schedule'); toolPath = profile.resolve('@deepseek-ai/dsh-tool-schedule') }
-  catch { t.skip('This check requires the installed rc2 native schedule service and tool package'); return }
-  const native = createRequire(profile.resolve('@deepseek-ai/dsh-base'))
   const root = await mkdtemp(join(tmpdir(), 'platform-schedule-native-'))
   let h, handle, step = 0
   t.after(async () => { await handle?.dispose(); await h?.close(); await rm(root, { recursive: true, force: true }) })
@@ -147,13 +163,7 @@ test('rc2 native schedule tool remains visible and reports its delegated-session
     assert.ok(request.tools.some(tool => tool.name === 'schedule_create'))
     return step++ === 0 ? [{ name: 'schedule_create', args: { title: '工作汇报', prompt: '汇报当前工作成果', after_seconds: 600 } }] : []
   }, { resident: true })
-  for (const name of ['session-query', 'typert-registry']) { const module = await import(pathToFileURL(native.resolve('@deepseek-ai/dsh-' + name))); await h.ctx.plugin(module.default ?? module) }
-  const controllerRoot = dirname(profile.resolve('@deepseek-ai/dsh-api-session-controller'))
-  const { ApiSessionAgentController } = await import(pathToFileURL(join(controllerRoot, 'types', 'agent.js')))
-  h.ctx.provide('sessionController', new ApiSessionAgentController(h.ctx))
-  const schedule = await import(pathToFileURL(schedulePath)), tool = await import(pathToFileURL(toolPath))
-  await h.ctx.plugin(schedule.default ?? schedule, {})
-  await h.ctx.plugin(tool.default ?? tool)
+  if (!await nativeSchedule(h, t)) return
   handle = await h.ctx.agents.create({ sessionId: 'schedule-platform-session', meta: { cwd: root, origin: 'subagent', delegationDepth: 1 },
     agentOptions: { provider: 'native-task-test', model: 'controlled' }, setup: async (agentCtx, agent) => {
       await agentCtx.get('agentPresets').mount(agentCtx, 'native-test')
@@ -164,4 +174,168 @@ test('rc2 native schedule tool remains visible and reports its delegated-session
   assert.equal(h.toolResults[0].name, 'schedule_create')
   assert.match(JSON.stringify(h.toolResults[0].result), /subagent_session/)
   assert.deepEqual(await h.ctx.schedule.list({ sessionId: handle.agent.session.id }), [])
+})
+
+for (const scenario of ['before-due', 'late-bridge', 'superseded']) test('Host native one-shot survives restart, retains child identity, queries fresh facts and delivers once: ' + scenario, { skip: !available ? reason : false, timeout: 15000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'platform-due-native-'))
+  const restoreLate = scenario === 'late-bridge', superseded = scenario === 'superseded'
+  let h, handler, originalTurns = 0, dueTurns = 0, taskTitle = '创建时旧事实', receiptFault = scenario === 'before-due'
+  const errors = [], childHeaders = [], scheduled = { title: '工作汇报', prompt: '汇报本群今天的工作成果', at: new Date(Date.now() + 2500).toISOString() }
+  const boot = async (late = false) => {
+    h = await nativeTaskHost(root, request => {
+      if (request.tools.some(tool => tool.name === 'platform_schedule_submit')) {
+        if (originalTurns++ === 0) return [0, 1].map(() => ({ name: 'platform_schedule_submit', args: scheduled }))
+        return [{ name: 'platform_reply_submit', args: { text: '已安排本次工作汇报。' } }]
+      }
+      if (!request.tools.some(tool => tool.name === 'platform_task_query')) return []
+      if (dueTurns++ === 0) return [{ name: 'platform_task_query', args: { state: 'completed', day: 'today' } }]
+      assert.match(JSON.stringify(request.messages), /到期时新事实/)
+      return [{ name: 'platform_reply_submit', args: { text: '本群当前完成一项：到期时新事实。' } }]
+    }, { resident: true })
+    h.ctx.on('agent/error', event => errors.push(event.error))
+    h.ctx.on('tools/result', exec => { if (exec.name === 'platform_schedule_submit') childHeaders.push(exec.agent.session.header) })
+    h.residentStore = await openResidentStore(h.ctx.storageDomain)
+    const update = h.residentStore.updatePlatformSchedule
+    h.residentStore.updatePlatformSchedule = (id, changes) => {
+      if (receiptFault && changes.scheduleId) { receiptFault = false; throw new Error('injected_receipt_write_failure') }
+      return update(id, changes)
+    }
+    if (late) {
+      if (!await nativeSchedule(h, t)) return false
+      await waitUntil(async () => (await h.ctx.schedule.catalog())[0]?.status === 'inactive', 'native service delivers while bridge is loading')
+    }
+    handler = createFixedTopicHandler({ ctx: h.ctx, store: h.residentStore, root, legacy: { getAgentConfig: () => ({ agentPreset: 'native-test' }) },
+      models: { provider: 'native-task-test', model: 'controlled' }, readTasks: async groupId => [{ taskId: 'test-task', groupId, title: taskTitle, state: 'completed', completedAt: new Date().toISOString() }],
+      appendOutbox: args => h.residentStore.appendOutbox(args), onError: (_group, error) => errors.push(error) })
+    return late || nativeSchedule(h, t)
+  }
+  t.after(async () => { await handler?.close(); await h?.close(); await rm(root, { recursive: true, force: true }) })
+  if (!await boot()) return
+  await h.residentStore.subscribe({ groupId: 'scheduled-group', timezone: 'Asia/Shanghai' })
+  const text = '稍后汇报本群今天工作成果'
+  await h.residentStore.ingest({ groupId: 'scheduled-group', messageId: 'scheduled-source', senderOpenDingTalkId: 'original-actor', text, occurredAt: new Date().toISOString() })
+  await h.residentStore.routeMessages({ groupId: 'scheduled-group', routeId: 'scheduled-route', routingRevision: 0, routes: [{ messageId: 'scheduled-source', messageVersion: 1,
+    units: [{ unitKey: 'scheduled', summary: '定时汇报', sourceRefs: [{ quote: text }], topics: [], fixedTopic: 'agent-platform', reason: '一次平台事项' }] }] })
+  handler.schedule('scheduled-group'); await handler.whenIdle()
+  assert.deepEqual(errors, [])
+  const [record] = await h.ctx.schedule.catalog()
+  assert.equal((await h.ctx.schedule.catalog()).length, 1, JSON.stringify(h.toolResults))
+  assert.equal(record.status, 'active')
+  if (scenario === 'before-due') assert.equal(h.toolResults.filter(item => item.name === 'platform_schedule_submit' && item.result.isError).length, 1)
+  assert.ok(childHeaders.length === 2 && childHeaders.every(header => header.origin === 'subagent' && header.delegationDepth === 1))
+  const persisted = await h.ctx.sessionPersistence.open(record.sessionId, 'read')
+  assert.equal(persisted.header.origin, undefined); assert.equal(persisted.header.delegationDepth ?? 0, 0)
+  await persisted.close()
+  assert.equal(h.residentStore.getGroup('scheduled-group').outbox.length, 1)
+  if (superseded) await h.residentStore.ingest({ groupId: 'scheduled-group', messageId: 'scheduled-source', messageVersion: 2, senderOpenDingTalkId: 'original-actor', text: '撤回之前的汇报要求', occurredAt: new Date().toISOString() })
+  await handler.close(); await h.close(); taskTitle = '到期时新事实'
+  if (restoreLate) await waitUntil(() => Date.now() > Date.parse(scheduled.at), 'original target passes while Host is stopped')
+  await boot(restoreLate)
+  await waitUntil(() => h.residentStore.getPlatformSchedule(record.sessionId)?.outcome === (superseded ? 'superseded' : 'replied'), 'native reminder settles the original group report')
+  assert.deepEqual(errors, [])
+  const outbox = h.residentStore.getGroup('scheduled-group').outbox
+  assert.equal(outbox.length, superseded ? 1 : 2)
+  assert.ok(outbox.every(item => item.replyToMessageId === 'scheduled-source' && item.replyToSenderOpenDingTalkId === 'original-actor'))
+  assert.equal((await h.ctx.schedule.catalog())[0].status, 'inactive')
+  assert.equal((await h.ctx.schedule.history({ sessionId: record.sessionId, id: record.id, limit: 10 })).records.length, 1)
+  const restored = await h.ctx.sessionController.resolveAgent(record.sessionId)
+  restored.agent.followup({ id: 'duplicate-delivery-probe', role: 'user', source: { kind: 'schedule' }, content: [{ type: 'text', text: '[SCHEDULE REMINDER]\n重复送入同一事项' }] })
+  await restored.agent.whenIdle()
+  assert.equal(dueTurns, superseded ? 0 : 2); assert.equal(h.residentStore.getGroup('scheduled-group').outbox.length, superseded ? 1 : 2)
+  assert.equal(h.residentStore.listTasks().length, 0)
+})
+
+test('native due report crosses the real task service and notification ledger after cold restart, separately from its confirmation', { skip: !available ? reason : false, timeout: 15000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'platform-scheduled-ledger-'))
+  let h, originalTurns = 0, dueTurns = 0, initialize = true
+  const sends = [], errors = [], scheduleInput = { title: '工作汇报', prompt: '汇报本群今天完成情况', at: new Date(Date.now() + 2500).toISOString() }
+  const route = fixedReplyModel('agent-platform')
+  const boot = async () => {
+    h = await nativeTaskHost(root, request => {
+      if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) return route(request)
+      if (request.tools.some(tool => tool.name === 'platform_schedule_submit')) {
+        if (originalTurns++ === 0) return [{ name: 'platform_schedule_submit', args: scheduleInput }]
+        return [{ name: 'platform_reply_submit', args: { text: '已安排本次工作汇报。' } }]
+      }
+      if (!request.tools.some(tool => tool.name === 'platform_task_query')) return []
+      if (dueTurns++ === 0) return [{ name: 'platform_task_query', args: { state: 'completed', day: 'today' } }]
+      const page = modelToolValues(request).find(value => Array.isArray(value.items) && value.asOf)
+      assert.ok(page, 'due report must read real task-service facts')
+      assert.ok(Date.parse(page.asOf) >= Date.parse(scheduleInput.at))
+      assert.deepEqual(page.items, [])
+      return [{ name: 'platform_reply_submit', args: { text: '本次工作汇报：当前范围没有已完成任务。' } }]
+    }, { resident: true })
+    h.ctx.on('agent/error', event => errors.push(event.error))
+    h.residentStore = await openResidentStore(h.ctx.storageDomain)
+    if (initialize) {
+      await h.residentStore.subscribe({ groupId: 'native-group', timezone: 'Asia/Shanghai', responsibility: '处理交办给测试助手的工作' })
+      await h.residentStore.setAgentNames(['测试助手'])
+    }
+    const legacy = { getAgentConfig: () => ({ workspaceDir: root, agentPreset: 'native-test', provider: 'native-task-test', model: 'controlled', agentNames: ['测试助手'] }),
+      getGroup: id => h.residentStore.getGroup(id) }
+    h.service = await openTaskSessionService({ ctx: h.ctx, residentStore: h.residentStore, legacy,
+      config: { workspaceDir: root, dbPath: join(root, 'dynamic.db'), instanceId: 'scheduled-native-test', initialize, ownerActorId: 'native-user', provider: 'native-task-test' },
+      notifications: {
+        async send(notification) { sends.push(structuredClone(notification)); return { messageId: `delivered-${notification.id}` } },
+        async readback(notification) { return { messageId: notification.ack.messageId, visible: true } },
+      } })
+    h.query = (kind, args = {}) => h.service.store.query({ kind, ...args })
+    if (!await nativeSchedule(h, t)) return false
+    initialize = false
+    await h.service.recover(); await h.service.whenIdle()
+    return true
+  }
+  t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
+  if (!await boot()) return
+  await h.service.ingest({ ...fixedMessage, text: '测试助手，稍后汇报本群今天完成情况', occurredAt: new Date().toISOString() })
+  await h.service.whenIdle()
+  const [record] = await h.ctx.schedule.catalog(), [confirmation] = await h.query('notification.list')
+  assert.equal(record.status, 'active'); assert.equal(confirmation.state, 'delivered')
+  assert.equal(sends.length, 1); assert.equal(dueTurns, 0)
+  await h.close(); await boot()
+  await waitUntil(() => h.residentStore.getPlatformSchedule(record.sessionId)?.outcome === 'replied', 'scheduled report prepared after native cold restore')
+  await h.service.whenIdle()
+  const notices = await h.query('notification.list'), report = notices.find(item => item.id !== confirmation.id)
+  assert.equal(notices.length, 2); assert.equal(report.kind, 'fixed-topic-reply'); assert.equal(report.state, 'delivered')
+  assert.equal(report.payload.fact.scheduleId, record.id); assert.equal(report.payload.fact.scheduledAt, scheduleInput.at)
+  assert.equal(report.id, `${confirmation.id}-scheduled-delivery`)
+  assert.equal(report.payload.sourceMessageId, fixedMessage.messageId); assert.equal(report.payload.actorId, fixedMessage.senderOpenDingTalkId)
+  assert.deepEqual(report.payload.topicRefs, []); assert.deepEqual(report.payload.atOpenDingTalkIds, [fixedMessage.senderOpenDingTalkId])
+  assert.equal(sends.length, 2); assert.equal(dueTurns, 2); assert.deepEqual(errors, [])
+  assert.deepEqual(await h.query('task.list'), []); assert.deepEqual(h.residentStore.getGroup(fixedMessage.groupId).topics, [])
+  assert.equal((await h.ctx.schedule.catalog()).length, 1)
+  assert.equal((await h.ctx.schedule.history({ sessionId: record.sessionId, id: record.id, limit: 10 })).records.length, 1)
+  await h.close(); await boot()
+  assert.equal(sends.length, 2); assert.equal(dueTurns, 2)
+})
+
+test('Host refuses an expired instant without scheduling tomorrow, while native source binding stays trusted', { skip: !available ? reason : false, timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'platform-expired-native-'))
+  let h, bridge
+  t.after(async () => { await bridge?.close(); await h?.close(); await rm(root, { recursive: true, force: true }) })
+  h = await nativeTaskHost(root, () => [], { resident: true })
+  if (!await nativeSchedule(h, t)) return
+  h.residentStore = await openResidentStore(h.ctx.storageDomain)
+  await h.residentStore.subscribe({ groupId: 'g', timezone: 'Asia/Shanghai' })
+  const text = '定点汇报'
+  await h.residentStore.ingest({ groupId: 'g', messageId: 'm', senderOpenDingTalkId: 'actor', text, occurredAt: new Date().toISOString() })
+  await h.residentStore.routeMessages({ groupId: 'g', routeId: 'r', routingRevision: 0, routes: [{ messageId: 'm', messageVersion: 1,
+    units: [{ unitKey: 'u', summary: '定时', sourceRefs: [{ quote: text }], topics: [], fixedTopic: 'agent-platform', reason: '平台事项' }] }] })
+  const message = h.residentStore.getGroup('g').messages[0], unit = message.units[0]
+  const source = { groupId: 'g', messageId: 'm', messageVersion: 1, unitId: unit.unitId, unitRevision: unit.unitRevision, timezone: 'Asia/Shanghai', requestId: fixedUnitRequestId('g', message, unit) }
+  bridge = createPlatformSchedules({ ctx: h.ctx, store: h.residentStore, root, legacy: { getAgentConfig: () => ({ agentPreset: 'native-test' }) },
+    readTasks: async () => [], appendOutbox: () => assert.fail('expired request must not send') })
+  const args = { title: '工作汇报', prompt: '汇报工作', at: new Date(Date.now() - 60000).toISOString() }
+  assert.equal((await bridge.submit(source, args)).status, 'expired')
+  assert.deepEqual(await h.ctx.schedule.catalog(), [])
+  await assert.rejects(bridge.submit({ ...source, groupId: 'other' }, { ...args, at: new Date(Date.now() + 60000).toISOString() }), /source_stale/)
+  await assert.rejects(bridge.submit(source, { ...args, at: '2026-10-30T12:00:00' }), /requires_offset/)
+  await assert.rejects(bridge.submit(source, { ...args, at: '2099-02-30T12:00:00+08:00' }), /time_invalid/)
+  const future = { ...args, at: new Date(Date.now() + 60000).toISOString() }
+  const accepted = await bridge.submit(source, future), [record] = await h.ctx.schedule.catalog()
+  assert.equal(accepted.status, 'scheduled')
+  await assert.rejects(bridge.submit(source, { ...future, title: '不同事项' }), /identity_conflict/)
+  await h.ctx.schedule.delete({ sessionId: record.sessionId, id: record.id })
+  assert.equal((await bridge.submit(source, future)).status, 'cancelled')
+  assert.deepEqual(await h.ctx.schedule.catalog(), [])
 })
