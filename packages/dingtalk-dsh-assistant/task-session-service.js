@@ -6,6 +6,7 @@ import { inspectStoppedNativeOperation, inspectInvestigatedNativeFailure, inspec
 import { isNativeFilePrecondition, nativeFileError } from './dynamic-filesystem-scope.js'
 import { inspectIsolatedHostRestart, prepareRestartScopeProbe } from './dynamic-operation-readback.js'
 import { readMaintenanceDrainProof } from './native-maintenance-drain.js'
+import { referencesIsolatedPostgres } from './native-postgres-wrapper.js'
 import { hasRestartIsolation, operationBlocksRecovery, verifyRestartIsolation, readAuditedRestartDrain } from './native-restart-isolation.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -936,7 +937,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (typeof args.command === 'string') for (const operation of await query('operation.list')) {
         const scope = operation.recoverySettlement?.proof?.isolation?.provenance?.scope
         if (hasRestartIsolation(operation) && scope?.kind === 'local-postgres'
-          && args.command.replaceAll('/', '\\').toLowerCase().includes(scope.directory.toLowerCase())) fail('DYNAMIC_ISOLATED_SOURCE_REUSE_FORBIDDEN')
+          && referencesIsolatedPostgres(args.command, scope, join(root, 'tasks', binding.taskId))) fail('DYNAMIC_ISOLATED_SOURCE_REUSE_FORBIDDEN')
       }
     }
     const key = `native:${binding.executionId}:${binding.inputVersion ?? 1}:${binding.leaseEpoch}:${callId}`
@@ -1000,7 +1001,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             const investigation = await query('execution.get', { executionId })
             const operation = await query('operation.get', { operationId: investigation.input?.readbackOperationId })
             const executions = await query('execution.list', { taskId: binding.taskId })
-            return prepareRestartScopeProbe({ ctx, operation, investigation, binding, args, executions,
+            return prepareRestartScopeProbe({ ctx, operation, investigation, binding, args, executions, workspaceRoot: root,
               execution: executions.find(item => item.executionId === operation?.executionId) })
           },
           readTeam: async () => {
@@ -1689,17 +1690,17 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (executionBackend(execution) !== 'dsh') fail('CLAUDE_OPERATION_READBACK_REQUIRED')
       if (resolution.scopeEvidence && (!resolution.scopeEvidence.probeExecutionId || !resolution.scopeEvidence.probeCallId)) {
         if (!args.checkOnly) fail('DYNAMIC_SCOPE_ISOLATION_PROBE_REQUIRED')
-        const plan = await inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence: resolution.scopeEvidence, planOnly: true })
+        const plan = await inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence: resolution.scopeEvidence, planOnly: true, workspaceRoot: root })
         if (!plan) fail('DYNAMIC_SCOPE_ISOLATION_UNSUPPORTED')
         requiredScopeProbes.push({ operationId: operation.operationId, readbackOperationId: operation.operationId,
           command: plan.probe.command, scriptDigest: plan.probe.scriptDigest, scope: plan.probe.spec.scope,
           managedCall: { name: 'execution_restart_scope_probe', arguments: { expectedOperationDigest: resolution.expectedOperationDigest,
             expectedScriptDigest: plan.probe.scriptDigest, scopeEvidence: Object.fromEntries(['hostPid', 'hostLogPath', 'hostLogSha256',
-              'producerScopeReviewed', 'localEffectsOnlyConfirmed', 'excludeOriginalSourcesConfirmed', 'hostExit'].filter(key => resolution.scopeEvidence[key] !== undefined).map(key => [key, resolution.scopeEvidence[key]])) } } })
+              'producerScopeReviewed', 'localEffectsOnlyConfirmed', 'excludeOriginalSourcesConfirmed', 'hostExit', 'postgresWrapper'].filter(key => resolution.scopeEvidence[key] !== undefined).map(key => [key, resolution.scopeEvidence[key]])) } } })
         continue
       }
       if (!resolution.scopeEvidence && !ctx.get?.('nativeJobRecovery')) fail('DYNAMIC_SCOPED_ISOLATION_EVIDENCE_REQUIRED')
-      const proof = await inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence: resolution.scopeEvidence })
+      const proof = await inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence: resolution.scopeEvidence, workspaceRoot: root })
       if (!proof) fail('DYNAMIC_OPERATION_EVIDENCE_INSUFFICIENT')
       if (!args.checkOnly && resolution.expectedIsolationDigest !== hash(proof.isolation)) fail('DYNAMIC_ISOLATION_EVIDENCE_STALE')
       proofs.push({ operationId: operation.operationId, proof })

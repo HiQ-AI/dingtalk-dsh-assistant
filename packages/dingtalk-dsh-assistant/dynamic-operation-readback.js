@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { inspectSession } from './session-persistence.js'
+import { inspectSession, executionInputFor, latestExecutionInput } from './session-persistence.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { isolationBinding, validIsolationReceipt } from './native-restart-isolation.js'
 import { restartScopeProbePlan, readRestartScopeProbe, readManagedRestartProbeCall } from './native-restart-scope-probe.js'
@@ -11,11 +11,7 @@ export const legacyDrainedError = 'execution_background_result_not_supported: Th
 const identity = (events, binding) => events.some(event => event.type === 'plugin:dingtalk/execution-session'
   && event.data.identity?.kind === 'task-execution' && event.data.identity.taskId === binding.taskId
   && event.data.identity.executionId === binding.executionId && event.data.identity.sessionId === binding.sessionId)
-const inputFor = (events, binding) => events.findLast(event => event.type === 'user/message'
-  && event.data.source?.executionSession?.sessionId === binding.sessionId
-  && event.data.source.executionSession.leaseEpoch === binding.leaseEpoch
-  && event.data.source.executionSession.inputVersion === binding.inputVersion
-  && event.data.source.executionSession.inputDigest === binding.inputDigest)
+const inputFor = executionInputFor
 
 /** 原调用作为调查材料提供，必须绑定真实日志和账本摘要；不把它当成效果成功证明。 */
 export async function readNativeOperationContext({ ctx, operation, allowHostIdentityRendering = false }) {
@@ -135,7 +131,7 @@ export async function inspectInvestigatedNativeFailure(args) {
 }
 
 /** 受管探针只读取当前调查绑定的原操作；模型不能换目标或提交替代命令。 */
-export async function prepareRestartScopeProbe({ ctx, operation, execution, executions, investigation, binding, args }) {
+export async function prepareRestartScopeProbe({ ctx, operation, execution, executions, investigation, binding, args, workspaceRoot }) {
   if (!investigation || investigation.taskId !== binding.taskId || investigation.executionId !== binding.executionId
     || investigation.sessionId !== binding.sessionId || investigation.inputVersion !== binding.inputVersion
     || investigation.inputDigest !== binding.inputDigest || investigation.leaseEpoch !== binding.leaseEpoch
@@ -143,12 +139,12 @@ export async function prepareRestartScopeProbe({ ctx, operation, execution, exec
     || investigation.definition?.recoveryReadOnly !== true || investigation.input?.readbackOperationId !== operation?.operationId
     || operation?.taskId !== binding.taskId || hash(operation) !== args.expectedOperationDigest) return null
   const authority = await inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence: args.scopeEvidence,
-    planOnly: true, activeProbe: investigation })
+    planOnly: true, activeProbe: investigation, workspaceRoot })
   return authority?.probe.scriptDigest === args.expectedScriptDigest ? authority.probe : null
 }
 
 /** Read existing Host fence evidence; never create a fence or a process result here. */
-export async function inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence, planOnly = false, activeProbe }) {
+export async function inspectIsolatedHostRestart({ ctx, operation, execution, executions, scopeEvidence, planOnly = false, activeProbe, workspaceRoot }) {
   const binding = operation.dispatchBinding, job = operation.job
   if (operation.state !== 'unknown' || operation.recoveryReason !== 'host_restart' || operation.recoverySettlement
     || !binding || !job || !['running', 'stopping'].includes(job.status) || operation.result != null
@@ -161,13 +157,13 @@ export async function inspectIsolatedHostRestart({ ctx, operation, execution, ex
   if (!jobs?.list || jobs.list(execution.sessionId).some(item => ['running', 'stopping'].includes(item.status))) return null
   const { events } = await inspectSession(ctx.sessionPersistence, binding.sessionId)
   if (!identity(events, binding)) return null
-  const input = inputFor(events, binding)
-  if (!input) return null
-  const calls = events.filter(event => event.seq > input.seq && event.type === 'tool/call'
+  const calls = events.filter(event => event.type === 'tool/call'
     && event.data.name === operation.definition.toolName
     && operation.key === `native:${binding.executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${event.data.callId}`)
   if (calls.length !== 1) return null
   const call = calls[0], callId = call.data.callId
+  const input = inputFor(events, binding, call.seq)
+  if (!input) return null
   let args
   try { args = JSON.parse(call.data.arguments) } catch { return null }
   if (hash(args) !== operation.definition.argumentsDigest || typeof args.command !== 'string') return null
@@ -192,7 +188,7 @@ export async function inspectIsolatedHostRestart({ ctx, operation, execution, ex
   const challenge = isolationBinding(operation, callId)
   let isolation
   if (scopeEvidence) {
-    const plan = restartScopeProbePlan({ command: args.command, binding: challenge, evidence: scopeEvidence })
+    const plan = restartScopeProbePlan({ command: args.command, binding: challenge, evidence: scopeEvidence, workspaceRoot })
     if (!plan) return null
     if (planOnly) {
       // 同一调查续办后当前投影变为 running，不能要求复制另一个已成功成员才能取只读计划。
@@ -275,7 +271,7 @@ export async function readExecutionProgress({ ctx, execution }) {
   const { events } = saved
   if (saved.meta.id !== binding.sessionId || !identity(events, binding)) reject('EXECUTION_PROGRESS_IDENTITY_MISMATCH')
   const input = inputFor(events, binding)
-  const latestInput = events.findLast(event => event.type === 'user/message' && event.data.source?.executionSession)
+  const latestInput = latestExecutionInput(events)?.event
   if (!input || input !== latestInput) reject('EXECUTION_PROGRESS_INPUT_MISMATCH')
   const currentEvents = events.filter(event => event.seq >= input.seq)
   const lastSequence = currentEvents.reduce((sequence, event) => Math.max(sequence, event.seq), -1)

@@ -30,6 +30,7 @@
     "native-restart-isolation.js",
     "native-maintenance-drain.js",
     "native-restart-scope-probe.js",
+    "native-postgres-wrapper.js",
     "dynamic-operation-readback.js",
     "dynamic-task-store.js",
     "task-archive.js",
