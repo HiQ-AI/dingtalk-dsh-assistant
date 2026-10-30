@@ -8,6 +8,7 @@ import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {runInNewContext} from 'node:vm'
 import {observerOutboxState} from '../packages/dingtalk-dsh-assistant/observer-outbox-state.js'
+import {stableId} from '../packages/dingtalk-dsh-assistant/topic-model.js'
 
 test('group paging uses SQL rows without reading source or resident history; commits update affected IDs',async t=>{
  let group={groupId:'g',topics:[],outbox:[],messages:Array.from({length:1000},(_,i)=>({messageId:`m${i}`,messageVersion:1,sequence:i,occurredAt:'2026-10-28T00:00:00Z',routingStatus:i%2?'pending':'failed',text:'payload',get resources(){throw new Error('hidden payload read')}}))}
@@ -92,4 +93,30 @@ test('another source update cannot hide an interrupted projection',async t=>{
  await assert.rejects(page('g'),/source unavailable/)
  unavailable=false;page.sourceChanged({groupId:'g',messageId:'b'})
  assert.equal((await page('g')).items.find(message=>message.messageId==='a').text,'Updated')
+})
+
+test('a Web-only completion cannot cover an earlier group message or hide its later conclusion',async t=>{
+ const ref={unitId:'group-unit',unitRevision:1},webRef={unitId:'web-unit',unitRevision:1}
+ const message={messageId:'group-input',messageVersion:2,sequence:1,routingStatus:'routed',activeUnitRefs:[ref],units:[ref],text:'补充空状态验收要求'}
+ const webId=stableId('web','g:followup')
+ const web={decisionId:stableId('decision','g:followup'),revision:3,status:'completed',completedAt:'2026-01-01T00:01:00Z',decision:{actions:[],basisMessageIds:[webId],basisUnitRefs:[webRef],reply:''}}
+ let group={groupId:'g',messages:[message],topics:[{topicId:'t',revision:3,processedRevision:3,
+  entries:[{revision:2,messageId:message.messageId,messageVersion:2,...ref,action:'add'}],decisions:[web]}]}
+ const source={sourceId:'s',groupId:'g',messageId:message.messageId,version:2,routed:true,processingCompleted:{at:web.completedAt,activeUnitRefs:[ref]}}
+ const page=createObserverGroupPages({readGroup:()=>group,readSources:()=>[source],readRequests:()=>[],isOwnNotification:()=>false})
+ t.after(()=>page.close());page.update({group})
+ let row=(await page('g')).items[0]
+ assert.equal(row.processingState,'processing','an old premature source stamp is not sufficient evidence')
+ assert.equal(row.processingConclusion,null)
+ assert.equal(row.processingCompletedAt,null)
+ const previous=group
+ const actual={decisionId:'coord-decision-current',revision:3,status:'completed',completedAt:'2026-01-01T00:02:00Z',
+  decision:{actions:[],basisMessageIds:[message.messageId],basisUnitRefs:[ref],reason:'已核对空状态验收要求'}}
+ group={...group,topics:[{...group.topics[0],decisions:[web,actual]}]}
+ source.processingCompleted={...source.processingCompleted,at:actual.completedAt}
+ page.update({previous,group})
+ row=(await page('g')).items[0]
+ assert.equal(row.processingState,'processed')
+ assert.equal(row.processingConclusion,actual.decision.reason,'select the real Topic judgment at the same revision')
+ assert.equal(row.processingCompletedAt,new Date(actual.completedAt).toISOString())
 })

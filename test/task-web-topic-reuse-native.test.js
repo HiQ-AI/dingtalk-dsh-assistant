@@ -5,8 +5,78 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { available, reason, nativeTaskHost, latestInput, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, waitUntil, topicTaskCalls } from './fixtures/task-session-native-host.js'
 const call = (name, args) => ({ name, args })
+
+for (const replaceVersion of [false,true]) test(`Web maintenance preserves an unsubmitted Topic input${replaceVersion ? ' across source enrichment' : ''}`,
+ { timeout: 20000, ...(!available ? { skip: reason } : {}) },async t=>{
+ const root=await mkdtemp(join(tmpdir(),'web-unjudged-source-'))
+ const entered=Promise.withResolvers(),release=Promise.withResolvers(),currentEntered=Promise.withResolvers(),finish=Promise.withResolvers()
+ let topicId,rounds=0
+ const h=await nativeTaskHost(root,async request=>{
+  assert.ok(++rounds<30)
+  const input=latestInput(request),names=request.tools.map(tool=>tool.name)
+  if(input.requestId?.startsWith('coord-summary-')||input.trigger==='task-facts')return topicTaskCalls(request)
+  if(names.includes('group_topic_route_submit'))return [call('group_topic_route_submit',{requestId:input.requestId,
+   routes:input.messages.map(item=>({messageId:item.messageId,messageVersion:item.messageVersion,topics:[{topicId}]}))})]
+  if(names.includes('group_decision_submit')){
+   if(input.revision===2){entered.resolve(input);await release.promise}
+   else if(!replaceVersion||input.messages.some(item=>item.messageId==='pending-topic-source'&&item.messageVersion===2)){
+    currentEntered.resolve(input);await finish.promise
+   }
+   return [call('group_decision_submit',{requestId:input.requestId,topicId:input.topicId,revision:input.revision,
+    decision:{actions:[],basisMessageIds:input.messages.map(item=>item.messageId),reason:'已核对当前版本的验收要求，无需新增任务',topicUpdate:{summary:'当前验收要求已记录'}}})]
+  }
+  return [call('task_session_submit',{decision:{action:'wait',summary:'等待验收材料',evidence:[],limitations:[]}})]
+ })
+ t.after(async()=>{release.resolve();finish.resolve();await h.close();await rm(root,{recursive:true,force:true})})
+ const task=await h.service.createTask({groupId:'native-group',requestId:'original-web-task',title:'列表核验',objective:'核验空状态',acceptanceCriteria:['记录结果']})
+ await h.service.whenIdle();topicId=task.topicRefs[0].topicId
+ const message={groupId:'native-group',messageId:'pending-topic-source',messageVersion:1,senderOpenDingTalkId:'native-user',senderName:'测试成员',text:'请核对空状态要求',occurredAt:'2026-01-01T00:00:00Z'}
+ const admitted=await h.service.ingest(message);await entered.promise
+ const context={taskId:task.taskId,requestId:'web-maintenance',context:'补充原任务材料说明',progressImpact:'preserve'}
+ await h.service.appendTaskContext(context)
+ assert.equal(h.residentStore.getTopic('native-group',topicId).processedRevision,1)
+ let current=admitted
+ if(replaceVersion)current=await h.service.ingest({...message,messageVersion:2,text:'请核对更新后的空状态要求'})
+ release.resolve()
+ const revised=await currentEntered.promise
+ assert.equal(revised.ownedDeltaMessageIds.includes(message.messageId),true)
+ assert.equal(revised.ownedDeltaMessageIds.some(id=>id.startsWith('web-')),false,'applied maintenance is not new authorization')
+ const pending=await h.query('source.get',{sourceId:current.sourceId})
+ assert.equal(pending.processingCompleted,undefined)
+ const row=(await h.service.observerGroupPage('native-group')).items.find(item=>item.messageId===message.messageId)
+ assert.equal(row.processingState,'processing');assert.equal(row.processingConclusion,null)
+ let priorStamp,priorReceipt
+ if(!replaceVersion){
+  // Seed the old release's durable source receipt, then use real recovery.
+  const refs=h.residentStore.getGroup('native-group').messages.find(item=>item.messageId===message.messageId).activeUnitRefs
+  await h.service.store.command({id:'historical-semantic-stamp',kind:'source.processingCompleted',args:{sourceId:current.sourceId,messageVersion:1,
+   routingRevision:h.residentStore.getGroup('native-group').routingRevision,activeUnitRefs:refs,units:refs.map(ref=>({...ref,dispatchOwner:'legacy-topic',processingComplete:true}))}})
+  priorReceipt=[{topicId,revision:revised.revision}]
+  await h.service.store.command({id:'historical-route-receipt',kind:'source.routed',args:{sourceId:current.sourceId,receipt:priorReceipt}})
+  priorStamp=(await h.query('source.get',{sourceId:current.sourceId})).processingCompleted
+  await h.service.recover()
+  const recovered=await h.query('source.get',{sourceId:current.sourceId})
+  assert.equal(recovered.processingCompleted,undefined);assert.equal(recovered.processingPending,true)
+  assert.deepEqual(recovered.processingHistory,[priorStamp]);assert.deepEqual(recovered.routeReceipt,priorReceipt)
+ }
+ finish.resolve();await h.service.whenIdle()
+ const source=await waitUntil(async()=>{const item=await h.query('source.get',{sourceId:current.sourceId});return item.processingCompleted&&item},'current input semantic conclusion')
+ const topic=h.residentStore.getTopic('native-group',topicId)
+ const real=topic.decisions.find(record=>record.status==='completed'&&record.decision.basisMessageIds.includes(message.messageId))
+ assert.ok(real);assert.equal(topic.processedRevision,topic.revision);assert.equal(topic.summary,'当前验收要求已记录')
+ assert.equal(source.version,replaceVersion?2:1)
+ if(priorStamp){assert.deepEqual(source.processingHistory,[priorStamp]);assert.deepEqual(source.routeReceipt,priorReceipt)}
+ const done=(await h.service.observerGroupPage('native-group')).items.find(item=>item.messageId===message.messageId)
+ assert.equal(done.processingState,'processed');assert.equal(done.processingConclusion,real.decision.reason)
+ if(replaceVersion){const old=await h.query('source.get',{sourceId:admitted.sourceId});assert.equal(old.processingCompleted,undefined);assert.deepEqual(old.routeReceipt,[{supersededByVersion:2}])}
+ const before=await h.query('task.get',{taskId:task.taskId}),decisions=structuredClone(topic.decisions)
+ await h.service.appendTaskContext(context);await h.service.whenIdle()
+ assert.deepEqual(await h.query('task.get',{taskId:task.taskId}),before,'maintenance replay stays idempotent')
+ assert.deepEqual(h.residentStore.getTopic('native-group',topicId).decisions,decisions)
+ assert.equal((await h.query('task.list')).length,1);assert.equal((await h.query('execution.list')).length,0);assert.equal(h.sent.length,0)
+})
 
 test('reopen reconsiders all five unapplied context messages at the current task version without replay', { timeout: 20000, ...(!available ? { skip: reason } : {}) }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'web-context-recovery-'))

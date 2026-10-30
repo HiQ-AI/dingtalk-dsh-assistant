@@ -29,6 +29,19 @@ export const stableId = (prefix, value) => `${prefix}-${createHash('sha256').upd
 export const fingerprint = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export const isPendingDecision = record => !['completed', 'rejected'].includes(record.status)
 
+// submitWebTaskInput derives both IDs from the same group/request identity.
+// Its deterministic action settles that Web input, not the whole Topic snapshot.
+export function isWebTaskDecision(record) {
+  return record.decisionId?.startsWith('decision-') && record.decision.basisMessageIds?.length === 1
+    && record.decision.basisMessageIds[0] === `web-${record.decisionId.slice('decision-'.length)}`
+}
+export function topicDecisionCoversEntry(record, entry) {
+  if (record.revision < entry.revision) return false
+  if (!isWebTaskDecision(record)) return true
+  return record.decision.basisMessageIds[0] === entry.messageId
+    && record.decision.basisUnitRefs?.some(ref => ref.unitId === entry.unitId && ref.unitRevision === entry.unitRevision)
+}
+
 // Historical messages are usable only when their actual source ownership is unique.
 // A task's many historical topicRefs are not notification subscribers.
 export function canonicalReplyTopic(group, topicId) {

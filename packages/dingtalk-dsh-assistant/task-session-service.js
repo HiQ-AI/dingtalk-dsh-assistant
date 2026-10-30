@@ -25,7 +25,7 @@ import { createTaskSessionObservability } from './task-session-observability.js'
 import { activeFixedUnits } from './fixed-topics.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { resolveTaskArtifactScope } from './task-artifact-scope.js'
-import { resolveTopicMessages, stableId, replyTopicForMessage, canonicalReplyTopic } from './topic-model.js'
+import { resolveTopicMessages, stableId, replyTopicForMessage, canonicalReplyTopic, topicDecisionCoversEntry } from './topic-model.js'
 import { createTopicFactHandler } from './topic-facts.js'
 import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from './task-message-projections.js'
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, taskFilePath, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
@@ -606,7 +606,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const latest = new Map()
       for (const entry of topic.entries) if (entry.messageId === source.messageId) latest.set(entry.unitId ?? 'legacy', entry)
       return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === source.version && !isRetired(entry)).every(entry =>
-        topic.processedRevision >= entry.revision && topic.decisions.some(record => record.status === 'completed' && record.revision >= entry.revision))
+        topic.processedRevision >= entry.revision && topic.decisions.some(record => record.status === 'completed' && topicDecisionCoversEntry(record, entry)))
     })
     if (Array.isArray(message.activeUnitRefs)) {
       if (!sameProcessingRefs(source, message.activeUnitRefs) || source.processingCompleted && !legacyComplete
