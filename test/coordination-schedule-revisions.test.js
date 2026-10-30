@@ -145,10 +145,12 @@ test(`retired periodic ${state}/${delivery} keeps history without transferring c
   const occurrence={id:'old-slot',scheduleId:'old',acceptedScheduleRevision:2,plannedAt:'2026-10-20T01:00:00Z',target:{conversationId:'g',recipientIds:['original']},actionState:'succeeded',deliveryState:delivery}
   const notice={id:'old-notice',kind:'coordination',state:delivery,payload:{conversationId:'g',text:'Frozen old result',fact:{coordinationId:'arrangement',eventId:'old-slot'}},
     ...(delivery==='delivered'?{receipt:{messageId:'sent-once'}}:delivery==='unknown'?{ack:{openTaskId:'accepted-once'},sendAttemptCount:1}:{})}
-  db.prepare("DELETE FROM dynamic_meta WHERE key='independentCoordinationRetired'").run()
-  for(const [table,row] of [['coordination_schedules',schedule],['coordination_occurrences',occurrence],['notifications',notice]])
-    db.prepare(`INSERT INTO dynamic_${table}(id,body) VALUES (?,?)`).run(row.id,JSON.stringify(row))
-  db.close();store=await openDynamicTaskStore(options)
+  try{
+    db.prepare("DELETE FROM dynamic_meta WHERE key='independentCoordinationRetired'").run()
+    for(const [table,row] of [['coordination_schedules',schedule],['coordination_occurrences',occurrence],['notifications',notice]])
+      db.prepare(`INSERT INTO dynamic_${table}(id,body) VALUES (?,?)`).run(row.id,JSON.stringify(row))
+  }finally{db.close()}
+  store=await openDynamicTaskStore(options)
   const query=kind=>store.query({kind})
   const [saved]=await query('coordination.schedule.list')
   assert.equal(saved.state,state);assert.equal(saved.nextDueAt,schedule.nextDueAt)

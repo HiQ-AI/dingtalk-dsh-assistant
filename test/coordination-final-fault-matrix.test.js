@@ -58,8 +58,15 @@ for(const when of ['before','after'])test(`T23 completion rollback at ${table} $
   try{await assert.rejects(f.command('task.complete',input,'complete-once'),/injected/)}finally{injected.restore()}
   assert.equal(injected.fired(),true);assert.deepEqual(await f.query('task.get',{taskId:'A'}),before)
   assert.deepEqual((await f.query('task.events')).events,[]);assert.equal(await f.query('receipt.get',{id:'complete-once'}),null)
-  const result=await f.command('task.complete',input,'complete-once')
-  assert.equal(result.topicFacts.length,1);assert.equal((await f.command('task.complete',input,'complete-once')).replayed,true)
+  const assertNoFacts=()=>{const db=new DatabaseSync(f.options.dbPath,{readOnly:true})
+    try{assert.equal(db.prepare('SELECT COUNT(*) AS count FROM dynamic_topic_facts').get().count,0)}finally{db.close()}}
+  assertNoFacts();await f.restart();assertNoFacts()
+  assert.deepEqual(await f.query('task.get',{taskId:'A'}),{...before,recovering:true})
+  assert.deepEqual((await f.query('task.events')).events,[]);assert.equal(await f.query('receipt.get',{id:'complete-once'}),null)
+  await assert.rejects(f.command('task.complete',input,'complete-once'),{code:'DYNAMIC_TASK_LEASE_STALE'})
+  await f.command('task.drained',{binding});const recoveredInput={...input,binding:await f.claim('A')}
+  const result=await f.command('task.complete',recoveredInput,'complete-once')
+  assert.equal(result.topicFacts.length,1);assert.equal((await f.command('task.complete',recoveredInput,'complete-once')).replayed,true)
   await f.restart();assert.equal((await f.query('task.get',{taskId:'A'})).status,'completed')
   assert.equal((await f.query('task.events')).events.length,1)
   assert.equal((await f.query('topic.fact.get',{factId:result.topicFacts[0].id})).commandId,'complete-once')
@@ -106,10 +113,12 @@ test('T32 retired periodic cursor and accepted UTC slot remain historical under 
   const f=await fixture(t);await f.task('A');await f.close();const db=new DatabaseSync(f.options.dbPath)
   const schedule={id:'old-schedule',state:'active',coordinationId:'old',rule:{kind:'daily',time:'09:00'},nextDueAt:'2026-10-22T01:00:00Z'}
   const occurrence={id:'old-slot',scheduleId:schedule.id,plannedAt:'2026-10-21T01:00:00Z',state:'waiting'}
-  db.prepare("DELETE FROM dynamic_meta WHERE key='independentCoordinationRetired'").run()
-  for(const [table,row] of [['dynamic_coordination_schedules',schedule],['dynamic_coordination_occurrences',occurrence]])
-    db.prepare(`INSERT INTO ${table}(id,body) VALUES (?,?)`).run(row.id,JSON.stringify(row))
-  db.close();await f.open();const task=await f.query('task.get',{taskId:'A'}),saved=await f.query('coordination.schedule.list')
+  try{
+    db.prepare("DELETE FROM dynamic_meta WHERE key='independentCoordinationRetired'").run()
+    for(const [table,row] of [['dynamic_coordination_schedules',schedule],['dynamic_coordination_occurrences',occurrence]])
+      db.prepare(`INSERT INTO ${table}(id,body) VALUES (?,?)`).run(row.id,JSON.stringify(row))
+  }finally{db.close()}
+  await f.open();const task=await f.query('task.get',{taskId:'A'}),saved=await f.query('coordination.schedule.list')
   for(const at of ['2026-10-25T01:00:00Z','2026-10-20T01:00:00Z','2026-10-25T01:00:00Z']){
     t.mock.timers.setTime(Date.parse(at));await f.restart()
     assert.deepEqual(await f.query('coordination.schedule.list'),saved);assert.deepEqual(await f.query('coordination.occurrence.list'),[occurrence])
