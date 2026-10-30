@@ -45,9 +45,12 @@ export async function readTaskFileDelivery(adapter, notification) {
   const openTaskId = notificationOpenTaskId(notification.ack ?? notification.receipt)
   if (!openTaskId) return undefined
   const status = await adapter.querySendStatus(openTaskId)
+  if (status.success === false || status.openTaskId !== undefined && status.openTaskId !== openTaskId) return undefined
   const conversationId = status.messageRef?.openConversationId ?? status.result?.openConversationId
   const messageId = status.messageRef?.openMessageId ?? status.result?.openMessageId
   if (status.result?.sendStatus !== 'SUCCESS' || !messageId || conversationId !== notification.payload.conversationId) return undefined
+  if (status.result.openConversationId !== undefined && status.result.openConversationId !== conversationId
+    || status.result.openMessageId !== undefined && status.result.openMessageId !== messageId) return undefined
   const artifact = notification.payload.artifact
   const verified = await adapter.readMessageFile({ groupId: conversationId, messageId, expected: { size: artifact.size, sha256: artifact.sha256 } })
   if (verified.size !== artifact.size || verified.sha256 !== artifact.sha256

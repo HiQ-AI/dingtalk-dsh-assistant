@@ -36,12 +36,17 @@ test('attachment transport selects frozen files and requires exact original rece
   const artifact = { artifactId: 'file', fileName: 'acceptance.png', size: 8, sha256: 'a'.repeat(64) }
   const notice = { id: 'notice:file', payload: { conversationId: 'group', artifact }, ack: { sendReceipt: { openTaskId: 'send-task' } } }
   const calls = [], verified = { message: { conversationId: 'group', messageId: 'file-message' }, size: 8, sha256: artifact.sha256, resourceRef: { type: 'fileId', resourceId: 'resource' } }
-  let status = { result: { sendStatus: 'SUCCESS' }, messageRef: { openConversationId: 'group', openMessageId: 'file-message' } }
+  let status = { contractVersion: 'im.message-send-status.v1', success: true, openTaskId: 'send-task', result: { sendStatus: 'SUCCESS' }, messageRef: { openConversationId: 'group', openMessageId: 'file-message' } }
   const adapter = { querySendStatus: async id => { assert.equal(id, 'send-task'); return status }, readMessageFile: async input => { calls.push(input); return verified } }
   const transport = withTaskFileNotifications({ send: async () => 'text-ack', sendFile: async (n, file) => { assert.equal(n, notice); assert.equal(file.directory, '/frozen'); return 'file-ack' }, readbackFile: n => readTaskFileDelivery(adapter, n) }, { resolve: async file => { assert.equal(file, artifact); return { ...file, directory: '/frozen' } } })
   assert.equal(await transport.send(notice), 'file-ack'); assert.equal(await transport.send({ payload: {} }), 'text-ack')
   assert.equal((await transport.readback(notice)).messageId, 'file-message')
   assert.deepEqual(calls[0].expected, { size: 8, sha256: artifact.sha256 })
+  status.openTaskId = 'unrelated-send'
+  assert.equal(await transport.readback(notice), undefined); assert.equal(calls.length, 1)
+  status.openTaskId = 'send-task'; status.result.openMessageId = 'conflicting-message'
+  assert.equal(await transport.readback(notice), undefined); assert.equal(calls.length, 1)
+  delete status.result.openMessageId
   status.messageRef.openConversationId = 'other'
   assert.equal(await transport.readback(notice), undefined); assert.equal(calls.length, 1)
   status.messageRef.openConversationId = 'group'; verified.sha256 = 'b'.repeat(64)
