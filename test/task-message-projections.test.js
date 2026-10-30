@@ -2,8 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ingestTaskResidentMessage, taskNotificationOutbound, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
-import { createHash } from 'node:crypto'
-import { coordinationContextRecoveryIdentity } from '../packages/dingtalk-dsh-assistant/coordination-changes.js'
+import { retiredSourceOwnership, COORDINATION_RETIRED_REASON } from '../packages/dingtalk-dsh-assistant/coordination-retirement.js'
 
 function memoryFacility(seed = new Map(), onWrite = () => {}) {
   const table = name => ({
@@ -16,63 +15,69 @@ function memoryFacility(seed = new Map(), onWrite = () => {}) {
   return { async open() { return { table, close: async () => undefined } } }
 }
 
-test('coordination processing DTO fences source versions and reservation generations without private errors', () => {
+test('retired coordination projection is bound to the exact source version and exposes no private ledger or retry token', () => {
   const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 2 }
   const ref = { unitId: 'u', unitRevision: 2 }
-  const owner = { ...ref, reservationId: 'r', generation: 3, dispatchOwner: 'coordination', semanticState: 'reserved', sourceSnapshot: { messageId: 'm', messageVersion: 2 } }
-  const ledger = { id: 'c', groupId: 'g', sourceMessageId: 'm', sourceRefs: ['s'], unitId: 'u', revision: 2, reservationId: 'r', reservationGeneration: 3,
-    dispatchOwner: 'coordination', state: 'reserved', attemptCount: 3, nextRetryAt: null, original: 'private', actorId: 'private', lastError: 'private' }
-  const read = () => messageProcessingSources([source], [], 'g', [ledger], [owner])[0].coordination
-  assert.deepEqual(read(), [{ ...ref, reservationId: 'r', generation: 3, state: 'reserved', semanticState: 'reserved', conclusion: null, attempt: 3, nextRetryAt: null, retryToken: read()[0].retryToken, resolved: false, frozen: false }])
-  assert.match(read()[0].retryToken, /^[a-f0-9]{64}$/)
+  const retirement = { kind: 'feature-removed', reason: COORDINATION_RETIRED_REASON, at: '2026-10-29T00:00:00Z' }
+  const owner = { ...ref, reservationId: 'r', generation: 3, dispatchOwner: 'coordination', semanticState: 'reserved',
+    retirement, sourceSnapshot: { groupId: 'g', messageId: 'm', messageVersion: 2 }, original: 'private', lastError: 'private' }
+  const ledger = { id: 'old-ledger', original: 'private', lastError: 'private' }
+  const read = () => messageProcessingSources(retiredSourceOwnership([source], [owner], 'g'), [], 'g', [ledger], [owner]).find(row => row.sourceId === 's')
+  assert.deepEqual(read().coordinationRetirement, { ...retirement, units: [ref] })
+  assert.equal(read().coordination, undefined)
+  assert.equal(read().retryToken, undefined)
+  assert.equal(read().processingCompleted, null, 'Feature retirement is not a semantic decision or business completion')
   assert.equal(JSON.stringify(read()).includes('private'), false)
-  for (const change of [() => ledger.reservationGeneration--, () => ledger.revision--, () => ledger.sourceRefs = ['old'], () => ledger.groupId = 'other',
-    () => owner.sourceSnapshot.messageVersion--, () => owner.dispatchOwner = 'legacy-topic']) {
-    const originalLedger = structuredClone(ledger), originalOwner = structuredClone(owner)
-    change(); assert.deepEqual(read(), []); Object.assign(ledger, originalLedger); Object.assign(owner, originalOwner)
+  for (const patch of [{ groupId: 'other' }, { messageId: 'other' }, { messageVersion: 1 }]) {
+    const previous = owner.sourceSnapshot
+    owner.sourceSnapshot = { ...previous, ...patch }
+    assert.equal(read().coordinationRetirement, null)
+    owner.sourceSnapshot = previous
   }
-  ledger.resolvedBy = 'new'; assert.equal(read()[0].resolved, true)
-  ledger.resolvedBy = undefined; owner.semanticState = 'accepted'; assert.equal(read()[0].resolved, true)
+  owner.dispatchOwner = 'legacy-topic'
+  assert.equal(read().coordinationRetirement, null)
 })
 
-test('协调结论来自同版本预约账，澄清、部分接纳和补齐保持不同事实', () => {
+test('old clarification, partial acceptance and accepted facts stay in audit without being presented as current work', () => {
   const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 1 }
-  const owner = { unitId: 'u', unitRevision: 1, reservationId: 'r', generation: 1, dispatchOwner: 'coordination',
-    sourceSnapshot: { messageId: 'm', messageVersion: 1 } }
-  const ledger = { id: 'c', groupId: 'g', sourceMessageId: 'm', sourceRefs: ['s'], unitId: 'u', revision: 1,
-    reservationId: 'r', reservationGeneration: 1, dispatchOwner: 'coordination', state: 'needs_clarification', question: '要部署哪个改动？' }
-  const read = () => messageProcessingSources([source], [{ payload: { text: '不可用通知推断结论' } }], 'g', [ledger], [owner])[0].coordination[0]
-  assert.equal(read().semanticState, 'needs_clarification'); assert.equal(read().conclusion, ledger.question)
-  ledger.state = 'accepted'; ledger.pendingClarifications = [{ question: '第二项环境是什么？' }]
-  assert.equal(read().semanticState, 'needs_clarification'); assert.equal(read().conclusion, '第二项环境是什么？')
-  ledger.resolvedBy = 'new-source'
-  assert.equal(read().semanticState, 'accepted'); assert.equal(read().conclusion, '澄清已补齐，已接纳安排')
-  ledger.resolvedBy = undefined; ledger.pendingClarifications = []
-  assert.equal(read().conclusion, '已接纳安排，执行结果另行核验')
-  owner.generation++
-  assert.equal(read(), undefined)
+  const retirement = { kind: 'feature-removed', reason: COORDINATION_RETIRED_REASON, at: '2026-10-29T00:00:00Z' }
+  for (const historical of [
+    { state: 'needs_clarification', question: 'Which change should be deployed?' },
+    { state: 'accepted', pendingClarifications: [{ question: 'Which environment?' }] },
+    { state: 'accepted', resolvedBy: 'new-source' },
+  ]) {
+    const owner = { unitId: 'u', unitRevision: 1, dispatchOwner: 'coordination', retirement,
+      sourceSnapshot: { messageId: 'm', messageVersion: 1 }, ...historical }
+    const before = structuredClone(owner)
+    const [result] = messageProcessingSources(retiredSourceOwnership([source], [owner], 'g'),
+      [{ id: 'n', payload: { conversationId: 'g', sourceMessageId: 'm', text: 'Cannot infer a decision from this message' } }], 'g', [historical], [owner])
+    assert.deepEqual(owner, before, 'Projection must not rewrite original audit facts')
+    assert.equal(result.coordinationRetirement.reason, COORDINATION_RETIRED_REASON)
+    assert.equal(result.processingCompleted, null)
+    assert.equal(result.coordination, undefined)
+    assert.equal(JSON.stringify(result).includes('Cannot infer'), false)
+  }
 })
 
-test('引用缺失重判令牌绑定原引用、来源版本、预约代及原安排修订，当前新预约不开放', () => {
-  const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 1, actorId: 'author',
-    quote: { messageId: 'delivery', content: '后端#417和前端#389' }, activeUnitRefs: [{ unitId: 'u', unitRevision: 1 }] }
+test('legacy missing-quote recovery cannot reopen retired coordination or fabricate current source evidence', () => {
+  const quote = { messageId: 'delivery', content: 'Original result references' }
+  const source = { sourceId: 's', groupId: 'g', messageId: 'm', version: 1, actorId: 'author', quote,
+    activeUnitRefs: [{ unitId: 'u', unitRevision: 1 }] }
   const owner = { unitId: 'u', unitRevision: 1, reservationId: 'r', generation: 1, dispatchOwner: 'coordination',
     semanticState: 'needs_clarification', sourceSnapshot: { messageId: 'm', messageVersion: 1 } }
-  const ledger = { id: 'c', groupId: 'g', sourceMessageId: 'm', sourceRefs: ['s'], unitId: 'u', revision: 1,
-    reservationId: 'r', reservationGeneration: 1, fence: 1, dispatchOwner: 'coordination', state: 'needs_clarification', coordinationId: 'a' }
-  const arrangement = { id: 'a', sourceId: 'c', groupId: 'g', revision: 1, state: 'needs_clarification', memberIds: [] }
-  const read = () => messageProcessingSources([source], [], 'g', [ledger], [owner], [arrangement])[0].coordination[0]
-  const token = read().contextRecoveryToken
-  assert.equal(token, createHash('sha256').update(JSON.stringify(coordinationContextRecoveryIdentity(ledger, arrangement, source))).digest('hex'))
-  for (const change of [() => { source.quote.content += '（补充）' }, () => { arrangement.revision++ }, () => { ledger.fence++ }]) {
-    change(); assert.notEqual(read().contextRecoveryToken, token)
+  const before = structuredClone(source)
+  for (const ledger of [
+    { fence: 1, state: 'needs_clarification', coordinationId: 'a' },
+    { fence: 2, state: 'needs_clarification', contextReconsideration: { at: 'already-requested' } },
+    { fence: 2, state: 'accepted', resolvedBy: 'answer' },
+  ]) {
+    const [row] = messageProcessingSources([source], [], 'g', [ledger], [owner], [{ id: 'a', revision: ledger.fence }])
+    assert.equal(row.coordination, undefined)
+    assert.equal(row.contextRecoveryToken, undefined)
+    assert.equal(row.coordinationRetirement, null, 'An old row alone does not prove retirement occurred')
+    assert.equal(row.processingCompleted, null)
   }
-  owner.sourceSnapshot.quotedMessage = source.quote
-  assert.equal(read().contextRecoveryToken, undefined, '新版本已保留引用不开放此修复路径')
-  delete owner.sourceSnapshot.quotedMessage; ledger.contextReconsideration = { at: 'already-requested' }
-  assert.equal(read().contextRecoveryToken, undefined, '一次修复不会反复重判')
-  delete ledger.contextReconsideration; delete source.actorId
-  assert.equal(read().contextRecoveryToken, undefined, '缺身份不能提供重判入口')
+  assert.deepEqual(source, before)
 })
 
 test('message processing DTO keeps exact source versions, unknown history and no private content', () => {
