@@ -95,6 +95,41 @@ test('topic-task association paging covers archived tasks and source-group overr
  assert.equal(page({collection:'tasks',groupId:'g',topicId:'topic',archived:'all'}).total,30)
 })
 
+test('topic task summaries select only the visible SQL fields without execution or historical body reads',t=>{
+ const {db,put}=fixture(t,{archives:true}), hidden='hidden-history-'.repeat(20000)
+ for(let n=0;n<35;n++)put('tasks',`topic-task-${String(n).padStart(2,'0')}`,{taskId:'t'+n,groupId:'g',title:'关联任务'+n,
+  status:'active',control:'active',drained:true,updatedAt:'same',topicRefs:[{topicId:'topic'}],
+  request:hidden,objective:hidden,completion:{result:{summary:hidden}},decisions:[{body:hidden}],dialogue:[{text:hidden}],
+  ...(n%2?{archivedAt:'2026-10-30'}:{})})
+ db.exec("INSERT INTO dynamic_archived_tasks SELECT id,rowid,body FROM dynamic_tasks WHERE json_extract(body,'$.archivedAt') IS NOT NULL; DELETE FROM dynamic_tasks WHERE json_extract(body,'$.archivedAt') IS NOT NULL;")
+ const sql=[],materialized=[]
+ const observed={prepare(query){sql.push(query);const st=db.prepare(query);return {get:(...args)=>st.get(...args),all:(...args)=>{const rows=st.all(...args);if(query.includes(' AS body'))materialized.push(...rows);return rows}}}}
+ const result=observerPage(observed,{collection:'tasks',groupId:'g',topicId:'topic',archived:'all',summary:true,offset:10,limit:10},'test')
+ assert.equal(result.total,35);assert.equal(result.items.length,10);assert.equal(materialized.length,10)
+ assert.deepEqual(result.items.map(item=>item.taskId),Array.from({length:10},(_,i)=>'topic-task-'+(i+10)))
+ assert(result.items.every(item=>Object.keys(item).sort().join(',')==='archivedAt,state,taskId,title,updatedAt'))
+ assert(result.items.every(item=>item.state==='waiting'))
+ assert(!JSON.stringify(materialized).includes(hidden));assert(JSON.stringify(materialized).length<2200)
+ const bodySql=sql.find(query=>query.includes(' AS body'))
+ assert(bodySql.includes('WITH page_ids AS MATERIALIZED'))
+ assert(!bodySql.includes('observer_execution_index'));assert(!bodySql.includes('json_remove'))
+ assert(!bodySql.includes("'$.dialogue'"));assert(!bodySql.includes("'$.completion'"))
+ const final=observerPage(db,{collection:'tasks',topicId:'topic',groupId:'g',archived:'all',summary:true,offset:30,limit:10,revision:result.revision},'test')
+ assert.equal(final.items.length,5);assert.equal(final.nextOffset,null)
+ put('tasks','another',{taskId:'another',title:'新任务',status:'active',drained:true,topicRefs:[{topicId:'topic'}],groupId:'g'})
+ assert.throws(()=>observerPage(db,{collection:'tasks',summary:true,offset:20,limit:10,revision:result.revision},'test'),{code:'OBSERVER_PAGE_STALE'})
+})
+
+test('topic task service passes the summary page through without detail DTO or additional queries',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/task-session-service.js',import.meta.url),'utf8')
+ const method=source.slice(source.indexOf('    async boardTasks(options)'),source.indexOf('    async taskDecisions('))
+ const page={items:[{taskId:'task',title:'任务',state:'running',archivedAt:null,updatedAt:'now'}],total:1,offset:0,limit:10,nextOffset:null}
+ const queries=[]
+ const board=runInNewContext(`({${method}}).boardTasks`,{query:async(kind,args)=>{queries.push({kind,...args});return page}})
+ assert.equal(await board({summary:true,groupId:'g',topicId:'topic',archived:'all',offset:0,limit:10}),page)
+ assert.deepEqual(queries,[{kind:'observer.page',collection:'tasks',summary:true,groupId:'g',topicId:'topic',archived:'all',offset:0,limit:10}])
+})
+
 
 test('work SQL read model excludes historical bodies while retaining the exact retry proof',t=>{
  const {db,put}=fixture(t)

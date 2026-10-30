@@ -1,10 +1,12 @@
 import {ObserverMemoryPages} from './observer-memory-pages.js'
+import { randomUUID } from 'node:crypto'
 const mixedTopicPages=new WeakMap()
+const topicDecisionVersions = new WeakMap()
 import { messageProcessingProjection } from './observer-message-projection.js'
 import { checkForUpdates } from './version-check.js'
 import { z } from 'zod'
 import { fixedTopicCorrectionSchema } from './fixed-topic-correction.js'
-import { isPendingDecision, topicDecisionRecovery } from './topic-model.js'
+import { fingerprint, isPendingDecision, topicDecisionRecovery } from './topic-model.js'
 import { taskContextProgressImpactSchema, taskContextSemanticsProblem } from './task-input-contract.js'
 
 const WEB_ORIGINS = new Set(['http://127.0.0.1:3080', 'http://localhost:3080'])
@@ -72,6 +74,13 @@ function topicSummary(topic) {
     ...(unfinished ? { processing: { decisionId: unfinished.decisionId, status: unfinished.status, appliedOperations: (unfinished.operations ?? []).filter((item) => item.status === 'applied').length, totalOperations: unfinished.operations?.length ?? 0, ...(unfinished.error ? { error: String(unfinished.error).slice(0, 1000) } : {}) } } : {}),
     createdAt: topic.createdAt, updatedAt: topic.updatedAt,
   }
+}
+// The daily overview does not inspect message ownership or decision history.
+function topicOverview(topic, { list = false } = {}) {
+  return { topicId: topic.topicId, groupId: topic.groupId, title: topic.title,
+    revision: topic.revision, summaryRevision: topic.summaryRevision, status: topic.status,
+    summary: list ? String(topic.summary ?? '').slice(0, 240) : topic.summary,
+    updatedAt: topic.updatedAt, ...(topic.mergedInto ? { mergedInto: topic.mergedInto } : {}) }
 }
 function workflowTopicSummary(topic) {
   return { topicId: topic.topicId, groupId: topic.conversationId, title: topic.title,
@@ -266,7 +275,8 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     try {
       const offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
       const groupId=url.searchParams.get('groupId')??undefined
-      if(store.listTopicsPage && !store.listWorkflowTopics) { const page=await store.listTopicsPage({groupId,offset,limit,includeMerged:url.searchParams.get('includeMerged')==='true',revision:url.searchParams.get('pageRevision')||undefined});return send(response,200,{...page,items:undefined,topics:page.items.map(topicSummary)}) }
+      const summarize = url.searchParams.get('view') === 'overview' ? topic => topicOverview(topic, { list: true }) : topicSummary
+      if(store.listTopicsPage && !store.listWorkflowTopics) { const page=await store.listTopicsPage({groupId,offset,limit,includeMerged:url.searchParams.get('includeMerged')==='true',revision:url.searchParams.get('pageRevision')||undefined});return send(response,200,{...page,items:undefined,topics:page.items.map(summarize)}) }
       if(store.listWorkflowTopics && (!store.listWorkflowTopicIndex||!store.getWorkflowTopicById))return send(response,503,{error:'workflow_topic_pagination_provider_required'})
       const local=store.listTopics(groupId).filter(topic=>!topic.mergedInto||url.searchParams.get('includeMerged')==='true')
       const workflow=await store.listWorkflowTopicIndex?.(groupId)??[]
@@ -275,7 +285,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       const key=JSON.stringify([groupId??null,url.searchParams.get('includeMerged')==='true'])
       pages.replace(key,JSON.stringify(descriptors),descriptors.map((item,index)=>({...item,order:String(index).padStart(12,'0')})))
       const byId=new Map(local.map(topic=>[`local:${topic.topicId}`,topic]))
-      const page=await pages.page(key,{offset,limit,revision:url.searchParams.get('pageRevision')||undefined},async id=>id.startsWith('local:')?topicSummary(byId.get(id)):workflowTopicSummary(await store.getWorkflowTopicById(id.slice(9))))
+      const page=await pages.page(key,{offset,limit,revision:url.searchParams.get('pageRevision')||undefined},async id=>id.startsWith('local:')?summarize(byId.get(id)):workflowTopicSummary(await store.getWorkflowTopicById(id.slice(9))))
       return send(response,200,{...page,items:undefined,topics:page.items})
     } catch (error) { return send(response,error.code==='OBSERVER_PAGE_STALE'?409:400, { error: error.message }) }
   }
@@ -285,6 +295,13 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       if (!groupId) return send(response, 400, { error: 'group_id_required' })
       const topicId = decodeURIComponent(url.pathname.slice('/state/topics/'.length))
       const revision = pageNumber(url, 'revision', undefined), offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 50, 100)
+      if (url.searchParams.get('view') === 'overview') {
+        const topic = store.getTopic?.(groupId, topicId)
+        if (topic) return send(response, 200, { topic: topicOverview(topic) })
+        const historical = await store.getWorkflowTopicById?.(topicId)
+        return send(response, historical?.conversationId === groupId ? 200 : 404,
+          historical?.conversationId === groupId ? { topic: workflowTopicSummary(historical) } : { error: 'topic_not_found' })
+      }
       if (!store.getTopic?.(groupId, topicId)) {
         const workflowContext=await store.getWorkflowTopicContext?.({groupId,topicId,offset,limit,...(url.searchParams.has('pageRevision')?{pageRevision:url.searchParams.get('pageRevision')}:{})})
         if(!workflowContext)return send(response,404,{error:'topic_not_found'})
@@ -299,15 +316,36 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   if (request.method === 'GET' && url.pathname === '/state/tasks') {
     try {
       const paged = url.searchParams.has('limit') || url.searchParams.has('offset')
-      if (paged && ([...url.searchParams.keys()].some(key => !['offset','limit','state','archived','groupId','topicId','revision'].includes(key)) || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1) || url.searchParams.has('archived') && !['true','false','all'].includes(url.searchParams.get('archived')))) throw new Error('OBSERVER_PAGE_INVALID')
+      if (url.searchParams.has('view') && !paged) throw new Error('OBSERVER_PAGE_INVALID')
+      if (paged && ([...url.searchParams.keys()].some(key => !['offset','limit','state','archived','groupId','topicId','revision','view'].includes(key)) || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1) || url.searchParams.has('archived') && !['true','false','all'].includes(url.searchParams.get('archived')) || url.searchParams.has('view') && url.searchParams.get('view') !== 'summary')) throw new Error('OBSERVER_PAGE_INVALID')
       const options = paged ? { offset: pageNumber(url, 'offset', 0), limit: pageNumber(url, 'limit', 20, 100),
         state: url.searchParams.get('state') || undefined, archived: url.searchParams.get('archived')==='all'?'all':url.searchParams.get('archived') === 'true',
-        groupId: url.searchParams.get('groupId') || undefined,topicId:url.searchParams.get('topicId')||undefined, revision: url.searchParams.get('revision') || undefined } : undefined
+        groupId: url.searchParams.get('groupId') || undefined,topicId:url.searchParams.get('topicId')||undefined, revision: url.searchParams.get('revision') || undefined,
+        ...(url.searchParams.get('view') === 'summary' ? { summary: true } : {}) } : undefined
       if (options?.state && !['queued','running','waiting','completed'].includes(options.state)) throw new Error('OBSERVER_PAGE_INVALID')
       return send(response, 200, await (store.listTaskView?.(options) ?? store.listTasks()))
     } catch(error) { return send(response, error.code === 'OBSERVER_PAGE_STALE' ? 409 : error.code === 'OBSERVER_PAGINATION_MIGRATION_REQUIRED' ? 503 : 400, {error:error.message}) }
   }
 
+  const topicDecisions = request.method === 'GET' && /^\/state\/topics\/([^/]+)\/decisions$/u.exec(url.pathname)
+  if (topicDecisions) {
+    try {
+      const groupId = url.searchParams.get('groupId')
+      if (!groupId) return send(response, 400, { error: 'group_id_required' })
+      const topic = store.getTopic?.(groupId, decodeURIComponent(topicDecisions[1]))
+      if (!topic) return send(response, 404, { error: 'topic_not_found' })
+      const offset = pageNumber(url, 'offset', 0), limit = pageNumber(url, 'limit', 10, 100)
+      // Resident writes replace the decisions array, including status-only updates
+      // that need not advance the Topic's message revision or updatedAt.
+      if (!topicDecisionVersions.has(topic.decisions)) topicDecisionVersions.set(topic.decisions, randomUUID())
+      const revision = fingerprint([topicDecisionVersions.get(topic.decisions), topic.revision, topic.updatedAt])
+      if (url.searchParams.has('pageRevision') && url.searchParams.get('pageRevision') !== revision) return send(response, 409, { error: 'topic_context_stale' })
+      const total = topic.decisions.length
+      // Stored order is oldest first. Select a page before reversing or serializing.
+      const items = topic.decisions.slice(Math.max(0, total - offset - limit), Math.max(0, total - offset)).reverse()
+      return send(response, 200, { items, total, offset, limit, revision, nextOffset: offset + items.length < total ? offset + items.length : null })
+    } catch (error) { return send(response, 400, { error: error.message }) }
+  }
   const topicState = request.method === 'GET' && /^\/state\/topics\/([^/]+)\/context$/u.exec(url.pathname)
   if (topicState) {
     try {

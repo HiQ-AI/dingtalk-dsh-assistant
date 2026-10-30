@@ -1875,6 +1875,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     async boardTasks(options) {
       if (!options) return Promise.all((await query('task.list')).map(taskDTO))
       const page = await query('observer.page', { collection: 'tasks', ...options })
+      if (options.summary) return page
       return { ...page, items: page.items.map(task => ({ ...task, inputVersion: task.requirementRevision,
         controlState: task.control, waitingReason: task.state === 'waiting' ? task.lastDecision?.summary ?? '' : '',
         result: task.completion?.result ?? task.lastDecision ?? null, legacyReadonly: false,

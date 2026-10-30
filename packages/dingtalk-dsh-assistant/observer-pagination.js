@@ -154,6 +154,7 @@ export function observerPage(db, q, instance) {
  const taskBody=taskArchive?'coalesce(d.body,a.body)':'d.body', executionBody=executionArchive?'coalesce(d.body,a.body)':'d.body'
  if (q.collection === 'tasks') {
   from = taskArchive?'observer_task_index i LEFT JOIN dynamic_tasks d ON d.id=i.id LEFT JOIN dynamic_archived_tasks a ON a.id=i.id':'observer_task_index i JOIN dynamic_tasks d ON d.id=i.id'; order = 'i.sort_key DESC,i.id'; body = `json_remove(${taskBody},'$.dialogue')`
+  if (q.summary) body = `json_object('taskId',i.id,'title',json_extract(${taskBody},'$.title'),'state',i.state,'archivedAt',json_extract(${taskBody},'$.archivedAt'),'updatedAt',i.sort_key)`
   if(q.archived!=='all'){conditions.push('i.archived=?');args.push(q.archived?1:0)}
   if (q.state) { conditions.push(q.state === 'completed' ? "i.state IN ('completed','cancelled')" : 'i.state=?'); if(q.state !== 'completed') args.push(q.state) }
   if(q.topicId){conditions.push('EXISTS(SELECT 1 FROM observer_task_topics ref WHERE ref.task_id=i.id AND ref.topic_id=?'+(q.groupId?' AND ref.group_id=?':'')+')');args.push(q.topicId);if(q.groupId)args.push(q.groupId)}else if(q.groupId) { conditions.push('i.group_id=?'); args.push(q.groupId) }
@@ -180,9 +181,9 @@ export function observerPage(db, q, instance) {
  const prefix = indexed ? `WITH page_ids AS MATERIALIZED (SELECT i.* FROM ${countFrom} ${where} ORDER BY ${order} LIMIT ? OFFSET ?) ` : ''
  const pageFrom = indexed ? from.replace(countFrom,'page_ids i') : from
  const suffix = indexed ? `ORDER BY ${order}` : `${where} ORDER BY ${order} LIMIT ? OFFSET ?`
- const rows = db.prepare(`${prefix}SELECT ${body} AS body${q.collection === 'tasks' ? ",i.state AS board_state,(SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id) AS execution_count,(SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id AND e.state IN ('succeeded','completed')) AS completed_count" : ''} FROM ${pageFrom} ${suffix}`).all(...args,limit,offset)
+ const rows = db.prepare(`${prefix}SELECT ${body} AS body${q.collection === 'tasks' && !q.summary ? ",i.state AS board_state,(SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id) AS execution_count,(SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id AND e.state IN ('succeeded','completed')) AS completed_count" : ''} FROM ${pageFrom} ${suffix}`).all(...args,limit,offset)
  if(rows.some(row=>row.body==null))throw error('OBSERVER_PAGE_DATA_MISSING')
- return { items: rows.map(row => ({...JSON.parse(row.body), ...(q.summary ? {drained:!!JSON.parse(row.body).drained,recovering:!!JSON.parse(row.body).recovering} : row.board_state ? {state:row.board_state,executionCount:row.execution_count,completedExecutionCount:row.completed_count} : {})})), total,offset,limit,revision:currentRevision,nextOffset:offset+rows.length<total?offset+rows.length:null }
+ return { items: rows.map(row => ({...JSON.parse(row.body), ...(q.summary && q.collection === 'executions' ? {drained:!!JSON.parse(row.body).drained,recovering:!!JSON.parse(row.body).recovering} : row.board_state ? {state:row.board_state,executionCount:row.execution_count,completedExecutionCount:row.completed_count} : {})})), total,offset,limit,revision:currentRevision,nextOffset:offset+rows.length<total?offset+rows.length:null }
 }
 
 export function observerGroupQuery(db,q) {
