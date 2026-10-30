@@ -195,11 +195,16 @@ for (const scenario of ['before-due', 'late-bridge', 'superseded']) test('Host n
   const root = await mkdtemp(join(tmpdir(), 'platform-due-native-'))
   const restoreLate = scenario === 'late-bridge', superseded = scenario === 'superseded'
   let h, handler, originalTurns = 0, dueTurns = 0, taskTitle = '创建时旧事实', receiptFault = scenario === 'before-due'
-  const errors = [], childHeaders = [], scheduled = { title: '工作汇报', prompt: '汇报本群今天的工作成果', at: new Date(Date.now() + 2500).toISOString() }
+  const errors = [], childHeaders = [], taskReads = [], scheduled = { title: '工作汇报', prompt: '汇报本群今天的工作成果' }
   const boot = async (late = false) => {
     h = await nativeTaskHost(root, request => {
       if (request.tools.some(tool => tool.name === 'platform_schedule_submit')) {
-        if (originalTurns++ === 0) return [0, 1].map(() => ({ name: 'platform_schedule_submit', args: scheduled }))
+        if (originalTurns++ === 0) {
+          // Cold Host/preset startup is not part of the reminder's waiting time.
+          // Freeze one target at submission, then retry that exact same instant.
+          scheduled.at = new Date(Date.now() + 2500).toISOString()
+          return [0, 1].map(() => ({ name: 'platform_schedule_submit', args: scheduled }))
+        }
         return [{ name: 'platform_reply_submit', args: { atOpenDingTalkIds: ['original-actor'], text: '已安排本次工作汇报。' } }]
       }
       if (!request.tools.some(tool => tool.name === 'platform_task_query')) return []
@@ -220,7 +225,10 @@ for (const scenario of ['before-due', 'late-bridge', 'superseded']) test('Host n
       await waitUntil(async () => (await h.ctx.schedule.catalog())[0]?.status === 'inactive', 'native service delivers while bridge is loading')
     }
     handler = createFixedTopicHandler({ ctx: h.ctx, store: h.residentStore, root, legacy: { getAgentConfig: () => ({ agentPreset: 'native-test' }) },
-      models: { provider: 'native-task-test', model: 'controlled' }, readTasks: async groupId => [{ taskId: 'test-task', groupId, title: taskTitle, state: 'completed', completedAt: new Date().toISOString() }],
+      models: { provider: 'native-task-test', model: 'controlled' }, readTasks: async groupId => {
+        taskReads.push({ groupId, title: taskTitle, at: Date.now() })
+        return [{ taskId: 'test-task', groupId, title: taskTitle, state: 'completed', completedAt: new Date().toISOString() }]
+      },
       appendOutbox: args => h.residentStore.appendOutbox(args), onError: (_group, error) => errors.push(error) })
     return late || nativeSchedule(h, t)
   }
@@ -243,16 +251,24 @@ for (const scenario of ['before-due', 'late-bridge', 'superseded']) test('Host n
   await persisted.close()
   assert.equal(h.residentStore.getGroup('scheduled-group').outbox.length, 1)
   if (superseded) await h.residentStore.ingest({ groupId: 'scheduled-group', messageId: 'scheduled-source', messageVersion: 2, senderOpenDingTalkId: 'original-actor', text: '撤回之前的汇报要求', occurredAt: new Date().toISOString() })
-  await handler.close(); await h.close(); taskTitle = '到期时新事实'
+  taskTitle = '到期时新事实'
+  await handler.close(); await h.close()
   if (restoreLate) await waitUntil(() => Date.now() > Date.parse(scheduled.at), 'original target passes while Host is stopped')
   await boot(restoreLate)
   await waitUntil(() => h.residentStore.getPlatformSchedule(record.sessionId)?.outcome === (superseded ? 'superseded' : 'replied'), 'native reminder settles the original group report')
+  // The Agent can settle before Schedule's separate inbox flush/status commit.
+  // Await that durable boundary too; neither completion stands in for the other.
+  await waitUntil(async () => (await h.ctx.schedule.catalog()).find(item => item.id === record.id)?.status === 'inactive', 'original native reminder commits its delivery')
   assert.deepEqual(errors, [])
   const outbox = h.residentStore.getGroup('scheduled-group').outbox
   assert.equal(outbox.length, superseded ? 1 : 2)
   assert.ok(outbox.every(item => item.sourceRef.messageId === 'scheduled-source' && item.sourceRef.actorId === 'original-actor' && !item.replyToMessageId))
   assert.equal((await h.ctx.schedule.catalog())[0].status, 'inactive')
   assert.equal((await h.ctx.schedule.history({ sessionId: record.sessionId, id: record.id, limit: 10 })).records.length, 1)
+  assert.ok(taskReads.some(read => read.title === '创建时旧事实' && read.at < Date.parse(scheduled.at)))
+  const dueReads = taskReads.filter(read => read.at >= Date.parse(scheduled.at))
+  assert.equal(dueReads.length, superseded ? 0 : 1, JSON.stringify(taskReads))
+  assert.ok(dueReads.every(read => read.groupId === 'scheduled-group' && read.title === '到期时新事实'))
   const restored = await h.ctx.sessionController.resolveAgent(record.sessionId)
   restored.agent.followup({ id: 'duplicate-delivery-probe', role: 'user', source: { kind: 'schedule' }, content: [{ type: 'text', text: '[SCHEDULE REMINDER]\n重复送入同一事项' }] })
   await restored.agent.whenIdle()
