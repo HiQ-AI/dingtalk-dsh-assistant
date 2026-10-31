@@ -63,3 +63,51 @@ export function createTaskSessionObservability({ store, listTasks, resolveSessio
       unavailable: [], observedSince, completeness: 'incomplete', reason: 'native-history-audit-not-installed' }),
   }
 }
+
+/** Preserve deferred FIFO observation calls, while letting the resident store
+ * coalesce a bounded burst before we await its individual durable receipts.
+ * close stops admission and joins every accepted observation and error report.
+ */
+export function createTaskObservationQueue({ observe, onError = error => { throw error }, onProgress } = {}) {
+  if (typeof observe !== 'function' || typeof onError !== 'function' || onProgress !== undefined && typeof onProgress !== 'function') throw new TypeError('observation_queue_callbacks_invalid')
+  const queued = [], failures = []
+  let accepting = true, pending = 0, running, closing
+  const progress = () => { try { onProgress?.(pending) } catch (error) { failures.push(error) } }
+  const drain = async () => {
+    while (queued.length) {
+      const batch = queued.splice(0, 256)
+      const outcomes = await Promise.all(batch.map(async args => {
+        try { await observe(...args); return null }
+        catch (error) { return { error } }
+        finally { pending--; progress() }
+      }))
+      // Error reporting retains input order, not nondeterministic IO completion order.
+      for (const outcome of outcomes) if (outcome) {
+        try { await onError(outcome.error) } catch (error) { failures.push(error) }
+      }
+    }
+  }
+  const schedule = () => {
+    if (running) return
+    running = Promise.resolve().then(drain).catch(error => { failures.push(error) }).finally(() => {
+      running = undefined
+      if (queued.length) schedule()
+    })
+  }
+  return {
+    get pending() { return pending },
+    enqueue(...args) {
+      if (!accepting) return false
+      queued.push(args); pending++; schedule()
+      return true
+    },
+    close() {
+      accepting = false
+      return closing ??= (async () => {
+        while (running) await running
+        if (failures.length === 1) throw failures[0]
+        if (failures.length) throw new AggregateError(failures, 'observation_queue_failed')
+      })()
+    },
+  }
+}
