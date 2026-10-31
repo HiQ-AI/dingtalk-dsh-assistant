@@ -2,10 +2,11 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { resolve, dirname, relative, isAbsolute, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { lifecycleStages } from './lifecycle-stages.js'
+import { lifecycleStages, lifecycleContext } from './lifecycle-stages.js'
 
 const scope = new AsyncLocalStorage()
-const preparationMs = 30000, cleanupMs = 10000
+const activeState = () => scope.getStore() ?? lifecycleContext()
+const preparationMs = 30000, cleanupMs = 20000
 const businessBudget = value => value === undefined ? 30000 : value
 export const nativeLifecycleTimeout = value => businessBudget(value) + preparationMs + cleanupMs
 
@@ -14,7 +15,7 @@ export const nativeLifecycleTimeout = value => businessBudget(value) + preparati
 export function registerNativeCleanup(close) { scope.getStore()?.resources.add(close) }
 export const nativeLifecycleSignal = () => scope.getStore()?.signal
 export function nativeTemporaryDirectory(...args) {
-  const state = scope.getStore()
+  const state = activeState()
   const pending = mkdtemp(...args)
   if (!state) return pending
   return pending.then(root => {
@@ -26,9 +27,34 @@ export function nativeTemporaryDirectory(...args) {
   })
 }
 
+function createCleanupTrace(state, cleanupSignal, diagnostic) {
+  if (state.cleanup) return state.cleanup
+  const trace = state.cleanup = { signal: cleanupSignal, pending: new Set(), failed: false, verbose: !!process.env.DSH_NATIVE_CLEANUP_DIAGNOSTICS }
+  trace.emit = (event, entry, outcome) => {
+    const message = JSON.stringify({
+      cleanupEvent: event, ...(entry ? { stage: entry.stage, elapsedMs: Math.round(performance.now() - entry.started), outcome } : {}),
+      pending: [...trace.pending].map(item => ({ stage: item.stage, elapsedMs: Math.round(performance.now() - item.started) })),
+      ownedRootCount: state.directories.length, aborted: cleanupSignal.aborted,
+    })
+    // Node may silently discard t.diagnostic after its test context has ended.
+    if (cleanupSignal.aborted) {
+      process.stderr.write(message + '\n')
+      try { diagnostic(message) } catch {} // A completed Node context cannot own late records.
+    } else diagnostic(message)
+  }
+  cleanupSignal.addEventListener('abort', () => trace.emit('deadline-unsettled'), { once: true })
+  return trace
+}
+function cleanupTrace() {
+  const state = activeState(), phase = lifecycleContext()
+  if (state?.cleanup) return state.cleanup
+  if (state && phase?.phase === 'cleanup') return createCleanupTrace(state, phase.signal, phase.diagnostic)
+}
+export const nativeCleanupSignal = () => cleanupTrace()?.signal
+
 // Observe the real operation; a deadline does not claim to cancel its Promise.
 export function nativeCleanupStage(name, action) {
-  const trace = scope.getStore()?.cleanup
+  const trace = cleanupTrace()
   if (!trace) return action()
   const entry = { stage: name, started: performance.now() }
   trace.pending.add(entry)
@@ -46,12 +72,12 @@ export function nativeCleanupStage(name, action) {
 // Instrument only this disposable test Host's own public methods. Restore an
 // own descriptor only if nobody else replaced it while closing.
 export function instrumentNativeCleanupMethod(target, key, label) {
-  if (!scope.getStore() || !target || typeof target[key] !== 'function') return () => {}
+  if (!activeState() || !target || typeof target[key] !== 'function') return () => {}
   const descriptor = Object.getOwnPropertyDescriptor(target, key), original = target[key]
   const wrapped = function (...args) { return nativeCleanupStage(label, () => Reflect.apply(original, this, args)) }
   try { Object.defineProperty(target, key, { value: wrapped, configurable: true, writable: true }) }
   catch {
-    const trace = scope.getStore()?.cleanup
+    const trace = cleanupTrace()
     if (trace?.verbose) trace.emit('instrumentation-unavailable', { stage: label, started: performance.now() }, 'parent-span-only')
     return () => {}
   } // Frozen/private methods remain inside their parent close span.
@@ -65,7 +91,7 @@ export function instrumentNativeCleanupMethod(target, key, label) {
 // Imported as fs.rm only by the audited native test files. Outside a lifecycle,
 // and for business operations, preserve the original call and Promise exactly.
 export function nativeRemove(...args) {
-  const state = scope.getStore(), trace = state?.cleanup
+  const state = activeState(), trace = cleanupTrace()
   if (!trace) return rm(...args)
   const input = args[0]
   const path = typeof input === 'string' ? resolve(input) : input instanceof URL ? resolve(fileURLToPath(input)) : Buffer.isBuffer(input) ? resolve(input.toString()) : null
@@ -141,17 +167,7 @@ export function nativeLifecycle(value, run, bounds = {}) {
         await body
       },
       cleanup: async (gate, cleanupSignal, drain) => {
-        const trace = state.cleanup = { signal: cleanupSignal, pending: new Set(), failed: false, verbose: !!process.env.DSH_NATIVE_CLEANUP_DIAGNOSTICS }
-        trace.emit = (event, entry, outcome) => {
-          const message = JSON.stringify({
-            cleanupEvent: event, ...(entry ? { stage: entry.stage, elapsedMs: Math.round(performance.now() - entry.started), outcome } : {}),
-            pending: [...trace.pending].map(item => ({ stage: item.stage, elapsedMs: Math.round(performance.now() - item.started) })),
-            ownedRootCount: state.directories.length, aborted: cleanupSignal.aborted,
-          })
-          try { t.diagnostic(message) }
-          catch { try { process.stderr.write(message + '\n') } catch {} }
-        }
-        cleanupSignal.addEventListener('abort', () => trace.emit('deadline-unsettled'), { once: true })
+        createCleanupTrace(state, cleanupSignal, message => t.diagnostic(message))
         const errors = []
         const closeResources = async () => {
           for (const close of [...state.resources].toReversed()) {

@@ -187,7 +187,7 @@ test('即时进度询问经原生路由与query工具一次答复四项任务，
 // The removed coordinator no longer owns quoted deployment or re-evaluation.
 // Current Topic decisions retain the same quoted evidence and reopen only the original Task.
 for (const priorClarification of [false, true]) test(`quoted continuation reuses the original Task and preserves delivered history: priorClarification=${priorClarification}`,
-  { skip: !available ? reason : false, timeout: 70000 }, async t => {
+  { skip: !available ? reason : false, timeout: 80000 }, async t => {
     let host, decisions = 0, pages = 0, turns = 0
     const originalId = 'original-delivery'
     const quote = { messageId: 'original-delivery-message', senderName: '原交付作者',

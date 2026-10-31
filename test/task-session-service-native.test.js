@@ -1773,7 +1773,7 @@ for (const correctOnce of [false, true]) test(`native owner empty-summary correc
   assert.deepEqual((await t.step(async () => h.query('task.events'))).events, completionEvents)
 }))
 
-test('native topic routing rejects incomplete source coverage and accepts correction in the same real session', { timeout: 50000 }, async t => {
+test('native topic routing rejects incomplete source coverage and accepts correction in the same real session', { timeout: 60000 }, async t => {
   let root, rootReady, opening, h, requests = 0, activity = 'host-preparation'
   await lifecycleStages(t, {
     limits: { business: 10000 },

@@ -45,7 +45,7 @@
     "test:all": "node scripts/test-suites.mjs all",
     "test:history": "node scripts/test-suites.mjs run history",
     "test:suites": "node scripts/test-suites.mjs check",
-    "test:release-smoke": "node --test test/release-workflow.test.js test/release-artifacts.test.js test/task-session-package-native.test.js"
+    "test:release-smoke": "node --test --test-concurrency=1 test/release-workflow.test.js test/release-artifacts.test.js test/task-session-package-native.test.js"
   },
   "engines": {
     "node": ">=24"

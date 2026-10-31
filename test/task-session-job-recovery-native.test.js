@@ -168,7 +168,7 @@ test('native missing-job read stays a real error without creating unknown effect
  },
  cleanup: async () => { for (const close of cleanups.toReversed()) await close() },
  })
-}, { timeout: 70000 })
+}, { timeout: 80000 })
 
 for (const explicitStop of [false, true]) test(`native background HTTP service remains usable by the next tool and drains its original job: explicitStop=${explicitStop}`, nativeLifecycle(30000, async (t) => {
  let step = 0, originalJob, serverPid

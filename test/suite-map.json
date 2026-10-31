@@ -5760,7 +5760,9 @@
       "lane": "compat-2",
       "category": "compat",
       "release": true,
-      "publishedImports": [],
+      "publishedImports": [
+        "packages/dingtalk-dsh-assistant/startup-metrics.js"
+      ],
       "retainedCompatibilityImports": [],
       "reason": "未逐用例审定退出；保守保留Release，分类仅隔离资源"
     },

@@ -18,7 +18,7 @@ import { readExecutionResourceCatalog, createExecutionResourceCatalog } from './
 import { createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
 import { taskModelConfig, taskModelSelection } from './task-model-config.js'
 import { inspectSession } from './session-persistence.js'
-import { createStartupMetrics } from './startup-metrics.js'
+import { createStartupMetrics, createCloseObservation, observeClose } from './startup-metrics.js'
 import { createExecutionSessions } from './execution-session.js'
 import { createClaudeExecutionSessions, claudeExecutionLogPath } from './claude-execution-session.js'
 import { createTaskSessionObservability } from './task-session-observability.js'
@@ -65,7 +65,8 @@ const drainDiagnostic = (error, depth = 0) => ({
 /** All model decisions pass through this Host boundary. No workflow catalog or staged plan exists here. */
 export async function openTaskSessionService({ ctx, config, legacy, residentStore, notifications, readMessage, readResource, readMentioned,
   taskSessions: suppliedTaskSessions, executionSessions: suppliedExecutionSessions, claudeExecutionSessions: suppliedClaudeExecutionSessions,
-  store: suppliedStore, persistence: suppliedPersistence, startupObserver } = {}) {
+  store: suppliedStore, persistence: suppliedPersistence, startupObserver, closeObserver } = {}) {
+  const closeTrace = createCloseObservation(closeObserver)
   const startup = createStartupMetrics(startupObserver)
   if (!config?.dbPath || !config?.instanceId) fail('TASK_SESSION_CONFIGURATION_REQUIRED')
   taskSessionModelSelection({}, config.model, config.provider)
@@ -217,9 +218,14 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (execution) return { taskId: execution.taskId, groupId: taskCache.get(execution.taskId)?.groupId, role: 'execution' }
     return null
   } })
-  let observationTail = Promise.resolve()
+  let observationTail = Promise.resolve(), observationPending = 0
   const stopObservation = ctx.on?.('session/event', (session, event) => {
     observationTail = observationTail.then(() => observation.observe(session, event)).catch(error => failures.set('observability', { id: 'observability', code: error.code ?? error.message }))
+    if (closeTrace) {
+      observationPending++
+      const settled = () => { observationPending--; closeTrace.sample('service.observation-progress', () => ({ queued: observationPending })) }
+      observationTail.then(settled, settled)
+    }
   })
   residentStore?.setTaskSessionReader?.({ getTask: id => taskCache.get(id), listTasks: () => [...taskCache.values()],
     hasAppliedOperation: async operationId => !!await query('receipt.get', { id: `topic-operation:${operationId}` }),
@@ -2011,14 +2017,20 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       nativeDws.close()
       clearTimeout(providerRetryTimer)
       stopObservation?.()
-      await observationTail
-      await topicCoordinator.close()
-      await Promise.all([taskSessions.close(), executionSessions.close()])
-      await Promise.allSettled([scheduling, recovering, notificationScan, ...sourceProjections, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean))
-      await persistence.close()
+      const counts = () => ({ observationPending, tasks: inflightTasks.size, executions: inflightExecutions.size, groups: inflightGroups.size,
+        notifications: inflightNotifications.size, sourceProjections: sourceProjections.size,
+        scheduling: !!scheduling, recovering: !!recovering, notificationScan: !!notificationScan })
+      await observeClose(closeTrace, 'service.observation-tail', () => observationTail, counts)
+      await observeClose(closeTrace, 'service.topic.close', () => topicCoordinator.close(), counts)
+      await Promise.all([
+        observeClose(closeTrace, 'service.owner.close', () => taskSessions.close(), counts),
+        observeClose(closeTrace, 'service.execution.close', () => executionSessions.close(), counts),
+      ])
+      await observeClose(closeTrace, 'service.inflight-settled', () => Promise.allSettled([scheduling, recovering, notificationScan, ...sourceProjections, ...inflightTasks.values(), ...inflightExecutions.values(), ...inflightGroups.values(), ...inflightNotifications.values()].filter(Boolean)), counts)
+      await observeClose(closeTrace, 'service.persistence.close', () => persistence.close(), counts)
       stopInboxProjection?.()
-      await observerGroupPage.close()
-      if (!suppliedStore) await store.close()
+      await observeClose(closeTrace, 'service.observer-page.close', () => observerGroupPage.close(), counts)
+      if (!suppliedStore) await observeClose(closeTrace, 'service.store.close', () => store.close(), counts)
     },
   }
 }

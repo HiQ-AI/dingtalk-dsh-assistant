@@ -6,7 +6,7 @@ import { artifactPolicySource } from '../../scripts/sandbox-artifact-policy.mjs'
 import { pathToFileURL } from 'node:url'
 import { openResidentStore } from '../../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskSessionService } from '../../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { registerNativeCleanup, nativeLifecycleSignal, nativeCleanupStage, instrumentNativeCleanupMethod } from './native-lifecycle.js'
+import { registerNativeCleanup, nativeLifecycleSignal, nativeCleanupSignal, nativeCleanupStage, instrumentNativeCleanupMethod } from './native-lifecycle.js'
 
 // Use one installed native composition, including its real preset and process providers.
 // No manager, agent, persistence, filesystem, shell, or control-store implementation is mocked.
@@ -27,14 +27,26 @@ export function loadNativeTestProfile(path) {
 const defaultProfile = loadNativeTestProfile(process.env.DSH_NATIVE_TEST_PROFILE ?? '.dsh/profiles/resident/package.json')
 export const { available, reason } = defaultProfile
 
+let closeSequence = 0
 export async function nativeTaskHost(root, decide, options = {}) {
   const { profile, native, Context, Loader, LlmAdapter, available, reason } = options.nativeProfile ?? defaultProfile
   if (!available) throw new Error(reason)
   const row = (name, config) => ({ name: pathToFileURL(native.resolve('@deepseek-ai/dsh-' + name)).href, ...(config ? { config } : {}) })
   const ctx = new Context(), requests = [], auxiliaryRequests = [], sent = [], readbacks = [], toolResults = []
   const h = { ctx, requests, auxiliaryRequests, sent, readbacks, toolResults, root }
-  let closing
+  let closing, closingActive = false, readClosePending
+  const closeEnabled = !!process.env.DSH_NATIVE_CLEANUP_DIAGNOSTICS
+  const closeId = closeEnabled ? 'native-close-' + process.pid + '-' + ++closeSequence : undefined
+  const emitClose = event => process.stderr.write(JSON.stringify({ closeId, ...event }) + '\n')
+  const closeObserver = closeEnabled ? event => {
+    readClosePending = event.readPending
+    if (closingActive) emitClose(event)
+  } : undefined
   h.close = () => closing ??= (async () => {
+    closingActive = true
+    const closeSignal = nativeCleanupSignal()
+    const deadline = () => { if (closeEnabled) emitClose({ closeEvent: 'deadline', ...readClosePending?.() }) }
+    closeSignal?.addEventListener('abort', deadline, { once: true })
     const restore = [
       instrumentNativeCleanupMethod(ctx.get?.('sessions'), 'flush', 'sessions.flush'),
       instrumentNativeCleanupMethod(ctx.get?.('sessionPersistence'), 'flush', 'persistence.flush'),
@@ -46,7 +58,11 @@ export async function nativeTaskHost(root, decide, options = {}) {
         try { await nativeCleanupStage('host.resident-store.close', () => h.residentStore?.close()) }
         finally { await nativeCleanupStage('host.fiber.dispose', () => ctx.fiber.dispose()) }
       }
-    } finally { for (const undo of restore.toReversed()) undo() }
+    } finally {
+      for (const undo of restore.toReversed()) undo()
+      closeSignal?.removeEventListener('abort', deadline)
+      closingActive = false
+    }
   })()
   const construction = Promise.withResolvers(), signal = nativeLifecycleSignal()
   let ready = false
@@ -143,7 +159,7 @@ export async function nativeTaskHost(root, decide, options = {}) {
     getAgentConfig: () => ({ workspaceDir: root, provider: 'native-task-test', model: 'controlled', agentPreset: 'native-test', agentNames: ['测试助手'], ...options.agentConfig }),
     getGroup: groupId => h.residentStore.getGroup(groupId),
   }
-  h.service = await (options.serviceFactory ?? openTaskSessionService)({ ctx, legacy, residentStore: h.residentStore, ...(options.store ? { store: options.store } : {}),
+  h.service = await (options.serviceFactory ?? openTaskSessionService)({ ctx, legacy, residentStore: h.residentStore, ...(closeObserver ? { closeObserver } : {}), ...(options.store ? { store: options.store } : {}),
     config: { workspaceDir: root, dbPath: join(root, 'dynamic.db'), instanceId: 'native-test', initialize: options.initialize !== false, ownerActorId: 'native-user', webActorId: 'native-user', provider: 'native-task-test', ...options.config },
     notifications: options.notifications ?? {
       async send(notification) { sent.push(structuredClone(notification)); return { messageId: 'native-notification-' + sent.length } },
