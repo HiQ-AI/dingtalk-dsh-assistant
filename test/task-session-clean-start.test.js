@@ -1,9 +1,10 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { get as httpGet, request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as resident from '../packages/dingtalk-dsh-assistant/resident.js'
@@ -97,7 +98,7 @@ test('active transport facade exposes notification read models without legacy DW
 
 // Real resident entry, native Cordis/storage/persistence, HTTP and SQLite. The model is
 // deterministic, and DWS is disabled. This test makes no deployment or live DingTalk claim.
-test('real resident starts a clean explicit ledger without reading old workflow files, importing 152 blockers or showing old tasks', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+test('real resident starts a clean explicit ledger without reading old workflow files, importing 152 blockers or showing old tasks', { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'task-clean-resident-'))
   let host
   const env = Object.fromEntries(['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy'].map(key => [key, process.env[key]]))
@@ -107,34 +108,35 @@ test('real resident starts a clean explicit ledger without reading old workflow 
       await rm(root, { recursive: true, force: true })
     }
   })
-  host = await nativeTaskHost(root, request => {
+  await t.beginBusiness()
+  host = await t.step(async () => nativeTaskHost(root, request => {
     assert.ok(request.tools.some(tool => tool.name === 'task_session_submit'))
     return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '新任务已接收', evidence: [], limitations: [] } } }]
-  }, { resident: true })
-  const domain = await host.ctx.storageDomain.open(residentDomainSpec)
-  await domain.table('scheduler').put('runtime', { tasks: [], groupConfigurationInitialized: true, agentWorkspaceDir: root, proxyUrl: '', agentNames: ['真实配置名称'] })
-  await domain.table('groups').put('g', legacyGroup())
-  for (let i = 0; i < 152; i++) await domain.table('tasks').put(`task-old-${i}`, legacyTask(i))
-  await domain.close()
-  const storagePath = join(root, 'storage', 'dingtalk_dsh_assistant.json'), before = await readFile(storagePath)
+  }, { resident: true }))
+  const domain = await t.step(async () => host.ctx.storageDomain.open(residentDomainSpec))
+  await t.step(async () => domain.table('scheduler').put('runtime', { tasks: [], groupConfigurationInitialized: true, agentWorkspaceDir: root, proxyUrl: '', agentNames: ['真实配置名称'] }))
+  await t.step(async () => domain.table('groups').put('g', legacyGroup()))
+  for (let i = 0; i < 152; i++) await t.step(async () => domain.table('tasks').put(`task-old-${i}`, legacyTask(i)))
+  await t.step(async () => domain.close())
+  const storagePath = join(root, 'storage', 'dingtalk_dsh_assistant.json'), before = await t.step(async () => readFile(storagePath))
   const oldPath = join(root, 'old-workflow.sqlite'), sentinel = 'Archived legacy bytes. An active SQLite read must fail.'
-  await writeFile(oldPath, sentinel)
+  await t.step(async () => writeFile(oldPath, sentinel))
   const probe = createServer()
-  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve))
+  await t.step(async () => new Promise(resolve => probe.listen(0, '127.0.0.1', resolve)))
   const port = probe.address().port
-  await new Promise(resolve => probe.close(resolve))
+  await t.step(async () => new Promise(resolve => probe.close(resolve)))
   const dbPath = join(root, 'new-task-sessions.sqlite')
-  const plugin = await host.ctx.plugin(resident, { host: '127.0.0.1', port, agentWorkspaceDir: root, agentPreset: 'native-test', proxyUrl: '',
+  const plugin = await t.step(async () => host.ctx.plugin(resident, { host: '127.0.0.1', port, agentWorkspaceDir: root, agentPreset: 'native-test', proxyUrl: '',
     dws: { enabled: false }, workflow: { dbPath: oldPath, instanceId: 'retired', ownerActorId: 'wrong-owner', webActorId: 'wrong-web' },
-    taskSessions: { ...explicit, provider: 'native-task-test', dbPath, initialize: true, ingressEpoch: '2026-10-13T08:00:00+08:00', recoveryIntervalMs: 60000 } })
+    taskSessions: { ...explicit, provider: 'native-task-test', dbPath, initialize: true, ingressEpoch: '2026-10-13T08:00:00+08:00', recoveryIntervalMs: 60000 } }))
   const read = path => new Promise((resolve, reject) => httpGet(`http://127.0.0.1:${port}${path}`, { agent: false }, response => {
     let body = ''; response.on('data', chunk => { body += chunk }); response.on('end', () => { try { resolve({ status: response.statusCode, body: JSON.parse(body) }) } catch (error) { reject(error) } })
   }).on('error', reject))
-  assert.equal((await read('/health')).body.status, 'ok')
-  for (const path of ['/state/tasks', '/state/authorizations', '/state/activities', '/state/supervisor/alerts']) assert.deepEqual((await read(path)).body, [], path)
-  assert.equal((await read('/state/tasks/task-old-1/detail')).status, 404)
-  assert.deepEqual((await read('/state/tasks/task-old-1/executions')).body.executions, [])
-  const groups = (await read('/state/groups')).body
+  assert.equal((await t.step(async () => read('/health'))).body.status, 'ok')
+  for (const path of ['/state/tasks', '/state/authorizations', '/state/activities', '/state/supervisor/alerts']) assert.deepEqual((await t.step(async () => read(path))).body, [], path)
+  assert.equal((await t.step(async () => read('/state/tasks/task-old-1/detail'))).status, 404)
+  assert.deepEqual((await t.step(async () => read('/state/tasks/task-old-1/executions'))).body.executions, [])
+  const groups = (await t.step(async () => read('/state/groups'))).body
   assert.equal(groups[0].name, '保留群配置')
   assert.deepEqual(groups[0].outbox, legacyGroup().outbox)
   assert.equal(groups[0].messages[0].senderOpenDingTalkId, 'real-owner')
@@ -142,9 +144,9 @@ test('real resident starts a clean explicit ledger without reading old workflow 
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
     for (const table of ['dynamic_tasks', 'dynamic_executions', 'dynamic_notifications', 'dynamic_legacy_blockers']) assert.equal(db.prepare(`SELECT count(*) AS count FROM ${table}`).get().count, 0, table)
-    assert.equal(JSON.parse(await readFile(dbPath + '.initialized', 'utf8')).ingressEpoch, '2026-10-13T00:00:00.000Z')
+    assert.equal(JSON.parse(await t.step(async () => readFile(dbPath + '.initialized', 'utf8'))).ingressEpoch, '2026-10-13T00:00:00.000Z')
   } finally { db.close() }
-  const initialized = JSON.parse(await readFile(storagePath, 'utf8')), expected = JSON.parse(before)
+  const initialized = JSON.parse(await t.step(async () => readFile(storagePath, 'utf8'))), expected = JSON.parse(before)
   const fixedTopics = initialized.tables.groups.g.fixedTopics
   assert.deepEqual(fixedTopics.map(({ createdAt, ...topic }) => topic), FIXED_TOPICS.map(topic => ({ ...topic, fixed: true })))
   assert.ok(fixedTopics.every(topic => Number.isFinite(Date.parse(topic.createdAt))))
@@ -155,25 +157,25 @@ test('real resident starts a clean explicit ledger without reading old workflow 
   for (const message of expected.tables.groups.g.messages) message.facts ??= []
   assert.deepEqual(initialized, expected, 'Only the fixed-category registry and existing empty ownership/message-facts defaults may be persisted')
   assert.deepEqual(initialized.tables.groups.g.topics, [], 'Fixed categories are not imported business Topics')
-  const created = await new Promise((resolve, reject) => {
+  const created = await t.step(async () => new Promise((resolve, reject) => {
     const req = httpRequest(`http://127.0.0.1:${port}/tasks`, { agent: false, method: 'POST', headers: { 'content-type': 'application/json' } }, response => {
       let body = ''; response.on('data', chunk => { body += chunk }); response.on('end', () => { try { resolve({ status: response.statusCode, body: JSON.parse(body) }) } catch (error) { reject(error) } })
     }).on('error', reject)
     req.end(JSON.stringify({ requestId: 'fresh', groupId: 'g', title: '新任务', objective: '只处理新任务', acceptanceCriteria: ['新账本可用'] }))
-  })
+  }))
   assert.equal(created.status, 200, JSON.stringify(created.body))
   assert.equal(created.body.ownerActorId, 'real-web')
-  assert.equal((await read('/state/tasks')).body.length, 1)
-  const settled = await waitUntil(async () => {
+  assert.equal((await t.step(async () => read('/state/tasks'))).body.length, 1)
+  const settled = await t.step(async () => waitUntil(async () => {
     const task = (await read(`/state/tasks/${created.body.taskId}/detail`)).body
     return task.session?.status === 'idle' && host.requests.length >= 1 ? task : null
-  }, 'new task native turn drains')
+  }, 'new task native turn drains'))
   assert.equal(settled.session.sessionBound, true)
   assert.equal(settled.lastDecision.summary, '新任务已接收')
   assert.equal(settled.session.sessionId, created.body.session.sessionId)
   assert.equal(host.requests.length, 1)
-  await plugin.dispose()
-  const preserved = await host.ctx.storageDomain.open(residentDomainSpec)
+  await t.step(async () => plugin.dispose())
+  const preserved = await t.step(async () => host.ctx.storageDomain.open(residentDomainSpec))
   try {
     const archivedTasks = [...preserved.table('tasks').entries()]
     assert.equal(archivedTasks.length, 152)
@@ -187,15 +189,15 @@ test('real resident starts a clean explicit ledger without reading old workflow 
     assert.equal(topic.decisions.length, 1)
     assert.equal(topic.decisions[0].status, 'completed')
     assert.equal(topic.decisions[0].operations[0].taskId, created.body.taskId)
-  } finally { await preserved.close() }
-  const stabilized = await readFile(storagePath)
-  const reopened = await openResidentStore(host.ctx.storageDomain)
-  await reopened.close()
-  assert.deepEqual(await readFile(storagePath), stabilized, 'Reopening must not rewrite initialized fixed categories or archived records again')
+  } finally { await t.step(async () => preserved.close()) }
+  const stabilized = await t.step(async () => readFile(storagePath))
+  const reopened = await t.step(async () => openResidentStore(host.ctx.storageDomain))
+  await t.step(async () => reopened.close())
+  assert.deepEqual(await t.step(async () => readFile(storagePath)), stabilized, 'Reopening must not rewrite initialized fixed categories or archived records again')
   const active = new DatabaseSync(dbPath, { readOnly: true })
   try {
     assert.equal(active.prepare('SELECT count(*) AS count FROM dynamic_tasks').get().count, 1)
     assert.equal(active.prepare('SELECT count(*) AS count FROM dynamic_legacy_blockers').get().count, 0)
   } finally { active.close() }
-  assert.equal(await readFile(oldPath, 'utf8'), sentinel)
-})
+  assert.equal(await t.step(async () => readFile(oldPath, 'utf8')), sentinel)
+}))

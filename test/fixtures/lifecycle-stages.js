@@ -1,9 +1,13 @@
+import { setTimeout as timerSetTimeout, clearTimeout as timerClearTimeout } from 'node:timers'
+const setDeadline = timerSetTimeout, clearDeadline = timerClearTimeout
+
 // Real deadlines for preparation, acceptance work, and resource drain. Every
 // awaited operation is gated so a timed-out continuation cannot start more work.
 export async function lifecycleStages(t, { prepare, business, cleanup, limits = {} }) {
   const budgets = { prepare: 30000, business: 30000, cleanup: 10000, ...limits }
   let active, failure
   const pending = new Set()
+  const operations = new Set()
   async function phase(name, action) {
     const started = performance.now(), controller = new AbortController()
     active = controller
@@ -15,15 +19,26 @@ export async function lifecycleStages(t, { prepare, business, cleanup, limits = 
     const deadline = new Promise((_, reject) => {
       const fail = () => { const error = controller.signal.reason; reject(error) }
       controller.signal.addEventListener('abort', fail, { once: true })
-      timer = setTimeout(() => controller.abort(expired()), budgets[name])
+      timer = setDeadline(() => controller.abort(expired()), budgets[name])
       if (name !== 'cleanup' && t.signal.aborted) abort()
     })
     const step = async operation => {
       controller.signal.throwIfAborted()
-      const value = await operation()
-      if (performance.now() - started >= budgets[name]) controller.abort(expired())
-      controller.signal.throwIfAborted()
-      return value
+      const work = Promise.resolve().then(() => { controller.signal.throwIfAborted(); return operation() })
+      operations.add(work)
+      work.then(() => operations.delete(work), () => operations.delete(work))
+      let abort
+      const cancelled = new Promise((_, reject) => {
+        abort = () => reject(controller.signal.reason)
+        controller.signal.addEventListener('abort', abort, { once: true })
+        if (controller.signal.aborted) abort()
+      })
+      try {
+        const value = await Promise.race([work, cancelled])
+        if (performance.now() - started >= budgets[name]) controller.abort(expired())
+        controller.signal.throwIfAborted()
+        return value
+      } finally { controller.signal.removeEventListener('abort', abort) }
     }
     const work = Promise.resolve().then(() => action(step, controller.signal))
     pending.add(work)
@@ -39,7 +54,7 @@ export async function lifecycleStages(t, { prepare, business, cleanup, limits = 
       throw error
     }
     finally {
-      clearTimeout(timer)
+      clearDeadline(timer)
       t.signal.removeEventListener('abort', abort)
       t.diagnostic(JSON.stringify({ lifecyclePhase: name, elapsedMs: Math.round(performance.now() - started), aborted: controller.signal.aborted }))
     }
@@ -48,10 +63,10 @@ export async function lifecycleStages(t, { prepare, business, cleanup, limits = 
     const value = await phase('prepare', prepare)
     await phase('business', (step, signal) => business(value, step, signal))
   } catch (error) { active?.abort(error); failure = error }
-  const unfinished = [...pending]
+  const unfinished = [...pending, ...operations]
   try {
-    await phase('cleanup', async step => {
-      await step(cleanup)
+    await phase('cleanup', async (step, signal) => {
+      await step(() => cleanup(step, signal, () => Promise.allSettled(unfinished)))
       // A failed stage must settle after owned resources have been cancelled.
       await step(() => Promise.allSettled(unfinished))
     })

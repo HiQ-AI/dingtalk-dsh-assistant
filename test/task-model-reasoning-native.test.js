@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -39,10 +40,12 @@ function installModel(ctx, providers, decide, requests) {
 const decision = action => ({ name:'task_session_submit', args:{ decision:{ action,summary:'核对原任务结果',evidence:[],limitations:[] } } })
 
 test('native owner inherits old depth, keeps in-flight depth and switches only on same-session resume; model default and unsupported differ',
-  {skip:!available ? reason : false,timeout:30000},async t => {
+  { ...({skip:!available ? reason : false,timeout:30000}), timeout: nativeLifecycleTimeout(30000) },nativeLifecycle(30000, async (t) => {
     const root = await mkdtemp(join(tmpdir(),'task-reasoning-native-'))
     const h = await nativeTaskHost(root,async()=>[],{resident:true})
-    const cwd = join(root,'tasks','owner'); await mkdir(cwd,{recursive:true})
+    await t.beginBusiness()
+
+    const cwd = join(root,'tasks','owner'); await t.step(async () => mkdir(cwd,{recursive:true}))
     const manager = createTaskSessions({ctx:h.ctx,isCurrent:async()=>true,getWorkspaceDir:async()=>cwd})
     t.after(async()=>{try{await manager.close();await h.close()}finally{await rm(root,{recursive:true,force:true})}})
     const requests=[], entered=Promise.withResolvers(), release=Promise.withResolvers()
@@ -54,27 +57,28 @@ test('native owner inherits old depth, keeps in-flight depth and switches only o
     const run=leaseEpoch=>manager.run({binding:{kind:'task-session',taskId:'owner',sessionId:'original-owner',leaseEpoch,sessionBound:leaseEpoch>1},
       ...taskModelSelection(global,config),agentPreset:'native-test',input:{task:{title:'原任务',objective:'核对配置'},wakes:[]},
       onSessionBound:async()=>{},submit:async()=>({accepted:true})})
-    const first=run(1); await entered.promise
-    config.reasoningEffort='high';release.resolve();assert.equal((await first).status,'submitted')
+    const first=run(1); await t.step(async () => entered.promise)
+    config.reasoningEffort='high';release.resolve();assert.equal((await t.step(async () => first)).status,'submitted')
     assert.equal(requests[0].reasoningEffort,'low','in-flight request keeps its original selection')
-    assert.equal((await run(2)).status,'submitted');assert.equal(requests.at(-1).reasoningEffort,'high')
+    assert.equal((await t.step(async () => run(2))).status,'submitted');assert.equal(requests.at(-1).reasoningEffort,'high')
     config.reasoningEffort=null
-    assert.equal((await run(3)).status,'submitted');assert.equal(requests.at(-1).reasoningEffort,'medium','native adapter model default differs from global low')
-    const before=await inspectSession(h.ctx.sessionPersistence,'original-owner')
+    assert.equal((await t.step(async () => run(3))).status,'submitted');assert.equal(requests.at(-1).reasoningEffort,'medium','native adapter model default differs from global low')
+    const before=await t.step(async () => inspectSession(h.ctx.sessionPersistence,'original-owner'))
     config.reasoningEffort='ultra'
-    await assert.rejects(run(4),{code:'TASK_SESSION_REASONING_EFFORT_UNSUPPORTED'})
-    assert.deepEqual((await inspectSession(h.ctx.sessionPersistence,'original-owner')).events,before.events)
+    await t.step(async () => assert.rejects(run(4),{code:'TASK_SESSION_REASONING_EFFORT_UNSUPPORTED'}))
+    assert.deepEqual((await t.step(async () => inspectSession(h.ctx.sessionPersistence,'original-owner'))).events,before.events)
     assert.equal(before.events.filter(x=>x.type==='plugin:dingtalk/task-session').length,1)
     assert.equal(requests.length,3);assert.equal(global.reasoningEffort,'low')
-  })
+  }))
 
 test('native service sends explicit owner depth while delegated execution and its provider retain the global selection',
-  {skip:!available ? reason : false,timeout:30000},async t=>{
+  { ...({skip:!available ? reason : false,timeout:30000}), timeout: nativeLifecycleTimeout(30000) },nativeLifecycle(30000, async (t) => {
     const root=await mkdtemp(join(tmpdir(),'task-depth-isolation-')),requests=[]
     let h,delegated=false
     const verification = nativeVerificationTeam()
     t.after(async()=>{try{await h?.close()}finally{await rm(root,{recursive:true,force:true})}})
-    h=await nativeTaskHost(root,async()=>[],{agentConfig:{provider:'executor-test',model:'sol',reasoningEffort:'low',
+    await t.beginBusiness()
+    h=await t.step(async () => nativeTaskHost(root,async()=>[],{agentConfig:{provider:'executor-test',model:'sol',reasoningEffort:'low',
       taskSessionModel:{provider:'owner-test',model:'astra',reasoningMode:'explicit',reasoningEffort:'high'}},
       serviceFactory:async options=>{
         installModel(options.ctx,['executor-test','owner-test'],async request=>{
@@ -87,12 +91,12 @@ test('native service sends explicit owner depth while delegated execution and it
           return verification.execute(request,latestInput(request)) ?? [{name:'execution_submit',args:{output:{status:'completed',summary:'已核对',evidence:[],limitations:[],artifacts:[]}}}]
         },requests)
         return openTaskSessionService(options)
-      }})
-    const task=await h.service.createTask({groupId:'native-group',requestId:'depth-isolation',objective:'核对独立推理深度'})
-    await h.service.whenIdle()
-    assert.equal((await h.query('task.get',{taskId:task.taskId})).status,'completed',JSON.stringify(h.service.listAlerts()))
+      }}))
+    const task=await t.step(async () => h.service.createTask({groupId:'native-group',requestId:'depth-isolation',objective:'核对独立推理深度'}))
+    await t.step(async () => h.service.whenIdle())
+    assert.equal((await t.step(async () => h.query('task.get',{taskId:task.taskId}))).status,'completed',JSON.stringify(h.service.listAlerts()))
     const owners=requests.filter(x=>x.tools.some(t=>t.name==='task_delegate')),executors=requests.filter(x=>x.tools.some(t=>t.name==='execution_submit'))
     assert.ok(owners.length>=2);assert.ok(executors.length)
     assert.ok(owners.every(x=>x.provider==='owner-test'&&x.model==='astra'&&x.reasoningEffort==='high'))
     assert.ok(executors.every(x=>x.provider==='executor-test'&&x.model==='sol'&&x.reasoningEffort==='low'))
-  })
+  }))

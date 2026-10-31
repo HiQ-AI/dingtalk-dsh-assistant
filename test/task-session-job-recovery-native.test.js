@@ -1,7 +1,8 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import { lifecycleStages } from './fixtures/lifecycle-stages.js'
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -36,7 +37,7 @@ async function fixture(t, model, { verifyTeam = false, step = operation => opera
  } : model, { promoteOnTimeout: true }); h = await opening })
  return h
 }
-test('native file read accepts historical draft and material job records without launching or reconciling a job', async t => {
+test('native file read accepts historical draft and material job records without launching or reconciling a job', nativeLifecycle(30000, async (t) => {
  let step = 0
  const historical = [
   { type: 'job/registered', seq: 1178, data: { jobId: 'pwsh-redacted-draft', owner: 'historical-draft-session', startedAt: 100 } },
@@ -61,16 +62,18 @@ test('native file read accepts historical draft and material job records without
   assert.match(JSON.stringify(observed.result), /pwsh-redacted-material/)
   return [call('execution_submit', { output: { status: 'completed', summary: 'Historical records read without replay', evidence: ['history.jsonl'], limitations: ['Historical running acknowledgement is not a terminal result'], artifacts: [] } })]
  })
- await h.service.createTask({ groupId: 'native-group', requestId: 'historical-job-file-read', objective: 'Inspect history without starting work' })
- await h.service.whenIdle()
- assert.equal(step, 2)
- const executed = (await h.query('execution.list'))[0]
- assert.equal(executed.status, 'succeeded', JSON.stringify(executed.result, (_key, value) => typeof value === 'string' ? value.slice(0, 400) : value))
- assert.equal((await h.query('operation.list')).length, 0)
- assert.ok(h.toolResults.some(row => row.name === 'read' && row.result.isError === false))
-})
+ await t.beginBusiness()
 
-test('native execution consumes serial tool results and wakes the coordinator only for a reported stage and final result', async t => {
+ await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'historical-job-file-read', objective: 'Inspect history without starting work' }))
+ await t.step(async () => h.service.whenIdle())
+ assert.equal(step, 2)
+ const executed = (await t.step(async () => h.query('execution.list')))[0]
+ assert.equal(executed.status, 'succeeded', JSON.stringify(executed.result, (_key, value) => typeof value === 'string' ? value.slice(0, 400) : value))
+ assert.equal((await t.step(async () => h.query('operation.list'))).length, 0)
+ assert.ok(h.toolResults.some(row => row.name === 'read' && row.result.isError === false))
+}), { timeout: nativeLifecycleTimeout(30000) })
+
+test('native execution consumes serial tool results and wakes the coordinator only for a reported stage and final result', nativeLifecycle(30000, async (t) => {
  let step = 0, ownerTurns = 0
  const h = await fixture(t, async (request, host) => {
   if (request.tools.some(tool => tool.name === 'task_delegate')) {
@@ -88,15 +91,17 @@ test('native execution consumes serial tool results and wakes the coordinator on
   const value = currentStep === 3 ? 3 : currentStep + 1
   return [call(nativeShell, { command: nativeShell === 'pwsh' ? `Add-Content serial-results.txt '${value}'; Get-Content serial-results.txt` : `printf '${value}\\n' >> serial-results.txt; cat serial-results.txt`, description: '写入并回读本执行的隔离证据' })]
  }, { verifyTeam: true })
- const task = await h.service.createTask({ groupId: 'native-group', requestId: 'serial-operation-wakes', objective: '阶段成果驱动统筹' })
- await h.service.whenIdle()
+ await t.beginBusiness()
+
+ const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'serial-operation-wakes', objective: '阶段成果驱动统筹' }))
+ await t.step(async () => h.service.whenIdle())
  assert.equal(ownerTurns, 3, '主要作业仅初次委派、阶段成果、最终成果各一次统筹回合；独立核验单独安排')
  assert.equal(step, 5)
- const operations = await h.query('operation.list', { taskId: task.taskId }), executions = await h.query('execution.list', { taskId: task.taskId })
+ const operations = await t.step(async () => h.query('operation.list', { taskId: task.taskId })), executions = await t.step(async () => h.query('execution.list', { taskId: task.taskId }))
  assert.equal(operations.length, 3)
  assert.ok(operations.every(item => item.state === 'succeeded' && item.executionId === executions[0].executionId))
  assert.equal(executions.length, 3); assert.equal(executions[0].inputVersion, 1); assert.equal(executions[0].drained, true)
- const wakes = await h.query('wake.list', { taskId: task.taskId })
+ const wakes = await t.step(async () => h.query('wake.list', { taskId: task.taskId }))
  assert.equal(wakes.filter(item => item.kind === 'operation.result').length, 0)
  assert.equal(wakes.filter(item => item.kind === 'execution.stage.progress').length, 1)
  const results = wakes.filter(item => item.kind === 'execution.result' && item.payload.drained !== true)
@@ -106,10 +111,10 @@ test('native execution consumes serial tool results and wakes the coordinator on
  const drains = wakes.filter(item => item.kind === 'execution.result' && item.payload.drained === true)
  assert.equal(new Set(drains.map(item => item.payload.executionId)).size, drains.length, '每个执行至多一次稳定排空跟进')
  assert.ok(drains.every(item => executions.some(execution => execution.executionId === item.payload.executionId && execution.drained && execution.status === 'succeeded')))
- assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
- assert.deepEqual((await readFile(join(h.root, 'tasks', task.taskId, 'serial-results.txt'), 'utf8')).trim().split(/\r?\n/), ['1', '2', '3'])
-})
-for (const background of [false, true]) test(`native shell retains its original process, reads output to terminal and persists the owned job receipt: background=${background}`, async t => {
+ assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed')
+ assert.deepEqual((await t.step(async () => readFile(join(h.root, 'tasks', task.taskId, 'serial-results.txt'), 'utf8'))).trim().split(/\r?\n/), ['1', '2', '3'])
+}), { timeout: nativeLifecycleTimeout(30000) })
+for (const background of [false, true]) test(`native shell retains its original process, reads output to terminal and persists the owned job receipt: background=${background}`, nativeLifecycle(30000, async (t) => {
  let step = 0, backgroundCollected = false
  const h = await fixture(t, async request => {
   const input = latestInput(request), owner = request.tools.some(tool => tool.name === 'task_delegate')
@@ -125,17 +130,19 @@ for (const background of [false, true]) test(`native shell retains its original 
   assert.match(JSON.stringify(request), /after/)
   return [call('execution_submit',{output:{status:'completed',summary:'done',evidence:['actual terminal output'],limitations:[],artifacts:['result.txt']}})]
  }, { verifyTeam: true })
- const created = await h.service.createTask({groupId:'native-group',requestId:'job-complete',objective:'long task'})
- await h.service.whenIdle()
- const operations = (await h.query('operation.list',{taskId:created.taskId})).filter(op => op.definition.toolName === nativeShell)
+ await t.beginBusiness()
+
+ const created = await t.step(async () => h.service.createTask({groupId:'native-group',requestId:'job-complete',objective:'long task'}))
+ await t.step(async () => h.service.whenIdle())
+ const operations = (await t.step(async () => h.query('operation.list',{taskId:created.taskId}))).filter(op => op.definition.toolName === nativeShell)
  assert.equal(operations.length,1)
  assert.equal(operations[0].state,'succeeded')
  assert.ok(operations[0].job, JSON.stringify(h.toolResults)); assert.equal(operations[0].job.status,'completed')
- assert.equal(operations[0].job.owner,(await h.query('execution.list'))[0].sessionId)
+ assert.equal(operations[0].job.owner,(await t.step(async () => h.query('execution.list')))[0].sessionId)
  assert.match(operations[0].job.chunks.map(c=>c.text).join(''),/before[\s\S]*after/)
- assert.equal((await readFile(join(h.root,'tasks',created.taskId,'result.txt'),'utf8')).trim(),'after')
+ assert.equal((await t.step(async () => readFile(join(h.root,'tasks',created.taskId,'result.txt'),'utf8'))).trim(),'after')
  assert.equal(step,background ? 3 : 2)
-})
+}), { timeout: nativeLifecycleTimeout(30000) })
 
 test('native missing-job read stays a real error without creating unknown effects or blocking later work', async t => {
  let modelStep=0, h
@@ -163,7 +170,7 @@ test('native missing-job read stays a real error without creating unknown effect
  })
 }, { timeout: 70000 })
 
-for (const explicitStop of [false, true]) test(`native background HTTP service remains usable by the next tool and drains its original job: explicitStop=${explicitStop}`, async t => {
+for (const explicitStop of [false, true]) test(`native background HTTP service remains usable by the next tool and drains its original job: explicitStop=${explicitStop}`, nativeLifecycle(30000, async (t) => {
  let step = 0, originalJob, serverPid
  const h = await fixture(t, async (request, host) => {
   const input = latestInput(request)
@@ -189,33 +196,37 @@ for (const explicitStop of [false, true]) test(`native background HTTP service r
   if (explicitStop && step === 3) return [call('job_kill', { job_id: originalJob })]
   return [call('execution_submit', { output: { status: 'completed', summary: 'Actual HTTP request passed', evidence: ['original-service response'], limitations: [], artifacts: [] } })]
  }, { verifyTeam: true })
- await h.service.createTask({ groupId: 'native-group', requestId: 'service', objective: 'Use and clean original service' })
- await h.service.whenIdle()
- assert.equal((await h.query('execution.list'))[0].drained, true)
- const operation = (await h.query('operation.list')).find(op => op.job?.jobId === originalJob)
+ await t.beginBusiness()
+
+ await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'service', objective: 'Use and clean original service' }))
+ await t.step(async () => h.service.whenIdle())
+ assert.equal((await t.step(async () => h.query('execution.list')))[0].drained, true)
+ const operation = (await t.step(async () => h.query('operation.list'))).find(op => op.job?.jobId === originalJob)
  assert.equal(operation.job.jobId, originalJob)
  assert.ok(['killed', 'failed', 'completed'].includes(operation.job.status))
  assert.notEqual(operation.state, 'starting')
  assert.throws(() => process.kill(serverPid, 0), { code: 'ESRCH' })
-})
-for (const background of [false, true]) test(`cancelling a native job records terminal cancellation and drains the actual owned process: background=${background}`, async t => {
+}), { timeout: nativeLifecycleTimeout(30000) })
+for (const background of [false, true]) test(`cancelling a native job records terminal cancellation and drains the actual owned process: background=${background}`, nativeLifecycle(30000, async (t) => {
  const h=await fixture(t,async request=>{
   const input=latestInput(request)
   if(request.tools.some(tool=>tool.name==='task_delegate')) return input.executions.length?[decide('wait','waiting')]:[call('task_delegate',{key:'cancel',objective:'cancel'}),decide('wait','waiting')]
   return [call(nativeShell,{command:nativeShell==='pwsh'?"Write-Output 'started'; Start-Sleep -Seconds 30; Set-Content forbidden.txt done":"printf 'started\\n'; sleep 30; printf done > forbidden.txt",timeoutMs:80,...(background?{run_in_background:true}:{}),description:'Long cancellable process'})]
  })
- const created=await h.service.createTask({groupId:'native-group',requestId:'job-cancel',objective:'cancel task'})
- const operation=await waitUntil(async()=> (await h.query('operation.list')).find(op=>op.job?.status==='running'),'persisted promoted job')
- await h.service.cancelTask({taskId:created.taskId,requestId:'cancel',reason:'Stop owned job'})
- await h.service.whenIdle()
- const after=await h.query('operation.get',{operationId:operation.operationId})
+ await t.beginBusiness()
+
+ const created=await t.step(async () => h.service.createTask({groupId:'native-group',requestId:'job-cancel',objective:'cancel task'}))
+ const operation=await t.step(async () => waitUntil(async()=> (await h.query('operation.list')).find(op=>op.job?.status==='running'),'persisted promoted job'))
+ await t.step(async () => h.service.cancelTask({taskId:created.taskId,requestId:'cancel',reason:'Stop owned job'}))
+ await t.step(async () => h.service.whenIdle())
+ const after=await t.step(async () => h.query('operation.get',{operationId:operation.operationId}))
  assert.equal(after.state,'unknown');assert.equal(after.job.cancelled,true)
  assert.ok(['killed','failed'].includes(after.job.status))
- assert.equal((await h.query('execution.list'))[0].drained,true)
- await assert.rejects(readFile(join(h.root,'tasks',created.taskId,'forbidden.txt')), {code:'ENOENT'})
-})
+ assert.equal((await t.step(async () => h.query('execution.list')))[0].drained,true)
+ await t.step(async () => assert.rejects(readFile(join(h.root,'tasks',created.taskId,'forbidden.txt')), {code:'ENOENT'}))
+}), { timeout: nativeLifecycleTimeout(30000) })
 
-test('unknown operation keeps native reads available; owner can investigate readonly but cannot clear missing evidence or replay', async t=>{
+test('unknown operation keeps native reads available; owner can investigate readonly but cannot clear missing evidence or replay', nativeLifecycle(30000, async (t) => {
  let step=0, ownerRound=0, writes=0, inspectStep=0
  const h=await fixture(t,async(request,host)=>{
   const input=latestInput(request)
@@ -240,41 +251,44 @@ test('unknown operation keeps native reads available; owner can investigate read
   assert.match(JSON.stringify(request),/Read-only receipt/)
   return [call('execution_submit',{output:{status:'blocked',summary:'unknown',evidence:['read evidence.txt'],limitations:['effect uncertain'],artifacts:[]}})]
  })
- await h.service.createTask({groupId:'native-group',requestId:'uncertain',objective:'inspect unknown'})
- await h.service.whenIdle()
- const ops=await h.query('operation.list'),unknown=ops.filter(op=>op.state==='unknown')
+ await t.beginBusiness()
+
+ await t.step(async () => h.service.createTask({groupId:'native-group',requestId:'uncertain',objective:'inspect unknown'}))
+ await t.step(async () => h.service.whenIdle())
+ const ops=await t.step(async () => h.query('operation.list')),unknown=ops.filter(op=>op.state==='unknown')
  assert.equal(unknown.length,1);assert.equal(writes,1)
- const execution=(await h.query('execution.list'))[0]
+ const execution=(await t.step(async () => h.query('execution.list')))[0]
  assert.equal(execution.inputVersion,2);assert.equal(execution.definition.recoveryReadOnly,true)
  assert.ok(h.toolResults.filter(r=>r.name==='read').length>=2, JSON.stringify({execution, results:h.toolResults}))
  assert.ok(h.toolResults.filter(r=>r.name==='read').every(r=>!r.result.isError))
  assert.ok(h.toolResults.some(r=>r.name==='task_operation_reconcile'&&!r.result.isError))
-})
+}), { timeout: nativeLifecycleTimeout(30000) })
 
-test('restart reconciles an original persisted native terminal receipt and resumes the same executor without replay', async t=>{
- const {openDynamicTaskStore}=await import('../packages/dingtalk-dsh-assistant/dynamic-task-store.js')
- const root=await mkdtemp(join(tmpdir(),'native-job-restart-')),hosts=[]
- const store=await openDynamicTaskStore({dbPath:join(root,'dynamic.db'),instanceId:'native-test',initialize:true})
+test('restart reconciles an original persisted native terminal receipt and resumes the same executor without replay', nativeLifecycle(30000, async (t) => {
+ await t.beginBusiness()
+ const {openDynamicTaskStore}=await t.step(async () => import('../packages/dingtalk-dsh-assistant/dynamic-task-store.js'))
+ const root=await t.step(async () => mkdtemp(join(tmpdir(),'native-job-restart-'))),hosts=[]
+ const store=await t.step(async () => openDynamicTaskStore({dbPath:join(root,'dynamic.db'),instanceId:'native-test',initialize:true}))
  t.after(async()=>{for(const h of hosts.toReversed())await h.close();await store.close();await rm(root,{recursive:true,force:true})})
  let failSettle=true,step=0
  const wrapped={...store,command:async command=>{
   if(command.kind==='operation.settle'&&failSettle){failSettle=false;throw new Error('Injected loss after durable native job receipt')}
   return store.command(command)
  }}
- const first=await nativeTaskHost(root,async request=>{
+ const first=await t.step(async () => nativeTaskHost(root,async request=>{
   const input=latestInput(request)
   if(!request.tools.some(tool=>['task_delegate','execution_submit'].includes(tool.name)))return topicTaskCalls(request)
   if(request.tools.some(tool=>tool.name==='task_delegate'))return input.executions.length?[decide('wait','Await original receipt reconciliation')]:[call('task_delegate',{key:'one-command',objective:'original'}),decide('wait','waiting')]
   if(step++===0)return [call(nativeShell,{command:nativeShell==='pwsh'?"Add-Content once.txt once; Start-Sleep -Milliseconds 300; Write-Output done":"printf 'once\\n' >> once.txt; sleep 0.3; printf done",timeoutMs:80,description:'Execute exactly once'})]
   return [call('execution_submit',{output:{status:'blocked',summary:'receipt interrupted',evidence:[],limitations:['reconcile original receipt'],artifacts:[]}})]
- },{store:wrapped,promoteOnTimeout:true});hosts.push(first)
- const created=await first.service.createTask({groupId:'native-group',requestId:'restart',objective:'once'})
- await first.service.whenIdle()
- const before=(await first.query('operation.list'))[0],original=(await first.query('execution.list'))[0]
+ },{store:wrapped,promoteOnTimeout:true}));hosts.push(first)
+ const created=await t.step(async () => first.service.createTask({groupId:'native-group',requestId:'restart',objective:'once'}))
+ await t.step(async () => first.service.whenIdle())
+ const before=(await t.step(async () => first.query('operation.list')))[0],original=(await t.step(async () => first.query('execution.list')))[0]
  assert.equal(before.state,'starting');assert.equal(before.job.status,'completed')
- await first.close();await store.close()
+ await t.step(async () => first.close());await t.step(async () => store.close())
  let ownerStep=0,readStep=0
- const second=await nativeTaskHost(root,async request=>{
+ const second=await t.step(async () => nativeTaskHost(root,async request=>{
   const input=latestInput(request)
   if(!request.tools.some(tool=>['task_delegate','execution_submit'].includes(tool.name)))return topicTaskCalls(request)
   if(request.tools.some(tool=>tool.name==='task_delegate')){
@@ -284,19 +298,19 @@ test('restart reconciles an original persisted native terminal receipt and resum
   }
   if(readStep++===0)return [call('read',{file_path:'once.txt'})]
   return [call('execution_submit',{output:{status:'completed',summary:'one original effect',evidence:['read once.txt'],limitations:[],artifacts:['once.txt']}})]
- },{initialize:false,promoteOnTimeout:true});hosts.push(second)
- await second.service.appendTaskContext({taskId:created.taskId,requestId:'inspect-receipt',progressImpact:'replan',context:'Inspect the original receipt and verify without replay'})
- await second.service.whenIdle()
- const after=await second.query('operation.get',{operationId:before.operationId}),execution=(await second.query('execution.list'))[0]
+ },{initialize:false,promoteOnTimeout:true}));hosts.push(second)
+ await t.step(async () => second.service.appendTaskContext({taskId:created.taskId,requestId:'inspect-receipt',progressImpact:'replan',context:'Inspect the original receipt and verify without replay'}))
+ await t.step(async () => second.service.whenIdle())
+ const after=await t.step(async () => second.query('operation.get',{operationId:before.operationId})),execution=(await t.step(async () => second.query('execution.list')))[0]
  assert.equal(after.state,'succeeded');assert.equal(after.result.reconciled,true)
  assert.equal(execution.executionId,original.executionId);assert.equal(execution.sessionId,original.sessionId)
  assert.equal(execution.inputVersion,2);assert.equal(execution.status,'succeeded')
- assert.equal(await readFile(join(root,'tasks',created.taskId,'once.txt'),'utf8'),process.platform==='win32'?'once\r\n':'once\n')
- assert.equal((await second.query('operation.list')).length,1)
-})
+ assert.equal(await t.step(async () => readFile(join(root,'tasks',created.taskId,'once.txt'),'utf8')),process.platform==='win32'?'once\r\n':'once\n')
+ assert.equal((await t.step(async () => second.query('operation.list'))).length,1)
+}), { timeout: nativeLifecycleTimeout(30000) })
 
 
-test('operator exact error resolution has zero-write HTTP check, retains partial effects and resumes original execution without replay', async t => {
+test('operator exact error resolution has zero-write HTTP check, retains partial effects and resumes original execution without replay', nativeLifecycle(30000, async (t) => {
  let originalStep=0, readStep=0, errorCalls=0, replied=false, resumed=false
  const h=await fixture(t,async(request,host)=>{
   const input=latestInput(request)
@@ -324,32 +338,34 @@ test('operator exact error resolution has zero-write HTTP check, retains partial
   if(originalStep===2)return [call('test_remote_write',{})]
   return [call('execution_submit',{output:{status:'blocked',summary:'Original request failed',evidence:[],limitations:['partial effects possible'],artifacts:[]}})]
  }, { verifyTeam: true })
- const created=await h.service.createTask({groupId:'native-group',requestId:'operator-resolution',objective:'investigate original'})
- await h.service.whenIdle()
- const waiting=await h.query('task.get',{taskId:created.taskId}),original=(await h.query('execution.list')).find(e=>e.key==='original-error')
- const operation=(await h.query('operation.list')).find(op=>op.state==='unknown')
+ await t.beginBusiness()
+
+ const created=await t.step(async () => h.service.createTask({groupId:'native-group',requestId:'operator-resolution',objective:'investigate original'}))
+ await t.step(async () => h.service.whenIdle())
+ const waiting=await t.step(async () => h.query('task.get',{taskId:created.taskId})),original=(await t.step(async () => h.query('execution.list'))).find(e=>e.key==='original-error')
+ const operation=(await t.step(async () => h.query('operation.list'))).find(op=>op.state==='unknown')
  const hash=value=>createHash('sha256').update(JSON.stringify(value,(_key,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item)).digest('hex')
  const human=waiting.humanRequests.find(item=>item.status==='waiting-reply')
  const body={requestId:'operator-exact-resolution',reply:'Settle original failed response; partial effects remain unverified; no replay or deployment authorization',expectedRequirementRevision:waiting.requirementRevision,expectedControlRevision:waiting.controlRevision,
   nativeFailureResolutions:[{operationId:operation.operationId,expectedOperationDigest:hash(operation)}]}
  const server=createServer((req,res)=>handleRequest(req,res,{respondTaskHumanRequest:args=>h.service.respondHumanRequest(args)}))
- await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)))
+ await t.step(async () => new Promise(resolve=>server.listen(0,'127.0.0.1',resolve)));t.after(()=>new Promise(resolve=>server.close(resolve)))
  const url=`http://127.0.0.1:${server.address().port}/tasks/${created.taskId}/human-requests/${human.requestId}/reply`
  const post=(suffix,value=body,headers={})=>fetch(url+suffix,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(value)})
- assert.equal((await post('/check',body,{origin:'https://outside.invalid'})).status,403)
- const check=await post('/check'),checked=await check.json();assert.equal(check.status,200,JSON.stringify(checked));assert.equal(checked.writes,0)
- assert.equal((await h.query('operation.get',{operationId:operation.operationId})).state,'unknown')
- assert.equal((await h.query('source.list')).some(item=>item.requestIdentity?.nativeFailureResolutions),false)
- const bad=await post('/check',{...body,nativeFailureResolutions:[{operationId:operation.operationId,expectedOperationDigest:'0'.repeat(64)}]});assert.equal(bad.status,409)
+ assert.equal((await t.step(async () => post('/check',body,{origin:'https://outside.invalid'}))).status,403)
+ const check=await t.step(async () => post('/check')),checked=await t.step(async () => check.json());assert.equal(check.status,200,JSON.stringify(checked));assert.equal(checked.writes,0)
+ assert.equal((await t.step(async () => h.query('operation.get',{operationId:operation.operationId}))).state,'unknown')
+ assert.equal((await t.step(async () => h.query('source.list'))).some(item=>item.requestIdentity?.nativeFailureResolutions),false)
+ const bad=await t.step(async () => post('/check',{...body,nativeFailureResolutions:[{operationId:operation.operationId,expectedOperationDigest:'0'.repeat(64)}]}));assert.equal(bad.status,409)
  replied=true
- const response=await post('');assert.equal(response.status,200,JSON.stringify(await response.json()))
- await h.service.whenIdle()
- const after=await h.query('operation.get',{operationId:operation.operationId})
+ const response=await t.step(async () => post(''));assert.equal(response.status,200,JSON.stringify(await t.step(async () => response.json())))
+ await t.step(async () => h.service.whenIdle())
+ const after=await t.step(async () => h.query('operation.get',{operationId:operation.operationId}))
  assert.equal(after.state,'failed');assert.equal(after.result.partialEffectsPossible,true);assert.equal(after.result.noEffect,undefined);assert.deepEqual(after.result.previousObservation,operation)
  assert.ok(after.result.operatorSourceId);assert.equal(errorCalls,1)
  assert.equal(h.service.listAlerts().some(item=>item.alertId===`operation:${operation.operationId}`),false)
- assert.equal((await post('')).status,200)
- assert.equal((await post('',{...body,reply:'changed scope'})).status,409)
- const continued=await h.query('execution.get',{executionId:original.executionId});assert.equal(continued.sessionId,original.sessionId);assert.equal(continued.inputVersion,2)
- assert.equal((await h.query('task.get',{taskId:created.taskId})).status,'completed')
-})
+ assert.equal((await t.step(async () => post(''))).status,200)
+ assert.equal((await t.step(async () => post('',{...body,reply:'changed scope'}))).status,409)
+ const continued=await t.step(async () => h.query('execution.get',{executionId:original.executionId}));assert.equal(continued.sessionId,original.sessionId);assert.equal(continued.inputVersion,2)
+ assert.equal((await t.step(async () => h.query('task.get',{taskId:created.taskId}))).status,'completed')
+}), { timeout: nativeLifecycleTimeout(30000) })

@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { lifecycleStages } from './fixtures/lifecycle-stages.js'
+import { nativeLifecycle, nativeTemporaryDirectory, registerNativeCleanup } from './fixtures/native-lifecycle.js'
 
 test('maintenance backup preserves a fixed snapshot while WAL metadata changes', { timeout: 55000 }, async t => {
   let root, source, target, writer, child, timer, closed
@@ -103,4 +104,115 @@ test('lifecycle business timeout terminates its child and removes its temporary 
   }), { code: 'TEST_STAGE_TIMEOUT', phase: 'business' })
   assert.ok(child.exitCode !== null || child.signalCode !== null)
   assert.equal(existsSync(root), false); assert.equal(continued, false)
+})
+
+test('native lifecycle preparation cancellation drains a late fixture and never starts business', async t => {
+  let root, closed = false, business = false, release, lateHook = false
+  const pending = new Promise(resolve => { release = resolve })
+  await assert.rejects(nativeLifecycle(1000, async n => {
+    root = await nativeTemporaryDirectory(join(tmpdir(), 'native-preparation-contract-'))
+    registerNativeCleanup(async () => { closed = true; release() })
+    await pending
+    n.after(() => { lateHook = true })
+    await n.beginBusiness()
+    business = true
+  }, { prepare: 20, cleanup: 1000 })(t), { code: 'TEST_STAGE_TIMEOUT', phase: 'prepare' })
+  assert.equal(closed, true); assert.equal(lateHook, true); assert.equal(business, false)
+  assert.equal(existsSync(root), false)
+})
+
+test('native lifecycle abort interrupts an await so business finally can release its close gate', async t => {
+  const gate = Promise.withResolvers(), events = []
+  let closed, continued = false
+  await assert.rejects(nativeLifecycle(20, async n => {
+    registerNativeCleanup(() => closed ??= gate.promise.then(() => { events.push('close') }))
+    n.after(() => { events.push('after-1') })
+    n.after(() => { events.push('after-2') })
+    await n.beginBusiness()
+    try { await n.step(() => gate.promise); continued = true }
+    finally { gate.resolve() }
+  }, { cleanup: 1000 })(t), { code: 'TEST_STAGE_TIMEOUT', phase: 'business' })
+  assert.equal(continued, false)
+  assert.deepEqual(events, ['close', 'after-1', 'after-2'])
+})
+
+test('native lifecycle cancellation releases teardown gates before closing resources', async t => {
+  const gate = Promise.withResolvers(), events = []
+  let closing
+  await assert.rejects(nativeLifecycle(20, async n => {
+    registerNativeCleanup(() => closing ??= gate.promise.then(() => { events.push('close') }))
+    n.onCancel(() => { events.push('release'); gate.resolve() })
+    n.after(() => { gate.resolve(); events.push('after') })
+    await n.beginBusiness()
+    await n.step(() => gate.promise)
+  }, { cleanup: 1000 })(t), { code: 'TEST_STAGE_TIMEOUT', phase: 'business' })
+  assert.deepEqual(events, ['release', 'close', 'after'])
+})
+
+test('native lifecycle cleanup timeout stays bounded and does not run later cleanup', async t => {
+  let later = false
+  await assert.rejects(nativeLifecycle(1000, async n => {
+    n.after(() => new Promise(() => {}))
+    n.after(() => { later = true })
+    await n.beginBusiness()
+  }, { cleanup: 20 })(t), { code: 'TEST_STAGE_TIMEOUT', phase: 'cleanup' })
+  assert.equal(later, false)
+})
+
+test('native lifecycle pre-cancelled parent never invokes the callback', async t => {
+  const parent = new AbortController(), reason = Error('parent already cancelled')
+  parent.abort(reason)
+  let invoked = false
+  await assert.rejects(nativeLifecycle(1000, async () => { invoked = true })({
+    signal: parent.signal, diagnostic: message => t.diagnostic(message),
+  }), error => error === reason)
+  assert.equal(invoked, false)
+})
+
+test('native lifecycle scopes own only their fresh roots and keep independent FIFO cleanup', async t => {
+  const roots = [], events = []
+  await Promise.all(['a', 'b'].map(key => nativeLifecycle(1000, async n => {
+    const root = await nativeTemporaryDirectory(join(tmpdir(), 'native-scope-' + key + '-'))
+    roots.push(root)
+    n.after(() => { events.push(key + '-1') }); n.after(() => { events.push(key + '-2') })
+    await n.beginBusiness()
+    await n.step(() => Promise.resolve())
+  })(t)))
+  assert.ok(roots.every(root => !existsSync(root)))
+  for (const key of ['a', 'b']) assert.deepEqual(events.filter(value => value.startsWith(key)), [key + '-1', key + '-2'])
+})
+
+test('native lifecycle onCancel failure still closes resources and preserves cleanup evidence', async t => {
+  const pending = Promise.withResolvers(), releaseError = Error('release failed')
+  let root, closed = false
+  await assert.rejects(nativeLifecycle(20, async n => {
+    root = await nativeTemporaryDirectory(join(tmpdir(), 'native-release-failure-'))
+    registerNativeCleanup(async () => { closed = true; pending.resolve() })
+    n.onCancel(() => { throw releaseError })
+    await n.beginBusiness()
+    await n.step(() => pending.promise)
+  }, { cleanup: 1000 })(t), error => error instanceof AggregateError
+    && error.errors[0].phase === 'business' && error.errors[1] instanceof AggregateError
+    && error.errors[1].errors.includes(releaseError))
+  assert.equal(closed, true)
+  assert.equal(existsSync(root), true, 'uncertain cleanup retains its owned directory as evidence')
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('native nested lifecycle inherits the parent business cancellation without sharing roots', async t => {
+  const pending = Promise.withResolvers(), roots = []
+  let childClosed = false, continued = false
+  await assert.rejects(nativeLifecycle(20, async parent => {
+    roots.push(await nativeTemporaryDirectory(join(tmpdir(), 'native-parent-scope-')))
+    await parent.beginBusiness()
+    await parent.step(() => nativeLifecycle(1000, async child => {
+      roots.push(await nativeTemporaryDirectory(join(tmpdir(), 'native-child-scope-')))
+      registerNativeCleanup(async () => { childClosed = true; pending.resolve() })
+      await child.beginBusiness()
+      await child.step(() => pending.promise)
+      continued = true
+    }, { cleanup: 1000 })(t))
+  }, { cleanup: 1000 })(t), { code: 'TEST_STAGE_TIMEOUT', phase: 'business' })
+  assert.equal(childClosed, true); assert.equal(continued, false)
+  assert.equal(roots.length, 2); assert.ok(roots.every(root => !existsSync(root)))
 })

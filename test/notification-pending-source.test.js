@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
@@ -194,12 +195,17 @@ test('明确原uuid长度校验拒绝在重启后只结清failed，保留证据�
 })
 
 for (const sameAuthor of [true, false]) test('native later Topic admission keeps two decisions and exact original recipients: sameAuthor=' + sameAuthor,
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'notification-topic-admission-native-'))
     const releaseFirst = Promise.withResolvers(), releaseSecond = Promise.withResolvers()
+t.onCancel(() => releaseSecond.resolve())
+
+t.onCancel(() => releaseFirst.resolve())
+
     let host, firstStarted = false, secondStarted = false
     t.after(async () => { releaseFirst.resolve(); releaseSecond.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
-    host = await nativeTaskHost(root, async request => {
+    await t.beginBusiness()
+    host = await t.step(async () => nativeTaskHost(root, async request => {
       const input = latestInput(request), names = request.tools.map(tool => tool.name)
       const calls = topicTaskCalls(request)
       if (names.includes('group_decision_submit') && input.trigger !== 'task-facts') {
@@ -213,59 +219,60 @@ for (const sameAuthor of [true, false]) test('native later Topic admission keeps
           replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }
       }
       return calls ?? []
-    })
+    }))
     const envelope = { groupId: 'native-group', senderOpenDingTalkId: 'native-user', timestamp: new Date().toISOString() }
-    await host.service.ingest({ ...envelope, messageId: 'original', text: '测试助手，请确认原事项。' })
-    await waitUntil(() => firstStarted, 'original Topic decision entered', 4000)
-    await host.service.ingest({ ...envelope, senderOpenDingTalkId: sameAuthor ? 'native-user' : 'other-user', messageId: 'newer', text: '测试助手，另一个独立事项也请确认。' })
+    await t.step(async () => host.service.ingest({ ...envelope, messageId: 'original', text: '测试助手，请确认原事项。' }))
+    await t.step(async () => waitUntil(() => firstStarted, 'original Topic decision entered', 4000))
+    await t.step(async () => host.service.ingest({ ...envelope, senderOpenDingTalkId: sameAuthor ? 'native-user' : 'other-user', messageId: 'newer', text: '测试助手，另一个独立事项也请确认。' }))
     releaseFirst.resolve()
-    await waitUntil(() => secondStarted, 'later Topic decision entered', 6000)
-    releaseSecond.resolve(); await host.service.whenIdle()
+    await t.step(async () => waitUntil(() => secondStarted, 'later Topic decision entered', 6000))
+    releaseSecond.resolve(); await t.step(async () => host.service.whenIdle())
     const diagnostics = JSON.stringify({ alerts: host.service.listAlerts(), tools: host.toolResults.slice(-4) })
     const [original] = host.sent.filter(item => item.payload.sourceMessageId === 'original')
     const [newer] = host.sent.filter(item => item.payload.sourceMessageId === 'newer')
     assert.ok(original && newer, diagnostics)
     assert.deepEqual(original.payload.atOpenDingTalkIds, ['native-user'])
     assert.deepEqual(newer.payload.atOpenDingTalkIds, [sameAuthor ? 'native-user' : 'other-user'])
-    assert.equal(host.sent.length, 2, diagnostics); assert.deepEqual(await host.query('task.list'), [])
-    await host.service.recover(); await host.service.whenIdle()
+    assert.equal(host.sent.length, 2, diagnostics); assert.deepEqual(await t.step(async () => host.query('task.list')), [])
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
     assert.equal(host.sent.length, 2)
-    for (const source of await host.query('source.list')) assert.ok(source.processingCompleted)
-  })
+    for (const source of await t.step(async () => host.query('source.list'))) assert.ok(source.processingCompleted)
+  }))
 
 test('native enrichment retires an already routed pending version with an independent command identity',
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'notification-source-superseded-native-'))
     let host
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
-    host = await nativeTaskHost(root, async request => {
+    await t.beginBusiness()
+    host = await t.step(async () => nativeTaskHost(root, async request => {
       const input = latestInput(request)
       return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
         routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
           units: [], ignoredRefs: [{ quote: item.text, reason: '日常寒暄，无待执行事项' }] })) } }]
-    })
+    }))
     const envelope = { groupId: 'native-group', messageId: 'greeting', senderOpenDingTalkId: 'native-user',
       timestamp: new Date().toISOString(), text: '测试助手，早上好。' }
-    await host.service.ingest(envelope)
-    await host.service.whenIdle()
-    const first = (await host.query('source.list'))[0]
+    await t.step(async () => host.service.ingest(envelope))
+    await t.step(async () => host.service.whenIdle())
+    const first = (await t.step(async () => host.query('source.list')))[0]
     assert.equal(first.routed, true)
-    assert.ok(await host.query('receipt.get', { id: `topic-routed:${first.sourceId}` }))
-    await host.service.store.command({ id: 'reroute-old-version', kind: 'source.processingStarted',
-      args: { sourceId: first.sourceId, messageVersion: 1, activeUnitRefs: [{ unitId: 'reclassified', unitRevision: 2 }] } })
-    assert.equal((await host.query('source.get', { sourceId: first.sourceId })).processingPending, true)
-    await host.service.ingest({ ...envelope, quotedMessage: { messageId: 'prior-greeting', content: '早安。' } })
-    await host.service.whenIdle()
-    await host.service.recover()
-    await host.service.whenIdle()
-    const retired = await host.query('source.get', { sourceId: first.sourceId })
-    const current = (await host.query('source.list')).find(item => item.version === 2)
+    assert.ok(await t.step(async () => host.query('receipt.get', { id: `topic-routed:${first.sourceId}` })))
+    await t.step(async () => host.service.store.command({ id: 'reroute-old-version', kind: 'source.processingStarted',
+      args: { sourceId: first.sourceId, messageVersion: 1, activeUnitRefs: [{ unitId: 'reclassified', unitRevision: 2 }] } }))
+    assert.equal((await t.step(async () => host.query('source.get', { sourceId: first.sourceId }))).processingPending, true)
+    await t.step(async () => host.service.ingest({ ...envelope, quotedMessage: { messageId: 'prior-greeting', content: '早安。' } }))
+    await t.step(async () => host.service.whenIdle())
+    await t.step(async () => host.service.recover())
+    await t.step(async () => host.service.whenIdle())
+    const retired = await t.step(async () => host.query('source.get', { sourceId: first.sourceId }))
+    const current = (await t.step(async () => host.query('source.list'))).find(item => item.version === 2)
     assert.ok(current?.processingCompleted)
     assert.equal(retired.processingPending, false)
     assert.equal(retired.processingCompleted, undefined)
     assert.deepEqual(retired.routeReceipt, first.routeReceipt)
     assert.deepEqual(retired.processingHistory, [first.processingCompleted])
-    assert.ok(await host.query('receipt.get', { id: `source-superseded:${first.sourceId}:2` }))
+    assert.ok(await t.step(async () => host.query('receipt.get', { id: `source-superseded:${first.sourceId}:2` })))
     assert.equal(host.service.listAlerts().length, 0)
     assert.equal(host.sent.length, 0)
-  })
+  }))

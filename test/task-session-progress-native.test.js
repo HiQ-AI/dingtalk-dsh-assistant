@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
+import { readFile, writeFile, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -42,13 +43,14 @@ test('execution progress due is exactly ten minutes and respects the current run
   for (const extra of [{ status: 'succeeded' }, { drained: true }, { recovering: true }, { cancelRequested: true }]) assert.equal(executionProgressDue({ ...execution, ...extra }, start + 600000), false)
 })
 
-test('native execution documents keep each input round and the owner reads the new duty and plan', { skip: !available ? reason : false, timeout: 45000 }, async t => {
+test('native execution documents keep each input round and the owner reads the new duty and plan', { ...({ skip: !available ? reason : false, timeout: 45000 }), timeout: nativeLifecycleTimeout(45000) }, nativeLifecycle(45000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'task-round-documents-')), target = join(root, 'proof.txt')
-  await writeFile(target, 'ROUND_EVIDENCE_UNCHANGED')
+  await t.beginBusiness()
+  await t.step(async () => writeFile(target, 'ROUND_EVIDENCE_UNCHANGED'))
   const steps = new Map(), ownerReads = new Set()
   const hash = bytes => createHash('sha256').update(bytes).digest('hex')
   let firstIdentity, firstDocument, firstHash, continued = false, completed = false, initialProgressSteps = 0
-  const h = await nativeTaskHost(root, async (request, host) => {
+  const h = await t.step(async () => nativeTaskHost(root, async (request, host) => {
     const input = latestInput(request)
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
       const [execution] = await host.query('execution.list', { taskId: input.task.taskId })
@@ -105,38 +107,41 @@ test('native execution documents keep each input round and the owner reads the n
     if (step === 2) return [call('read', { file_path: target })]
     if (step === 3) return [call('execution_report_progress', { summary: `ROUND_${version}_PROGRESS：已读到ROUND_EVIDENCE_UNCHANGED。`, evidence: [target], activity: '提交本轮结果' })]
     return [call('execution_submit', { output: { status: 'completed', summary: `ROUND_${version}_RESULT`, evidence: [target], limitations: ['只核对本轮证据，不部署或发送'], artifacts: [] } })]
-  })
+  }))
   t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'round-documents', objective: '沿原执行分两轮核对不同职责，并保留每轮执行文档' })
-  await h.service.whenIdle()
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'round-documents', objective: '沿原执行分两轮核对不同职责，并保留每轮执行文档' }))
+  await t.step(async () => h.service.whenIdle())
   assert.equal(completed, true, JSON.stringify({ alerts: h.service.listAlerts(), errors: h.toolResults.filter(item => item.result.isError) }))
   assert.equal(initialProgressSteps, 3)
   assert.ok(!h.toolResults.some(item => item.name === 'task_execution_progress' && item.result.isError), '文档查询不产生INVALID_TOOL_OUTPUT')
-  const [execution] = await h.query('execution.list', { taskId: task.taskId })
-  assert.equal((await h.query('execution.list', { taskId: task.taskId })).length, 1)
+  const [execution] = await t.step(async () => h.query('execution.list', { taskId: task.taskId }))
+  assert.equal((await t.step(async () => h.query('execution.list', { taskId: task.taskId }))).length, 1)
   assert.equal(execution.definition.executionBackend, 'dsh')
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', 'One member can finish after both document rounds are verified')
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed', 'One member can finish after both document rounds are verified')
   assert.deepEqual({ executionId: execution.executionId, sessionId: execution.sessionId }, firstIdentity)
   assert.equal(execution.inputVersion, 2)
-  assert.equal(hash(await readFile(firstDocument)), firstHash)
+  assert.equal(hash(await t.step(async () => readFile(firstDocument))), firstHash)
   const secondPath = join(root, 'tasks', task.taskId, 'outputs', execution.executionId, 'round-2.md')
-  const first = await readFile(firstDocument, 'utf8'), second = await readFile(secondPath, 'utf8')
+  const first = await t.step(async () => readFile(firstDocument, 'utf8')), second = await t.step(async () => readFile(secondPath, 'utf8'))
   assert.match(first, /ROUND_ONE_DUTY/); assert.match(first, /ROUND_1_PLAN/); assert.match(first, /ROUND_1_RESULT/)
   assert.match(second, /ROUND_TWO_DUTY/); assert.match(second, /ROUND_2_PLAN/); assert.match(second, /ROUND_2_PROGRESS/); assert.match(second, /ROUND_2_RESULT/)
   assert.doesNotMatch(second, /ROUND_1_PLAN|ROUND_1_RESULT/)
   assert.deepEqual([...ownerReads], [1, 2], '统筹通过原生read分别读取两轮实际文档')
-  assert.equal((await h.query('operation.list', { taskId: task.taskId })).length, 0, 'Host文档投影和只读验证不产生业务写入')
-  await h.service.recover(); await h.service.whenIdle()
-  assert.equal(hash(await readFile(firstDocument)), firstHash, '恢复只刷新当前轮，不能改写旧轮字节')
-})
+  assert.equal((await t.step(async () => h.query('operation.list', { taskId: task.taskId }))).length, 0, 'Host文档投影和只读验证不产生业务写入')
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+  assert.equal(hash(await t.step(async () => readFile(firstDocument))), firstHash, '恢复只刷新当前轮，不能改写旧轮字节')
+}))
 
-for (const humanWait of [false, true]) test(`native progress review reads the current execution document without replaying or bypassing human wait: ${humanWait}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
+for (const humanWait of [false, true]) test(`native progress review reads the current execution document without replaying or bypassing human wait: ${humanWait}`, { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'task-progress-native-')), gate = Promise.withResolvers()
+t.onCancel(() => gate.resolve())
+
   t.after(() => gate.resolve())
-  await writeFile(join(root, 'actual-target.txt'), 'ACTUAL_PROGRESS_DIRECTION_READ_ONLY')
+  await t.beginBusiness()
+  await t.step(async () => writeFile(join(root, 'actual-target.txt'), 'ACTUAL_PROGRESS_DIRECTION_READ_ONLY'))
   const reviewers = completionReviews(join(root, 'actual-target.txt'))
   let ownerTurns = 0, executionSteps = 0, reviewSteps = 0, executionId, progressInput
-  const h = await nativeTaskHost(root, async request => {
+  const h = await t.step(async () => nativeTaskHost(root, async request => {
     const names = request.tools.map(tool => tool.name)
     if (!names.includes('task_delegate')) {
       const review = reviewers.execution(latestInput(request)); if (review) return review
@@ -172,30 +177,30 @@ for (const humanWait of [false, true]) test(`native progress review reads the cu
       return [submit('wait')]
     }
     return [submit('wait')]
-  })
+  }))
   t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'progress-native', objective: '核对执行的真实动作和方向' })
-  await waitUntil(() => ownerTurns >= 2 && executionSteps >= 2, 'owner waiting while the actual read execution remains running')
-  const [before] = await h.query('execution.list')
+  const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'progress-native', objective: '核对执行的真实动作和方向' }))
+  await t.step(async () => waitUntil(() => ownerTurns >= 2 && executionSteps >= 2, 'owner waiting while the actual read execution remains running'))
+  const [before] = await t.step(async () => h.query('execution.list'))
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse(before.updatedAt) + 599999 })
-  try { await h.service.recover() } finally { t.mock.timers.reset() }
-  assert.equal((await h.query('execution.get', { executionId: before.executionId })).progressReview, undefined)
+  try { await t.step(async () => h.service.recover()) } finally { t.mock.timers.reset() }
+  assert.equal((await t.step(async () => h.query('execution.get', { executionId: before.executionId }))).progressReview, undefined)
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse(before.updatedAt) + 600000 })
-  try { await h.service.recover() } finally { t.mock.timers.reset() }
-  const checked = await h.query('execution.get', { executionId: before.executionId })
+  try { await t.step(async () => h.service.recover()) } finally { t.mock.timers.reset() }
+  const checked = await t.step(async () => h.query('execution.get', { executionId: before.executionId }))
   assert.ok(checked.progressReview)
   assert.equal(checked.status, 'running')
   assert.equal(checked.drained, false)
   assert.equal(checked.progressReview.readError, undefined, JSON.stringify({ expected: { executionId: before.executionId, inputVersion: before.inputVersion, leaseEpoch: before.leaseEpoch, inputDigest: before.inputDigest, sessionId: before.sessionId },
-    inputs: (await inspectSession(h.ctx.sessionPersistence, before.sessionId)).events.filter(event => event.type === 'user/message').map(event => ({ seq: event.seq, source: event.data.source })) }))
+    inputs: (await t.step(async () => inspectSession(h.ctx.sessionPersistence, before.sessionId))).events.filter(event => event.type === 'user/message').map(event => ({ seq: event.seq, source: event.data.source })) }))
   assert.ok(checked.progressReview.lastSequence >= 0)
   if (humanWait) {
     assert.equal(ownerTurns, 2)
-    const task = await h.query('task.get', { taskId: created.taskId }), request = task.humanRequests[0]
+    const task = await t.step(async () => h.query('task.get', { taskId: created.taskId })), request = task.humanRequests[0]
     assert.equal(request.status, 'waiting-reply')
-    await h.service.respondHumanRequest({ taskId: task.taskId, humanRequestId: request.requestId, requestId: 'progress-human-reply', reply: '仅核对原有结果，不追加写入', expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision })
+    await t.step(async () => h.service.respondHumanRequest({ taskId: task.taskId, humanRequestId: request.requestId, requestId: 'progress-human-reply', reply: '仅核对原有结果，不追加写入', expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision }))
   }
-  await waitUntil(() => reviewSteps >= 4, 'owner corrects status-only submission and natively reads the current execution document')
+  await t.step(async () => waitUntil(() => reviewSteps >= 4, 'owner corrects status-only submission and natively reads the current execution document'))
   const directionRead = h.toolResults.findLast(item => item.name === 'read' && item.sessionId === progressInput.task.sessionId)
   assert.match(JSON.stringify(directionRead.result), /只读方向/, '小目标从实际执行文档核对，不依赖重复内联正文')
   const result = h.toolResults.findLast(item => item.name === 'task_execution_progress' && !item.result.isError)
@@ -205,31 +210,34 @@ for (const humanWait of [false, true]) test(`native progress review reads the cu
   assert.equal(result.result.value.excerpts, undefined, '日常巡检不回灌原始工具日志')
   assert.equal(result.result.value.sessionLogRoot, undefined)
   assert.equal(progressInput.executions[0].document.path, result.result.value.document.path)
-  assert.equal((await h.query('execution.list')).length, 1)
-  assert.equal((await h.query('execution.get', { executionId })).cancelRequested, false)
-  assert.equal((await h.query('execution.get', { executionId })).feedback?.length ?? 0, 0)
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 1)
+  assert.equal((await t.step(async () => h.query('execution.get', { executionId }))).cancelRequested, false)
+  assert.equal((await t.step(async () => h.query('execution.get', { executionId }))).feedback?.length ?? 0, 0)
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse(checked.progressReview.checkedAt) })
-  try { await h.service.recover() } finally { t.mock.timers.reset() }
-  assert.equal((await h.query('wake.list', { taskId: created.taskId })).filter(wake => wake.kind === 'execution.progress.review').length, 1)
-  assert.equal((await h.query('execution.get', { executionId })).progressReview.checkedAt, checked.progressReview.checkedAt)
-  gate.resolve(); await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
-  const completed = await h.query('execution.list')
+  try { await t.step(async () => h.service.recover()) } finally { t.mock.timers.reset() }
+  assert.equal((await t.step(async () => h.query('wake.list', { taskId: created.taskId }))).filter(wake => wake.kind === 'execution.progress.review').length, 1)
+  assert.equal((await t.step(async () => h.query('execution.get', { executionId }))).progressReview.checkedAt, checked.progressReview.checkedAt)
+  gate.resolve(); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: created.taskId }))).status, 'completed')
+  const completed = await t.step(async () => h.query('execution.list'))
   assert.equal(completed.length, 3)
   assert.equal(completed.filter(item => item.key === 'original-read').length, 1, 'completion reviews do not replace or duplicate the inspected execution')
-})
+}))
 
-for (const detour of [false, true]) test(`scripted progress decision waits for evidence or steers the original execution once: detour=${detour}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
+for (const detour of [false, true]) test(`scripted progress decision waits for evidence or steers the original execution once: detour=${detour}`, { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'task-direction-native-')), gate = Promise.withResolvers()
+t.onCancel(() => gate.resolve())
+
   t.after(() => gate.resolve())
   const target = join(root, 'verified-target.txt')
-  await writeFile(target, 'VERIFIED_TARGET_UNCHANGED')
+  await t.beginBusiness()
+  await t.step(async () => writeFile(target, 'VERIFIED_TARGET_UNCHANGED'))
   const reviewers = completionReviews(target)
   const extraTarget = join(root, 'unrelated-extra.txt')
-  await writeFile(extraTarget, 'UNREQUESTED_EXTRA_CHECK')
+  await t.step(async () => writeFile(extraTarget, 'UNREQUESTED_EXTRA_CHECK'))
   let delegated = false, steps = 0, reviews = 0
   const phases = new Map(), judgments = []
-  const h = await nativeTaskHost(root, async request => {
+  const h = await t.step(async () => nativeTaskHost(root, async request => {
     if (!request.tools.some(tool => tool.name === 'task_delegate')) {
       const review = reviewers.execution(latestInput(request)); if (review) return review
       steps++
@@ -302,34 +310,34 @@ for (const detour of [false, true]) test(`scripted progress decision waits for e
     limitations: ['原执行尚未提交结果；下一检查点为原执行的真实动作与结果，而非反馈回执'] }
     judgments.push(decision)
     return [call('task_session_submit', { decision })]
-  })
+  }))
   t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'direction-review', objective: '核对文件并简短报告' })
-  await waitUntil(() => steps >= (detour ? 4 : 3), 'executor reports its current plan and holds its original native model call')
-  await waitUntil(async () => (await h.query('task.get', { taskId: created.taskId })).drained, 'owner submits initial wait before inspection')
-  const [before] = await h.query('execution.list')
+  const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'direction-review', objective: '核对文件并简短报告' }))
+  await t.step(async () => waitUntil(() => steps >= (detour ? 4 : 3), 'executor reports its current plan and holds its original native model call'))
+  await t.step(async () => waitUntil(async () => (await h.query('task.get', { taskId: created.taskId })).drained, 'owner submits initial wait before inspection'))
+  const [before] = await t.step(async () => h.query('execution.list'))
   for (let round = 1; round <= 2; round++) {
-    const current = await h.query('execution.get', { executionId: before.executionId })
+    const current = await t.step(async () => h.query('execution.get', { executionId: before.executionId }))
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse(current.progressReview?.checkedAt ?? current.updatedAt) + 600000 })
-    try { await h.service.recover() } finally { t.mock.timers.reset() }
-    await waitUntil(async () => reviews === round && (await h.query('task.get', { taskId: created.taskId })).drained, 'original owner finishes progress review').catch(error => {
+    try { await t.step(async () => h.service.recover()) } finally { t.mock.timers.reset() }
+    await t.step(async () => waitUntil(async () => reviews === round && (await h.query('task.get', { taskId: created.taskId })).drained, 'original owner finishes progress review').catch(error => {
       error.message += JSON.stringify({ reviews, phases: [...phases], alerts: h.service.listAlerts(), tools: h.toolResults.filter(item => item.result.isError).slice(-3) })
       throw error
-    })
+    }))
   }
-  const [checked] = await h.query('execution.list')
-  assert.equal((await h.query('task.list')).length, 1)
-  assert.equal((await h.query('execution.list')).length, 1)
+  const [checked] = await t.step(async () => h.query('execution.list'))
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 1)
   for (const key of ['executionId', 'sessionId', 'inputVersion', 'leaseEpoch']) assert.equal(checked[key], before[key])
   assert.equal(checked.cancelRequested, false)
   assert.equal(checked.feedback?.length ?? 0, detour ? 1 : 0, 'second inspection must not repeat pending advice')
-  const history = await h.query('task.decisions', { taskId: created.taskId })
+  const history = await t.step(async () => h.query('task.decisions', { taskId: created.taskId }))
   const savedJudgments = history.decisions.map(item => item.decision).filter(decision => decision.summary.startsWith('第'))
     .map(({ action, summary, evidence, limitations }) => ({ action, summary, evidence, limitations }))
   assert.deepEqual(savedJudgments, judgments.toReversed(), 'both inspections retain their distinct decisions, explanations and limits')
-  gate.resolve(); await h.service.whenIdle()
-  const after = await h.query('execution.get', { executionId: before.executionId })
+  gate.resolve(); await t.step(async () => h.service.whenIdle())
+  const after = await t.step(async () => h.query('execution.get', { executionId: before.executionId }))
   if (detour) assert.ok(after.feedback[0].modelStepEnteredAt, 'advice enters the original native model step')
-  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
-  assert.equal((await h.query('execution.list')).length, 3)
-})
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: created.taskId }))).status, 'completed')
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
+}))

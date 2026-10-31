@@ -6,6 +6,7 @@ import { artifactPolicySource } from '../../scripts/sandbox-artifact-policy.mjs'
 import { pathToFileURL } from 'node:url'
 import { openResidentStore } from '../../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskSessionService } from '../../packages/dingtalk-dsh-assistant/task-session-service.js'
+import { registerNativeCleanup, nativeLifecycleSignal } from './native-lifecycle.js'
 
 // Use one installed native composition, including its real preset and process providers.
 // No manager, agent, persistence, filesystem, shell, or control-store implementation is mocked.
@@ -34,14 +35,24 @@ export async function nativeTaskHost(root, decide, options = {}) {
   const h = { ctx, requests, auxiliaryRequests, sent, readbacks, toolResults, root }
   let closing
   h.close = () => closing ??= (async () => { try { await h.service?.close() } finally { try { await h.residentStore?.close() } finally { await ctx.fiber.dispose() } } })()
+  const construction = Promise.withResolvers(), signal = nativeLifecycleSignal()
+  let ready = false
+  registerNativeCleanup(async () => {
+    if (!ready) await ctx.fiber.dispose()
+    await construction.promise
+    await h.close()
+  })
   try {
+  signal?.throwIfAborted()
   ctx.baseUrl = pathToFileURL(join(root, 'cordis.yml')).href
   await ctx.plugin(Loader)
+  signal?.throwIfAborted()
   ctx.loader.builtins.group = createRequire(profile.resolve('@deepseek-ai/dsh-agent-preset-registry'))('@deepseek-ai/cordis-plugin-group').default
   let artifactPolicyEntry = options.artifactPolicyEntry ?? process.env.DSH_ARTIFACT_POLICY_MODULE
   if (!artifactPolicyEntry) {
     const installed = native.resolve('@deepseek-ai/dsh-sandbox-policy')
     const original = await readFile(installed)
+    signal?.throwIfAborted()
     if (original.includes('bindArtifactRoot(session, value)')) artifactPolicyEntry = installed
     else {
       artifactPolicyEntry = join(root, '.native-policy', 'index.mjs')
@@ -50,7 +61,9 @@ export async function nativeTaskHost(root, decide, options = {}) {
       for (const dependency of ['@deepseek-ai/cordis', 'zod', '@deepseek-ai/schemastery'])
         patched = patched.replace(`from "${dependency}"`, `from "${pathToFileURL(policyRequire.resolve(dependency)).href}"`)
       await mkdir(dirname(artifactPolicyEntry), { recursive: true })
+      signal?.throwIfAborted()
       await writeFile(artifactPolicyEntry, patched)
+      signal?.throwIfAborted()
     }
   }
   const policyRow = { name: pathToFileURL(resolve(artifactPolicyEntry)).href, config: { mode: 'workspace-write', workspaceRoot: root } }
@@ -69,7 +82,9 @@ export async function nativeTaskHost(root, decide, options = {}) {
     ...(options.resident ? [row('credentials-local', { path: join(root, 'credentials.json'), watch: false }), row('attachment-local', { dshHome: join(root, 'attachment-home') }),
       row('agent-default-model', { provider: 'native-task-test', model: 'controlled' })] : []),
   ])
+  signal?.throwIfAborted()
   await ctx.loader.await()
+  signal?.throwIfAborted()
   assert.ok(ctx.agents && ctx.agentPresets && ctx.workspaceRegistry, 'Native composition failed to activate')
   await ctx.plugin({ inject: ['agentPresets'], async *apply(child) {
     yield await child.agentPresets.register({ id: 'native-test', plugins: [{ name: 'cordis:group', group: true,
@@ -80,7 +95,9 @@ export async function nativeTaskHost(root, decide, options = {}) {
       ...(options.skillDirs ? [row('skill-filesystem', { includeDefaultRoots: false, customSkillDirs: options.skillDirs, watch: false }), row('tool-skill')] : []),
     ] }] })
   } })
+  signal?.throwIfAborted()
   assert.equal((await ctx.agentPresets.resolve()).broken, undefined)
+  signal?.throwIfAborted()
   let sequence = 0
   class ScriptedModel extends LlmAdapter {
     resolveModel(provider, model) { return { provider, id: model, name: model, reasoning: { efforts: ['low'].map(id => ({ id, name: id })), defaultEffort: 'low' } } }
@@ -103,10 +120,12 @@ export async function nativeTaskHost(root, decide, options = {}) {
   }
   ctx.llm.registerAdapter(options.modelProviders ?? ['native-task-test'], new ScriptedModel())
   ctx.on('tools/result', (exec, result) => toolResults.push({ name: exec.name, sessionId: exec.agent?.id, result: structuredClone(result) }))
-  if (options.resident) return h
+  if (options.resident) { ready = true; construction.resolve(); return h }
   h.residentStore = await openResidentStore(ctx.storageDomain)
+  signal?.throwIfAborted()
   await h.residentStore.subscribe({ groupId: 'native-group', name: '真实服务测试群', responsibility: '处理明确交办给测试助手的工作' })
   await h.residentStore.setAgentNames(['测试助手'])
+  signal?.throwIfAborted()
   const legacy = {
     getAgentConfig: () => ({ workspaceDir: root, provider: 'native-task-test', model: 'controlled', agentPreset: 'native-test', agentNames: ['测试助手'], ...options.agentConfig }),
     getGroup: groupId => h.residentStore.getGroup(groupId),
@@ -118,9 +137,11 @@ export async function nativeTaskHost(root, decide, options = {}) {
       async readback(notification) { readbacks.push(structuredClone(notification)); return { messageId: notification.ack.messageId, visible: true } },
     },
   })
+  signal?.throwIfAborted()
   h.query = (kind, args = {}) => h.service.store.query({ kind, ...args })
+  ready = true; construction.resolve()
   return h
-  } catch (error) { await h.close(); throw error }
+  } catch (error) { construction.resolve(); await h.close(); throw error }
 }
 
 export function modelToolValues(request) {

@@ -1,12 +1,13 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { available, reason, nativeShell, nativeTaskHost, latestInput, topicTaskCalls } from './fixtures/task-session-native-host.js'
 import { inspectSession } from '../packages/dingtalk-dsh-assistant/session-persistence.js'
 
-const test = (name, run) => testRunner(name, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, run)
+const test = (name, run, options = {}) => testRunner(name, { timeout: 30000, ...options, ...(!available ? { skip: reason } : {}) }, run)
 const call = (name, args) => ({ name, args })
 const finish = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
 const message = { groupId: 'native-group', messageId: 'personal-skills-1', senderOpenDingTalkId: 'native-user',
@@ -54,7 +55,7 @@ async function fixture(t) {
   } }
 }
 
-test('native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned', async t => {
+test('native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned', nativeLifecycle(30000, async (t) => {
   const f = await fixture(t), steps = new Map(), first = new Map()
   const reviewers = completionReviews(join(f.skillRoot, names[0], 'references/procedure.md'))
   const h = await f.host(async (request, host) => {
@@ -92,26 +93,28 @@ test('native personal skills are discovered cheaply, loaded independently by bot
     return [call('execution_submit', { output: { status: 'completed', summary: 'Read the actual personal reference.',
       evidence: [`REFERENCE_ONLY_${names[0]}`], limitations: [], artifacts: [] } })]
   })
-  await h.service.ingest(message); await h.service.whenIdle()
-  assert.deepEqual((await h.service.recover()).failures, [])
-  const [task] = await h.query('task.list'), [execution] = await h.query('execution.list')
+  await t.beginBusiness()
+
+  await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())
+  assert.deepEqual((await t.step(async () => h.service.recover())).failures, [])
+  const [task] = await t.step(async () => h.query('task.list')), [execution] = await t.step(async () => h.query('execution.list'))
   assert.equal(task.status, 'completed')
-  assert.equal((await h.query('execution.list')).length, 3)
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
   assert.equal(task.topicRefs.length, 1)
   assert.equal(h.residentStore.listTopics('native-group').length, 1)
   assert.notEqual(task.sessionId, execution.sessionId)
   assert.deepEqual(execution.input.skillNames, [names[0]])
   assert.equal(first.size, 2)
   assert.equal(h.toolResults.filter(result => result.name === 'skill' && !result.result.isError).length, 2)
-  assert.ok(!(await h.query('operation.list')).some(operation => operation.definition?.toolName === 'skill'), 'Skill loads do not pretend to be external effects')
+  assert.ok(!(await t.step(async () => h.query('operation.list'))).some(operation => operation.definition?.toolName === 'skill'), 'Skill loads do not pretend to be external effects')
   for (const sessionId of [task.sessionId, execution.sessionId]) {
-    const log = await inspectSession(h.ctx.sessionPersistence, sessionId)
+    const log = await t.step(async () => inspectSession(h.ctx.sessionPersistence, sessionId))
     assert.ok(log.events.some(event => event.type === 'tool/call' && event.data.name === 'skill'))
     assert.ok(log.events.some(event => event.type === 'user/message' && event.data.source?.kind === 'skill-catalog'))
   }
-})
+}), { timeout: nativeLifecycleTimeout(30000) })
 
-test('an unavailable native skill is a correctable read and does not leave unknown external effects', async t => {
+test('an unavailable native skill is a correctable read and does not leave unknown external effects', nativeLifecycle(30000, async (t) => {
   const f = await fixture(t); let step = 0
   const reviewers = completionReviews(join(f.skillRoot, names[1], 'references/procedure.md'))
   const h = await f.host(async request => {
@@ -127,15 +130,17 @@ test('an unavailable native skill is a correctable read and does not leave unkno
     assert.ok(JSON.stringify(request).includes(`BODY_ONLY_${names[1]}`))
     return [call('execution_submit', { output: { status: 'completed', summary: 'Read available fallback instructions.', evidence: [], limitations: ['Requested guide is unavailable.'], artifacts: [] } })]
   })
-  await h.service.ingest(message); await h.service.whenIdle()
-  assert.equal((await h.query('task.list'))[0].status, 'completed')
-  assert.equal((await h.query('execution.list')).length, 3)
-  assert.ok(h.toolResults.some(result => result.name === 'skill' && result.result.isError))
-  assert.deepEqual(await h.query('operation.list'), [])
-  assert.deepEqual((await h.service.recover()).failures, [])
-})
+  await t.beginBusiness()
 
-test('task session rejects business tools and late replacements while keeping the original evidence reader', async t => {
+  await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.list')))[0].status, 'completed')
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
+  assert.ok(h.toolResults.some(result => result.name === 'skill' && result.result.isError))
+  assert.deepEqual(await t.step(async () => h.query('operation.list')), [])
+  assert.deepEqual((await t.step(async () => h.service.recover())).failures, [])
+}), { timeout: nativeLifecycleTimeout(30000) })
+
+test('task session rejects business tools and late replacements while keeping the original evidence reader', nativeLifecycle(30000, async (t) => {
   const f = await fixture(t); let ownerStep = 0, effects = 0
   const h = await f.host(async (request, host) => {
     const input = latestInput(request), tools = request.tools.map(tool => tool.name)
@@ -157,16 +162,18 @@ test('task session rejects business tools and late replacements while keeping th
     assert.ok(!tools.includes('late_global_business'))
     return [finish('complete', '已读取证据，业务操作均被拒绝。'), call('skill', {})]
   })
-  await h.service.ingest(message); await h.service.whenIdle()
+  await t.beginBusiness()
+
+  await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())
   assert.equal(effects, 0)
-  assert.equal((await h.query('task.list'))[0].status, 'completed')
+  assert.equal((await t.step(async () => h.query('task.list')))[0].status, 'completed')
   assert.ok(h.toolResults.some(result => result.name === 'read' && !result.result.isError))
   for (const name of ['skill', 'late_global_business', 'late_scoped_business', 'write', nativeShell])
     assert.ok(h.toolResults.some(result => result.name === name && result.result.isError), `${name} was denied`)
   assert.equal(h.toolResults.filter(result => result.name === 'skill' && result.result.isError).length, 2, '提交后仍拒绝被替换的工具')
-})
+}), { timeout: nativeLifecycleTimeout(30000) })
 
-test('unconfigured native profiles expose no bundled personal skills', async t => {
+test('unconfigured native profiles expose no bundled personal skills', nativeLifecycle(30000, async (t) => {
   const f = await fixture(t)
   const h = await f.host(async request => {
     const input = latestInput(request), tools = request.tools.map(tool => tool.name)
@@ -176,11 +183,13 @@ test('unconfigured native profiles expose no bundled personal skills', async t =
     if (topicCalls) return topicCalls
     return [finish('complete', 'No personal skills were configured.')]
   }, { skillDirs: undefined })
-  await h.service.ingest(message); await h.service.whenIdle()
-  assert.equal((await h.query('task.list'))[0].status, 'completed')
-})
+  await t.beginBusiness()
 
-test('an execution same-name replacement does not inherit the native loader read-only accounting', async t => {
+  await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.list')))[0].status, 'completed')
+}), { timeout: nativeLifecycleTimeout(30000) })
+
+test('an execution same-name replacement does not inherit the native loader read-only accounting', nativeLifecycle(30000, async (t) => {
   const f = await fixture(t); let step = 0, effects = 0
   const reviewers = completionReviews(join(f.skillRoot, names[0], 'references/procedure.md'))
   const h = await f.host(async (request, host) => {
@@ -202,17 +211,19 @@ test('an execution same-name replacement does not inherit the native loader read
     }
     return [call('execution_submit', { output: { status: 'completed', summary: 'Replacement returned.', evidence: [], limitations: [], artifacts: [] } })]
   })
-  await h.service.ingest(message); await h.service.whenIdle()
+  await t.beginBusiness()
+
+  await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())
   assert.equal(effects, 1)
-  const operations = await h.query('operation.list')
+  const operations = await t.step(async () => h.query('operation.list'))
   assert.equal(operations.length, 1)
   assert.equal(operations[0].definition.toolName, 'skill')
   assert.equal(operations[0].state, 'succeeded')
-  assert.equal((await h.query('task.list'))[0].status, 'completed')
-  assert.equal((await h.query('execution.list')).length, 3)
-})
+  assert.equal((await t.step(async () => h.query('task.list')))[0].status, 'completed')
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
+}), { timeout: nativeLifecycleTimeout(30000) })
 
-test('已读技能和引用变化只提示相关路径，原生重读后消除提示且保留旧版本审计', async t => {
+test('已读技能和引用变化只提示相关路径，原生重读后消除提示且保留旧版本审计', nativeLifecycle(30000, async (t) => {
   const f = await fixture(t), reference = join(f.skillRoot, names[0], 'references/procedure.md')
   let step = 0
   const h = await f.host(async request => {
@@ -237,15 +248,17 @@ test('已读技能和引用变化只提示相关路径，原生重读后消除�
         return [finish('complete', '已核对最新相关规则')]
     }
   })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'skill-freshness', objective: '只读核对规则更新' })
-  await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(await h.query('task.get', { taskId: task.taskId })))
-  const log = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
+  await t.beginBusiness()
+
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'skill-freshness', objective: '只读核对规则更新' }))
+  await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed', JSON.stringify(await t.step(async () => h.query('task.get', { taskId: task.taskId }))))
+  const log = await t.step(async () => inspectSession(h.ctx.sessionPersistence, task.sessionId))
   assert.equal(log.events.filter(e => e.data.source?.kind === 'dingtalk-skill-read').length, 4)
   assert.ok(log.events.some(e => e.type === 'tool/result' && JSON.stringify(e.data).includes(`BODY_ONLY_${names[0]}`)), '旧实际工具结果保留')
-})
+}), { timeout: nativeLifecycleTimeout(30000) })
 
-test('执行会话续办恢复已读版本，入口未变而引用改变也能在首次模型步骤看到', async t => {
+test('执行会话续办恢复已读版本，入口未变而引用改变也能在首次模型步骤看到', nativeLifecycle(30000, async (t) => {
   const f = await fixture(t), reference = join(f.skillRoot, names[0], 'references/procedure.md')
   const reviewers = completionReviews(reference), steps = new Map()
   const h = await f.host(async request => {
@@ -276,12 +289,14 @@ test('执行会话续办恢复已读版本，入口未变而引用改变也能�
     }
     return [call('execution_submit', { output: { status: 'completed', summary: '已读取本阶段相关规则', evidence: [reference], limitations: [], artifacts: [] } })]
   })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'skill-resume', objective: '分两阶段核对规则更新' })
-  await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(await h.query('task.get', { taskId: task.taskId })))
-  const [execution] = await h.query('execution.list', { taskId: task.taskId })
+  await t.beginBusiness()
+
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'skill-resume', objective: '分两阶段核对规则更新' }))
+  await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed', JSON.stringify(await t.step(async () => h.query('task.get', { taskId: task.taskId }))))
+  const [execution] = await t.step(async () => h.query('execution.list', { taskId: task.taskId }))
   assert.equal(execution.inputVersion, 2)
-  const log = await inspectSession(h.ctx.sessionPersistence, execution.sessionId)
+  const log = await t.step(async () => inspectSession(h.ctx.sessionPersistence, execution.sessionId))
   assert.equal(log.events.filter(e => e.data.source?.kind === 'dingtalk-skill-read' && e.data.source.record.kind === 'reference').length, 2)
-  assert.deepEqual(await h.query('operation.list'), [], '技能检查不制造外部效果')
-})
+  assert.deepEqual(await t.step(async () => h.query('operation.list')), [], '技能检查不制造外部效果')
+}), { timeout: nativeLifecycleTimeout(30000) })

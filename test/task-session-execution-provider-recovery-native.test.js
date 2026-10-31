@@ -1,7 +1,8 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import { lifecycleStages } from './fixtures/lifecycle-stages.js'
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { access, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
@@ -85,114 +86,120 @@ async function host(root, { initialize = true, fault = true, allowUnrelated = fa
     } })
   return Object.assign(h, { requests })
 }
-for (const restart of [false, true]) test(`native provider failure resumes original executor after persisted backoff; successful write never replays: restart=${restart}`, async t => {
+for (const restart of [false, true]) test(`native provider failure resumes original executor after persisted backoff; successful write never replays: restart=${restart}`, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-provider-recovery-')), hosts = []
   t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
-  let h = await host(root); hosts.push(h)
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'provider', objective: 'Original task' })
-  await h.service.whenIdle()
-  const first = (await h.query('execution.list'))[0]
+  let h = await host(root);
+  await t.beginBusiness()
+ hosts.push(h)
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'provider', objective: 'Original task' }))
+  await t.step(async () => h.service.whenIdle())
+  const first = (await t.step(async () => h.query('execution.list')))[0]
   assert.equal(first.status, 'queued'); assert.equal(first.drained, true)
   assert.equal(first.providerRecovery.attempts, 1)
   assert.equal(first.result.payload.error.providerError.code, 'PI_AI_ERROR')
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests?.length ?? 0, 0)
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).humanRequests?.length ?? 0, 0)
   if (restart) {
-    await h.close(); h = await host(root, { initialize: false, fault: false }); hosts.push(h)
-    await h.service.recover()
+    await t.step(async () => h.close()); h = await t.step(async () => host(root, { initialize: false, fault: false })); hosts.push(h)
+    await t.step(async () => h.service.recover())
   }
   // 十秒只约束定时恢复准入；实际模型读取和执行由原生排空等待，仍受用例总时限约束。
-  await waitUntil(async () => (await h.query('execution.list'))[0]?.inputVersion === 2, 'bounded native provider recovery admission', 10000)
-  await h.service.whenIdle()
-  await completed(h, task.taskId)
-  const final = (await h.query('execution.list'))[0]
+  await t.step(async () => waitUntil(async () => (await h.query('execution.list'))[0]?.inputVersion === 2, 'bounded native provider recovery admission', 10000))
+  await t.step(async () => h.service.whenIdle())
+  await t.step(async () => completed(h, task.taskId))
+  const final = (await t.step(async () => h.query('execution.list')))[0]
   assert.equal(final.executionId, first.executionId); assert.equal(final.sessionId, first.sessionId)
   assert.equal(final.inputVersion, 2); assert.equal(final.status, 'succeeded')
   assert.equal(final.results.length, 1); assert.equal(final.results[0].payload.error.code, 'EXECUTION_PROVIDER_TRANSIENT')
-  assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
-  const operations = await h.query('operation.list')
+  assert.equal((await t.step(async () => readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8'))).trim(), 'once')
+  const operations = await t.step(async () => h.query('operation.list'))
   assert.equal(operations.length, 1); assert.equal(operations[0].state, 'succeeded')
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests?.length ?? 0, 0)
-})
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).humanRequests?.length ?? 0, 0)
+}), { timeout: nativeLifecycleTimeout(30000) })
 
-test('one unreadable provider terminal stops only its recovery and unrelated native task still completes', async t => {
+test('one unreadable provider terminal stops only its recovery and unrelated native task still completes', nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-provider-isolation-'))
   const h = await host(root, { allowUnrelated: true })
+  await t.beginBusiness()
+
   t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'bad-proof', objective: 'Original task' })
-  await h.service.whenIdle()
-  const execution = (await h.query('execution.list'))[0]
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'bad-proof', objective: 'Original task' }))
+  await t.step(async () => h.service.whenIdle())
+  const execution = (await t.step(async () => h.query('execution.list')))[0]
   const persistence = h.ctx.sessionPersistence, originalOpen = persistence.open.bind(persistence)
   persistence.open = (sessionId, mode, ...args) => {
     if (sessionId === execution.sessionId && mode === 'read') throw Object.assign(new Error('Injected terminal evidence unavailable'), { code: 'TEST_TERMINAL_READ_FAILED' })
     return originalOpen(sessionId, mode, ...args)
   }
-  const unrelated = await h.service.createTask({ groupId: 'native-group', requestId: 'unrelated', objective: 'Other task' })
-  await h.service.whenIdle()
-  await waitUntil(async () => (await h.query('execution.get', { executionId: execution.executionId })).providerRecovery?.blocked, 'visible recovery proof failure')
-  await h.service.whenIdle()
-  const blocked = await h.query('execution.get', { executionId: execution.executionId })
+  const unrelated = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'unrelated', objective: 'Other task' }))
+  await t.step(async () => h.service.whenIdle())
+  await t.step(async () => waitUntil(async () => (await h.query('execution.get', { executionId: execution.executionId })).providerRecovery?.blocked, 'visible recovery proof failure'))
+  await t.step(async () => h.service.whenIdle())
+  const blocked = await t.step(async () => h.query('execution.get', { executionId: execution.executionId }))
   assert.equal(blocked.status, 'failed'); assert.equal(blocked.providerRecovery.nextAttemptAt, null)
   assert.equal(blocked.result.payload.error.code, 'EXECUTION_PROVIDER_TRANSIENT')
   assert.equal(blocked.result.recovery.decision, 'blocked')
   assert.equal(blocked.providerRecovery.blocked.code, 'TEST_TERMINAL_READ_FAILED')
   assert.equal(blocked.inputVersion, 1)
-  assert.equal((await h.query('task.get', { taskId: unrelated.taskId })).status, 'completed')
-  assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
-})
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: unrelated.taskId }))).status, 'completed')
+  assert.equal((await t.step(async () => readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8'))).trim(), 'once')
+}), { timeout: nativeLifecycleTimeout(30000) })
 
-for (const recoverAfterCold of [false, true]) test(`provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=${recoverAfterCold}`, async t => {
+for (const recoverAfterCold of [false, true]) test(`provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=${recoverAfterCold}`, nativeLifecycle(recoverAfterCold ? 30000 : 60000, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
   const root = await mkdtemp(join(tmpdir(), 'native-provider-exhausted-'))
   const h = await host(root, { persistent: true, recoverAfterCold })
+  await t.beginBusiness()
+
   t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'persistent', objective: 'Original task' })
-  await h.service.whenIdle()
-  const first = (await h.query('execution.list'))[0]
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'persistent', objective: 'Original task' }))
+  await t.step(async () => h.service.whenIdle())
+  const first = (await t.step(async () => h.query('execution.list')))[0]
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const execution = (await h.query('execution.list'))[0]
+    const execution = (await t.step(async () => h.query('execution.list')))[0]
     assert.equal(execution.providerRecovery.attempts, attempt)
     assert.equal(execution.inputVersion, attempt)
     t.mock.timers.setTime(Date.parse(execution.providerRecovery.nextAttemptAt) + 1)
-    await h.service.recover(); await h.service.whenIdle()
+    await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
   }
-  let execution = (await h.query('execution.list'))[0]
+  let execution = (await t.step(async () => h.query('execution.list')))[0]
   assert.equal(execution.providerRecovery.exhausted, true); assert.equal(execution.providerRecovery.attempts, 3)
   assert.equal(execution.inputVersion, 4); assert.equal(execution.status, 'failed')
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests.length, 0)
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).humanRequests.length, 0)
   assert.match(JSON.stringify(h.requests), /DYNAMIC_PROVIDER_TECHNICAL_WAIT/)
   const beforeCooldown = h.requests.length
-  await h.service.recover(); await h.service.whenIdle()
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
   assert.equal(h.requests.length, beforeCooldown)
   for (let cold = 1; cold <= (recoverAfterCold ? 1 : 3); cold++) {
-    execution = (await h.query('execution.list'))[0]
+    execution = (await t.step(async () => h.query('execution.list')))[0]
     assert.ok(execution.providerRecovery.nextReviewAt)
     t.mock.timers.setTime(Date.parse(execution.providerRecovery.nextReviewAt) + 1)
-    await h.service.recover(); await h.service.whenIdle()
-    execution = (await h.query('execution.list'))[0]
+    await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+    execution = (await t.step(async () => h.query('execution.list')))[0]
     assert.equal(execution.inputVersion, 4 + cold)
     assert.equal(execution.sessionId, first.sessionId)
     if (!recoverAfterCold) { assert.equal(execution.providerRecovery.attempts, 3); assert.equal(execution.providerRecovery.coldAttempts, cold) }
-    assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests.length, 0)
+    assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).humanRequests.length, 0)
   }
   if (recoverAfterCold) {
-    assert.equal(execution.status, 'succeeded'); await completed(h, task.taskId)
+    assert.equal(execution.status, 'succeeded'); await t.step(async () => completed(h, task.taskId))
   } else {
     assert.equal(execution.providerRecovery.nextReviewAt, null)
     const count = h.requests.length
-    for (let tick = 0; tick < 4; tick++) { t.mock.timers.setTime(Date.now() + 3600000); await h.service.recover(); await h.service.whenIdle() }
+    for (let tick = 0; tick < 4; tick++) { t.mock.timers.setTime(Date.now() + 3600000); await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle()) }
     assert.equal(h.requests.length, count)
     // A later real event may ask the successful owner to evaluate availability;
     // this does not reset the short budget or create an autonomous retry loop.
-    await h.service.store.command({ id: 'new-provider-evidence', kind: 'task.wake', args: { taskId: task.taskId, kind: 'provider.evidence.available', payload: { observed: true } } })
-    await h.service.recover(); await h.service.whenIdle()
-    execution = (await h.query('execution.list'))[0]
+    await t.step(async () => h.service.store.command({ id: 'new-provider-evidence', kind: 'task.wake', args: { taskId: task.taskId, kind: 'provider.evidence.available', payload: { observed: true } } }))
+    await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+    execution = (await t.step(async () => h.query('execution.list')))[0]
     assert.equal(execution.providerRecovery.attempts, 3); assert.equal(execution.providerRecovery.coldAttempts, 4)
     assert.equal(execution.providerRecovery.nextReviewAt, null)
   }
-  assert.equal((await h.query('operation.list')).length, 1)
-  assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
+  assert.equal((await t.step(async () => h.query('operation.list'))).length, 1)
+  assert.equal((await t.step(async () => readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8'))).trim(), 'once')
   // 未恢复分支完整运行三次冷审阅及后续真实事件，新增原生引用读取也计入墙钟预算。
-}, { timeout: recoverAfterCold ? 30000 : 60000 })
+}), { ...({ timeout: recoverAfterCold ? 30000 : 60000 }), timeout: nativeLifecycleTimeout(recoverAfterCold ? 30000 : 60000) })
 
 test('business human answer replaces pending provider recovery input before any original session resumes', async t => {
   let root, rootReady, h, task, first, waiting
@@ -254,26 +261,27 @@ test('lifecycle timeout drains an acquired native host before removing its works
   await assert.rejects(access(root), { code: 'ENOENT' })
 }, { timeout: 40020 })
 
-test('anonymous field v12 error restores original execution with complete diagnostics and no human request or duplicate effect', async t => {
+test('anonymous field v12 error restores original execution with complete diagnostics and no human request or duplicate effect', nativeLifecycle(30000, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
-  const { fieldV12Error } = await import('./fixtures/execution-provider-field-sample.js')
-  const root = await mkdtemp(join(tmpdir(), 'native-field-v12-'))
-  const h = await host(root, { providerError: fieldV12Error })
+  await t.beginBusiness()
+  const { fieldV12Error } = await t.step(async () => import('./fixtures/execution-provider-field-sample.js'))
+  const root = await t.step(async () => mkdtemp(join(tmpdir(), 'native-field-v12-')))
+  const h = await t.step(async () => host(root, { providerError: fieldV12Error }))
   t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'field-v12', objective: 'Original task' })
-  await h.service.whenIdle()
-  const before = (await h.query('execution.list'))[0]
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'field-v12', objective: 'Original task' }))
+  await t.step(async () => h.service.whenIdle())
+  const before = (await t.step(async () => h.query('execution.list')))[0]
   assert.deepEqual(before.result.payload.error.providerError, fieldV12Error)
   assert.equal(before.result.payload.output, null); assert.equal(before.result.payload.error.phase, 'provider')
   t.mock.timers.setTime(Date.parse(before.providerRecovery.nextAttemptAt) + 1)
-  await h.service.recover(); await h.service.whenIdle()
-  const after = (await h.query('execution.list'))[0]
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+  const after = (await t.step(async () => h.query('execution.list')))[0]
   assert.equal(after.sessionId, before.sessionId); assert.equal(after.executionId, before.executionId)
   assert.equal(after.status, 'succeeded'); assert.deepEqual(after.results[0].payload.error.providerError, fieldV12Error)
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests.length, 0)
-  assert.equal((await h.query('operation.list')).length, 1)
-  assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
-})
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).humanRequests.length, 0)
+  assert.equal((await t.step(async () => h.query('operation.list'))).length, 1)
+  assert.equal((await t.step(async () => readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8'))).trim(), 'once')
+}), { timeout: nativeLifecycleTimeout(30000) })
 
 test('requirement supplement during provider cooldown wakes current owner after restart and resumes original executor once', async t => {
   let root, rootReady, h, task, first
@@ -319,27 +327,29 @@ test('requirement supplement during provider cooldown wakes current owner after 
   })
 }, { timeout: 70000 })
 
-test('owner may honestly wait at each bounded provider review; all three reviews survive restart without replay', async t => {
+test('owner may honestly wait at each bounded provider review; all three reviews survive restart without replay', nativeLifecycle(30000, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
   const root = await mkdtemp(join(tmpdir(), 'native-review-wait-')), hosts = []
   t.after(async () => { for (const h of hosts.toReversed()) await h.close(); await rm(root, { recursive: true, force: true }) })
-  let h = await host(root, { persistent: true, reviewWait: true }); hosts.push(h)
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'review-wait', objective: 'Original task' })
-  await h.service.whenIdle()
+  let h = await host(root, { persistent: true, reviewWait: true });
+  await t.beginBusiness()
+ hosts.push(h)
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'review-wait', objective: 'Original task' }))
+  await t.step(async () => h.service.whenIdle())
   for (let fast = 0; fast < 3; fast++) {
-    const e = (await h.query('execution.list'))[0]
+    const e = (await t.step(async () => h.query('execution.list')))[0]
     t.mock.timers.setTime(Date.parse(e.providerRecovery.nextAttemptAt) + 1)
-    await h.service.recover(); await h.service.whenIdle()
+    await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
   }
-  const first = (await h.query('execution.list'))[0]
-  await h.close(); h = await host(root, { initialize: false, persistent: true, reviewWait: true, fault: false }); hosts.push(h)
-  await h.service.recover(); await h.service.whenIdle()
+  const first = (await t.step(async () => h.query('execution.list')))[0]
+  await t.step(async () => h.close()); h = await t.step(async () => host(root, { initialize: false, persistent: true, reviewWait: true, fault: false })); hosts.push(h)
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
   for (let review = 1; review <= 3; review++) {
-    const e = (await h.query('execution.list'))[0]
+    const e = (await t.step(async () => h.query('execution.list')))[0]
     assert.ok(e.providerRecovery.nextReviewAt)
     t.mock.timers.setTime(Date.parse(e.providerRecovery.nextReviewAt) + 1)
-    await h.service.recover(); await h.service.whenIdle()
-    const after = (await h.query('execution.list'))[0]
+    await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+    const after = (await t.step(async () => h.query('execution.list')))[0]
     assert.equal(after.providerRecovery.reviewAttempts, review)
     assert.equal(after.providerRecovery.coldAttempts, 0)
     assert.equal(after.inputVersion, first.inputVersion); assert.equal(after.leaseEpoch, first.leaseEpoch)
@@ -347,8 +357,32 @@ test('owner may honestly wait at each bounded provider review; all three reviews
   }
   const count = h.requests.length
   t.mock.timers.setTime(Date.now() + 3600000)
-  await h.service.recover(); await h.service.whenIdle()
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
   assert.equal(h.requests.length, count)
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests.length, 0)
-  assert.equal((await h.query('operation.list')).length, 1)
-})
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).humanRequests.length, 0)
+  assert.equal((await t.step(async () => h.query('operation.list'))).length, 1)
+}), { timeout: nativeLifecycleTimeout(30000) })
+
+test('unified lifecycle construction cancellation closes the late real service before deleting its root', async t => {
+  const parent = new AbortController(), reason = Error('cancel native construction after service open')
+  const outerSignal = AbortSignal.any([t.signal, parent.signal])
+  const context = new Proxy(t, { get(target, key) {
+    if (key === 'signal') return outerSignal
+    const value = Reflect.get(target, key, target)
+    return typeof value === 'function' ? value.bind(target) : value
+  } })
+  let root, closed = 0, business = false
+  await assert.rejects(nativeLifecycle(1000, async n => {
+    root = await mkdtemp(join(tmpdir(), 'native-construction-cancel-'))
+    await nativeTaskHost(root, async () => [], { serviceFactory: async options => {
+      const service = await openTaskSessionService(options)
+      parent.abort(reason)
+      await Promise.resolve()
+      return { ...service, async close() { closed++; await service.close() } }
+    } })
+    await n.beginBusiness()
+    business = true
+  })(context), error => error === reason)
+  assert.equal(business, false); assert.equal(closed, 1)
+  await assert.rejects(access(root), { code: 'ENOENT' })
+}, { timeout: 41000 })
