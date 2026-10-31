@@ -1,3 +1,4 @@
+import { lifecycleStages } from './fixtures/lifecycle-stages.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -182,7 +183,7 @@ test('即时进度询问经原生路由与query工具一次答复四项任务，
 // The removed coordinator no longer owns quoted deployment or re-evaluation.
 // Current Topic decisions retain the same quoted evidence and reopen only the original Task.
 for (const priorClarification of [false, true]) test(`quoted continuation reuses the original Task and preserves delivered history: priorClarification=${priorClarification}`,
-  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  { skip: !available ? reason : false, timeout: 70000 }, async t => {
     let host, decisions = 0, pages = 0, turns = 0
     const originalId = 'original-delivery'
     const quote = { messageId: 'original-delivery-message', senderName: '原交付作者',
@@ -193,72 +194,81 @@ for (const priorClarification of [false, true]) test(`quoted continuation reuses
       payload: { conversationId: 'native-group', text: question, fact: { coordinationId: 'old-clarification', eventId: 'question' } } }
     const tasks = [...(priorClarification ? [] : Array.from({ length: 21 }, (_, i) => ({ taskId: 'other-' + i, request: '其他独立事项' + i }))),
       { taskId: originalId, request: quote.content }]
-    const f = await retiredCoordinationHost(t, { name: 'quoted-continuation-', tasks,
-      rows: priorClarification ? {
-        coordination: [{ id: 'old-clarification', groupId: 'native-group', state: 'needs_clarification', revision: 1, question, memberIds: [] }],
-        coordination_sources: [{ id: 'old-source', unitId: 'old-unit', revision: 1, groupId: 'native-group',
-          dispatchOwner: 'coordination', state: 'needs_clarification', sourceMessageId: 'old-deployment', original: '部署到测试环境', quotedMessage: quote }],
-        notifications: [oldQuestion],
-      } : {},
-      decide: request => {
-        const names = request.tools.map(tool => tool.name), input = latestInput(request)
-        assert.ok(++turns <= 160, 'quoted continuation model did not settle')
-        if (input.trigger === 'task-facts') return topicTaskCalls(request)
-        if (names.includes('group_topic_route_submit')) {
-          assert.ok(JSON.stringify(input).includes(quote.content))
-          return routeMatter(input, '原交付部署到测试环境')
-        }
-        if (names.includes('group_decision_submit')) {
-          assert.ok(JSON.stringify(input).includes(quote.content), 'quotation must survive current Topic projection')
-          const values = modelToolValues(request), page = values.findLast(value => value.snapshotFingerprint && Array.isArray(value.tasks))
-          if (!page) { pages++; return [{ name: 'group_task_list', args: { offset: 0, limit: 10 } }] }
-          if (page.hasMore) { pages++; return [{ name: page.nextCall.name, args: page.nextCall.arguments }] }
-          assert.ok(values.filter(value => value.snapshotFingerprint).flatMap(value => value.tasks).some(task => task.taskId === originalId))
-          const full = values.findLast(value => !value.snapshotFingerprint && value.tasks?.some(task => task.taskId === originalId))
-          if (!full) return [{ name: 'group_task_context_get', args: { taskIds: [originalId] } }]
-          const task = full.tasks.find(task => task.taskId === originalId)
-          assert.equal(task.state, 'completed')
-          const actions = [{ kind: 'task-reopen', taskId: originalId, inputVersion: task.inputVersion, runSequence: task.runSequence,
-            context: '当前授权：部署原引用交付到测试环境。' + quote.content, objective: '将原交付后端#17和前端#19部署到测试环境并核验',
-            acceptanceCriteria: ['核对版本与健康，不部署生产'], topicRefs: [{ topicId: input.topicId, revision: input.revision }],
-            basisUnitRefs: input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })) }]
-          const calls = replyMatter(request, input, '沿原任务承接本次测试环境部署。', actions)
-          if (calls[0].name === 'group_decision_submit') decisions++
-          return calls
-        }
-        return [{ name: 'task_session_submit', args: { decision: { action: input.task.runSequence === 1 ? 'complete' : 'wait',
-          summary: input.task.runSequence === 1 ? '原交付已完成，尚未部署' : '已承接原部署范围，等待实际执行',
-          evidence: [], limitations: ['隔离合同测试不进行外部部署'] } } }]
+    let f, before, history
+    const cleanups = []
+    await lifecycleStages(t, {
+      prepare: async step => {
+        f = await step(() => retiredCoordinationHost({ after: fn => cleanups.push(fn) }, { name: 'quoted-continuation-', tasks, step,
+          rows: priorClarification ? {
+            coordination: [{ id: 'old-clarification', groupId: 'native-group', state: 'needs_clarification', revision: 1, question, memberIds: [] }],
+            coordination_sources: [{ id: 'old-source', unitId: 'old-unit', revision: 1, groupId: 'native-group',
+              dispatchOwner: 'coordination', state: 'needs_clarification', sourceMessageId: 'old-deployment', original: '部署到测试环境', quotedMessage: quote }],
+            notifications: [oldQuestion],
+          } : {},
+          decide: request => {
+            const names = request.tools.map(tool => tool.name), input = latestInput(request)
+            assert.ok(++turns <= 160, 'quoted continuation model did not settle')
+            if (input.trigger === 'task-facts') return topicTaskCalls(request)
+            if (names.includes('group_topic_route_submit')) {
+              assert.ok(JSON.stringify(input).includes(quote.content))
+              return routeMatter(input, '原交付部署到测试环境')
+            }
+            if (names.includes('group_decision_submit')) {
+              assert.ok(JSON.stringify(input).includes(quote.content), 'quotation must survive current Topic projection')
+              const values = modelToolValues(request), page = values.findLast(value => value.snapshotFingerprint && Array.isArray(value.tasks))
+              if (!page) { pages++; return [{ name: 'group_task_list', args: { offset: 0, limit: 10 } }] }
+              if (page.hasMore) { pages++; return [{ name: page.nextCall.name, args: page.nextCall.arguments }] }
+              assert.ok(values.filter(value => value.snapshotFingerprint).flatMap(value => value.tasks).some(task => task.taskId === originalId))
+              const full = values.findLast(value => !value.snapshotFingerprint && value.tasks?.some(task => task.taskId === originalId))
+              if (!full) return [{ name: 'group_task_context_get', args: { taskIds: [originalId] } }]
+              const task = full.tasks.find(task => task.taskId === originalId)
+              assert.equal(task.state, 'completed')
+              const actions = [{ kind: 'task-reopen', taskId: originalId, inputVersion: task.inputVersion, runSequence: task.runSequence,
+                context: '当前授权：部署原引用交付到测试环境。' + quote.content, objective: '将原交付后端#17和前端#19部署到测试环境并核验',
+                acceptanceCriteria: ['核对版本与健康，不部署生产'], topicRefs: [{ topicId: input.topicId, revision: input.revision }],
+                basisUnitRefs: input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })) }]
+              const calls = replyMatter(request, input, '沿原任务承接本次测试环境部署。', actions)
+              if (calls[0].name === 'group_decision_submit') decisions++
+              return calls
+            }
+            return [{ name: 'task_session_submit', args: { decision: { action: input.task.runSequence === 1 ? 'complete' : 'wait',
+              summary: input.task.runSequence === 1 ? '原交付已完成，尚未部署' : '已承接原部署范围，等待实际执行',
+              evidence: [], limitations: ['隔离合同测试不进行外部部署'] } } }]
       },
-    })
+    }))
     host = f.host
-    const before = await host.query('task.get', { taskId: originalId })
+    before = await step(() => host.query('task.get', { taskId: originalId }))
     assert.equal(before.status, 'completed')
-    const history = priorClarification ? await host.query('coordination.get', { coordinationId: 'old-clarification' }) : null
-    await host.service.ingest({ groupId: 'native-group', messageId: 'quoted-deploy', senderOpenDingTalkId: 'native-user',
-      senderName: '当前部署人', text: '部署到测试环境', quotedMessage: quote, timestamp: '2026-10-27T04:15:53.180Z' })
-    await host.service.whenIdle()
-    assert.equal(decisions, 1, JSON.stringify(host.service.listAlerts()))
-    assert.ok(pages >= (priorClarification ? 1 : 3), 'all necessary directory pages must be read')
-    const current = await host.query('task.get', { taskId: originalId })
-    assert.equal(current.runSequence, 2); assert.equal(current.sessionId, before.sessionId)
-    assert.match(current.objective, /#17.*#19.*测试环境/)
-    assert.equal((await host.query('task.list')).length, tasks.length)
-    for (const task of f.beforeTasks.filter(task => task.taskId !== originalId))
-      assert.deepEqual(await host.query('task.get', { taskId: task.taskId }), task)
-    const source = (await host.query('source.list')).find(source => source.messageId === 'quoted-deploy')
-    assert.deepEqual(source.quote, quote); assert.ok(source.processingCompleted)
-    if (priorClarification) {
-      assert.deepEqual(await host.query('notification.get', { notificationId: oldQuestion.id }), oldQuestion)
-      assert.deepEqual(await host.query('coordination.get', { coordinationId: 'old-clarification' }), history)
-      await assert.rejects(host.service.retryMessageProcessing({ groupId: 'native-group', messageId: 'old-deployment',
-        phase: 'coordination-context', requestId: 'old-source', token: 'old-token' }), { code: 'MESSAGE_RETRY_STALE' })
-    }
-    const sent = host.sent.length
-    await host.service.recover(); await host.service.whenIdle()
-    assert.equal(decisions, 1); assert.equal(host.sent.length, sent)
-    assert.equal((await host.query('task.get', { taskId: originalId })).runSequence, 2)
-    assert.equal(host.sent.some(notice => notice.payload.text === question), false)
+    history = priorClarification ? await step(() => host.query('coordination.get', { coordinationId: 'old-clarification' })) : null
+      },
+      business: async (_value, step) => {
+        await step(() => host.service.ingest({ groupId: 'native-group', messageId: 'quoted-deploy', senderOpenDingTalkId: 'native-user',
+          senderName: '当前部署人', text: '部署到测试环境', quotedMessage: quote, timestamp: '2026-10-27T04:15:53.180Z' }))
+        await step(() => host.service.whenIdle())
+        assert.equal(decisions, 1, JSON.stringify(host.service.listAlerts()))
+        assert.ok(pages >= (priorClarification ? 1 : 3), 'all necessary directory pages must be read')
+        const current = await step(() => host.query('task.get', { taskId: originalId }))
+        assert.equal(current.runSequence, 2); assert.equal(current.sessionId, before.sessionId)
+        assert.match(current.objective, /#17.*#19.*测试环境/)
+        assert.equal((await step(() => host.query('task.list'))).length, tasks.length)
+        for (const task of f.beforeTasks.filter(task => task.taskId !== originalId))
+          assert.deepEqual(await step(() => host.query('task.get', { taskId: task.taskId })), task)
+        const source = (await step(() => host.query('source.list'))).find(source => source.messageId === 'quoted-deploy')
+        assert.deepEqual(source.quote, quote); assert.ok(source.processingCompleted)
+        if (priorClarification) {
+          assert.deepEqual(await step(() => host.query('notification.get', { notificationId: oldQuestion.id })), oldQuestion)
+          assert.deepEqual(await step(() => host.query('coordination.get', { coordinationId: 'old-clarification' })), history)
+          await step(() => assert.rejects(host.service.retryMessageProcessing({ groupId: 'native-group', messageId: 'old-deployment',
+            phase: 'coordination-context', requestId: 'old-source', token: 'old-token' }), { code: 'MESSAGE_RETRY_STALE' }))
+        }
+        const sent = host.sent.length
+        await step(() => host.service.recover()); await step(() => host.service.whenIdle())
+        assert.equal(decisions, 1); assert.equal(host.sent.length, sent)
+        assert.equal((await step(() => host.query('task.get', { taskId: originalId }))).runSequence, 2)
+        assert.equal(host.sent.some(notice => notice.payload.text === question), false)
+      },
+      cleanup: async () => { for (const close of cleanups.toReversed()) await close() },
+    })
   })
 
 test('coordination context shares exact bounded inputs, including paired source identity', () => {

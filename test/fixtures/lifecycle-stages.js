@@ -1,0 +1,59 @@
+// Real deadlines for preparation, acceptance work, and resource drain. Every
+// awaited operation is gated so a timed-out continuation cannot start more work.
+export async function lifecycleStages(t, { prepare, business, cleanup, limits = {} }) {
+  const budgets = { prepare: 30000, business: 30000, cleanup: 10000, ...limits }
+  let active, failure
+  const pending = new Set()
+  async function phase(name, action) {
+    const started = performance.now(), controller = new AbortController()
+    active = controller
+    const abort = () => controller.abort(t.signal.reason)
+    t.signal.addEventListener('abort', abort, { once: true })
+    let timer
+    const expired = () => Object.assign(new Error(`lifecycle ${name} exceeded ${budgets[name]}ms`), { code: 'TEST_STAGE_TIMEOUT', phase: name })
+    const deadline = new Promise((_, reject) => {
+      const fail = () => { const error = controller.signal.reason; reject(error) }
+      controller.signal.addEventListener('abort', fail, { once: true })
+      timer = setTimeout(() => controller.abort(expired()), budgets[name])
+      if (t.signal.aborted) abort()
+    })
+    const step = async operation => {
+      controller.signal.throwIfAborted()
+      const value = await operation()
+      if (performance.now() - started >= budgets[name]) controller.abort(expired())
+      controller.signal.throwIfAborted()
+      return value
+    }
+    const work = Promise.resolve().then(() => action(step, controller.signal))
+    pending.add(work)
+    work.then(() => pending.delete(work), () => pending.delete(work))
+    try {
+      const result = await Promise.race([work, deadline])
+      if (performance.now() - started >= budgets[name]) controller.abort(expired())
+      controller.signal.throwIfAborted()
+      return result
+    }
+    catch (error) {
+      if (error && typeof error === 'object') error.lifecyclePhase ??= name
+      throw error
+    }
+    finally {
+      clearTimeout(timer)
+      t.signal.removeEventListener('abort', abort)
+      t.diagnostic(JSON.stringify({ lifecyclePhase: name, elapsedMs: Math.round(performance.now() - started), aborted: controller.signal.aborted }))
+    }
+  }
+  try {
+    const value = await phase('prepare', prepare)
+    await phase('business', (step, signal) => business(value, step, signal))
+  } catch (error) { active?.abort(error); failure = error }
+  const unfinished = [...pending]
+  try {
+    await phase('cleanup', async step => {
+      await step(cleanup)
+      // A failed stage must settle after owned resources have been cancelled.
+      await step(() => Promise.allSettled(unfinished))
+    })
+  } catch (error) { failure = failure ? new AggregateError([failure, error], 'Lifecycle failed and cleanup did not complete') : error }
+  if (failure) throw failure
+}

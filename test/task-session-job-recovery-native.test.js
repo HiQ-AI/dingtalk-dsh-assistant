@@ -1,3 +1,4 @@
+import { lifecycleStages } from './fixtures/lifecycle-stages.js'
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -7,13 +8,15 @@ import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 import { available, reason, nativeShell, nativeTaskHost, nativeVerificationTeam, latestInput, waitUntil, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
-const test = (name, fn) => testRunner(name, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, fn)
+const test = (name, fn, options = {}) => testRunner(name, { timeout: 30000, ...options, ...(!available ? { skip: reason } : {}) }, fn)
 const call = (name, args) => ({ name, args })
 const decide = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
-async function fixture(t, model, { verifyTeam = false } = {}) {
- const root = await mkdtemp(join(tmpdir(), 'native-job-recovery-'))
+async function fixture(t, model, { verifyTeam = false, step = operation => operation() } = {}) {
+ let root, h, opening
+ t.after(async () => { if (opening) await opening; await h?.close(); if (root) await rm(root, { recursive: true, force: true }) })
+ await step(async () => { root = await mkdtemp(join(tmpdir(), 'native-job-recovery-')) })
  const team = nativeVerificationTeam(), completions = new Map()
- const h = await nativeTaskHost(root, verifyTeam ? async (request, host) => {
+ await step(async () => { opening = nativeTaskHost(root, verifyTeam ? async (request, host) => {
   const input = latestInput(request), verification = team.execute(request, input)
   if (verification) return verification
   if (!request.tools.some(tool => tool.name === 'task_delegate')) return model(request, host)
@@ -30,8 +33,7 @@ async function fixture(t, model, { verifyTeam = false } = {}) {
   }
   return members.length >= 3 && members.every(item => item.status === 'succeeded' && item.drained)
    ? [completion] : [decide('wait', '原作业完成，等待结果版本和交付限制核验')]
- } : model, { promoteOnTimeout: true })
- t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
+ } : model, { promoteOnTimeout: true }); h = await opening })
  return h
 }
 test('native file read accepts historical draft and material job records without launching or reconciling a job', async t => {
@@ -136,22 +138,30 @@ for (const background of [false, true]) test(`native shell retains its original 
 })
 
 test('native missing-job read stays a real error without creating unknown effects or blocking later work', async t => {
- let step=0
- const h=await fixture(t,async request=>{
+ let modelStep=0, h
+ const cleanups=[]
+ await lifecycleStages(t, {
+ prepare: async step => {
+ h=await step(() => fixture({after: fn => cleanups.push(fn)},async request=>{
   const input=latestInput(request)
   if(request.tools.some(tool=>tool.name==='task_delegate'))return !input.executions.length&&!input.task.lastDecision
    ?[call('task_delegate',{key:'read-job',objective:'inspect missing job'}),decide('wait','waiting')]
    :[decide(input.executions.every(e=>e.status==='succeeded')?'complete':'wait','verified')]
-  if(step++===0)return [call('job_output',{job_id:'pwsh-777777'})]
-  if(step===2){assert.match(JSON.stringify(request),/unknown job pwsh-777777/);return [call('job_list',{})]}
+  if(modelStep++===0)return [call('job_output',{job_id:'pwsh-777777'})]
+  if(modelStep===2){assert.match(JSON.stringify(request),/unknown job pwsh-777777/);return [call('job_list',{})]}
   return [call('execution_submit',{output:{status:'completed',summary:'Missing read remains failed, no external effects',evidence:['original missing-job receipt'],limitations:[],artifacts:[]}})]
- }, { verifyTeam: true })
- await h.service.createTask({groupId:'native-group',requestId:'read-job',objective:'inspect job'})
- await h.service.whenIdle()
- assert.equal((await h.query('operation.list')).length,0)
+ }, { verifyTeam: true, step }))
+ },
+ business: async (_value, step) => {
+ await step(() => h.service.createTask({groupId:'native-group',requestId:'read-job',objective:'inspect job'}))
+ await step(() => h.service.whenIdle())
+ assert.equal((await step(() => h.query('operation.list'))).length,0)
  assert.ok(h.toolResults.some(row=>row.name==='job_output'&&row.result.isError))
- assert.equal((await h.query('execution.list'))[0].status,'succeeded')
-})
+ assert.equal((await step(() => h.query('execution.list')))[0].status,'succeeded')
+ },
+ cleanup: async () => { for (const close of cleanups.toReversed()) await close() },
+ })
+}, { timeout: 70000 })
 
 for (const explicitStop of [false, true]) test(`native background HTTP service remains usable by the next tool and drains its original job: explicitStop=${explicitStop}`, async t => {
  let step = 0, originalJob, serverPid
