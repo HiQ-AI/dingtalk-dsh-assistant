@@ -6,8 +6,10 @@ import { nativeTaskHost, topicTaskCalls } from './task-session-native-host.js'
 
 // Model only the former on-disk records. Seeding happens while the real Host is
 // closed; the current startup transaction, native Owner and delivery code run unchanged.
-export async function retiredCoordinationHost(t, { name, tasks = [], rows = {}, decide, notifications } = {}) {
-  const root = await mkdtemp(join(tmpdir(), name ?? 'retired-coordination-native-'))
+export async function retiredCoordinationHost(t, { name, tasks = [], rows = {}, decide, notifications, step = operation => operation() } = {}) {
+  let root, host, opening
+  t.after(async () => { if (opening) await opening; await host?.close(); if (root) await rm(root, { recursive: true, force: true }) })
+  await step(async () => { root = await mkdtemp(join(tmpdir(), name ?? 'retired-coordination-native-')) })
   const requests = []
   const model = async request => {
     requests.push(request)
@@ -17,18 +19,18 @@ export async function retiredCoordinationHost(t, { name, tasks = [], rows = {}, 
     } } }]
   }
   const options = { config: { coordination: { enabled: true, provider: 'native-task-test', model: 'former-selection' } }, ...(notifications ? { notifications } : {}) }
-  let host = await nativeTaskHost(root, model, options)
-  t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+  await step(async () => { opening = nativeTaskHost(root, model, options); host = await opening })
+  let beforeTasks
   for (const task of tasks) {
     if (task.groupId && task.groupId !== 'native-group' && !host.residentStore.getGroup(task.groupId))
-      await host.residentStore.subscribe({ groupId: task.groupId, name: '独立群', responsibility: '核对明确交办' })
-    await host.service.store.command({ id: 'seed-task:' + task.taskId, kind: 'task.create', args: {
+      await step(() => host.residentStore.subscribe({ groupId: task.groupId, name: '独立群', responsibility: '核对明确交办' }))
+    await step(() => host.service.store.command({ id: 'seed-task:' + task.taskId, kind: 'task.create', args: {
       groupId: 'native-group', ownerActorId: 'native-user', request: '保留原业务目标', ...task,
-    } })
+    } }))
   }
-  await host.service.recover(); await host.service.whenIdle()
-  const beforeTasks = await host.query('task.list')
-  await host.close()
+  await step(() => host.service.recover()); await step(() => host.service.whenIdle())
+  beforeTasks = await step(() => host.query('task.list'))
+  await step(() => host.close())
   const db = new DatabaseSync(join(root, 'dynamic.db'))
   try {
     db.prepare("DELETE FROM dynamic_meta WHERE key='independentCoordinationRetired'").run()
@@ -39,7 +41,7 @@ export async function retiredCoordinationHost(t, { name, tasks = [], rows = {}, 
       for (const entry of entries) insert.run(entry.id, JSON.stringify(entry))
     }
   } finally { db.close() }
-  host = await nativeTaskHost(root, model, { ...options, initialize: false })
+  await step(async () => { opening = nativeTaskHost(root, model, { ...options, initialize: false }); host = await opening })
   return { root, beforeTasks, requests,
     get host() { return host },
     async restart() { await host.close(); host = await nativeTaskHost(root, model, { ...options, initialize: false }); return host },
