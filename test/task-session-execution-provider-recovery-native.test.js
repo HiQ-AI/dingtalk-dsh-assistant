@@ -194,26 +194,55 @@ for (const recoverAfterCold of [false, true]) test(`provider short budget exhaus
 }, { timeout: recoverAfterCold ? 30000 : 60000 })
 
 test('business human answer replaces pending provider recovery input before any original session resumes', async t => {
+  const started = performance.now()
+  let phase = 'initialize', h, taskId
+  const mark = next => { phase = next; t.diagnostic(JSON.stringify({ phase, elapsedMs: Math.round(performance.now() - started) })) }
+  const abort = () => {
+    t.diagnostic(JSON.stringify({ phase, elapsedMs: Math.round(performance.now() - started), taskId, requests: h?.requests?.length, toolResults: h?.toolResults?.length, lastToolNames: h?.toolResults?.slice(-5).map(item => ({ name: item.name, isError: item.result.isError })) }))
+    void h?.close().catch(error => t.diagnostic('close: ' + error.message))
+  }
+  t.signal.addEventListener('abort', abort, { once: true })
+  t.after(() => t.signal.removeEventListener('abort', abort))
+  mark('mock-clock')
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
   const root = await mkdtemp(join(tmpdir(), 'native-provider-human-target-'))
-  const h = await host(root, { humanFlow: true })
-  t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
+  t.after(async () => { mark('cleanup-start'); try { await h?.close() } finally { await rm(root, { recursive: true, force: true }); mark('cleanup-complete') } })
+  mark('host-start')
+  h = await host(root, { humanFlow: true })
+  mark('host-ready')
+  t.signal.throwIfAborted()
+  mark('task-create')
   const task = await h.service.createTask({ groupId: 'native-group', requestId: 'human-target', objective: 'Original task' })
+  mark('task-created')
+  mark('idle-wait')
   await h.service.whenIdle()
+  mark('idle-complete')
+  taskId = task.taskId
   const first = (await h.query('execution.list'))[0]
+  mark('business-wake')
   await h.service.store.command({ id: 'business-target-wake', kind: 'task.wake', args: { taskId: task.taskId, kind: 'business.target.required', payload: {} } })
-  await h.service.recover(); await h.service.whenIdle()
+  mark('recover')
+  await h.service.recover()
+  mark('recover-idle-wait')
+  await h.service.whenIdle()
+  mark('recover-idle-complete')
   const waiting = await h.query('task.get', { taskId: task.taskId })
   assert.equal(waiting.humanRequests.length, 1); assert.equal(waiting.humanRequests[0].audience, 'requester')
   t.mock.timers.setTime(Date.parse(first.providerRecovery.nextAttemptAt) + 1)
+  mark('human-response')
   await h.service.respondHumanRequest({ taskId: task.taskId, humanRequestId: waiting.humanRequests[0].requestId, requestId: 'actual-target',
     expectedRequirementRevision: 1, expectedControlRevision: 1, reply: 'Only use UAT3 target' })
+  mark('idle-wait')
   await h.service.whenIdle()
+  mark('idle-complete')
+  mark('execution-query')
   const execution = (await h.query('execution.list'))[0]
   assert.equal(execution.sessionId, first.sessionId); assert.equal(execution.executionId, first.executionId)
   assert.equal(execution.inputVersion, 2); assert.equal(execution.input.objective, 'Authenticated UAT3 target')
   assert.equal(execution.status, 'succeeded')
+  mark('completion-check')
   await completed(h, task.taskId)
+  mark('verified')
   assert.equal((await h.query('operation.list')).length, 1)
 })
 
