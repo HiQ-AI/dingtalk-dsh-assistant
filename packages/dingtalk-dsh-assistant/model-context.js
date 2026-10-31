@@ -299,11 +299,13 @@ export function taskModelInput(input) {
     operations = mergeRecords(input.operations ?? [], input.blockers?.operations ?? [], 'operationId'),
     executions = mergeRecords(input.executions ?? [], input.blockers?.executions ?? [], 'executionId')
   const wokenExecutions = new Set(wakes.map(wake => wake.payload?.executionId).filter(Boolean))
+  const coordinatedExecutions = new Set((task.humanRequests ?? []).filter((request, i, all) => request.status === 'waiting-reply' || i === all.length - 1 && request.status === 'answered')
+    .flatMap(request => (request.executionBindings ?? []).map(binding => binding.executionId)))
   const wokenOperations = new Set(wakes.map(wake => wake.payload?.operationId).filter(Boolean))
   // Only definitely historical terminal records leave the default decision view.
   // A current result is not presumed reviewed from a timestamp or lastDecision.
   const relevant = executions.filter(execution => !terminalExecutions.has(execution.status) || !execution.drained
-    || wokenExecutions.has(execution.executionId) || execution.status !== 'stale' && execution.result?.current !== false)
+    || wokenExecutions.has(execution.executionId) || coordinatedExecutions.has(execution.executionId) || execution.status !== 'stale' && execution.result?.current !== false)
   const currentExecutions = relevant.map(execution => {
     // 日常交接从本轮文档读取完整职责、进度和证据；原账仍保存在 catalog。
     if (execution.document) return { ...fields(execution,
@@ -354,7 +356,7 @@ export function taskModelInput(input) {
     ...(task.lastDecision ? { lastDecision: fields(task.lastDecision, ['action', 'summary', 'question', 'audience', 'at', 'recordedAt', 'requirementRevision', 'controlRevision', 'binding']) } : {}),
     authorizationSourceId: task.metadata?.authorizationSourceId,
     humanRequests: (task.humanRequests ?? []).filter((request, i, all) => request.status === 'waiting-reply' || i === all.length - 1)
-      .map(request => ({ ...fields(request, ['requestId', 'status', 'audience', 'requirementRevision', 'controlRevision', 'sourceId', 'responseSourceId']),
+      .map(request => ({ ...fields(request, ['requestId', 'status', 'audience', 'requirementRevision', 'controlRevision', 'sourceId', 'responseSourceId', 'executionBindings']),
         ...(request.status === 'waiting-reply' ? fields(request, ['reason', 'question']) : {}) })) }
   const materials = (input.materials ?? []).filter(material => material.resources?.length).map(material => fields(material, ['sourceId', 'path', 'resources']))
   return { task: currentTask, sources: currentTaskSources(sources, task.metadata?.authorizationSourceId).map(source => taskSourceContext(source, (input.materials ?? []).find(material => material.sourceId === source.sourceId))), sourceCount: sources.length, sourceReviewRequired: true,

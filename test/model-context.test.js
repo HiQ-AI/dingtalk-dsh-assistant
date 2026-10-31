@@ -452,3 +452,16 @@ test('budget also covers tool render bypasses, long keys and reserved context na
     }
   }
 })
+
+
+for (const status of ['waiting-reply', 'answered']) test(`Topic scoped execution remains discoverable for the original-session resume: ${status}`, () => {
+  const binding = { executionId: 'affected', sessionId: 'original-session', inputVersion: 3, leaseEpoch: 4, inputDigest: 'bound-input' }
+  const input = { task: { taskId: 'task', humanRequests: [{ requestId: 'route', audience: 'topic', status, executionBindings: [binding] }] },
+    executions: [{ executionId: 'affected', key: 'original', status: 'stale', drained: true, result: { current: false }, input: {} },
+      { executionId: 'old-unrelated', status: 'stale', drained: true, result: { current: false }, input: {} },
+      { executionId: 'live-unrelated', status: 'running', drained: false, input: {} }] }
+  const view = taskModelInput(input)
+  assert.deepEqual(view.executions.map(item => item.executionId), ['affected', 'live-unrelated'])
+  assert.deepEqual(view.task.humanRequests[0].executionBindings, [binding])
+  assert.equal(view.executions.find(item => item.executionId === 'affected').key, 'original')
+})

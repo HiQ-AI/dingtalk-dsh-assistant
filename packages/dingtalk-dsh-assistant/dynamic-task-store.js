@@ -30,6 +30,15 @@ const terminalOperations = new Set(['succeeded', 'failed', 'cancelled'])
 const terminalExecutions = new Set(['succeeded', 'failed', 'cancelled', 'stale'])
 const currentFeedback = (execution, item) => item.requirementRevision === execution.requirementRevision
   && item.controlRevision === execution.controlRevision && (!item.sourceExecutionId || item.inputVersion === execution.inputVersion)
+// Legacy and unscoped requests retain task-wide waiting. Only Host-captured
+// execution bindings on Topic coordination narrow its admission barrier.
+const scopedCoordination = request => request.audience === 'topic' && Array.isArray(request.executionBindings) && request.executionBindings.length > 0
+export function taskHumanWait(task, executionId) {
+  return !!task?.humanRequests?.some(request => request.status === 'waiting-reply'
+    && (!scopedCoordination(request) || executionId !== undefined && request.executionBindings.some(item => item.executionId === executionId)))
+}
+const executionCoordinationWait = (task, executionId) => !!task?.humanRequests?.some(request => request.status === 'waiting-reply'
+  && scopedCoordination(request) && request.executionBindings.some(item => item.executionId === executionId))
 /** 只让问题创建后接纳的新群来源进入一次只读复核；执行结果和普通定时唤醒不能解除等待。 */
 export function pendingTaskHumanReview(task, wakes) {
   const request = task?.humanRequests?.findLast(item => item.status === 'waiting-reply')
@@ -207,7 +216,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
   const executionCurrent = execution => {
     const task = get('dynamic_tasks', execution.taskId)
     return !task.archivedAt && !execution.recovering && task.status === 'active' && task.control === 'active' && execution.requirementRevision === task.requirementRevision
-      && execution.controlRevision === task.controlRevision && !execution.cancelRequested
+      && execution.controlRevision === task.controlRevision && !execution.cancelRequested && !executionCoordinationWait(task, execution.executionId)
   }
   const blockers = taskId => ({
     executions: executionViews(execs(taskId).filter(item => !item.drained || !terminalExecutions.has(item.status))).map(taskExecutionContext),
@@ -700,7 +709,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         && (!task.providerRecovery.nextAttemptAt || Date.parse(stamp) < Date.parse(task.providerRecovery.nextAttemptAt))) fail('DYNAMIC_TASK_PROVIDER_RETRY_NOT_DUE')
       const humanReview = a.humanReview === true ? pendingTaskHumanReview(task, wakes(task.taskId)) : null
       if (a.humanReview === true && !humanReview) fail('DYNAMIC_HUMAN_REVIEW_NOT_PENDING')
-      if (task.humanRequests?.some(item => item.status === 'waiting-reply') && !humanReview && a.dialogue !== true) fail('DYNAMIC_HUMAN_RESPONSE_REQUIRED')
+      if (taskHumanWait(task) && !humanReview && a.dialogue !== true) fail('DYNAMIC_HUMAN_RESPONSE_REQUIRED')
       task.leaseEpoch++; task.drained = false; task.recovering = false
       task.humanReviewLease = humanReview ? task.leaseEpoch : null
       task.claimRequirementRevision = task.requirementRevision; task.claimControlRevision = task.controlRevision
@@ -805,7 +814,19 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const requestId = text(a.humanRequest.requestId, 'requestId')
         const audience = a.humanRequest.audience ?? 'operator'
         if (!['operator', 'requester', 'topic'].includes(audience)) fail('DYNAMIC_ARGUMENT_INVALID', 'audience')
-        const request = { requestId, audience, status: 'waiting-reply', question: question.trim(), reason: text(a.humanRequest.reason ?? question.trim(), 'reason'),
+        let executionBindings
+        if (a.humanRequest.executionIds !== undefined) {
+          const ids = array(a.humanRequest.executionIds)
+          if (audience !== 'topic' || !ids.length || ids.length > 32 || new Set(ids).size !== ids.length) fail('DYNAMIC_ARGUMENT_INVALID', 'executionIds')
+          executionBindings = ids.map(id => {
+            const execution = get('dynamic_executions', text(id, 'executionId'))
+            if (execution.taskId !== task.taskId || execution.requirementRevision !== task.requirementRevision || execution.controlRevision !== task.controlRevision) fail('DYNAMIC_EXECUTION_SCOPE_INVALID')
+            if (!execution.drained || execution.recovering || execution.leaseEpoch < 1 || !execution.cancelRequested) fail('DYNAMIC_EXECUTION_BUSY')
+            return Object.fromEntries(['executionId', 'sessionId', 'inputVersion', 'leaseEpoch', 'inputDigest'].map(key => [key, execution[key]]))
+          })
+        }
+        if (task.humanRequests?.some(item => item.status === 'waiting-reply' && scopedCoordination(item) && item.requestId !== requestId)) fail('DYNAMIC_HUMAN_REQUEST_PENDING')
+        const request = { requestId, audience, ...(executionBindings ? { executionBindings } : {}), status: 'waiting-reply', question: question.trim(), reason: text(a.humanRequest.reason ?? question.trim(), 'reason'),
           waitingReason: text(a.humanRequest.waitingReason ?? a.summary, 'waitingReason'), objective: task.objective, evidence: clone(a.evidence ?? []),
           attemptedActions: clone(array(a.humanRequest.attemptedActions ?? [])),
           requirementRevision: task.requirementRevision, controlRevision: task.controlRevision, createdAt: stamp }
@@ -921,6 +942,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'task.complete') {
       const task = currentTask(a.binding)
+      if (task.humanRequests?.some(item => item.status === 'waiting-reply')) fail('DYNAMIC_HUMAN_RESPONSE_REQUIRED')
       if (task.dialogue?.some(item => !item.reply)) fail('DYNAMIC_TASK_DIALOGUE_PENDING')
       if (execs(task.taskId).some(execution => (execution.feedback ?? []).some(item => !item.consumedAt && currentFeedback(execution, item)
         && item.requirementRevision === task.requirementRevision && item.controlRevision === task.controlRevision))) fail('DYNAMIC_EXECUTION_FEEDBACK_PENDING')
@@ -971,6 +993,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const task = currentTask(a.binding), execution = get('dynamic_executions', a.executionId)
       assertRestartRecoveryDispatch(task, a)
       if (execution.taskId !== task.taskId) fail('DYNAMIC_EXECUTION_SCOPE_INVALID')
+      if (taskHumanWait(task, execution.executionId)) fail('DYNAMIC_HUMAN_RESPONSE_REQUIRED')
       if (!execution.drained || execution.leaseEpoch === 0) fail('DYNAMIC_EXECUTION_BUSY')
       const replyClaimed = wakes(task.taskId).some(item => item.kind === 'human.responded' && item.state === 'claimed' && item.leaseEpoch === task.leaseEpoch)
       if (execution.providerRecovery?.nextAttemptAt && !replyClaimed) fail('DYNAMIC_EXECUTION_RECOVERY_PENDING')
@@ -1013,7 +1036,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const execution = boundExecution(a.binding)
       const task = get('dynamic_tasks', execution.taskId)
       if (!execution.drained || execution.recovering || !executionCurrent(execution)
-        || execution.status !== 'queued' || !execution.providerRecovery?.nextAttemptAt || task.humanRequests?.some(item => item.status === 'waiting-reply')) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+        || execution.status !== 'queued' || !execution.providerRecovery?.nextAttemptAt || taskHumanWait(task, execution.executionId)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       if (wakes(task.taskId).some(item => item.kind === 'human.responded' && item.state !== 'acked')) fail('DYNAMIC_OWNER_INPUT_PENDING')
       assertNoLegacy(task.taskId)
       if (ops(task.taskId).some(item => item.executionId === execution.executionId && operationBlocksRecovery(item))) fail('DYNAMIC_OPERATION_UNRESOLVED')
@@ -1035,7 +1058,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       // 复核只唤醒当前统筹，不接纳旧需求的执行结果或自动重跑旧输入。
       if (!execution.drained || execution.recovering || task.archivedAt || task.status !== 'active' || task.control !== 'active'
         || execution.controlRevision !== task.controlRevision || execution.cancelRequested || execution.status !== 'failed'
-        || !execution.providerRecovery?.nextReviewAt || task.humanRequests?.some(item => item.status === 'waiting-reply')) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
+        || !execution.providerRecovery?.nextReviewAt || taskHumanWait(task, execution.executionId)) fail('DYNAMIC_EXECUTION_NOT_CURRENT')
       if (Date.parse(stamp) < Date.parse(execution.providerRecovery.nextReviewAt)) fail('DYNAMIC_EXECUTION_RETRY_NOT_DUE')
       if (ops(task.taskId).some(item => item.executionId === execution.executionId && operationBlocksRecovery(item))) fail('DYNAMIC_OPERATION_UNRESOLVED')
       const reviews = (execution.providerRecovery.reviewAttempts ?? 0) + 1
@@ -1201,7 +1224,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             && terminal?.sessionId === execution.sessionId && terminal.inputVersion === execution.inputVersion
             && terminal.reason === 'error' && Number.isSafeInteger(terminal.endSeq) && terminal.endSeq >= 0
             && execution.sessionBound && !ops(execution.taskId).some(item => item.executionId === execution.executionId && operationBlocksRecovery(item))
-            && !get('dynamic_tasks', execution.taskId).humanRequests?.some(item => item.status === 'waiting-reply')
+            && !taskHumanWait(get('dynamic_tasks', execution.taskId), execution.executionId)
           const attempts = execution.providerRecovery?.attempts ?? 0
           if (recoverable && attempts < 3) {
             execution.status = 'queued'

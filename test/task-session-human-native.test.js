@@ -702,9 +702,11 @@ test('Web answer recalls its delivered operator notification once without recall
 }))
 
 
-test('Topic route answer resumes the safely stopped original execution without restarting its unrelated member', { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
-  const release = Promise.withResolvers(); t.onCancel(() => release.resolve()); t.after(() => release.resolve())
-  let original, topicId, asked = false, resumed = false, continuation = false
+test('Topic-scoped waiting keeps unrelated progress, inspection and recovery live and resumes its original member after answer', { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const release = Promise.withResolvers(), unrelated = Promise.withResolvers(), failProvider = Promise.withResolvers()
+  t.onCancel(() => { release.resolve(); unrelated.resolve(); failProvider.resolve() }); t.after(() => { release.resolve(); unrelated.resolve(); failProvider.resolve() })
+  let original, topicId, asked = false, resumed = false, continuation = false, otherSteps = 0, sawInspection = false, sawOtherResult = false, attemptedPremature = false
+  const reviewed = new Set()
   const rounds = new Map(), wait = summary => call('task_session_submit', { decision: { action: 'wait', summary, evidence: [], limitations: [] } })
   const answer = '沿现有 UAT 验证入口完成，只读核验，不新建数据库或修改基础设施。'
   const coordination = requestHuman('topic'); delete coordination.args.audience
@@ -731,7 +733,12 @@ test('Topic route answer resumes the safely stopped original execution without r
     }
     if (routed) return routed
     if (!names.includes('task_delegate')) {
-      if (input.objective === '独立核对另一成果') return [call('execution_submit', { output: { status: 'completed', summary: '另一成果正常完成', evidence: ['独立结果'], limitations: [], artifacts: [] } })]
+      if (input.objective === '独立核对另一成果') {
+        otherSteps++
+        if (otherSteps === 1) { await unrelated.promise; return [call('execution_report_progress', { plan: '独立成果核验，不依赖A的路线', summary: 'B在A待答期间继续推进', evidence: ['B实际阶段成果'], activity: '继续独立核验' })] }
+        if (otherSteps === 2) { await failProvider.promise; return [] }
+        return [call('execution_submit', { output: { status: 'completed', summary: '另一成果沿原生技术恢复完成', evidence: ['独立结果'], limitations: [], artifacts: [] } })]
+      }
       if (input.context?.includes(answer)) { resumed = true; return [call('execution_submit', { output: { status: 'completed', summary: '按原范围沿现有入口完成', evidence: [answer], limitations: [], artifacts: [] } })] }
       const count = rounds.get(input.executionId) ?? 0; rounds.set(input.executionId, count + 1)
       if (!count) return [call('execution_report_progress', { plan: '核验业务成果', summary: '外部环境绕障不能推进原验收，需要另选路线', evidence: ['已有成果保留'], activity: '等待安全停止' })]
@@ -742,11 +749,26 @@ test('Topic route answer resumes the safely stopped original execution without r
     const execution = input.executions.find(item => item.key === 'original')
     if (input.humanReview) return [call('task_human_resolve', { requestId: input.humanReview.requestId, sourceId: input.humanReview.sourceIds[0],
       reason: 'Topic已将同一问题的真实答复与只读限制回流，未扩大范围', evidence: [answer] }), wait('保存真实答复，下一轮恢复原执行')]
-    if (!asked) { asked = true; return [call('task_execution_cancel', { executionId: execution.executionId, reason: '停止为当前路线新增的环境绕障，保留成果及原会话' }), coordination] }
+    if (!asked) { asked = true; coordination.args.executionIds = [execution.executionId]; return [call('task_execution_cancel', { executionId: execution.executionId, reason: '停止为当前路线新增的环境绕障，保留成果及原会话' }), coordination] }
+    if (input.task.humanRequests[0]?.status === 'waiting-reply') {
+      if (input.executions.some(item => item.key === 'independent' && item.status === 'succeeded')) sawOtherResult = true
+      if (!attemptedPremature) { attemptedPremature = true; return [call('task_delegate', { executionId: execution.executionId, key: 'premature-resume', objective: '核验业务成果，不建设基础设施' })] }
+      const reviews = input.wakes.filter(wake => wake.kind === 'execution.progress.review')
+      if (reviews.length) {
+        sawInspection = true
+        const key = JSON.stringify(reviews)
+        if (!reviewed.has(key)) { reviewed.add(key); return reviews.map(wake => call('task_execution_progress', { executionId: wake.payload.executionId })) }
+      }
+      return [wait('A等待Topic，继续核对B的实际动作与结果')]
+    }
     if (input.task.humanRequests[0]?.status === 'answered' && !continuation) { continuation = true; return [call('task_delegate', {
       executionId: execution.executionId, key: 'resume-approved-route', objective: '核验业务成果，不建设基础设施', context: answer }), wait('原会话沿已核对路线继续')] }
     return [wait('保留原执行结果与独立成员成果')]
-  })
+  }, { providerError: request => {
+    try { return latestInput(request)?.objective === '独立核对另一成果' && otherSteps === 2
+      ? { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are currently overloaded. Please try again later.' } : null }
+    catch { return null } // Auxiliary summary/context requests have no execution envelope.
+  } })
   await t.beginBusiness()
   await t.step(() => h.service.ingest({ groupId: 'native-group', messageId: 'original-route-request', senderOpenDingTalkId: 'native-user', text: '测试助手，完成业务核验，外部环境仅用现有入口', occurredAt: new Date().toISOString() }))
   await t.step(() => waitUntil(async () => (await h.query('task.list')).length === 1, 'original group request creates one task'))
@@ -754,18 +776,42 @@ test('Topic route answer resumes the safely stopped original execution without r
   await t.step(() => waitUntil(async () => (await h.query('execution.list')).some(item => item.cancelRequested), 'affected original receives safe cancellation'))
   release.resolve()
   await t.step(() => waitUntil(() => pending(h), 'Topic coordination pending after drain'))
-  await t.step(() => waitUntil(async () => (await h.query('execution.list')).every(item => item.drained), 'both affected drain and independent result are durable'))
+  await t.step(() => waitUntil(async () => (await h.query('execution.list')).find(item => item.key === 'original')?.drained, 'affected drain is durable'))
   original = await t.step(() => h.query('task.get', { taskId: created.taskId })); topicId = original.topicRefs[0].topicId
   const before = await t.step(() => h.query('execution.list')), stopped = before.find(item => item.key === 'original'), independent = before.find(item => item.key === 'independent')
-  assert.equal(stopped.drained, true); assert.equal(independent.status, 'succeeded'); assert.equal(independent.cancelRequested, false)
+  assert.equal(stopped.drained, true); assert.equal(independent.status, 'running'); assert.equal(independent.cancelRequested, false)
   assert.equal(original.humanRequests[0].audience, 'topic')
+  assert.equal(original.humanRequests[0].executionBindings[0].executionId, stopped.executionId)
+  unrelated.resolve()
+  await t.step(() => waitUntil(() => otherSteps >= 2, 'unrelated member reports real progress while Topic waits'))
+  const currentOther = await t.step(() => h.query('execution.get', { executionId: independent.executionId }))
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(currentOther.updatedAt) + 600001 })
+  try { await t.step(() => h.service.recover()) } finally { t.mock.timers.reset() }
+  await t.step(() => waitUntil(() => sawInspection && attemptedPremature, 'Owner independently inspects B during A coordination wait'))
+  await t.step(() => waitUntil(async () => (await h.query('task.get', { taskId: created.taskId })).drained, 'inspection Owner settles'))
+  assert.ok(h.toolResults.some(item => item.name === 'task_delegate' && JSON.stringify(item.result).includes('DYNAMIC_HUMAN_RESPONSE_REQUIRED')))
+  failProvider.resolve()
+  await t.step(() => waitUntil(async () => (await h.query('execution.get', { executionId: independent.executionId })).providerRecovery?.nextAttemptAt, 'B retains its native transient recovery during A waiting'))
+  const observed = h.toolResults.find(item => item.name === 'task_execution_progress' && item.result.value?.executionId === independent.executionId)
+  assert.ok(observed?.result.value.observation.excerpts.some(item => item.type === 'tool/call'))
+  const retrying = await t.step(() => h.query('execution.get', { executionId: independent.executionId }))
+  assert.equal(retrying.result.payload.error.code, 'EXECUTION_PROVIDER_TRANSIENT')
+  assert.equal(retrying.providerRecovery.terminal.sessionId, independent.sessionId)
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(retrying.providerRecovery.nextAttemptAt) + 1 })
+  try { await t.step(() => h.service.recover()) } finally { t.mock.timers.reset() }
+  await t.step(() => waitUntil(async () => { const item = await h.query('execution.get', { executionId: independent.executionId }); return item.status === 'succeeded' && item.drained }, 'B resumes its same native session and completes before A answer'))
+  const recoveredOther = await t.step(() => h.query('execution.get', { executionId: independent.executionId }))
+  assert.equal(recoveredOther.sessionId, independent.sessionId); assert.ok(recoveredOther.inputVersion > independent.inputVersion)
+  await t.step(() => waitUntil(() => sawOtherResult, 'Owner consumes unrelated completion while A is still awaiting Topic'))
+  assert.equal((await t.step(() => h.query('execution.get', { executionId: stopped.executionId }))).inputVersion, stopped.inputVersion)
+  assert.equal((await t.step(() => h.query('task.get', { taskId: created.taskId }))).humanRequests[0].status, 'waiting-reply')
   await t.step(() => h.service.ingest({ groupId: 'native-group', messageId: 'route-answer', senderOpenDingTalkId: 'native-user', text: answer, occurredAt: new Date().toISOString() }))
   await t.step(() => waitUntil(() => resumed, 'original execution resumes from real Topic answer'))
   await t.step(() => h.service.whenIdle())
   const after = await t.step(() => h.query('execution.list')), continued = after.find(item => item.executionId === stopped.executionId)
   assert.equal(resumed, true); assert.equal(continued.status, 'succeeded'); assert.equal(continued.sessionId, stopped.sessionId)
   assert.equal(continued.inputVersion, stopped.inputVersion + 1); assert.equal(after.length, 2)
-  assert.equal(after.find(item => item.executionId === independent.executionId).inputVersion, independent.inputVersion)
+  assert.equal(after.find(item => item.executionId === independent.executionId).inputVersion, recoveredOther.inputVersion)
   assert.equal((await t.step(() => h.query('task.get', { taskId: created.taskId }))).humanRequests[0].status, 'answered')
 }))
 

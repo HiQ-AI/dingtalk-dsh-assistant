@@ -138,6 +138,8 @@ export async function nativeTaskHost(root, decide, options = {}) {
       try { auxiliary = latestInput(request).requestId?.startsWith('coord-summary-') === true } catch {}
       ;(auxiliary ? auxiliaryRequests : requests).push(structuredClone(request))
       const calls = contextReadCalls(request) ?? (auxiliary ? topicTaskCalls(request) : await decide(request, h))
+      const providerError = options.providerError?.(request)
+      if (providerError) { yield { type: 'finish', reason: { kind: 'error', failure: providerError } }; return }
       for (const [index, call] of calls.entries()) {
         const id = `native-call-${++sequence}`, args = JSON.stringify(call.args)
         yield { type: 'block-start', index, blockType: 'tool-call' }
