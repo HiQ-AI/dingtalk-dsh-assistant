@@ -237,7 +237,7 @@ test('business human answer replaces pending provider recovery input before any 
       if (root) await rm(root, { recursive: true, force: true })
     },
   })
-}, { timeout: 70000 })
+}, { timeout: 80000 })
 
 test('lifecycle timeout drains an acquired native host before removing its workspace', async t => {
   let root, rootReady, opening, h, release, closed = false, continued = false
@@ -259,7 +259,7 @@ test('lifecycle timeout drains an acquired native host before removing its works
   }), { code: 'TEST_STAGE_TIMEOUT', phase: 'business' })
   assert.equal(closed, true); assert.equal(continued, false)
   await assert.rejects(access(root), { code: 'ENOENT' })
-}, { timeout: 40020 })
+}, { timeout: 50020 })
 
 test('anonymous field v12 error restores original execution with complete diagnostics and no human request or duplicate effect', nativeLifecycle(30000, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
@@ -325,7 +325,7 @@ test('requirement supplement during provider cooldown wakes current owner after 
       if (root) await rm(root, { recursive: true, force: true })
     },
   })
-}, { timeout: 70000 })
+}, { timeout: 80000 })
 
 test('owner may honestly wait at each bounded provider review; all three reviews survive restart without replay', nativeLifecycle(30000, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })

@@ -16,3 +16,33 @@ export function createStartupMetrics(observe) {
       catch (error) { record(phase, since, 'failed'); throw error }
     } }
 }
+
+// Optional, explicitly injected diagnostics. Without an observer the original
+// action and its Promise are returned directly; no clocks or logs are added.
+export const observeClose = (trace, stage, action, counts) => trace ? trace.step(stage, action, counts) : action()
+
+export function createCloseObservation(observer) {
+  if (observer === undefined) return undefined
+  if (typeof observer !== 'function') throw new TypeError('closeObserver must be a function')
+  const pending = new Set()
+  const snapshot = () => ({ pending: [...pending].map(entry => ({
+    stage: entry.stage, elapsedMs: Math.round(performance.now() - entry.started), ...(entry.counts ? { counts: entry.counts() } : {}),
+  })) })
+  const notify = (event, entry, error) => {
+    try { observer({ closeEvent: event, stage: entry.stage,
+      elapsedMs: Math.round(performance.now() - entry.started), ...(entry.counts ? { counts: entry.counts() } : {}), ...(error ? { errorCode: error.code ?? error.name } : {}),
+      ...snapshot(), readPending: snapshot }) }
+    catch (diagnosticError) {
+      // A broken observer must not skip a real close or replace its exception.
+      process.stderr.write(JSON.stringify({ closeEvent: 'observer-error', errorCode: diagnosticError.code ?? diagnosticError.name }) + '\n')
+    }
+  }
+  return { sample(stage, counts) { notify('progress', { stage, counts, started: performance.now() }) }, step(stage, action, counts) {
+    const entry = { stage, started: performance.now(), counts }
+    pending.add(entry); notify('start', entry)
+    const finish = (event, error) => { pending.delete(entry); notify(event, entry, error) }
+    let value
+    try { value = action() } catch (error) { finish('rejected', error); throw error }
+    return Promise.resolve(value).then(result => { finish('settled'); return result }, error => { finish('rejected', error); throw error })
+  } }
+}

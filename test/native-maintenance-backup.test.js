@@ -1,3 +1,4 @@
+import { createCloseObservation, observeClose } from '../packages/dingtalk-dsh-assistant/startup-metrics.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
@@ -7,9 +8,9 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { lifecycleStages } from './fixtures/lifecycle-stages.js'
-import { nativeLifecycle, nativeTemporaryDirectory, registerNativeCleanup, nativeCleanupStage, nativeRemove, instrumentNativeCleanupMethod } from './fixtures/native-lifecycle.js'
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory, registerNativeCleanup, nativeCleanupStage, nativeRemove, instrumentNativeCleanupMethod } from './fixtures/native-lifecycle.js'
 
-test('maintenance backup preserves a fixed snapshot while WAL metadata changes', { timeout: 55000 }, async t => {
+test('maintenance backup preserves a fixed snapshot while WAL metadata changes', { timeout: 65000 }, async t => {
   let root, source, target, writer, child, timer, closed
   let writes = 0, stdout = '', stderr = ''
   await lifecycleStages(t, {
@@ -268,4 +269,53 @@ test('normal shared cleanup observes flush and removal while preserving method r
   })(t)
   assert.deepEqual(order, ['flush', 'frozen-close', 'removed'])
   assert.equal(existsSync(root), false)
+})
+
+
+test('close observation is opt-in, retains Promise identity by default and reports actual pending stages', async () => {
+  const gate = Promise.withResolvers(), records = []
+  assert.equal(createCloseObservation(), undefined)
+  assert.equal(observeClose(undefined, 'disabled', () => gate.promise), gate.promise)
+  const trace = createCloseObservation(event => records.push(event))
+  let count = 2
+  const work = observeClose(trace, 'owner.drained', () => gate.promise, () => ({ active: count }))
+  assert.deepEqual(records.at(-1).readPending().pending.map(item => item.stage), ['owner.drained'])
+  count = 1
+  assert.equal(records.at(-1).readPending().pending[0].counts.active, 1)
+  gate.resolve('original'); assert.equal(await work, 'original')
+  assert.deepEqual(records.at(-1).readPending().pending, [])
+  const error = Object.assign(Error('original-close-failure'), { code: 'ORIGINAL_CLOSE' })
+  await assert.rejects(observeClose(trace, 'flush', () => Promise.reject(error)), value => value === error)
+  assert.equal(records.at(-1).closeEvent, 'rejected')
+  assert.equal(records.at(-1).errorCode, 'ORIGINAL_CLOSE')
+  const brokenObserver = createCloseObservation(() => { throw Error('diagnostic sink failed') })
+  let invoked = false
+  await assert.rejects(observeClose(brokenObserver, 'close', () => { invoked = true; return Promise.reject(error) }), value => value === error)
+  assert.equal(invoked, true)
+})
+
+test('independent phased cleanup also retains its root after a late close', async t => {
+  const release = Promise.withResolvers(), finished = Promise.withResolvers()
+  let root, blocked = false, closed = false
+  await assert.rejects(lifecycleStages(t, {
+    limits: { cleanup: 20 },
+    prepare: async () => { root = await nativeTemporaryDirectory(join(tmpdir(), 'native-independent-late-')) },
+    business: async () => {},
+    cleanup: async () => {
+      try { await nativeCleanupStage('host.close', () => release.promise.then(() => { closed = true })) }
+      finally {
+        try { await nativeRemove(root, { recursive: true, force: true }) }
+        catch (error) { blocked = true; throw error }
+        finally { finished.resolve() }
+      }
+    },
+  }), { code: 'TEST_STAGE_TIMEOUT', phase: 'cleanup' })
+  assert.equal(closed, false); assert.equal(existsSync(root), true)
+  release.resolve(); await finished.promise
+  assert.equal(blocked, true); assert.equal(closed, true); assert.equal(existsSync(root), true)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('approved cleanup budget is 20s while representative original business limits stay unchanged', () => {
+  for (const business of [10000, 15000, 30000, 240000]) assert.equal(nativeLifecycleTimeout(business), business + 30000 + 20000)
 })
