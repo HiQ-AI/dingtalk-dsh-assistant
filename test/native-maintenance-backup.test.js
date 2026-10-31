@@ -74,6 +74,21 @@ test('lifecycle cleanup has an independent deadline and preserves the original f
     && error.errors[1].phase === 'cleanup')
 })
 
+test('lifecycle parent cancellation still drains resources within the cleanup budget', async t => {
+  const parent = new AbortController(), failure = Error('outer test cancelled')
+  let release, cleaned = false, continued = false
+  const blocked = new Promise(resolve => { release = resolve })
+  await assert.rejects(lifecycleStages({ signal: parent.signal, diagnostic: message => t.diagnostic(message) }, {
+    prepare: async () => {},
+    business: async (_value, step) => {
+      parent.abort(failure)
+      await step(() => blocked); continued = true
+    },
+    cleanup: async () => { cleaned = true; release() },
+  }), error => error === failure)
+  assert.equal(cleaned, true); assert.equal(continued, false)
+})
+
 test('lifecycle business timeout terminates its child and removes its temporary directory', async t => {
   let root, child, closed, continued = false
   await assert.rejects(lifecycleStages(t, {
