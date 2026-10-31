@@ -1,3 +1,4 @@
+import { lifecycleStages } from './fixtures/lifecycle-stages.js'
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
@@ -1721,40 +1722,58 @@ for (const correctOnce of [false, true]) test(`native owner empty-summary correc
   assert.deepEqual((await h.query('task.events')).events, completionEvents)
 })
 
-test('native topic routing rejects incomplete source coverage and accepts correction in the same real session', { timeout: 10000 }, async t => {
-  const fixture = await nativeCase(t, 'task-service-invalid-route-')
-  let requests = 0
-  const h = await fixture.host(async request => {
-    if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) {
-      requests++
-      assert.ok(requests <= 2, 'Routing correction must finish on its second model call')
-      if (requests === 1) {
-        const input = latestInput(request)
-        return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, units: [], ignoredRefs: [] })) })]
-      }
-    }
-    return topicTaskCalls(request) ?? [decision('complete', '话题决定合法纠正后完成任务')]
+test('native topic routing rejects incomplete source coverage and accepts correction in the same real session', { timeout: 50000 }, async t => {
+  let root, rootReady, opening, h, requests = 0, activity = 'host-preparation'
+  await lifecycleStages(t, {
+    limits: { business: 10000 },
+    prepare: async step => {
+      root = await step(() => (rootReady = mkdtemp(join(tmpdir(), 'task-service-invalid-route-'))))
+      h = await step(() => (opening = nativeTaskHost(root, async request => {
+        if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) {
+          requests++
+          assert.ok(requests <= 2, 'Routing correction must finish on its second model call')
+          if (requests === 1) {
+            const input = latestInput(request)
+            return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, units: [], ignoredRefs: [] })) })]
+          }
+        }
+        return topicTaskCalls(request) ?? [decision('complete', '话题决定合法纠正后完成任务')]
+      })))
+    },
+    business: async (_value, step) => {
+      activity = 'ingest'
+      const ingested = await step(() => h.service.ingest({ ...message, messageId: 'invalid-source-coverage' }))
+      activity = 'routing-drain'
+      await step(() => h.service.whenIdle())
+      assert.equal(requests, 2)
+      assert.equal((await step(() => h.query('source.get', { sourceId: ingested.sourceId }))).routed, true)
+      const tasks = await step(() => h.query('task.list'))
+      assert.equal(tasks.length, 1)
+      assert.equal(tasks[0].status, 'completed')
+      const group = h.residentStore.getGroup(message.groupId)
+      assert.equal(group.messages[0].routingStatus, 'routed')
+      assert.equal(group.topics.length, 1)
+      assert.equal(group.topics[0].processedRevision, group.topics[0].revision)
+      const results = h.toolResults.filter(result => result.name === 'group_topic_route_submit')
+      assert.equal(results[0].result.value.status, 'invalid-arguments')
+      assert.equal(results[0].result.value.issues[0].path, 'routes.0.ignoredRefs')
+      assert.match(results[0].result.value.issues[0].message, /完整原文忽略记录/)
+      assert.equal(results[1].result.value.status, 'accepted')
+      activity = 'session-persistence'
+      const saved = await step(() => inspectSession(h.ctx.sessionPersistence, results[0].sessionId))
+      assert.equal(saved.events.filter(event => event.type === 'tool/call' && event.data.name === 'group_topic_route_submit').length, 2)
+      activity = 'final-drain'
+      await step(() => h.service.whenIdle())
+      assert.equal(requests, 2)
+    },
+    cleanup: async () => {
+      t.diagnostic(JSON.stringify({ topicCorrectionActivity: activity, routeCalls: requests }))
+      if (rootReady) root = await rootReady
+      if (opening) h = await opening
+      await h?.close()
+      if (root) await rm(root, { recursive: true, force: true })
+    },
   })
-  const ingested = await h.service.ingest({ ...message, messageId: 'invalid-source-coverage' })
-  await h.service.whenIdle()
-  assert.equal(requests, 2)
-  assert.equal((await h.query('source.get', { sourceId: ingested.sourceId })).routed, true)
-  const tasks = await h.query('task.list')
-  assert.equal(tasks.length, 1)
-  assert.equal(tasks[0].status, 'completed')
-  const group = h.residentStore.getGroup(message.groupId)
-  assert.equal(group.messages[0].routingStatus, 'routed')
-  assert.equal(group.topics.length, 1)
-  assert.equal(group.topics[0].processedRevision, group.topics[0].revision)
-  const results = h.toolResults.filter(result => result.name === 'group_topic_route_submit')
-  assert.equal(results[0].result.value.status, 'invalid-arguments')
-  assert.equal(results[0].result.value.issues[0].path, 'routes.0.ignoredRefs')
-  assert.match(results[0].result.value.issues[0].message, /完整原文忽略记录/)
-  assert.equal(results[1].result.value.status, 'accepted')
-  const saved = await inspectSession(h.ctx.sessionPersistence, results[0].sessionId)
-  assert.equal(saved.events.filter(event => event.type === 'tool/call' && event.data.name === 'group_topic_route_submit').length, 2)
-  await h.service.whenIdle()
-  assert.equal(requests, 2)
 })
 
 test('resident.apply boots and disposes with only its declared native service dependencies', { timeout: 15000 }, async t => {
