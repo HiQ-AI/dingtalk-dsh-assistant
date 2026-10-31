@@ -1,5 +1,6 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import assert from 'node:assert/strict'
-import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises'
+import { readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -10,21 +11,22 @@ import { available, reason, nativeTaskHost } from './fixtures/task-session-nativ
 const { apply, name } = resident
 import { buildTaskAssociationIndex } from '../packages/dingtalk-dsh-assistant/runtime.js'
 
-test('单一业务插件以原生任务会话启停，不恢复已移除的任务表格同步', { skip: !available ? reason : false }, async t => {
+test('单一业务插件以原生任务会话启停，不恢复已移除的任务表格同步', { ...({ skip: !available ? reason : false }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'resident-health-'))
   let host
   t.after(async () => { try { await host?.close() } finally { await rm(root, { recursive: true, force: true }) } })
   const interval = t.mock.method(globalThis, 'setInterval')
-  host = await nativeTaskHost(root, () => { throw new Error('MODEL_NOT_EXPECTED') }, { resident: true })
-  const plugin = await host.ctx.plugin(resident, { host: '127.0.0.1', port: 0, agentWorkspaceDir: root,
-    agentPreset: 'native-test', dws: { enabled: false }, taskSessions: { dbPath: join(root, 'tasks.db'), instanceId: 'resident-health', ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', initialize: true } })
+  await t.beginBusiness()
+  host = await t.step(async () => nativeTaskHost(root, () => { throw new Error('MODEL_NOT_EXPECTED') }, { resident: true }))
+  const plugin = await t.step(async () => host.ctx.plugin(resident, { host: '127.0.0.1', port: 0, agentWorkspaceDir: root,
+    agentPreset: 'native-test', dws: { enabled: false }, taskSessions: { dbPath: join(root, 'tasks.db'), instanceId: 'resident-health', ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', initialize: true } }))
   assert.equal(name, 'dingtalk-dsh-assistant')
   assert.equal(interval.mock.calls.some(call => call.arguments[1] === 180000), false)
   assert.equal(host.ctx.get('execution'), undefined)
   assert.equal(host.ctx.get('subagents'), undefined)
   assert.equal(host.requests.length, 0)
-  await plugin.dispose()
-})
+  await t.step(async () => plugin.dispose())
+}))
 
 test('通用生产源码不绑定个人姓名，群回复署名遵循工作区与群职责', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/runtime.js', import.meta.url), 'utf8')

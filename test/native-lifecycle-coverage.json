@@ -1,0 +1,4147 @@
+{
+  "schema": 1,
+  "basis": "f498d8538bb40252c7dec8e7787130b2c020d633",
+  "policy": "resource-only preparation 30000; unchanged explicit business deadline; cleanup 10000; unbounded native registrations gain business 30000",
+  "inventory": {
+    "files": 44,
+    "staticRegistrations": 250,
+    "trueHostRegistrations": 206,
+    "existingPhased": 6,
+    "migrated": 200,
+    "excludedUnitOrSQLite": 44
+  },
+  "cases": [
+    {
+      "id": "test/coordination-fairness-native.test.js:8",
+      "file": "test/coordination-fairness-native.test.js",
+      "originalLine": 8,
+      "name": "'retired ' + blockedBy + ' preserves history without blocking ready cross-group Task Owners'",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "02c691583a3d0610c1630196023fc19fed3f5bf19ed88ef6148e0b87746fe50e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 183,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 9
+    },
+    {
+      "id": "test/coordination-final-native.test.js:57",
+      "file": "test/coordination-final-native.test.js",
+      "originalLine": 57,
+      "name": "'expired historical query remains audit-only after restart; a current read replies once without reopening its Task'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1ec19302b60a881c2533b9d4244c8098a05fd929f5fdc8087a638824600d12ba",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 91,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 58
+    },
+    {
+      "id": "test/coordination-final-native.test.js:92",
+      "file": "test/coordination-final-native.test.js",
+      "originalLine": 92,
+      "name": "'competing actual ingress and recovery supplement one current Task and preserve its source receipt after restart'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "14c0f98a032721a6fc2f8a24947ea7cef4703ebf4782b86e26f54ee7bd6a1c6b",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1964,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 94
+    },
+    {
+      "id": "test/coordination-final-native.test.js:149",
+      "file": "test/coordination-final-native.test.js",
+      "originalLine": 149,
+      "name": "`retired query cannot refresh or misaddress a current reply after restart with ${topology} optional Topic`",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "9528ffd7e46163b14195633c8b55698724c01871e639e001ba0bfc84e3ca8347",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 91,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 152
+    },
+    {
+      "id": "test/coordination-model-native.test.js:13",
+      "file": "test/coordination-model-native.test.js",
+      "originalLine": 13,
+      "name": "'native Loader model changes affect the next Topic session while active requests and Owner selection stay fixed'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "fd054588781fb20010e7abed3b9778bd021029a2571c930c406e84dc0c37f1ac",
+      "cancelResolvers": [
+        "release.resolve"
+      ],
+      "boundary": {
+        "offset": 440,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 14
+    },
+    {
+      "id": "test/coordination-model-native.test.js:81",
+      "file": "test/coordination-model-native.test.js",
+      "originalLine": 81,
+      "name": "'retired coordination settings cannot activate planning while ordinary native Topic routing remains available'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "9936a80109cbc8a060520b95a7c338bbbd902c3f4931910d289444e239c8fae7",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 327,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 85
+    },
+    {
+      "id": "test/coordination-observed-native.test.js:7",
+      "file": "test/coordination-observed-native.test.js",
+      "originalLine": 7,
+      "name": "`current chat reads Tasks without mutation; retired observation never resumes the original Task: ${mode}, scheduled=${scheduled}`",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "51c91cb675187c7f94a8d01ca3f00d640bbb36b8b4b613e00dd3172940c76a86",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 5,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 8
+    },
+    {
+      "id": "test/coordination-recurring-native.test.js:8",
+      "file": "test/coordination-recurring-native.test.js",
+      "originalLine": 8,
+      "name": "'retired daily Task schedule preserves both occurrence identities and never invents another Owner input'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "edcc67a9a78014de3969024d5d4e4eca1605e1b0f0497e4037c5a67375f18198",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 504,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 9
+    },
+    {
+      "id": "test/coordination-reorder-native.test.js:6",
+      "file": "test/coordination-reorder-native.test.js",
+      "originalLine": 6,
+      "name": "'retired reorder assessments remain historical while explicit changed scope reaches only the original Task Owner'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "08bf1569e5fa6d9cf97510d8655b29b4a9297d79c639127c3ce842a920c8fb2f",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 305,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 7
+    },
+    {
+      "id": "test/coordination-workspace-native.test.js:11",
+      "file": "test/coordination-workspace-native.test.js",
+      "originalLine": 11,
+      "name": "'saved Agent cwd survives restart without moving native Topic sessions or existing task files and logs'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "c44e1c57a53cd15793b7f8422acb31af8d54d823b27f035817e9c169840f0df8",
+      "cancelResolvers": [
+        "release.resolve"
+      ],
+      "boundary": {
+        "offset": 117,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 12
+    },
+    {
+      "id": "test/dingtalk-dsh-assistant.test.js:13",
+      "file": "test/dingtalk-dsh-assistant.test.js",
+      "originalLine": 13,
+      "name": "'单一业务插件以原生任务会话启停，不恢复已移除的任务表格同步'",
+      "originalBudget": null,
+      "businessBudget": "30000",
+      "newConstraint": true,
+      "sourceCallbackSha256": "e8483092eaebb5f7233e59e2717de50988d89434d77a50e91644a5a4acab5078",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 255,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 14
+    },
+    {
+      "id": "test/fixed-topics-native.test.js:57",
+      "file": "test/fixed-topics-native.test.js",
+      "originalLine": 57,
+      "name": "`fixed ${category} reply reaches the real outbound ledger and readback without a business Topic`",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "b4edb183d84e3809fa0a905c330524d6a9aff495f98f338aef7a5398ea1a656e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 176,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 58
+    },
+    {
+      "id": "test/fixed-topics-native.test.js:97",
+      "file": "test/fixed-topics-native.test.js",
+      "originalLine": 97,
+      "name": "`restart resumes a frozen fixed reply before notification prepare without regenerating it: legacy=${legacyFrozen}`",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ac9be34f7148e4d56b69b30625fdc21e654b1c286bacea6e15c34245546cea7f",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 336,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 99
+    },
+    {
+      "id": "test/fixed-topics-native.test.js:137",
+      "file": "test/fixed-topics-native.test.js",
+      "originalLine": 137,
+      "name": "'native platform tools coexist with preset tools and full access stays session-local'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "66ef98f58747cc7882f9632aca068df975a0ab57406929d4166543eb6679de6f",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 242,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 140
+    },
+    {
+      "id": "test/fixed-topics-native.test.js:173",
+      "file": "test/fixed-topics-native.test.js",
+      "originalLine": 173,
+      "name": "'rc2 native schedule tool remains visible and reports its delegated-session boundary truthfully'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "a87d2e5c23c7ddd47f2bad1f98e03a6061f6ef63af5c9a2cec0a3d55ff1f8d0e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 222,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 177
+    },
+    {
+      "id": "test/fixed-topics-native.test.js:194",
+      "file": "test/fixed-topics-native.test.js",
+      "originalLine": 194,
+      "name": "'Host native one-shot survives restart, retains child identity, queries fresh facts and delivers once: ' + scenario",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1fbb0deb4716124b5feea596d2dfa9da6e2ccd1ccc15edf76b608d11eb410d26",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2961,
+        "reason": "business await: boot"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 199
+    },
+    {
+      "id": "test/fixed-topics-native.test.js:279",
+      "file": "test/fixed-topics-native.test.js",
+      "originalLine": 279,
+      "name": "`native due ${audience} report shares final delivery and recovers attachments after cold restart`",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "f34650b5eb4def83833f107587af08335563752fe11330868679fee60d86d90d",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 4404,
+        "reason": "business await: boot"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 285
+    },
+    {
+      "id": "test/fixed-topics-native.test.js:377",
+      "file": "test/fixed-topics-native.test.js",
+      "originalLine": 377,
+      "name": "'Host refuses an expired instant without scheduling tomorrow, while native source binding stays trusted'",
+      "originalBudget": "10000",
+      "businessBudget": "10000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "a8a44cd6067e2002f9baf2c8ed84c5e906216e51ebd768cecbf3f2014ae8167c",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 209,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(10000) + 40000",
+      "currentLine": 384
+    },
+    {
+      "id": "test/independent-coordination-changes-native.test.js:48",
+      "file": "test/independent-coordination-changes-native.test.js",
+      "originalLine": 48,
+      "name": "'quoted historical reminder stays read-only; a current Topic records the new request: ' + correction",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "75a354e7a82620ddf0252052cf4967ffda23791f8913742d596ee9fd1e72960b",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 25,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 49
+    },
+    {
+      "id": "test/independent-coordination-changes-native.test.js:71",
+      "file": "test/independent-coordination-changes-native.test.js",
+      "originalLine": 71,
+      "name": "'mixed current discussion and explicit Task supplement keep all source text while only the chosen Task changes'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ed559b927bfb32e42072c63af36f7c900c5aef1fe090a61e1ea8cf5ed900c566",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 73
+    },
+    {
+      "id": "test/independent-coordination-changes-native.test.js:86",
+      "file": "test/independent-coordination-changes-native.test.js",
+      "originalLine": 86,
+      "name": "'two old reminder receipts remain distinct across restart; delivered and unknown effects are never recreated'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "553e2ed951387073aed6c9e7628171aa2ad74b0b7338e56db2bdfb6bc1673f31",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 79,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 89
+    },
+    {
+      "id": "test/independent-coordination-changes-native.test.js:102",
+      "file": "test/independent-coordination-changes-native.test.js",
+      "originalLine": 102,
+      "name": "'retired conditional schedule cannot continue a Task; one fresh explicit supplement reaches its existing Owner once'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "0547e79149e132c11a00680eddd477f608e722c14fb1bf39ff086111ddb13533",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 106
+    },
+    {
+      "id": "test/independent-coordination-changes-native.test.js:119",
+      "file": "test/independent-coordination-changes-native.test.js",
+      "originalLine": 119,
+      "name": "'a clarification has no Task effect until the next source identifies A; B and the original question stay intact'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "22ba54a7a83dc3bf103b29a2447085b9defc044475bcb78785ff3929e79fcd21",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 124
+    },
+    {
+      "id": "test/independent-coordination-changes-native.test.js:133",
+      "file": "test/independent-coordination-changes-native.test.js",
+      "originalLine": 133,
+      "name": "'historical interleaved ordinals and resolutions retain their proof without controlling current Tasks'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "26de030c74bdceacda7cbfe6e72f34d3db694350dda33e196b30e042d49b952d",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 131,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 139
+    },
+    {
+      "id": "test/independent-coordination-changes-native.test.js:148",
+      "file": "test/independent-coordination-changes-native.test.js",
+      "originalLine": 148,
+      "name": "'current explicit follow-up rejects stale Task CAS before changing any Task, then preserves one accepted input identity'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "2160d6979d9879320273f17590dbba840ba5fa876440bb525564ab8406c81f67",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 155
+    },
+    {
+      "id": "test/independent-coordination-changes-native.test.js:163",
+      "file": "test/independent-coordination-changes-native.test.js",
+      "originalLine": 163,
+      "name": "'a new authorized review reopens the completed original Task without replacing its session or completing another Task'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1fbdc089f92e24d9d64f93aea76b28eec0cbc14b2985960f185ec9a3f8d4cfa8",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 171
+    },
+    {
+      "id": "test/independent-coordination-changes-native.test.js:180",
+      "file": "test/independent-coordination-changes-native.test.js",
+      "originalLine": 180,
+      "name": "'ordinary discussion goes directly through a current Topic with no independent reservation, handoff or business effect'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "30bd921ba2f7ae5fe08fd1f27f4f16af9a4a08d7435e22803d9c80bedd0b1246",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 189
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:37",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 37,
+      "name": "'retired coordinator config cannot dispatch history or replay notices while a current Topic task continues'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "a21db5aa45b745a4a23eb581090e5c9f1df474c78623f777d4845732cdb77faa",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 48,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 38
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:90",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 90,
+      "name": "'retired observation HTTP mutations return gone while original task versions and historical observations remain intact'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "a2103177eae70aab7cc14b378e1eb2107a1fd1b96892e051bf2593951fced089",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 5,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 92
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:130",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 130,
+      "name": "'即时进度询问经原生路由与query工具一次答复四项任务，恢复不唤醒或重发'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "59bc4ff9912cdc7d436a45d4dad55d07e9e431aec58bb950b52cc19e510ba05e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 261,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 133
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:185",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 185,
+      "name": "`quoted continuation reuses the original Task and preserves delivered history: priorClarification=${priorClarification}`",
+      "originalBudget": "70000",
+      "businessBudget": "70000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "bef7470f65042db572a2acfc47cfde1d5a018283633c526c83d56aa1dec8b057",
+      "status": "existing-phased-unchanged"
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:285",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 285,
+      "name": "`current Topic reads ${taskCount} task summaries through bounded pages without full detail or Owner wake`",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "590693cd6889aecd5f1dc36907b462e06597444e981e945d138dc4c933ee3822",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 430,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 289
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:357",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 357,
+      "name": "'current native source retry preserves failed attempt evidence and clears the alert after one clarification'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e9c7fc12e774d747704d4b52980f0d34b1223e91aacb32b401f21a547bc3f805",
+      "cancelResolvers": [
+        "releaseFailureWrite.resolve"
+      ],
+      "boundary": {
+        "offset": 423,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 362
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:426",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 426,
+      "name": "`one delivery preserves arbitrary user stages: ${stageCase.name}, existing=${existing}`",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ff6ada300a4f82d2bb6a1c8a5c45fb14fe571cbd47f0e8051429e0f67906e576",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 361,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 434
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:509",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 509,
+      "name": "`retired creation never auto-starts while current explicit scope keeps its constraint: scheduled=${scheduled}`",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "234af334ca7e794bff831eae151c5ce4b5b2279a63f255765c0cc1331f06184c",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 422,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 518
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:560",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 560,
+      "name": "'current explicit A then B follow-ups use original Owners while retired completion dependencies never replay B'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "abedaf23dcb06dd5e8fa6c73dce6031dbcac1b9d4aae930f153440a19ea25b01",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 54,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 570
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:620",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 620,
+      "name": "'ambiguous current Topic asks one clarification without mutating either candidate Task'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "adb3c924c0aed62a8bf85ef529b580834ec8611ca28939fceac873d48db2cb0f",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 5,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 631
+    },
+    {
+      "id": "test/independent-coordination-native.test.js:649",
+      "file": "test/independent-coordination-native.test.js",
+      "originalLine": 649,
+      "name": "'retired due query keeps its original occurrence and receipt without reopening the observed Task'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "b7e027e68aac1dd789e41252a959d10b5f664097f51f8f850282ed676e2d9329",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 792,
+        "reason": "historical recovery factory remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 661
+    },
+    {
+      "id": "test/model-context-files-native.test.js:10",
+      "file": "test/model-context-files-native.test.js",
+      "originalLine": 10,
+      "name": "'user source files: exact original, native targeted reads, stable paths after restart and unchanged source identity'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "962d839d2d71567d23311ea087b457bd78c6c7c5c9d96110d719545e2316e120",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3512,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 11
+    },
+    {
+      "id": "test/native-restart-scope-runner-native.test.js:60",
+      "file": "test/native-restart-scope-runner-native.test.js",
+      "originalLine": 60,
+      "name": "`managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader: ${wrapper ? 'retained PG wrapper' : observedExit ? 'observed exit' : 'OOM'}`",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "512c5f26ac5afbbbfcf2828a70bb8c3b9ca85cb16dc9189422c57af877c95820",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 70,
+        "reason": "business await: fixturePlan"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 61
+    },
+    {
+      "id": "test/native-restart-scope-runner-native.test.js:119",
+      "file": "test/native-restart-scope-runner-native.test.js",
+      "originalLine": 119,
+      "name": "'managed native entry rejects tampering and policy denial; a failed real producer stays failed and its original call remains readable'",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "d013c069563cf3510fbd1f1e998948eaaab36f7fdfeddb4bf2f4766642c04f5f",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 184,
+        "reason": "business await: fixturePlan"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 121
+    },
+    {
+      "id": "test/notification-pending-source.test.js:196",
+      "file": "test/notification-pending-source.test.js",
+      "originalLine": 196,
+      "name": "'native later Topic admission keeps two decisions and exact original recipients: sameAuthor=' + sameAuthor",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "525801bde426821d4fee56a8b9ef125f70b3d79cd1c5d7821ee38f7575d39996",
+      "cancelResolvers": [
+        "releaseFirst.resolve",
+        "releaseSecond.resolve"
+      ],
+      "boundary": {
+        "offset": 473,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 197
+    },
+    {
+      "id": "test/notification-pending-source.test.js:236",
+      "file": "test/notification-pending-source.test.js",
+      "originalLine": 236,
+      "name": "'native enrichment retires an already routed pending version with an independent command identity'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "b3edda650bfab5388076d5e7ee7ed3c0314e03f2fb7d11db6dc4c973440e6d55",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 206,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 242
+    },
+    {
+      "id": "test/task-artifact-scope-native.test.js:39",
+      "file": "test/task-artifact-scope-native.test.js",
+      "originalLine": 39,
+      "name": "'受信原生完整模式允许原临时Git工作树及MSYS，默认模式保留产物边界'",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e0265b70e1785ca7e65c704d92d81c2e5513670faadfe3516a7ef635f5955f30",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 147,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 40
+    },
+    {
+      "id": "test/task-artifact-scope-native.test.js:89",
+      "file": "test/task-artifact-scope-native.test.js",
+      "originalLine": 89,
+      "name": "'原生Host已授权完整模式在恢复绑定时保留，原生逐次模式与只读模式均不改历史身份'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "51a587283f0c048261015f92cb98761ce89adad2a55e1a1c7ae5ad9f656ddb12",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 414,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 91
+    },
+    {
+      "id": "test/task-artifact-scope-native.test.js:140",
+      "file": "test/task-artifact-scope-native.test.js",
+      "originalLine": 140,
+      "name": "'official execution artifact binding makes native FS and shell share one root and reject outside writes'",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "888dc292de6d24c331a0f944ca0a162120745503fbc63bf8a7b7b3e5eb083974",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 67,
+        "reason": "business await: coordinationArtifactScope"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 144
+    },
+    {
+      "id": "test/task-artifact-scope-native.test.js:240",
+      "file": "test/task-artifact-scope-native.test.js",
+      "originalLine": 240,
+      "name": "`one Task Owner preserves retained scope across three ordered executions: denyOutside=${denyOutside}`",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "fe363c0261fe976223a97531a3d0063007e304e08dc7a0ea2f6177a1b565b461",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 193,
+        "reason": "business await: existingScopedTask"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 245
+    },
+    {
+      "id": "test/task-artifact-scope-native.test.js:337",
+      "file": "test/task-artifact-scope-native.test.js",
+      "originalLine": 337,
+      "name": "'explicit Task reopen preserves original Owner, retained artifact scope and prior files while old daily dispatch stays retired'",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "0bfd3bb0cdfa46b1ac04fe77f21eaf8f74269af08817e67b2ad1606567784cf5",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 193,
+        "reason": "business await: existingScopedTask"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 343
+    },
+    {
+      "id": "test/task-background-retry-native.test.js:10",
+      "file": "test/task-background-retry-native.test.js",
+      "originalLine": 10,
+      "name": "'Host exact recovery rejects unknown effects and queue-stale facts, then resumes the original pre-effect failure once'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "c2e9f0243bf8c346d70705ad5cae24785b8618fc87680d5430d5ffe6e137ee66",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 271,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 11
+    },
+    {
+      "id": "test/task-background-retry-native.test.js:55",
+      "file": "test/task-background-retry-native.test.js",
+      "originalLine": 55,
+      "name": "'retired coordination recovery cannot consume or replay a source already handled by the native Topic and Owner'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "2cc9eb518b4813d8533a4b2e12a5078db96f304db25c49058997fe6b6530b5c5",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 388,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 58
+    },
+    {
+      "id": "test/task-background-retry-native.test.js:82",
+      "file": "test/task-background-retry-native.test.js",
+      "originalLine": 82,
+      "name": "'精确收件恢复沿原生会话处理：外部启动阻塞未修再次失败，修复后成功且不复制事实'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ff2035d72ef8f3ea8e81031d43e1030e54df1c938459a37638dcca9d3f669a10",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 353,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 87
+    },
+    {
+      "id": "test/task-background-retry-native.test.js:124",
+      "file": "test/task-background-retry-native.test.js",
+      "originalLine": 124,
+      "name": "'explicit background message retry admits original facts through topics once without opening automatic history ingress'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "54b410a6acfcf8ba912dda3d7bb30559717335a0bb04087f2285e01ce63e34c0",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 726,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 131
+    },
+    {
+      "id": "test/task-clean-ingress-native.test.js:12",
+      "file": "test/task-clean-ingress-native.test.js",
+      "originalLine": 12,
+      "name": "'own echoes require an exact group and receipt ID, including persisted file and image projections'",
+      "originalBudget": "10000",
+      "businessBudget": "10000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "90e8b2c328984d0231e4b60d3de35df67fa36682a01d9b9843a10a30d818b873",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 202,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(10000) + 40000",
+      "currentLine": 13
+    },
+    {
+      "id": "test/task-clean-ingress-native.test.js:41",
+      "file": "test/task-clean-ingress-native.test.js",
+      "originalLine": 41,
+      "name": "'clean ingress gates listener-ready history and raw missing timestamps before model, materials and legacy dedup'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ddf49859572dfceb22a18276becd10b3abf74c7a10bcba3df4a6f9c16171e622",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 656,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 43
+    },
+    {
+      "id": "test/task-dialogue-native.test.js:12",
+      "file": "test/task-dialogue-native.test.js",
+      "originalLine": 12,
+      "name": "'dialogue uses the same native owner, answers questions without feedback, steers the original execution and refuses restart'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "d6e1fec14d70d2a88752c6205b4cdfd33cc5c1822262472e96d6cdddefa1efbc",
+      "cancelResolvers": [
+        "gate.resolve"
+      ],
+      "boundary": {
+        "offset": 208,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 13
+    },
+    {
+      "id": "test/task-execution-resources-native.test.js:13",
+      "file": "test/task-execution-resources-native.test.js",
+      "originalLine": 13,
+      "name": "'原生资源目录工具驱动准备到发布的原会话续办，目录别名实际落为canonical锁'",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "b98c67f9e00cdb6e47b0249623fad69fd93522ed74010d55813e3b57be8063d1",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 74,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 14
+    },
+    {
+      "id": "test/task-execution-resources-native.test.js:60",
+      "file": "test/task-execution-resources-native.test.js",
+      "originalLine": 60,
+      "name": "'旧执行缺resourcePhase时原生读取仍为lossless JSON，旧Host未提供目录回调可只读空目录'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "288aeff36ddb834f4439d1514c91b79575947c333683eaec4425c12f48e3d1c9",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 319,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 62
+    },
+    {
+      "id": "test/task-execution-resources-native.test.js:81",
+      "file": "test/task-execution-resources-native.test.js",
+      "originalLine": 81,
+      "name": "`执行原生工具读取自身租约并在续办刷新，初始资源=${resourceKeys.join(',') || 'none'}`",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "df461affe3184bc54e22dcbcb0ccccc58177b6a659819eb2e44ea28d429f7811",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2537,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 85
+    },
+    {
+      "id": "test/task-execution-resources-native.test.js:140",
+      "file": "test/task-execution-resources-native.test.js",
+      "originalLine": 140,
+      "name": "`同任务原生定向通信持久消费且不重启终态成员：并发${maxConcurrentExecutions}`",
+      "originalBudget": "60000",
+      "businessBudget": "60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "8baa928dfea234b9e34310575a6f20a2d32d60995169fd72baad1c483d3d15af",
+      "cancelResolvers": [
+        "sent.resolve"
+      ],
+      "boundary": {
+        "offset": 3351,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(60000) + 40000",
+      "currentLine": 146
+    },
+    {
+      "id": "test/task-filesystem-boundary-native.test.js:8",
+      "file": "test/task-filesystem-boundary-native.test.js",
+      "originalLine": 8,
+      "name": "'动态执行沿原生文件权限读取已授权路径和原任务日志，不再安装插件文件边界'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "0662c8ce37cb64553d02b65d8bb1d00ae5b5e80d2b9e1d761aee97e6d9fe6e62",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 249,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 9
+    },
+    {
+      "id": "test/task-filesystem-boundary-native.test.js:47",
+      "file": "test/task-filesystem-boundary-native.test.js",
+      "originalLine": 47,
+      "name": "'已有未知记录及旧全局锁不阻断原生GitHub CLI查询，原未知操作保持'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "69e92d971ed5830a11938a0556e7cec74db74155eec93932f0fd5c4c59c051ec",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 184,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 49
+    },
+    {
+      "id": "test/task-model-reasoning-native.test.js:41",
+      "file": "test/task-model-reasoning-native.test.js",
+      "originalLine": 41,
+      "name": "'native owner inherits old depth, keeps in-flight depth and switches only on same-session resume; model default and unsupported differ'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "61afbcdae5e54340a116de84e6e0b5dccac6b263d6d55f9e2a3d5c60dca7f12a",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 141,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 42
+    },
+    {
+      "id": "test/task-model-reasoning-native.test.js:71",
+      "file": "test/task-model-reasoning-native.test.js",
+      "originalLine": 71,
+      "name": "'native service sends explicit owner depth while delegated execution and its provider retain the global selection'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "634287eb8571c8ee988139c9730a7f967d7bedb416e37690a19e825944a837dc",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 259,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 74
+    },
+    {
+      "id": "test/task-native-unknown-fence.test.js:9",
+      "file": "test/task-native-unknown-fence.test.js",
+      "originalLine": 9,
+      "name": "'restart wakes technical unknown wait once per implementation and retains the effect fence'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "43101f7e79946e635eb7d2afcd4800820369294492a9e73a543de60cc9cd316d",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1534,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 10
+    },
+    {
+      "id": "test/task-native-unknown-fence.test.js:51",
+      "file": "test/task-native-unknown-fence.test.js",
+      "originalLine": 51,
+      "name": "'未知写保留unknown，独立原生终端调查仍可执行'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "a9c332d1ddf83a315ea87c742d7cbeadd5e31320b3bd0a39381d1f4294933c1b",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 222,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 53
+    },
+    {
+      "id": "test/task-native-unknown-fence.test.js:87",
+      "file": "test/task-native-unknown-fence.test.js",
+      "originalLine": 87,
+      "name": "'同一原生操作已派发时拒绝再次执行，原账对账后可完成'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "853869bfb13ef86ea04ad1a276d1614b51e48bb93073bec0d2785d669d0d2c2e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 303,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 90
+    },
+    {
+      "id": "test/task-native-unknown-fence.test.js:138",
+      "file": "test/task-native-unknown-fence.test.js",
+      "originalLine": 138,
+      "name": "'原生文件前置拒绝后同会话读取纠正，无人工处理: ' + mutation",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "8ff7a51f60dc7f0d4a37efdf6a3d0acebee358802b41ef40a2a7d2f513a68350",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 75,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 142
+    },
+    {
+      "id": "test/task-notification-retry-native.test.js:13",
+      "file": "test/task-notification-retry-native.test.js",
+      "originalLine": 13,
+      "name": "'real native completed task retires its definitively unsent start confirmation without re-dispatch'",
+      "originalBudget": "10000",
+      "businessBudget": "10000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "6aab76c3bcd113ba00374177e495a68ce0b3e90ac0a60eca1db4d22c8577dcb5",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 423,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(10000) + 40000",
+      "currentLine": 14
+    },
+    {
+      "id": "test/task-operator-notification-scan.test.js:133",
+      "file": "test/task-operator-notification-scan.test.js",
+      "originalLine": 133,
+      "name": "'话题通知提交后即可发送，不等待同群另一独立事项的慢决策或恢复轮询'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "4baa401f9fbe2f1937a2e707d180c85fa07d4896e5e58cd3e9ddf83e7f3df64d",
+      "cancelResolvers": [
+        "sendRelease.resolve",
+        "slowRelease.resolve"
+      ],
+      "boundary": {
+        "offset": 469,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 134
+    },
+    {
+      "id": "test/task-operator-notification-scan.test.js:186",
+      "file": "test/task-operator-notification-scan.test.js",
+      "originalLine": 186,
+      "name": "`通知释放串行槽后自动递进并保留发送边界: ${firstOutcome}`",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "07292573a612427440dd19d0773bae0c2551b8ece1f10f4b6b92c1ce90bcba6f",
+      "cancelResolvers": [
+        "release.resolve"
+      ],
+      "boundary": {
+        "offset": 345,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 192
+    },
+    {
+      "id": "test/task-session-clean-start.test.js:100",
+      "file": "test/task-session-clean-start.test.js",
+      "originalLine": 100,
+      "name": "'real resident starts a clean explicit ledger without reading old workflow files, importing 152 blockers or showing old tasks'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "54d784e36b0d052d8ceee0145f94443d042494c54768bf001140beea21b99968",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 502,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 101
+    },
+    {
+      "id": "test/task-session-execution-provider-recovery-native.test.js:88",
+      "file": "test/task-session-execution-provider-recovery-native.test.js",
+      "originalLine": 88,
+      "name": "`native provider failure resumes original executor after persisted backoff; successful write never replays: restart=${restart}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "096916f84dd8e7bfb2f52e80d6edd274cc378d253b026d7a1e0ae872429163af",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 243,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 89
+    },
+    {
+      "id": "test/task-session-execution-provider-recovery-native.test.js:117",
+      "file": "test/task-session-execution-provider-recovery-native.test.js",
+      "originalLine": 117,
+      "name": "'one unreadable provider terminal stops only its recovery and unrelated native task still completes'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ac2e19b4513d41f6b816c95d0b9e364bacfa2905997bd1fc39f1a653d3a430b9",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 130,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 120
+    },
+    {
+      "id": "test/task-session-execution-provider-recovery-native.test.js:143",
+      "file": "test/task-session-execution-provider-recovery-native.test.js",
+      "originalLine": 143,
+      "name": "`provider short budget exhaustion remains technical wait; bounded cold owner review resumes safely: recovered=${recoverAfterCold}`",
+      "originalBudget": "recoverAfterCold ? 30000 : 60000",
+      "businessBudget": "recoverAfterCold ? 30000 : 60000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "c4319eef9bd7985661f77631b7021434607c1bfce729903f20607189f939348d",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 204,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(recoverAfterCold ? 30000 : 60000) + 40000",
+      "currentLine": 148
+    },
+    {
+      "id": "test/task-session-execution-provider-recovery-native.test.js:197",
+      "file": "test/task-session-execution-provider-recovery-native.test.js",
+      "originalLine": 197,
+      "name": "'business human answer replaces pending provider recovery input before any original session resumes'",
+      "originalBudget": "70000",
+      "businessBudget": "70000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e5a2df529825db1c33dfd4d54f9afab04d723cb0228eee3851316fa0355862fd",
+      "status": "existing-phased-unchanged"
+    },
+    {
+      "id": "test/task-session-execution-provider-recovery-native.test.js:235",
+      "file": "test/task-session-execution-provider-recovery-native.test.js",
+      "originalLine": 235,
+      "name": "'lifecycle timeout drains an acquired native host before removing its workspace'",
+      "originalBudget": "40020",
+      "businessBudget": "40020",
+      "newConstraint": false,
+      "sourceCallbackSha256": "fdd78c8bb09d2df3182d3729e591608b8e8f35318b7e10497b6b52c315295300",
+      "status": "existing-phased-unchanged"
+    },
+    {
+      "id": "test/task-session-execution-provider-recovery-native.test.js:257",
+      "file": "test/task-session-execution-provider-recovery-native.test.js",
+      "originalLine": 257,
+      "name": "'anonymous field v12 error restores original execution with complete diagnostics and no human request or duplicate effect'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ca05186b3ac51df0a1fdd0e94b4e4294e2980c44cbc3e33510808b38267f3f4e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 63,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 264
+    },
+    {
+      "id": "test/task-session-execution-provider-recovery-native.test.js:278",
+      "file": "test/task-session-execution-provider-recovery-native.test.js",
+      "originalLine": 278,
+      "name": "'requirement supplement during provider cooldown wakes current owner after restart and resumes original executor once'",
+      "originalBudget": "70000",
+      "businessBudget": "70000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "22471555b259b4250d9dd01414289d75e014f57d9fc887328d662972259c7499",
+      "status": "existing-phased-unchanged"
+    },
+    {
+      "id": "test/task-session-execution-provider-recovery-native.test.js:322",
+      "file": "test/task-session-execution-provider-recovery-native.test.js",
+      "originalLine": 322,
+      "name": "'owner may honestly wait at each bounded provider review; all three reviews survive restart without replay'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "028336623ac4c84f610107376c4fb011c06009e5ac66653dc3dd3c5108b9ca67",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 337,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 330
+    },
+    {
+      "id": "test/task-session-follow-conflict-native.test.js:13",
+      "file": "test/task-session-follow-conflict-native.test.js",
+      "originalLine": 13,
+      "name": "'official session follow reads a cold Host-owned task without acquiring its writer and the Host resumes next lease'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "f3dfda76a17826b8cd9558a1dad4bddad63a6523f2e8c185ccbe6664839b8040",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 269,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 14
+    },
+    {
+      "id": "test/task-session-human-native.test.js:43",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 43,
+      "name": "`群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：${failure}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "6d34d6f6cb29c696bf1c50750bdad984bf4c1437c6bc9e5315836e7efef5851c",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3556,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 44
+    },
+    {
+      "id": "test/task-session-human-native.test.js:146",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 146,
+      "name": "'待实施批准期间事实追问保留来源并明确通知，内部证据不外发且不恢复旧执行'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "0203f641c056aaa4a9970b6847a11a201eaf6c43d335020800ac639d648939a8",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3473,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 149
+    },
+    {
+      "id": "test/task-session-human-native.test.js:235",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 235,
+      "name": "`积压的两条事实追问均送达且无关来源不空转：同一唤醒=${batched}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "80082c2a009efea376db7150840c693e3a09be17a5209f0c7be7313930ea2579",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 844,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 240
+    },
+    {
+      "id": "test/task-session-human-native.test.js:292",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 292,
+      "name": "`operator technical reply retains business sources and shared scope protocol in the same resumed execution permission=${permission}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e87a54c241de34a6de9496e41abe1524b5b13243553883cff0ca4f3173215f03",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1630,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 299
+    },
+    {
+      "id": "test/task-session-human-native.test.js:379",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 379,
+      "name": "'技术申请进入Web和登录人私聊，精确引用及真实作者恢复原任务，零技术群询问'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "dc758029680deaf8bf5f33e0c2e512038e5e9dff2ed7d0bb8f5de011b515b141",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 54,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 388
+    },
+    {
+      "id": "test/task-session-human-native.test.js:422",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 422,
+      "name": "'人工外发问题在入账前拒绝已知运行标识，内部证据与业务链接原样保留'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "f0a2ee3e6fb789d0726892bac37d22f7616c3f6f98186d0f0d29f0f0e90263c4",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1296,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 432
+    },
+    {
+      "id": "test/task-session-human-native.test.js:460",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 460,
+      "name": "'native human request waits without repeat wakes; authenticated HTTP reply resumes the original session from actual source text'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "715ffad4d4c65959c8f4ac12697a40a270c024e810c0e388e02dc19ab8db2e00",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 240,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 472
+    },
+    {
+      "id": "test/task-session-human-native.test.js:498",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 498,
+      "name": "'an execution result cannot bypass human waiting; reply reads the original execution and continues the original task'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "76833d09edf8e7545918b4091a42e671e78c00b27023afb9a79f9ba33a2ee463",
+      "cancelResolvers": [
+        "released.resolve"
+      ],
+      "boundary": {
+        "offset": 1345,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 512
+    },
+    {
+      "id": "test/task-session-human-native.test.js:539",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 539,
+      "name": "'a native blocked decision without a human question is corrected into an explicit durable request'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1086e73b25745f7f736562e7322b10c4801fe5a47c0385a6eea1979150fb911f",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 349,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 557
+    },
+    {
+      "id": "test/task-session-human-native.test.js:557",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 557,
+      "name": "`original-group human input preserves clarification but fences explicit authorization change: changed=${changed}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "a3ef7b6c920e83204bfc7fb3dce2e8fd948495bf65510aabf32f74eeb0cc7c1a",
+      "cancelResolvers": [
+        "release.resolve"
+      ],
+      "boundary": {
+        "offset": 2719,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 577
+    },
+    {
+      "id": "test/task-session-human-native.test.js:647",
+      "file": "test/task-session-human-native.test.js",
+      "originalLine": 647,
+      "name": "'Web answer recalls its delivered operator notification once without recalling group replies'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "141e4805ac62cb03ebc21e4a66168bd3593f88c585f0e46234aab485fb15c4b9",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 724,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 671
+    },
+    {
+      "id": "test/task-session-job-recovery-native.test.js:39",
+      "file": "test/task-session-job-recovery-native.test.js",
+      "originalLine": 39,
+      "name": "'native file read accepts historical draft and material job records without launching or reconciling a job'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1ea4e565a15d9a756d8a86b34a3496280c2e37ca66d3b9f85cd81bc3c26ceec9",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1942,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 40
+    },
+    {
+      "id": "test/task-session-job-recovery-native.test.js:73",
+      "file": "test/task-session-job-recovery-native.test.js",
+      "originalLine": 73,
+      "name": "'native execution consumes serial tool results and wakes the coordinator only for a reported stage and final result'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1efffc023d94edadd78c86f5dbce9eda11824f7f3f010d7c1eaf2321fdce38e4",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1442,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 76
+    },
+    {
+      "id": "test/task-session-job-recovery-native.test.js:112",
+      "file": "test/task-session-job-recovery-native.test.js",
+      "originalLine": 112,
+      "name": "`native shell retains its original process, reads output to terminal and persists the owned job receipt: background=${background}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "0308d0aac04a427ba39db6f751b3836c0c204cbdb557fc4038114427c9c7257c",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1404,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 117
+    },
+    {
+      "id": "test/task-session-job-recovery-native.test.js:140",
+      "file": "test/task-session-job-recovery-native.test.js",
+      "originalLine": 140,
+      "name": "'native missing-job read stays a real error without creating unknown effects or blocking later work'",
+      "originalBudget": "70000",
+      "businessBudget": "70000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ccd530dbb4f5750ea256ec869e463ddcd1890337f9ab7cc4b9ae0c17e5cf5063",
+      "status": "existing-phased-unchanged"
+    },
+    {
+      "id": "test/task-session-job-recovery-native.test.js:166",
+      "file": "test/task-session-job-recovery-native.test.js",
+      "originalLine": 166,
+      "name": "`native background HTTP service remains usable by the next tool and drains its original job: explicitStop=${explicitStop}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "42145c3e98dbbfc7c3ec2af58c0fcbed62c28ecee5eeceeabd4c73f0e9eac1dd",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2162,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 173
+    },
+    {
+      "id": "test/task-session-job-recovery-native.test.js:201",
+      "file": "test/task-session-job-recovery-native.test.js",
+      "originalLine": 201,
+      "name": "`cancelling a native job records terminal cancellation and drains the actual owned process: background=${background}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e341ed981fa1dfb4ea2ec64456b20b34056d45d50231358abdf11f0c8a1c14b6",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 581,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 210
+    },
+    {
+      "id": "test/task-session-job-recovery-native.test.js:218",
+      "file": "test/task-session-job-recovery-native.test.js",
+      "originalLine": 218,
+      "name": "'unknown operation keeps native reads available; owner can investigate readonly but cannot clear missing evidence or replay'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "9b1f046aac8777e7f6a49d28734d0a3592832aa64abfc149608277ed436049f8",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1901,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 229
+    },
+    {
+      "id": "test/task-session-job-recovery-native.test.js:254",
+      "file": "test/task-session-job-recovery-native.test.js",
+      "originalLine": 254,
+      "name": "'restart reconciles an original persisted native terminal receipt and resumes the same executor without replay'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "fd2cdc4d1b8b5a8d57630cd38849f721e9f897f6726bf7a4adfffbabf825ecf3",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 267
+    },
+    {
+      "id": "test/task-session-job-recovery-native.test.js:299",
+      "file": "test/task-session-job-recovery-native.test.js",
+      "originalLine": 299,
+      "name": "'operator exact error resolution has zero-write HTTP check, retains partial effects and resumes original execution without replay'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "3d8a2327d7c42bf5b2b7b1f9c155ced7e4b6e5978a03da7e73c8e6772cb35e60",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3035,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 313
+    },
+    {
+      "id": "test/task-session-listener-resume-native.test.js:12",
+      "file": "test/task-session-listener-resume-native.test.js",
+      "originalLine": 12,
+      "name": "`native owner repeated resume with live root async agent-created listeners: ${mode}`",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1439f2fd78f36d333cc5024025595694c11f823e4e8c140f00557f50858008fd",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 272,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 13
+    },
+    {
+      "id": "test/task-session-material-history.test.js:107",
+      "file": "test/task-session-material-history.test.js",
+      "originalLine": 107,
+      "name": "'active task service ignores archived history and never exposes or imports retired tasks'",
+      "originalBudget": null,
+      "businessBudget": "30000",
+      "newConstraint": true,
+      "sourceCallbackSha256": "df0e2a5da7c8aaab5c4d84a3e36224c8a7399f86646ed55c840668c374702f89",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "business await: snapshot"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 108
+    },
+    {
+      "id": "test/task-session-material-history.test.js:141",
+      "file": "test/task-session-material-history.test.js",
+      "originalLine": 141,
+      "name": "'source text and actual attachment bytes are materialized into their own task and reused without downloading again'",
+      "originalBudget": null,
+      "businessBudget": "30000",
+      "newConstraint": true,
+      "sourceCallbackSha256": "525c02cd6fc95e22d6863fde86121dd624d36db54c6c0abe85075eb3abcf2aa0",
+      "terminalCleanupMoved": true,
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 468,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 143
+    },
+    {
+      "id": "test/task-session-material-history.test.js:180",
+      "file": "test/task-session-material-history.test.js",
+      "originalLine": 180,
+      "name": "`resource ${mode} never becomes a successful material download`",
+      "originalBudget": null,
+      "businessBudget": "30000",
+      "newConstraint": true,
+      "sourceCallbackSha256": "cf656dfa33f1d489e1c164c5aefb9e196c0042fe5ef6792866abf46a3c85dfed",
+      "terminalCleanupMoved": true,
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 449,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 185
+    },
+    {
+      "id": "test/task-session-material-history.test.js:202",
+      "file": "test/task-session-material-history.test.js",
+      "originalLine": 202,
+      "name": "`cached material ${mode} is rejected before reaching any task model or connector`",
+      "originalBudget": null,
+      "businessBudget": "30000",
+      "newConstraint": true,
+      "sourceCallbackSha256": "3c7a45020c2720e7e4e5ed9e5b624fb52d32b73e12f3bfbf486df92b64cba471",
+      "terminalCleanupMoved": true,
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 210,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 210
+    },
+    {
+      "id": "test/task-session-model-native.test.js:21",
+      "file": "test/task-session-model-native.test.js",
+      "originalLine": 21,
+      "name": "'native create and resume use the current exact task model on the original session; missing model never creates or resumes'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "2d58264792fd803a50fccdf7126f035030ff4e18a1ebd866680566240da202e5",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 277,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 22
+    },
+    {
+      "id": "test/task-session-model-native.test.js:60",
+      "file": "test/task-session-model-native.test.js",
+      "originalLine": 60,
+      "name": "`native service isolates task model from delegated execution: ${configured ?? 'old config'}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "82f3e767067e48217ae54d34b2fb10d48d8383ef03cc13c0b137c4fbb266d727",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 219,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 63
+    },
+    {
+      "id": "test/task-session-names-native.test.js:9",
+      "file": "test/task-session-names-native.test.js",
+      "originalLine": 9,
+      "name": "`真实任务链路：可选中文短名、原生标题一致，续办不改名：${continuationTitle}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "a631800fe23ec02f7523beafe2c56632bb59ef47d52219b35aa3c38da38e82cd",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 213,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 10
+    },
+    {
+      "id": "test/task-session-package-native.test.js:167",
+      "file": "test/task-session-package-native.test.js",
+      "originalLine": 167,
+      "name": "'actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "31f3ed42a73ac30dcb33ec9e3c7d5b14764038651cc3546e5f378879f04e51ed",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "business await: pack"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "fileWrapperOwnsLifecycle": true,
+      "currentLine": 163
+    },
+    {
+      "id": "test/task-session-package-native.test.js:251",
+      "file": "test/task-session-package-native.test.js",
+      "originalLine": 251,
+      "name": "'actual extracted resident starts and serves health without legacy entrypoints or personal assets'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "8b1567d0eb85b66e07a4f8bef2e5b1a77ac0605f3473d833a260ee6739baf54a",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "business await: pack"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "fileWrapperOwnsLifecycle": true,
+      "currentLine": 248
+    },
+    {
+      "id": "test/task-session-progress-native.test.js:45",
+      "file": "test/task-session-progress-native.test.js",
+      "originalLine": 45,
+      "name": "'native execution documents keep each input round and the owner reads the new duty and plan'",
+      "originalBudget": "45000",
+      "businessBudget": "45000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "318a757635622d94ba4c2a33f507df03d88344369c39b293ec7bc7db85f1e07b",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 107,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(45000) + 40000",
+      "currentLine": 46
+    },
+    {
+      "id": "test/task-session-progress-native.test.js:133",
+      "file": "test/task-session-progress-native.test.js",
+      "originalLine": 133,
+      "name": "`native progress review reads the current execution document without replaying or bypassing human wait: ${humanWait}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "8d8f6c457d4cc9c78455e2a51d25e61b2a65c3d5881086663620049eed8aba8f",
+      "cancelResolvers": [
+        "gate.resolve"
+      ],
+      "boundary": {
+        "offset": 171,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 135
+    },
+    {
+      "id": "test/task-session-progress-native.test.js:222",
+      "file": "test/task-session-progress-native.test.js",
+      "originalLine": 222,
+      "name": "`scripted progress decision waits for evidence or steers the original execution once: detour=${detour}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "7c78f417e3a913b798983b242e83752d26cd9d53225b0ba103a77401857df6ee",
+      "cancelResolvers": [
+        "gate.resolve"
+      ],
+      "boundary": {
+        "offset": 223,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 227
+    },
+    {
+      "id": "test/task-session-provider-native.test.js:22",
+      "file": "test/task-session-provider-native.test.js",
+      "originalLine": 22,
+      "name": "`native owner provider error keeps the same session and submitted decisions take priority: trailing=${trailing}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "dd295833e2901d7701cfed4938b14e13c6e1a277ecc3b3765fd2524f4373c304",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 145,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 23
+    },
+    {
+      "id": "test/task-session-provider-native.test.js:116",
+      "file": "test/task-session-provider-native.test.js",
+      "originalLine": 116,
+      "name": "'stale owner no-submission drains and resumes the same session with the supplement without technical backoff'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "94a8f736cba35b584a7d396add1d18d0119372f7834a228bfe61dc738a1dd435",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 118,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 119
+    },
+    {
+      "id": "test/task-session-provider-native.test.js:160",
+      "file": "test/task-session-provider-native.test.js",
+      "originalLine": 160,
+      "name": "'service retries a transient native owner with its claimed wake and same session after cooldown'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "fc1a8fda13a4c701167fc56aef9ed004cf3a20f09d488ce74dad1a2120d93f0e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 257,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 164
+    },
+    {
+      "id": "test/task-session-provider-native.test.js:183",
+      "file": "test/task-session-provider-native.test.js",
+      "originalLine": 183,
+      "name": "`normal empty owner completion resumes automatically with the same session and wake: restart=${restart}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "f79e305e9c6c290af61158113fc82d3429d98120a07806c2293fc310b9cf6d34",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 274,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 189
+    },
+    {
+      "id": "test/task-session-provider-native.test.js:220",
+      "file": "test/task-session-provider-native.test.js",
+      "originalLine": 220,
+      "name": "`restart recovers only a legacy acknowledged no-submission with exact transient native proof: ${transient}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "6e17c3b7a0959e76da050666f940b0907e3efc904652595fefa5b4c0b72dd885",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 214,
+        "reason": "cold/recovery construction remains business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 228
+    },
+    {
+      "id": "test/task-session-provider-native.test.js:242",
+      "file": "test/task-session-provider-native.test.js",
+      "originalLine": 242,
+      "name": "`owner technical failures have a durable bounded budget across leases and restart; later real input preserves a recovery entrance: noSubmission=${noSubmission}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "111660a9da50efaa72717bd20c165c14d32c04f6fbc1dff80052c954fce17489",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 348,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 251
+    },
+    {
+      "id": "test/task-session-provider-native.test.js:276",
+      "file": "test/task-session-provider-native.test.js",
+      "originalLine": 276,
+      "name": "`owner recovery admission cannot hot-loop on non-provider runtime failure: newInput=${newInput}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ab015faeef58243986ecd80f0a7af66505fe62927dea0080314150cdcb408528",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 340,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 287
+    },
+    {
+      "id": "test/task-session-reply-identity.test.js:157",
+      "file": "test/task-session-reply-identity.test.js",
+      "originalLine": 157,
+      "name": "'完成及状态末尾统一署名，保留来源和真实@且最终结果不隐式引用'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "564947ba143e84996dfe73c7298cac5bfd69591ac39530eabf506a33eb3afbf3",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 46,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 158
+    },
+    {
+      "id": "test/task-session-reply-identity.test.js:179",
+      "file": "test/task-session-reply-identity.test.js",
+      "originalLine": 179,
+      "name": "'任务提问使用显式Agent署名'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "7b0675afa7667de5240abc0472d4a4ff2c5c044beae78c0531477802724b7250",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "business await: t.test"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 182
+    },
+    {
+      "id": "test/task-session-reply-identity.test.js:199",
+      "file": "test/task-session-reply-identity.test.js",
+      "originalLine": 199,
+      "name": "'真实完成出口将模型重复署名移到证据和限制后'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "fa797512a364b9d9b0358fe781fc862f407b2bf985902e46182b58e3c017b65b",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 74,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 205
+    },
+    {
+      "id": "test/task-session-reply-identity.test.js:206",
+      "file": "test/task-session-reply-identity.test.js",
+      "originalLine": 206,
+      "name": "`${dialogueCase ? 'Web对话' : 'Topic完成回复'}在公开入账前拒绝来源消息和人员标识，原轮订正保留业务编号与链接`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "017d1b52295f6da35b221f647886695ff5ed7578b2968c66483bada173a6d60a",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 390,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 214
+    },
+    {
+      "id": "test/task-session-reply-identity.test.js:181:nested",
+      "file": "test/task-session-reply-identity.test.js",
+      "originalLine": 181,
+      "name": "nested signature variant",
+      "originalBudget": "parent aggregate 30000",
+      "businessBudget": "30000",
+      "status": "nested-within-original-parent-budget",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 59,
+        "reason": "initial empty Host is ready; all following work is business"
+      }
+    },
+    {
+      "id": "test/task-session-service-native.test.js:19",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 19,
+      "name": "'same-host recovery drains the original native process without replaying an unknown operation'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "9e6d4788cef69f6f1f9aa887bdd15a3c8b7241a90b50ff6ebeafca7cf19b27d7",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 436,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 20
+    },
+    {
+      "id": "test/task-session-service-native.test.js:78",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 78,
+      "name": "'原生网页工具错误不建立未知效果，仍可完成后续读取'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "f63658309d305853137b01dce827ffac37223e68224762494f7d64b05e32b118",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 220,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 80
+    },
+    {
+      "id": "test/task-session-service-native.test.js:115",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 115,
+      "name": "'native DWS observer binds send and status operations, filters early echoes and persists exact identities'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "bf25d14ff0f60188522f60c927417031363e404b5d0392dd1bd5e94fc617af3d",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3543,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 118
+    },
+    {
+      "id": "test/task-session-service-native.test.js:186",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 186,
+      "name": "'native completion freezes files and resumes remaining delivery after the explanation is archived'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "8c7c67b69235b532a80bb583b056f3f2535d3ddbf04f61fe96f4ade8dda6b718",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1470,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 190
+    },
+    {
+      "id": "test/task-session-service-native.test.js:253",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 253,
+      "name": "'running reminder and coordinator clarification preserve one native shell job with received and consumed receipts'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "79131dc06ca046e932ee88f4bbed9cedccb45dd14ef8de56d75de7dd8a0aaa18",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 316,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 259
+    },
+    {
+      "id": "test/task-session-service-native.test.js:312",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 312,
+      "name": "'native completion race drains then resumes the original execution without replaying its shell effect'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1e3e759c745a30af082fea06c83122ae7615d6f365ce9894950275f3aa6a3d93",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 313,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 319
+    },
+    {
+      "id": "test/task-session-service-native.test.js:354",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 354,
+      "name": "`real coordinator input enforces explicit context semantics without default cancellation: ${mode}`",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "563a0918d83ca68f4dfb94cf8c8ff97249d2127a121eaf6a67f4fc5f064c6b5e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 250,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 362
+    },
+    {
+      "id": "test/task-session-service-native.test.js:452",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 452,
+      "name": "'owner injects one authoritative source body across task, Web identity and materials'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "08a774f65aafc2006aa67050173850f52f747ba6c1c478a76ea213b4114a6bea",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1205,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 461
+    },
+    {
+      "id": "test/task-session-service-native.test.js:494",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 494,
+      "name": "'不同群成员续办已完成任务，旧授权拒绝显式重试仍保留原任务和会话'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "8bf30506c4fb1b96eb566f15cd445a949fb26cd23ba68bb45a705d9124752109",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 179,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 505
+    },
+    {
+      "id": "test/task-session-service-native.test.js:571",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 571,
+      "name": "`话题历史${ownEcho ? '自身通知不阻断人工补充' : '未准入真实消息仍拒绝更新且不发送成功回复'}-${followupActor}`",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "9a4d1cebd08d26ec6c7a33a0e03de8d035c36335a5706c6b2ec8d4218edd87c9",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2745,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 583
+    },
+    {
+      "id": "test/task-session-service-native.test.js:698",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 698,
+      "name": "'180 legacy task Host markers retire without changing audit or foreign context, including compacted surface replay'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "4a6cfcdcc95a95ad794f022dfdf64945b3e48a65f1d293c4973b5abd9447ea18",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 711
+    },
+    {
+      "id": "test/task-session-service-native.test.js:743",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 743,
+      "name": "'owner keeps one current Host snapshot and delegates non-recursive execution context across three generations'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "5de1e2b0b37daad34a8dbbfb9d4689041bcf0103c5f0b5347d1af81c0fecfd14",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2758,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 757
+    },
+    {
+      "id": "test/task-session-service-native.test.js:801",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 801,
+      "name": "'32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects'",
+      "originalBudget": "240000",
+      "businessBudget": "240000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "f316ce12b91553d8b5ba26f2af733e9e4b534baaf4dcf1fea30cb4d470c7e6a5",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 4265,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(240000) + 40000",
+      "currentLine": 817
+    },
+    {
+      "id": "test/task-session-service-native.test.js:858",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 858,
+      "name": "'configured group responsibility reaches group and task models and its reply signature survives notification formatting'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "159ddbe1bf2375dce12f0ecebf76aeac2639fe3035f0c2ad3ee6f0b1e4264d4d",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 646,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 876
+    },
+    {
+      "id": "test/task-session-service-native.test.js:880",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 880,
+      "name": "'simple existing-file delivery uses one executor and owner reads the delivered evidence'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "fac30e883c54789de5e15ede2d1fc5def1c2be0937646d3a89cc72989620c471",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 174,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 900
+    },
+    {
+      "id": "test/task-session-service-native.test.js:932",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 932,
+      "name": "'native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "447118286628ce17d1d6aa31dc72c10087e548ba86aaff55df7a4bd5ff57829c",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 6113,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 953
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1097",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1097,
+      "name": "'native sequential handoff preserves one executor before independent review of the fixed artifact'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "96e5416f39c910701935e30b6fe63c13567d748cf5c0474df477d67f93e78259",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 4349,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 1120
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1181",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1181,
+      "name": "'native service runs eleven independent members within the configured concurrency and completes'",
+      "originalBudget": "45000",
+      "businessBudget": "45000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e9a2e557450087d1a9749680c3d65857f20ee277b1259d19b1cff5f33be3e4c9",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2138,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(45000) + 40000",
+      "currentLine": 1206
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1228",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1228,
+      "name": "'native executor resumes in the same titled task workspace and all task sessions share the process cwd'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "27e4b978ef5ab6bcb6ccac5d9a4b8e5b824f9bf89515f3c5de03d0ede40cafed",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2332,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 1255
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1287",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1287,
+      "name": "'native service reopens an unknown notification for readback without resending completed business work'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ac76340393173ad833ec5f1c8bb9eaeb5caddae83486fc3cd0bcf7674226de6a",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 800,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 1316
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1328",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1328,
+      "name": "'native service cancellation stops the real execution process, drains the session, and rejects late completion'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "946bcf1f2abc2bc94f1876114a3d36bcecd58b00175bc0761e63f5652d3a3f67",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1323,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 1359
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1383",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1383,
+      "name": "'native requirement update resumes the same owner with new sources and fences the interrupted old execution result'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "6d05a2bf18799ab986abba53c4615655a0a46921553b4b314e5cbfa1d3e5a3e8",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1175,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 1416
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1442",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1442,
+      "name": "`native capacity queues promote every task and execution: tasks=${maxConcurrentTasks}, executions=${maxConcurrentExecutions}`",
+      "originalBudget": "25000",
+      "businessBudget": "25000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "5b8ac2706aff3aad6fba16b0f8aade8948e17a7ff6fbcc20bef318743c8f308a",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1270,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(25000) + 40000",
+      "currentLine": 1477
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1476",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1476,
+      "name": "'native shared resources queue without occupying task capacity and promote on drain'",
+      "originalBudget": "45000",
+      "businessBudget": "45000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "6175dd7476608bba520fc2a817792ed39614a1c4e0416f0e6ce572ade7344ba5",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1777,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(45000) + 40000",
+      "currentLine": 1513
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1525",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1525,
+      "name": "'native delegation rejects changed keys on receipt replay and preserves omitted continuation keys'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "657b5317ccaed5c642a2d3bddac468b3be41e3b8d16a7f73f1096d2733637f9e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1782,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 1564
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1563",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1563,
+      "name": "'recovering an idle owner with no pending wake does not consume a task slot'",
+      "originalBudget": "10000",
+      "businessBudget": "10000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e764d767e7b09f6990a94d9753944331aad3e376c8e7b970ab6c91f1340cb557",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 217,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(10000) + 40000",
+      "currentLine": 1604
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1576",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1576,
+      "name": "`native session creation failure has bounded recovery retries: persistent=${persistent}`",
+      "originalBudget": "10000",
+      "businessBudget": "10000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "84c9aabdf430779381380e9a9c0c0493342c066a55bc91a6d3e56c574423942a",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 195,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(10000) + 40000",
+      "currentLine": 1619
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1603",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1603,
+      "name": "`native model failures settle without repeated owner requests: persistent=${persistent}`",
+      "originalBudget": "10000",
+      "businessBudget": "10000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e10c7bf7cc228901456d556f71ef98e2666e347c0c3cd4baea34e5dba466994a",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 306,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(10000) + 40000",
+      "currentLine": 1648
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1624",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1624,
+      "name": "'empty owner recovery reviews the retained execution without replaying its completed native write'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "f58fe8b05252f48d0941d1ab6512d2a2ed0bbeaa6dedd1359ddf9acbbe32ee5d",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1775,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 1671
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1689",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1689,
+      "name": "`native owner empty-summary corrections are bounded and may recover: correctOnce=${correctOnce}`",
+      "originalBudget": "10000",
+      "businessBudget": "10000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "b53da22dd2a3712660817b65e31a01a2843bd54c096f6cec117b1c50f7daea3b",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 327,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(10000) + 40000",
+      "currentLine": 1738
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1725",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1725,
+      "name": "'native topic routing rejects incomplete source coverage and accepts correction in the same real session'",
+      "originalBudget": "50000",
+      "businessBudget": "50000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "5acd92df883abeb43d7e61805166ee0f51115b097e1a3d8f673f8b8004b4b9c4",
+      "status": "existing-phased-unchanged"
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1779",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1779,
+      "name": "'resident.apply boots and disposes with only its declared native service dependencies'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "65adcd1af1790fb823804429cdd7098b897fec750e54b2b6dea4779c31180b88",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 178,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 1830
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1806",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1806,
+      "name": "'resident listener startup failure disposes native resources and permits reopening the same task database'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "aac8eebab84d9302a2a91c69e9f82cc0c3c9d5fcb8d0c3f4771d535a5e52c051",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 205,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 1859
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1829",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1829,
+      "name": "'native board keeps a drained coordinator running while its delegated target is executing'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "0ddfb41a9b444a9e8695f091a18b338e1ba46751ee16f11d6eea93bec2466eda",
+      "cancelResolvers": [
+        "release.resolve"
+      ],
+      "boundary": {
+        "offset": 1228,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 1883
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1866",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1866,
+      "name": "'native single-member completion keeps an unknown tool effect unresolved without replay'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e1f808f023ba4d4013b77534a1f2038747abe459354ae3658471c021074abf3c",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1525,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 1924
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1910",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1910,
+      "name": "'native recovery no-op preserves an undrained task writer conflict alert'",
+      "originalBudget": "10000",
+      "businessBudget": "10000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "4a456334115503e0dd333ea87670dcb5139b6166510a6c9714992501639092ec",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 180,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(10000) + 40000",
+      "currentLine": 1970
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1930",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1930,
+      "name": "'execution document publication failure after claim drains the committed execution and exposes an alert'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "605e814dd7541f706ff27b97367cd51a5b3429715909d41b8a497f8a12ed8428",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 300,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 1992
+    },
+    {
+      "id": "test/task-session-service-native.test.js:1968",
+      "file": "test/task-session-service-native.test.js",
+      "originalLine": 1968,
+      "name": "'resource read retries preserve image facts and duplicate ingress reuses the source'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "7990030cb1e0990d05d07f821488027411bd6c548622c46a4dfc11fbfd6eaf1b",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 2031
+    },
+    {
+      "id": "test/task-session-skills-native.test.js:57",
+      "file": "test/task-session-skills-native.test.js",
+      "originalLine": 57,
+      "name": "'native personal skills are discovered cheaply, loaded independently by both sessions, and references stay execution-owned'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "42b63d6c1ede4920a79bf043cc224bed79513b6ce05a3d8902dff5215e5c5c8a",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2437,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 58
+    },
+    {
+      "id": "test/task-session-skills-native.test.js:114",
+      "file": "test/task-session-skills-native.test.js",
+      "originalLine": 114,
+      "name": "'an unavailable native skill is a correctable read and does not leave unknown external effects'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "dece653c759a1ef9afca1c5b0d478d3e50eba92a9335ff79429447a4ac73a8a9",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1153,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 117
+    },
+    {
+      "id": "test/task-session-skills-native.test.js:138",
+      "file": "test/task-session-skills-native.test.js",
+      "originalLine": 138,
+      "name": "'task session rejects business tools and late replacements while keeping the original evidence reader'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "80621007e08c4b812390e02449e9d3489b293602ed3ba5f900456ba2969a2785",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1509,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 143
+    },
+    {
+      "id": "test/task-session-skills-native.test.js:169",
+      "file": "test/task-session-skills-native.test.js",
+      "originalLine": 169,
+      "name": "'unconfigured native profiles expose no bundled personal skills'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "9df120df44750f07fe1e98de6b88c0966c0c01b909a07a189b5d3b819259e4c7",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 467,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 176
+    },
+    {
+      "id": "test/task-session-skills-native.test.js:183",
+      "file": "test/task-session-skills-native.test.js",
+      "originalLine": 183,
+      "name": "'an execution same-name replacement does not inherit the native loader read-only accounting'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "f7374792ae45b87834b01649d7a17294c291b4d5530ac52bd7814a65e3f7a400",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1416,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 192
+    },
+    {
+      "id": "test/task-session-skills-native.test.js:215",
+      "file": "test/task-session-skills-native.test.js",
+      "originalLine": 215,
+      "name": "'已读技能和引用变化只提示相关路径，原生重读后消除提示且保留旧版本审计'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "e720c25ba6f58ac5469c163fa19e3b25dde2cb31dc0858b5fc994c100cf3b593",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1401,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 226
+    },
+    {
+      "id": "test/task-session-skills-native.test.js:248",
+      "file": "test/task-session-skills-native.test.js",
+      "originalLine": 248,
+      "name": "'执行会话续办恢复已读版本，入口未变而引用改变也能在首次模型步骤看到'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "97f0fcacae0faa2ebf752f45447d9e94e1ec911c77f03720387e3e60465e0763",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1825,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 261
+    },
+    {
+      "id": "test/task-source-replay-native.test.js:46",
+      "file": "test/task-source-replay-native.test.js",
+      "originalLine": 46,
+      "name": "`source replay accepts ${reverse ? 'official history then realtime' : 'realtime then official history'} without rerouting or losing original facts`",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "41acb19861fbee25141a9c6b0ea66ba5b3c4174697b04856745112f2af9dee74",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 42,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 47
+    },
+    {
+      "id": "test/task-source-replay-native.test.js:71",
+      "file": "test/task-source-replay-native.test.js",
+      "originalLine": 71,
+      "name": "'same-second transport timestamp projections do not turn one source into multiple commands'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ea273e3df5f0568cf8a4f136f4f1026245bdcca432af38e1b9845241d84250af",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 40,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 74
+    },
+    {
+      "id": "test/task-source-replay-native.test.js:88",
+      "file": "test/task-source-replay-native.test.js",
+      "originalLine": 88,
+      "name": "`source replay rejects ${name} before changing existing facts or routing`",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "286869a31dd36938d309736d164df85818bb94a910fc1164824d396ce68c62b5",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 42,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 93
+    },
+    {
+      "id": "test/task-source-replay-native.test.js:101",
+      "file": "test/task-source-replay-native.test.js",
+      "originalLine": 101,
+      "name": "'millisecond ingress cutoff remains exact even when replay identity tolerates transport precision'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "f5a91cf30ac019b3c459d0e62212ac177f526c9b6d640a07e7970467494b88d5",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 86,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 108
+    },
+    {
+      "id": "test/task-source-replay-native.test.js:123",
+      "file": "test/task-source-replay-native.test.js",
+      "originalLine": 123,
+      "name": "`source replay cannot silently swallow ${name}`",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "5206e3186cf78bdfb616c673c9018f71ac612933b64c452aa54d95ff0948f3b7",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 35,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 132
+    },
+    {
+      "id": "test/task-source-replay-native.test.js:146",
+      "file": "test/task-source-replay-native.test.js",
+      "originalLine": 146,
+      "name": "'a quarantined source receipt cannot become admitted through a later same-second projection'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "7a1899d223ccf5ed7b85390b4929d9795765481e1f9fa35998088d9dcc1caeae",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 86,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 157
+    },
+    {
+      "id": "test/task-stage-progress-native.test.js:36",
+      "file": "test/task-stage-progress-native.test.js",
+      "originalLine": 36,
+      "name": "'integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "036bc782fef941bc459d03ec5ce888886e2ac398a5b8b52f236922bea8755fcb",
+      "cancelResolvers": [
+        "gate.resolve"
+      ],
+      "boundary": {
+        "offset": 243,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 37
+    },
+    {
+      "id": "test/task-stage-progress-native.test.js:128",
+      "file": "test/task-stage-progress-native.test.js",
+      "originalLine": 128,
+      "name": "`native nonterminal stage report continues execution and updates owner summary; human wait=${humanWait}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "23ddb8a8c1c1e1f5e17e67c9c547ce31f1f91ee4fb855a51629ed443efdc1eff",
+      "cancelResolvers": [
+        "gate.resolve"
+      ],
+      "boundary": {
+        "offset": 138,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 133
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:50",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 50,
+      "name": "'来源语义戳在首次Topic完成后落账，不等待同群其他判断'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "c028e2eacc5663ae3870176d4905e9a827585de47109afffe6835962244193eb",
+      "cancelResolvers": [
+        "releaseSlow.resolve"
+      ],
+      "boundary": {
+        "offset": 398,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 51
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:147",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 147,
+      "name": "'native request-bound review and Topic reads accept empty args while routing never guesses a Topic'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "3e35bd48e17a3b2604dc2aa343a3898c719982fed84bfd61cceabea089a363f6",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2446,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 151
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:186",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 186,
+      "name": "'native revised Topic supplies current linked Task reads without rescanning the catalogue'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "7d8d2cfca717a269eceec1e87663c89663ca015adbdcab4c979e53bf9fd69abb",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1572,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 192
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:228",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 228,
+      "name": "'native task context reports invalid arguments and reads explicit archived identity'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "6245c586013b0dfa7d0bb8fbce0b079b0370224b4c135da7d3e1046ae661fb22",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2575,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 236
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:278",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 278,
+      "name": "'native batch followup reopens each original completed task and session once from one coordination topic'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "249c429cab6687bad2aa54dc080e2a56c3ef73bf1ea0a9e8f795c908c8587af9",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2715,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 288
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:350",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 350,
+      "name": "'普通回复显式多收件人贯穿原生通知格式化 quoted=' + quoted",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "cde88f253d4b3ac2ba8812c817be85debd10c53afcc440cdf08bd14dbba49603",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1619,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 362
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:391",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 391,
+      "name": "`旧回复冻结恢复 ${mode}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "533c53f790f84fa543c18720f6b8450f62c29897a5bf3dd3ff7e1e8398b02f9c",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 235,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 405
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:443",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 443,
+      "name": "'native task service preserves Topic routing, task association, ignored input and recovery idempotency'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "094f53b6d510346eacfca36502243c0a61a1f0bb5efaac3349a502e395cc26ce",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 283,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 458
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:584",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 584,
+      "name": "'Topic外发标识在接纳前被拒绝，原轮修改后只创建一项任务且保留业务编号链接'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "b3b4a1ac78cd5704d32950d6b863e63530ef82adefbd90ec6cc6c0e7818f1106",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1001,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 600
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:614",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 614,
+      "name": "'native Topic handoff keeps the explicit requester as task and completion notification owner'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "347a40f64bc7d53383c32bca14fc9cbb87d91768edc7a576ac9ae1f2f98803a2",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2336,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 632
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:669",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 669,
+      "name": "`replan fences an execution claim ${committed ? 'after commit' : 'before commit'}`",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "437904aefd9a747dc0c066a4b00b56c13e77da519e416bac721fd03114bdd284",
+      "cancelResolvers": [
+        "gate.resolve"
+      ],
+      "boundary": {
+        "offset": 1062,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 689
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:720",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 720,
+      "name": "'concurrent same-topic revision is busy while a different task makes progress'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "ca41fc83dfa679c38b5971939fda6fc7091cb0e296ec141e0a17754b71d32db1",
+      "cancelResolvers": [
+        "gate.resolve"
+      ],
+      "boundary": {
+        "offset": 646,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 743
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:762",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 762,
+      "name": "'failed old-drain ends its timing and releases admission for later work'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "98f3b80036b98a796511cc7cb776be8a14d0db9cd0acd0e4c63d6a6dfeb5394b",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 550,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 788
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:806",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 806,
+      "name": "'Web material failure recovers once and retries the same request without repeating work'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "0270034c1998b6216af591a6e70bb78617c3b79a6bb45cc02d8cdd81d283088f",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1958,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 833
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:879",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 879,
+      "name": "'Web replan blocks a new Owner while old-generation cancellation is in flight'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "4f0dca9b49ceecfdd53aed877fad2dfc5b964c1cbce68ae6d2d2cdba0a4b9271",
+      "cancelResolvers": [
+        "releaseQuery.resolve",
+        "releaseNew.resolve"
+      ],
+      "boundary": {
+        "offset": 1052,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 907
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:957",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 957,
+      "name": "'Web replan drains the old Owner without waiting for the new Owner'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1b5cda74da1317c3344fa8407f66a4a2c0c98c14376dda296855ed9ae88c3e03",
+      "cancelResolvers": [
+        "releaseOld.resolve",
+        "releaseNew.resolve"
+      ],
+      "boundary": {
+        "offset": 803,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 990
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:985",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 985,
+      "name": "'native Web Topic edits reject stale requirement and control revisions without changing task or topics'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "98011494613318b063dc4013bb76afd620a79d284cfafac2cf0a8324b175118d",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 284,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 1024
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:1013",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 1013,
+      "name": "'business notices 423–424 and named owners remain in the original Topic without assistant tasks or replies'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "1124cdeaef8ea76703883e3e723cd6489bafd7b69cfbb9167c2e2723ecbbe7c3",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1306,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 1054
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:1060",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 1060,
+      "name": "'scripted native aggregation keeps list requirements, screenshot delivery and later acceptance in one Topic and Task'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "766532a4db2e43940bb46851cfdfd2a2d49c83e0a34da7f1a301613a62ceaa3b",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 4105,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 1103
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:1128",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 1128,
+      "name": "'scripted native routing checks scope before reusing an old Topic and reconsiders a new technical matter'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "5dc8218ed53ee35c91df484ecab4e4ded23fc5ef1a2f080e24387c1c12aef4f3",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2061,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 1173
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:1180",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 1180,
+      "name": "'scripted native routing permits distinct delivery goals on the same page'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "b572d4f3d762e5906cfc9337ba1948240e0158d67500081d1dda7189d9cf4257",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1120,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 1227
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:1200",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 1200,
+      "name": "'native Topic context accepts a requirement that only mentions notification recipients'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "5bff11c1a0499d32f8d476fec0e5b514f2c79ca077e68da0452d7e8292e673f3",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 2425,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 1249
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:1246",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 1246,
+      "name": "'native proposal prompt preserves original authorization and asks without claiming task execution'",
+      "originalBudget": "15000",
+      "businessBudget": "15000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "3140e8be55d3192b36ba2ccd082a0f1138d7a78c1e4d841f7ab6741b33a4785d",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 1635,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(15000) + 40000",
+      "currentLine": 1297
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:1276",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 1276,
+      "name": "'native Web reopen preserves task identity and rejects stale input; HTTP retry is idempotent'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "23567950c32cc3b4a24bb6e53c92f1d45eb04248accc19de80cc67e514002064",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 3,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 1329
+    },
+    {
+      "id": "test/task-topic-routing-native.test.js:1305",
+      "file": "test/task-topic-routing-native.test.js",
+      "originalLine": 1305,
+      "name": "'协调暂停时混合消息拒绝协调来源，普通话题Host重试仍按原版本完成'",
+      "originalBudget": "30000",
+      "businessBudget": "30000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "056a698266a84444fcb5dbdea3be3619de49cd10686ee4e897433cc35662a6fb",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 265,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 1359
+    },
+    {
+      "id": "test/task-web-topic-reuse-native.test.js:11",
+      "file": "test/task-web-topic-reuse-native.test.js",
+      "originalLine": 11,
+      "name": "`Web maintenance preserves an unsubmitted Topic input${replaceVersion ? ' across source enrichment' : ''}`",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "5eda09ce82725f07e132d11d3bc240261d016b7a8693401aeb6a497c3d61e4e3",
+      "cancelResolvers": [
+        "release.resolve",
+        "finish.resolve"
+      ],
+      "boundary": {
+        "offset": 1486,
+        "reason": "initial empty Host is ready; all following work is business"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 12
+    },
+    {
+      "id": "test/task-web-topic-reuse-native.test.js:81",
+      "file": "test/task-web-topic-reuse-native.test.js",
+      "originalLine": 81,
+      "name": "'reopen reconsiders all five unapplied context messages at the current task version without replay'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "9b86f136cda8a2f9c7990236a0875159905a91773b8bb6ea891e4cab1d626cf5",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 355,
+        "reason": "serviceFactory executes business during Host construction"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 88
+    },
+    {
+      "id": "test/task-web-topic-reuse-native.test.js:152",
+      "file": "test/task-web-topic-reuse-native.test.js",
+      "originalLine": 152,
+      "name": "'web acceptance reuses existing topic and captures exact enriched source version with real image execution material'",
+      "originalBudget": "20000",
+      "businessBudget": "20000",
+      "newConstraint": false,
+      "sourceCallbackSha256": "7319b0106b2470504307df464f4ca286cf291fcc536adfa25c124021b955737a",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 263,
+        "reason": "serviceFactory executes business during Host construction"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(20000) + 40000",
+      "currentLine": 160
+    },
+    {
+      "id": "test/workflow-configuration.test.js:263",
+      "file": "test/workflow-configuration.test.js",
+      "originalLine": 263,
+      "name": "'真实Resident以task-session启动，旧workflow配置HTTP返回410且保留历史凭据'",
+      "originalBudget": null,
+      "businessBudget": "30000",
+      "newConstraint": true,
+      "sourceCallbackSha256": "bde59e67cfde4184acd1c8dffa877ade807d1dd26607743d2d33984493b0ce8e",
+      "cancelResolvers": [],
+      "boundary": {
+        "offset": 261,
+        "reason": "first business/control statement"
+      },
+      "status": "migrated",
+      "preparationMs": 30000,
+      "cleanupMs": 10000,
+      "outerBudget": "(30000) + 40000",
+      "currentLine": 264
+    }
+  ]
+}

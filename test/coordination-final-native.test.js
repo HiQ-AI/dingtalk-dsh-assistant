@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
@@ -55,21 +56,22 @@ function readOnlyModel(request) {
 }
 
 test('expired historical query remains audit-only after restart; a current read replies once without reopening its Task',
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
-    const f = await retiredCoordinationHost(t, { name: 'final-expired-native-', tasks: [{ taskId: 'A', request: '原目标' }], rows: rows(), decide: readOnlyModel })
-    const before = await f.host.query('task.get', { taskId: 'A' }), wakes = await f.host.query('wake.list', { taskId: 'A' })
+    await t.beginBusiness()
+    const f = await t.step(async () => retiredCoordinationHost(t, { name: 'final-expired-native-', tasks: [{ taskId: 'A', request: '原目标' }], rows: rows(), decide: readOnlyModel }))
+    const before = await t.step(async () => f.host.query('task.get', { taskId: 'A' })), wakes = await t.step(async () => f.host.query('wake.list', { taskId: 'A' }))
     assert.equal(before.status, 'completed')
     t.mock.timers.tick(76 * 60000)
-    await f.host.service.recover(); await f.host.service.whenIdle()
+    await t.step(async () => f.host.service.recover()); await t.step(async () => f.host.service.whenIdle())
     assert.equal(f.host.sent.length, 0, 'Expiry cannot reactivate the retired scheduler or publish its old result')
-    assert.equal((await f.host.query('notification.get', { notificationId: oldNotice.id })).state, 'superseded')
-    const source = (await f.host.query('coordination.source.list'))[0]
+    assert.equal((await t.step(async () => f.host.query('notification.get', { notificationId: oldNotice.id }))).state, 'superseded')
+    const source = (await t.step(async () => f.host.query('coordination.source.list')))[0]
     assert.equal(source.original, original); assert.equal(source.state, 'accepted')
-    const history = await f.host.query('coordination.occurrence.list')
+    const history = await t.step(async () => f.host.query('coordination.occurrence.list'))
     assert.equal(history.length, 1); assert.equal(history[0].actionState, 'pending', 'Retirement does not manufacture an expired execution')
     const query = message('current-query', '测试助手，只读核对原材料当前完成情况。')
-    await f.host.service.ingest(query); await f.host.service.whenIdle()
+    await t.step(async () => f.host.service.ingest(query)); await t.step(async () => f.host.service.whenIdle())
     assert.equal(f.host.sent.length, 1, JSON.stringify(f.host.service.listAlerts()))
     const notice = f.host.sent[0]
     assert.equal(notice.kind, 'topic-reply'); assert.equal(notice.payload.sourceMessageId, query.messageId)
@@ -77,20 +79,20 @@ test('expired historical query remains audit-only after restart; a current read 
     assert.match(notice.payload.text, /原材料已核验/)
     assert.ok(f.host.toolResults.some(item => item.name === 'group_task_context_get' && JSON.stringify(item.result).includes('original-completion')),
       'The reply must be based on an actual successful scoped Task read, not merely visible tools')
-    assert.equal((await f.host.query('notification.get', { notificationId: notice.id })).state, 'delivered')
-    assert.deepEqual(await f.host.query('task.get', { taskId: 'A' }), before)
-    assert.deepEqual(await f.host.query('wake.list', { taskId: 'A' }), wakes)
-    await f.restart()
-    await Promise.all([f.host.service.recover(), f.host.service.ingest(query)]); await f.host.service.whenIdle()
+    assert.equal((await t.step(async () => f.host.query('notification.get', { notificationId: notice.id }))).state, 'delivered')
+    assert.deepEqual(await t.step(async () => f.host.query('task.get', { taskId: 'A' })), before)
+    assert.deepEqual(await t.step(async () => f.host.query('wake.list', { taskId: 'A' })), wakes)
+    await t.step(async () => f.restart())
+    await t.step(async () => Promise.all([f.host.service.recover(), f.host.service.ingest(query)])); await t.step(async () => f.host.service.whenIdle())
     assert.equal(f.host.sent.length, 0)
-    assert.deepEqual(await f.host.query('coordination.occurrence.list'), history)
-    assert.deepEqual(await f.host.query('task.get', { taskId: 'A' }), before)
+    assert.deepEqual(await t.step(async () => f.host.query('coordination.occurrence.list')), history)
+    assert.deepEqual(await t.step(async () => f.host.query('task.get', { taskId: 'A' })), before)
     const outbox = f.host.residentStore.getGroup('native-group').outbox.filter(item => item.outboundId === notice.id)
     assert.equal(outbox.length, 1); assert.equal(outbox[0].notificationState, 'delivered')
-  })
+  }))
 
 test('competing actual ingress and recovery supplement one current Task and preserve its source receipt after restart',
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'final-ingress-native-'))
     let host, decisions = 0
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
@@ -116,21 +118,22 @@ test('competing actual ingress and recovery supplement one current Task and pres
         action: 'wait', summary: '原目标不变，保留定位材料', evidence: [], limitations: [],
       } } }]
     }
-    host = await nativeTaskHost(root, decide)
-    await host.service.store.command({ id: 'seed', kind: 'task.create', args: {
+    await t.beginBusiness()
+    host = await t.step(async () => nativeTaskHost(root, decide))
+    await t.step(async () => host.service.store.command({ id: 'seed', kind: 'task.create', args: {
       taskId: 'A', groupId: 'native-group', ownerActorId: 'native-user', request: '原目标',
-    } })
-    await host.service.recover(); await host.service.whenIdle()
-    const before = await host.query('task.get', { taskId: 'A' })
+    } }))
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    const before = await t.step(async () => host.query('task.get', { taskId: 'A' }))
     const input = { ...message('same', '测试助手，给原任务补充唯一定位材料。'), senderOpenDingTalkId: 'native-user' }
-    await Promise.all([host.service.ingest(input), host.service.ingest(input), host.service.recover()]); await host.service.whenIdle()
+    await t.step(async () => Promise.all([host.service.ingest(input), host.service.ingest(input), host.service.recover()])); await t.step(async () => host.service.whenIdle())
     assert.equal(decisions, 1, JSON.stringify(host.service.listAlerts()))
-    const after = await host.query('task.get', { taskId: 'A' })
+    const after = await t.step(async () => host.query('task.get', { taskId: 'A' }))
     assert.equal(after.contextRevision, 1); assert.equal(after.sessionId, before.sessionId)
     assert.equal(after.requirementRevision, before.requirementRevision); assert.equal(after.runSequence, before.runSequence)
-    const sources = (await host.query('source.list')).filter(item => item.messageId === 'same')
+    const sources = (await t.step(async () => host.query('source.list'))).filter(item => item.messageId === 'same')
     assert.equal(sources.length, 1); assert.equal(sources[0].text, input.text)
-    assert.deepEqual(await host.query('coordination.list'), [])
+    assert.deepEqual(await t.step(async () => host.query('coordination.list')), [])
     const topic = host.residentStore.listTopics('native-group')[0]
     // Persistence omits transient undefined diagnostic properties, preserving
     // the complete JSON decision, operation proof and delivery identity.
@@ -138,51 +141,52 @@ test('competing actual ingress and recovery supplement one current Task and pres
     assert.equal(receipt.status, 'completed'); assert.equal(receipt.decision.actions[0].taskId, 'A')
     const notice = host.sent.find(item => item.payload.sourceMessageId === 'same')
     assert.equal(notice?.kind, 'topic-reply'); assert.deepEqual(notice.payload.atOpenDingTalkIds, ['native-user'])
-    await host.close(); host = await nativeTaskHost(root, decide, { initialize: false })
-    await Promise.all([host.service.recover(), host.service.ingest(input)]); await host.service.whenIdle()
+    await t.step(async () => host.close()); host = await t.step(async () => nativeTaskHost(root, decide, { initialize: false }))
+    await t.step(async () => Promise.all([host.service.recover(), host.service.ingest(input)])); await t.step(async () => host.service.whenIdle())
     assert.equal(decisions, 1); assert.equal(host.sent.length, 0)
-    assert.equal((await host.query('task.get', { taskId: 'A' })).contextRevision, 1)
+    assert.equal((await t.step(async () => host.query('task.get', { taskId: 'A' }))).contextRevision, 1)
     assert.deepEqual(host.residentStore.getTopic('native-group', topic.topicId).decisions.at(-1), receipt)
-    assert.equal((await host.query('task.list')).length, 1)
-  })
+    assert.equal((await t.step(async () => host.query('task.list'))).length, 1)
+  }))
 
 for (const topology of ['closed', 'deleted']) test(`retired query cannot refresh or misaddress a current reply after restart with ${topology} optional Topic`,
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
-    const f = await retiredCoordinationHost(t, { name: 'final-topology-native-', tasks: [{ taskId: 'A', request: '原目标' }], rows: rows(), decide: readOnlyModel })
-    const before = await f.host.query('task.get', { taskId: 'A' })
-    await f.host.residentStore.ingest({ ...message('context', '仅历史对话上下文'), occurredAt: '2026-10-21T00:00:00Z' })
-    await f.host.residentStore.routeMessages({ groupId: 'native-group', routeId: 'context-route', routingRevision: 0,
-      routes: [{ messageId: 'context', messageVersion: 1, topics: [{ newTopicKey: 'optional', title: '历史查询上下文' }] }] })
+    await t.beginBusiness()
+    const f = await t.step(async () => retiredCoordinationHost(t, { name: 'final-topology-native-', tasks: [{ taskId: 'A', request: '原目标' }], rows: rows(), decide: readOnlyModel }))
+    const before = await t.step(async () => f.host.query('task.get', { taskId: 'A' }))
+    await t.step(async () => f.host.residentStore.ingest({ ...message('context', '仅历史对话上下文'), occurredAt: '2026-10-21T00:00:00Z' }))
+    await t.step(async () => f.host.residentStore.routeMessages({ groupId: 'native-group', routeId: 'context-route', routingRevision: 0,
+      routes: [{ messageId: 'context', messageVersion: 1, topics: [{ newTopicKey: 'optional', title: '历史查询上下文' }] }] }))
     const topicId = f.host.residentStore.listTopics('native-group')[0].topicId
     // Isolated pre-upgrade outbox and Topic lifecycle facts, not a runtime deletion API.
-    await projectTaskNotification({ residentStore: f.host.residentStore,
-      notification: { ...oldNotice, payload: { ...oldNotice.payload, topicRefs: [{ topicId, revision: 1 }] } } })
+    await t.step(async () => projectTaskNotification({ residentStore: f.host.residentStore,
+      notification: { ...oldNotice, payload: { ...oldNotice.payload, topicRefs: [{ topicId, revision: 1 }] } } }))
     const groups = f.host.ctx.storageDomain.get(residentDomainSpec.name).table('groups')
     const group = structuredClone(groups.get('native-group'))
     if (topology === 'deleted') group.topics = []
     else group.topics[0].status = 'closed'
-    await groups.put('native-group', group)
-    t.mock.timers.tick(76 * 60000); await f.restart()
-    await f.host.service.recover(); await f.host.service.whenIdle()
-    const retired = await f.host.query('notification.get', { notificationId: oldNotice.id })
+    await t.step(async () => groups.put('native-group', group))
+    t.mock.timers.tick(76 * 60000); await t.step(async () => f.restart())
+    await t.step(async () => f.host.service.recover()); await t.step(async () => f.host.service.whenIdle())
+    const retired = await t.step(async () => f.host.query('notification.get', { notificationId: oldNotice.id }))
     assert.equal(retired.state, 'superseded'); assert.deepEqual(retired.payload, oldNotice.payload)
     assert.equal(f.host.sent.length, 0, 'An unavailable Topic cannot revive a retired prepared notification')
     const query = message('new-read', '测试助手，只读核对原材料现状，请回复当前查询。')
-    await f.host.service.ingest(query); await f.host.service.whenIdle()
+    await t.step(async () => f.host.service.ingest(query)); await t.step(async () => f.host.service.whenIdle())
     assert.equal(f.host.sent.length, 1, JSON.stringify(f.host.service.listAlerts()))
     const current = f.host.sent[0]
     assert.notEqual(current.id, oldNotice.id)
     assert.equal(current.payload.sourceMessageId, query.messageId)
     assert.deepEqual(current.payload.atOpenDingTalkIds, ['current-reader'])
     assert.notEqual(current.payload.replyTopicId, topicId)
-    assert.deepEqual(await f.host.query('task.get', { taskId: 'A' }), before)
+    assert.deepEqual(await t.step(async () => f.host.query('task.get', { taskId: 'A' })), before)
     const oldOutbound = f.host.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === oldNotice.id)
     assert.equal(oldOutbound.status, 'superseded'); assert.equal(oldOutbound.text, oldNotice.payload.text)
-    const occurrence = (await f.host.query('coordination.occurrence.list'))[0]
+    const occurrence = (await t.step(async () => f.host.query('coordination.occurrence.list')))[0]
     assert.equal(occurrence.resultVersion, 1); assert.equal(occurrence.deliveryState, 'pending')
-    await f.restart(); await f.host.service.recover(); await f.host.service.whenIdle()
+    await t.step(async () => f.restart()); await t.step(async () => f.host.service.recover()); await t.step(async () => f.host.service.whenIdle())
     assert.equal(f.host.sent.length, 0)
-    assert.equal((await f.host.query('notification.get', { notificationId: current.id })).state, 'delivered')
-    assert.equal((await f.host.query('task.get', { taskId: 'A' })).runSequence, before.runSequence)
-  })
+    assert.equal((await t.step(async () => f.host.query('notification.get', { notificationId: current.id }))).state, 'delivered')
+    assert.equal((await t.step(async () => f.host.query('task.get', { taskId: 'A' }))).runSequence, before.runSequence)
+  }))

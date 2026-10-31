@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
+import { rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { available, reason, nativeTaskHost, latestInput, modelToolValues, resolveContextInput, waitUntil } from './fixtures/task-session-native-host.js'
@@ -10,15 +11,16 @@ import { createTaskSessions } from '../packages/dingtalk-dsh-assistant/task-sess
 const call = (name, args) => ({ name, args })
 const submit = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: [], limitations: [] } })
 
-test('原生资源目录工具驱动准备到发布的原会话续办，目录别名实际落为canonical锁', { skip: !available ? reason : false, timeout: 60000 }, async t => {
+test('原生资源目录工具驱动准备到发布的原会话续办，目录别名实际落为canonical锁', { ...({ skip: !available ? reason : false, timeout: 60000 }), timeout: nativeLifecycleTimeout(60000) }, nativeLifecycle(60000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-resource-stage-'))
-  await mkdir(join(root, '.dsh'))
-  await writeFile(join(root, '.dsh', 'shared-resources.json'), JSON.stringify({ version: 1, resources: [
+  await t.beginBusiness()
+  await t.step(async () => mkdir(join(root, '.dsh')))
+  await t.step(async () => writeFile(join(root, '.dsh', 'shared-resources.json'), JSON.stringify({ version: 1, resources: [
     { key: 'publish:example:uat', aliases: ['old:uat'], purpose: 'publication', description: '隔离测试发布目标' },
-  ] }))
+  ] })))
   let catalogRead = false
   const readRounds = new Set(), observed = []
-  const h = await nativeTaskHost(root, async request => {
+  const h = await t.step(async () => nativeTaskHost(root, async request => {
     const input = latestInput(request)
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
       if (!catalogRead) { catalogRead = true; return [call('task_resource_catalog', {})] }
@@ -38,11 +40,11 @@ test('原生资源目录工具驱动准备到发布的原会话续办，目录�
     assert.ok(snapshot)
     observed.push(snapshot)
     return [call('execution_submit', { output: { status: 'completed', summary: '已核对本轮阶段与资源', evidence: [], limitations: [], artifacts: [] } })]
-  })
+  }))
   t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'native-resource-stage', objective: '准备后再联合取得发布资源，复用原执行' })
-  await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'native-resource-stage', objective: '准备后再联合取得发布资源，复用原执行' }))
+  await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed', JSON.stringify(h.service.listAlerts()))
   assert.equal(observed.length, 2)
   assert.equal(observed[0].resourcePhase, 'prepare')
   assert.equal(observed[0].resources.state, 'none')
@@ -51,34 +53,36 @@ test('原生资源目录工具驱动准备到发布的原会话续办，目录�
   assert.deepEqual(observed[1].resources.keys, ['publish:example:uat'])
   assert.equal(observed[1].executionId, observed[0].executionId)
   assert.equal(observed[1].sessionId, observed[0].sessionId)
-  assert.equal((await h.query('execution.list', { taskId: task.taskId })).length, 1)
-  assert.deepEqual(await h.query('resource.list'), [])
-  assert.deepEqual(await h.query('operation.list'), [])
+  assert.equal((await t.step(async () => h.query('execution.list', { taskId: task.taskId }))).length, 1)
+  assert.deepEqual(await t.step(async () => h.query('resource.list')), [])
+  assert.deepEqual(await t.step(async () => h.query('operation.list')), [])
   assert.equal(h.toolResults.some(item => item.result.isError), false)
-})
+}))
 
-test('旧执行缺resourcePhase时原生读取仍为lossless JSON，旧Host未提供目录回调可只读空目录', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+test('旧执行缺resourcePhase时原生读取仍为lossless JSON，旧Host未提供目录回调可只读空目录', { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-resource-legacy-view-'))
   let step = 0
   const h = await nativeTaskHost(root, async () => step++ === 0
     ? [call('task_resource_catalog', {}), call('task_execution_read', { executionId: 'legacy-execution' })]
     : [submit('wait', '旧执行读取成功')], { resident: true })
+    await t.beginBusiness()
+
   const manager = createTaskSessions({ ctx: h.ctx, isCurrent: async () => true, getWorkspaceDir: async () => root })
   t.after(async () => { try { await manager.close(); await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const result = await manager.run({ binding: { kind: 'task-session', taskId: 'legacy-task', sessionId: 'legacy-owner', leaseEpoch: 1, sessionBound: false },
+  const result = await t.step(async () => manager.run({ binding: { kind: 'task-session', taskId: 'legacy-task', sessionId: 'legacy-owner', leaseEpoch: 1, sessionBound: false },
     provider: 'native-task-test', model: 'controlled', agentPreset: 'native-test', input: { task: { title: '旧执行读取', objective: '保留历史记录' }, wakes: [] },
     onSessionBound: async () => {}, submit: async () => ({ accepted: true }),
     readExecution: async () => ({ executionId: 'legacy-execution', inputVersion: 1, status: 'succeeded', document: null,
       resources: { state: 'released', keys: [], holder: null, blocking: [] } }),
-  })
+  }))
   assert.equal(result.status, 'submitted')
   const reads = h.toolResults.filter(item => ['task_resource_catalog', 'task_execution_read'].includes(item.name))
   assert.equal(reads.length, 2)
   assert.ok(reads.every(item => !item.result.isError), JSON.stringify(reads))
-})
+}))
 
 // 真实 Host 和账本串联两轮同会话续办；模型只脚本化选工具，不伪造资源回执。
-for (const resourceKeys of [['uat2'], []]) test(`执行原生工具读取自身租约并在续办刷新，初始资源=${resourceKeys.join(',') || 'none'}`, { skip: !available ? reason : false, timeout: 60000 }, async t => {
+for (const resourceKeys of [['uat2'], []]) test(`执行原生工具读取自身租约并在续办刷新，初始资源=${resourceKeys.join(',') || 'none'}`, { ...({ skip: !available ? reason : false, timeout: 60000 }), timeout: nativeLifecycleTimeout(60000) }, nativeLifecycle(60000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-own-resources-'))
   const observed = []
   let executorCalls = 0, reviewDispatched = false
@@ -115,10 +119,12 @@ for (const resourceKeys of [['uat2'], []]) test(`执行原生工具读取自身�
     observed.push(value)
     return [call('execution_submit', { output: { status: 'completed', summary: '已核对自身当前租约', evidence: [], limitations: [], artifacts: [] } })]
   })
+  await t.beginBusiness()
+
   t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: `own-resources-${resourceKeys.length}`, objective: '只读核验自身资源，分两轮执行' })
-  await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: `own-resources-${resourceKeys.length}`, objective: '只读核验自身资源，分两轮执行' }))
+  await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed')
   assert.equal(observed.length, 2)
   assert.equal(observed[0].resources.state, resourceKeys.length ? 'held' : 'none')
   assert.deepEqual(observed[0].resources.keys, resourceKeys)
@@ -128,18 +134,20 @@ for (const resourceKeys of [['uat2'], []]) test(`执行原生工具读取自身�
   assert.ok(observed[1].leaseEpoch > observed[0].leaseEpoch)
   assert.deepEqual(observed[1].resources.keys, ['uat3'])
   assert.equal(observed[1].resources.holder, `execution:${observed[1].executionId}`)
-  const [execution] = await h.query('execution.list', { taskId: task.taskId })
+  const [execution] = await t.step(async () => h.query('execution.list', { taskId: task.taskId }))
   assert.deepEqual(execution.feedback ?? [], [], '不需要统筹反馈补发持锁证明')
-  assert.deepEqual(await h.query('operation.list', { taskId: task.taskId }), [], '内部只读工具不生成外部操作')
-  assert.deepEqual((await h.query('task.get', { taskId: task.taskId })).humanRequests, [])
+  assert.deepEqual(await t.step(async () => h.query('operation.list', { taskId: task.taskId })), [], '内部只读工具不生成外部操作')
+  assert.deepEqual((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).humanRequests, [])
   const reads = h.toolResults.filter(item => item.name === 'execution_resources_read')
   assert.equal(reads.length, 3)
   assert.equal(reads[0].result.isError, true, '模型不能指定其他 executionId')
-})
+}))
 
-for (const maxConcurrentExecutions of [1, 3]) test(`同任务原生定向通信持久消费且不重启终态成员：并发${maxConcurrentExecutions}`, { skip: !available ? reason : false, timeout: 60000 }, async t => {
+for (const maxConcurrentExecutions of [1, 3]) test(`同任务原生定向通信持久消费且不重启终态成员：并发${maxConcurrentExecutions}`, { ...({ skip: !available ? reason : false, timeout: 60000 }), timeout: nativeLifecycleTimeout(60000) }, nativeLifecycle(60000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-peer-messages-'))
   const sent = Promise.withResolvers(), receipts = [], steps = new Map()
+t.onCancel(() => sent.resolve())
+
   t.after(() => sent.resolve())
   const done = summary => call('execution_submit', { output: { status: 'completed', summary, evidence: [], limitations: [], artifacts: [] } })
   const h = await nativeTaskHost(root, async (request, host) => {
@@ -191,11 +199,13 @@ for (const maxConcurrentExecutions of [1, 3]) test(`同任务原生定向通信�
     assert.ok(values.some(item => item.received === false && item.reason === 'recipient_finished'))
     return [done('已核对终态不自动重启')]
   }, { config: { maxConcurrentExecutions } })
+  await t.beginBusiness()
+
   t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: `peer-${maxConcurrentExecutions}`, objective: '三成员按固定接口交换必要证据并核对状态' })
-  await h.service.whenIdle()
-  const executions = await h.query('execution.list', { taskId: task.taskId }), receiver = executions.find(item => item.key === 'consumer')
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed')
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: `peer-${maxConcurrentExecutions}`, objective: '三成员按固定接口交换必要证据并核对状态' }))
+  await t.step(async () => h.service.whenIdle())
+  const executions = await t.step(async () => h.query('execution.list', { taskId: task.taskId })), receiver = executions.find(item => item.key === 'consumer')
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed')
   assert.equal(executions.length, 3)
   assert.equal(receiver.inputVersion, 1)
   assert.equal(receiver.leaseEpoch, 1)
@@ -204,14 +214,14 @@ for (const maxConcurrentExecutions of [1, 3]) test(`同任务原生定向通信�
   assert.ok(Number.isInteger(receiver.feedback[0].sequence))
   assert.ok(receipts.some(item => item.messageId === receiver.feedback[0].id))
   const producer = executions.find(item => item.key === 'producer')
-  const producerHistory = await inspectSession(h.ctx.sessionPersistence, producer.sessionId)
+  const producerHistory = await t.step(async () => inspectSession(h.ctx.sessionPersistence, producer.sessionId))
   const sends = producerHistory.events.filter(item => item.type === 'tool/call' && item.data.name === 'execution_send_message')
   assert.equal(sends.length, 2, '原生模型确实重试同一消息')
   assert.deepEqual(JSON.parse(sends[0].data.arguments), JSON.parse(sends[1].data.arguments))
   assert.equal(h.toolResults.filter(item => item.name === 'execution_send_message' && !item.result.isError).length, 3, '两次幂等发送及一次终态回执均成功返回')
-  const history = await inspectSession(h.ctx.sessionPersistence, receiver.sessionId)
+  const history = await t.step(async () => inspectSession(h.ctx.sessionPersistence, receiver.sessionId))
   const messages = history.events.filter(item => item.type === 'user/message' && item.data.source?.kind === 'execution-peer')
   assert.equal(messages.length, 1)
   assert.equal(messages[0].seq, receiver.feedback[0].sequence)
-  assert.deepEqual(await h.query('operation.list', { taskId: task.taskId }), [], '内部通信不生成外部效果账')
-})
+  assert.deepEqual(await t.step(async () => h.query('operation.list', { taskId: task.taskId })), [], '内部通信不生成外部效果账')
+}))

@@ -1,7 +1,8 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import { lifecycleStages } from './fixtures/lifecycle-stages.js'
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { createServer } from 'node:net'
@@ -16,12 +17,13 @@ import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { taskNotificationRecovery } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
 
-testRunner('same-host recovery drains the original native process without replaying an unknown operation', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+testRunner('same-host recovery drains the original native process without replaying an unknown operation', { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-drain-retry-'))
   const store = await openDynamicTaskStore({ dbPath: join(root, 'dynamic.db'), instanceId: 'native-test', initialize: true })
   let h, delegated = false, requested = false, ready = false, rejectCommit = false, launches = 0, waits = 0
   t.after(async () => { await h?.close().catch(() => {}); await store.close(); await rm(root, { recursive: true, force: true }) })
-  h = await nativeTaskHost(root, request => {
+  await t.beginBusiness()
+  h = await t.step(async () => nativeTaskHost(root, request => {
     const topics = topicTaskCalls(request); if (topics) return topics
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
       if (!delegated) { delegated = true; return [{ name: 'task_delegate', args: { key: 'original', objective: '只读取本地标识并保留原始回执' } }] }
@@ -51,36 +53,37 @@ testRunner('same-host recovery drains the original native process without replay
       } })
     }
     return openTaskSessionService(options)
-  } })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'drain-retry', objective: '读取本地标识' })
-  await h.service.whenIdle()
+  } }))
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'drain-retry', objective: '读取本地标识' }))
+  await t.step(async () => h.service.whenIdle())
   assert.equal(launches, 1, JSON.stringify(h.toolResults.filter(item => item.name === nativeShell)))
-  const held = await waitUntil(async () => (await h.query('execution.list', { taskId: task.taskId })).find(item => item.recovering), 'original drain failure recorded')
+  const held = await t.step(async () => waitUntil(async () => (await h.query('execution.list', { taskId: task.taskId })).find(item => item.recovering), 'original drain failure recorded'))
   assert.equal(held.drained, false)
   assert.equal(held.drainFailure.error.cause.phase, 'waitForExit')
   assert.match(held.drainFailure.error.cause.cause.message, /fixture range observation unavailable/)
-  const operations = await h.query('operation.list', { taskId: task.taskId })
+  const operations = await t.step(async () => h.query('operation.list', { taskId: task.taskId }))
   assert.equal(operations.length, 1); assert.equal(operations[0].state, 'unknown')
-  await h.service.recover(); await h.service.whenIdle()
-  assert.equal((await h.query('execution.get', { executionId: held.executionId })).drained, false)
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('execution.get', { executionId: held.executionId }))).drained, false)
   ready = true; rejectCommit = true
-  await h.service.recover(); await h.service.whenIdle()
-  assert.equal((await h.query('execution.get', { executionId: held.executionId })).drained, false, 'physical proof alone cannot settle the ledger')
-  await Promise.all([h.service.recover(), h.service.recover()]); await h.service.whenIdle()
-  const drained = await h.query('execution.get', { executionId: held.executionId })
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('execution.get', { executionId: held.executionId }))).drained, false, 'physical proof alone cannot settle the ledger')
+  await t.step(async () => Promise.all([h.service.recover(), h.service.recover()])); await t.step(async () => h.service.whenIdle())
+  const drained = await t.step(async () => h.query('execution.get', { executionId: held.executionId }))
   assert.equal(drained.drained, true); assert.equal(drained.recovering, false)
   assert.deepEqual(drained.result, held.result)
   assert.ok(drained.drainFailure.recoveredAt)
   assert.equal(launches, 1); assert.equal(waits, 3)
-  assert.deepEqual(await h.query('operation.list', { taskId: task.taskId }), operations)
-})
+  assert.deepEqual(await t.step(async () => h.query('operation.list', { taskId: task.taskId })), operations)
+}))
 
-testRunner('原生网页工具错误不建立未知效果，仍可完成后续读取', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+testRunner('原生网页工具错误不建立未知效果，仍可完成后续读取', { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
  const root=await mkdtemp(join(tmpdir(),'native-web-read-'))
  let host, delegated=false, calls=0
  const team=nativeVerificationTeam()
  t.after(async()=>{await host?.close();await rm(root,{recursive:true,force:true})})
- host=await nativeTaskHost(root, async(request,h)=>{
+ await t.beginBusiness()
+ host=await t.step(async () => nativeTaskHost(root, async(request,h)=>{
   const topics=topicTaskCalls(request);if(topics)return topics
   const input=latestInput(request), names=request.tools.map(tool=>tool.name)
   const verification=team.execute(request,input);if(verification)return verification
@@ -98,13 +101,13 @@ testRunner('原生网页工具错误不建立未知效果，仍可完成后续�
   if(calls===0)return [{name:'web_fetch',args:{}}]
   if(calls===1)return [{name:'web_search',args:{}}]
   return [{name:'execution_submit',args:{output:{status:'completed',summary:'已记录两次读取失败',evidence:[],limitations:['内容不可读'],artifacts:[]}}}]
- })
- await host.service.ingest({groupId:'native-group',messageId:'web-failure',senderOpenDingTalkId:'native-user',text:'测试助手，读取并报告结果',timestamp:'2026-10-13T11:00:00Z'})
- await host.service.whenIdle()
- assert.equal(calls,2);assert.equal((await host.query('operation.list')).length,0)
- assert.equal((await host.query('task.list'))[0].status,'completed')
- assert.equal((await host.query('task.list'))[0].humanRequests?.length ?? 0,0)
-})
+ }))
+ await t.step(async () => host.service.ingest({groupId:'native-group',messageId:'web-failure',senderOpenDingTalkId:'native-user',text:'测试助手，读取并报告结果',timestamp:'2026-10-13T11:00:00Z'}))
+ await t.step(async () => host.service.whenIdle())
+ assert.equal(calls,2);assert.equal((await t.step(async () => host.query('operation.list'))).length,0)
+ assert.equal((await t.step(async () => host.query('task.list')))[0].status,'completed')
+ assert.equal((await t.step(async () => host.query('task.list')))[0].humanRequests?.length ?? 0,0)
+}))
 import { projectTaskNotification } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 import { findSessionLog, requestSystemText } from './fixtures/session-persistence.js'
 
@@ -112,7 +115,7 @@ const call = (name, args) => ({ name, args })
 const test = (name, options, run) => testRunner(name, { ...options, ...(!available ? { skip: reason } : {}) }, run)
 const decision = (action, summary) => call('task_session_submit', { decision: { action, summary, evidence: ['实际文件和进程输出已核验'], limitations: [] } })
 
-test('native DWS observer binds send and status operations, filters early echoes and persists exact identities', { timeout: 20000 }, async t => {
+test('native DWS observer binds send and status operations, filters early echoes and persists exact identities', { ...({ timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const fixture = await nativeCase(t, 'native-dws-receipts-')
   const launched = Promise.withResolvers(), allowAck = Promise.withResolvers(), allowStatus = Promise.withResolvers()
   let delegated = false, h, probes = 0
@@ -145,25 +148,26 @@ test('native DWS observer binds send and status operations, filters early echoes
   const options = { config: { assistantActorId: 'native-assistant' }, serviceFactory: options => openTaskSessionService({ ...options, executionSessions: executor }),
     notifications: { send: async () => assert.fail('This test must not dispatch a notification'), readback: async () => undefined,
       querySendStatus: async id => { assert.equal(id, 'trusted-send'); return ++probes === 1 ? { ...status(), result: { sendStatus: 'PROCESSING' } } : status() } } }
-  h = await fixture.host(async (request, host) => {
+  await t.beginBusiness()
+  h = await t.step(async () => fixture.host(async (request, host) => {
     const input = latestInput(request)
     if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
       routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, units: [], ignoredRefs: [{ quote: message.text, reason: '人工测试消息无任务' }] })) } }]
     if (!delegated) { delegated = true; return [call('task_delegate', { key: 'send', objective: '观察受信发送回执' }), decision('wait', '等待发送观察')] }
     const [execution] = await host.query('execution.list', { taskId: input.task.taskId })
     return [decision(execution?.drained && execution.status === 'succeeded' ? 'complete' : 'wait', '核对发送观察结果')]
-  }, options)
-  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'native-send', objective: '观察明确授权的发送及成功状态' })
-  await launched.promise
+  }, options))
+  const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'native-send', objective: '观察明确授权的发送及成功状态' }))
+  await t.step(async () => launched.promise)
   const echo = { groupId: 'native-group', messageId: 'sent-file', senderOpenDingTalkId: 'native-assistant', text: '[文件] accepted.png', timestamp: new Date().toISOString() }
   const early = h.service.ingest(echo)
   allowAck.resolve()
-  assert.equal((await early).reason, 'own-notification')
-  allowStatus.resolve(); await h.service.whenIdle()
+  assert.equal((await t.step(async () => early)).reason, 'own-notification')
+  allowStatus.resolve(); await t.step(async () => h.service.whenIdle())
   const outbox = h.residentStore.getGroup('native-group').outbox
   assert.equal(outbox.length, 1); assert.equal(outbox[0].deliveredMessageId, 'sent-file')
   assert.equal(outbox[0].sendReceipt.openTaskId, 'trusted-send')
-  const operations = await h.query('operation.list', { taskId: created.taskId })
+  const operations = await t.step(async () => h.query('operation.list', { taskId: created.taskId }))
   assert.ok(operations.some(operation => operation.result?.nativeDwsSend?.openTaskId === 'trusted-send'))
   assert.ok(operations.some(operation => operation.result?.nativeDwsStatuses?.some(proof => proof.messageId === 'sent-file')))
   for (const id of ['failed-read', 'cancelled-read']) {
@@ -171,19 +175,19 @@ test('native DWS observer binds send and status operations, filters early echoes
     assert.equal(operation.state, 'failed'); assert.equal(operation.result.noEffect, true)
     assert.equal(operation.result.nativeDwsStatuses, undefined)
   }
-  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
-  assert.equal((await h.service.ingest({ ...echo, messageId: 'manual-same-body', messageAiSendFlag: 'DWS' })).accepted, true)
-  await h.service.whenIdle()
-  const sources = await h.query('source.list')
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: created.taskId }))).status, 'completed')
+  assert.equal((await t.step(async () => h.service.ingest({ ...echo, messageId: 'manual-same-body', messageAiSendFlag: 'DWS' }))).accepted, true)
+  await t.step(async () => h.service.whenIdle())
+  const sources = await t.step(async () => h.query('source.list'))
   assert.equal(sources.filter(source => source.messageId === 'manual-same-body').length, 1)
   assert.equal(sources.some(source => source.messageId === 'sent-file'), false, 'The echo never reaches semantic ingress')
-  await h.close()
-  h = await fixture.host(() => { throw new Error('Receipt recovery must not invoke models') }, { ...options, initialize: false })
-  assert.equal((await h.service.ingest(echo)).reason, 'own-notification')
+  await t.step(async () => h.close())
+  h = await t.step(async () => fixture.host(() => { throw new Error('Receipt recovery must not invoke models') }, { ...options, initialize: false }))
+  assert.equal((await t.step(async () => h.service.ingest(echo))).reason, 'own-notification')
   assert.equal(h.residentStore.getGroup('native-group').outbox.length, 1)
-})
+}))
 
-test('native completion freezes files and resumes remaining delivery after the explanation is archived', { timeout: 20000 }, async t => {
+test('native completion freezes files and resumes remaining delivery after the explanation is archived', { ...({ timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const fixture = await nativeCase(t, 'native-final-files-')
   let delegated = false, step = 0
   const h = await fixture.host(async (request, host) => {
@@ -200,62 +204,65 @@ test('native completion freezes files and resumes remaining delivery after the e
     return [call('execution_submit', { output: { status: 'completed', summary: '本地验收文件已生成', evidence: ['acceptance.txt'], limitations: [], artifacts: ['acceptance.txt'] } })]
   }, { notifications: { send: async () => ({ messageId: 'summary' }), readback: async () => undefined,
     sendFile: async () => assert.fail('Files must wait for the final explanation receipt'), readbackFile: async () => undefined } })
-  await h.service.ingest({ groupId: 'native-group', messageId: 'final-file', senderOpenDingTalkId: 'native-user', senderName: '用户',
-    text: '测试助手，生成并核验本地文件，随最终结果交付', timestamp: new Date().toISOString() })
-  await h.service.whenIdle()
-  const [created] = await h.query('task.list')
-  const task = await h.query('task.get', { taskId: created.taskId })
+    await t.beginBusiness()
+
+  await t.step(async () => h.service.ingest({ groupId: 'native-group', messageId: 'final-file', senderOpenDingTalkId: 'native-user', senderName: '用户',
+    text: '测试助手，生成并核验本地文件，随最终结果交付', timestamp: new Date().toISOString() }))
+  await t.step(async () => h.service.whenIdle())
+  const [created] = await t.step(async () => h.query('task.list'))
+  const task = await t.step(async () => h.query('task.get', { taskId: created.taskId }))
   assert.equal(task.status, 'completed', JSON.stringify(h.toolResults.filter(item => item.result.isError)))
   assert.equal(task.completion.result.artifactFiles.length, 1)
   assert.equal(task.completion.result.artifactFiles[0].artifact.taskId, created.taskId)
   assert.equal(task.completion.result.artifactFiles[0].caption, '本地验收结果')
-  const notices = await h.query('notification.list')
+  const notices = await t.step(async () => h.query('notification.list'))
   const explanation = notices.find(n => n.payload.deliveryId === n.id)
   const fileNotice = notices.find(n => n.payload.artifact)
   assert.ok(explanation); assert.equal(fileNotice.state, 'prepared')
-  await h.service.store.command({ id: 'observe-summary', kind: 'notification.reconcile', args: { notificationId: explanation.id, state: 'delivered',
-    evidenceRef: 'exact-original-send', receipt: { messageId: explanation.ack.messageId, conversationId: 'native-group' } } })
-  await h.service.store.command({ id: 'archive-delivery-task', kind: 'task.archive', args: { taskId: created.taskId, actorId: 'native-user' } })
-  assert.equal((await h.query('notification.list')).some(n => n.id === explanation.id), false)
-  await h.close()
+  await t.step(async () => h.service.store.command({ id: 'observe-summary', kind: 'notification.reconcile', args: { notificationId: explanation.id, state: 'delivered',
+    evidenceRef: 'exact-original-send', receipt: { messageId: explanation.ack.messageId, conversationId: 'native-group' } } }))
+  await t.step(async () => h.service.store.command({ id: 'archive-delivery-task', kind: 'task.archive', args: { taskId: created.taskId, actorId: 'native-user' } }))
+  assert.equal((await t.step(async () => h.query('notification.list'))).some(n => n.id === explanation.id), false)
+  await t.step(async () => h.close())
   const sent = []
-  const recovered = await fixture.host(() => { throw new Error('Recovery must not re-run task models') }, { initialize: false, notifications: {
+  const recovered = await t.step(async () => fixture.host(() => { throw new Error('Recovery must not re-run task models') }, { initialize: false, notifications: {
     send: async () => assert.fail('The explanation must not be sent twice'), readback: async n => ({ messageId: n.ack.messageId }),
     sendFile: async (n, file) => { sent.push(n.id); assert.equal(await readFile(file.path, 'utf8'), 'accepted original bytes'); return { openTaskId: 'queued-file-send' } },
     readbackFile: async () => undefined,
     querySendStatus: async id => { assert.equal(id, 'queued-file-send'); return { contractVersion: 'im.message-send-status.v1', success: true, openTaskId: id,
       result: { sendStatus: 'SUCCESS', openConversationId: 'native-group', openMessageId: 'delivered-file' },
       messageRef: { openConversationId: 'native-group', openMessageId: 'delivered-file' } } },
-  } })
-  await recovered.service.whenIdle()
+  } }))
+  await t.step(async () => recovered.service.whenIdle())
   assert.deepEqual(sent, [fileNotice.id])
   const echo = { groupId: 'native-group', messageId: 'delivered-file', senderOpenDingTalkId: 'native-assistant', text: '[文件] acceptance.txt', timestamp: new Date().toISOString() }
-  assert.equal((await recovered.service.ingest(echo)).reason, 'own-notification')
-  const pendingFile = await recovered.query('notification.get', { notificationId: fileNotice.id })
+  assert.equal((await t.step(async () => recovered.service.ingest(echo))).reason, 'own-notification')
+  const pendingFile = await t.step(async () => recovered.query('notification.get', { notificationId: fileNotice.id }))
   assert.equal(pendingFile.state, 'starting'); assert.equal(pendingFile.ack.openTaskId, 'queued-file-send')
   const outbound = recovered.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === fileNotice.id)
   assert.equal(outbound.deliveredMessageId, 'delivered-file'); assert.equal(outbound.status, 'pending')
-  await recovered.close()
-  const verified = await fixture.host(() => { throw new Error('Receipt recovery must not re-run models') }, { initialize: false, notifications: {
+  await t.step(async () => recovered.close())
+  const verified = await t.step(async () => fixture.host(() => { throw new Error('Receipt recovery must not re-run models') }, { initialize: false, notifications: {
     send: async () => assert.fail('The explanation must not be sent twice'), readback: async () => undefined,
     sendFile: async () => assert.fail('An acknowledged file must not be sent twice'),
     readbackFile: async () => ({ messageId: 'delivered-file', conversationId: 'native-group' }),
-  } })
-  assert.equal((await verified.service.ingest(echo)).reason, 'own-notification', 'Early identity proof survives restart')
-  await verified.service.whenIdle()
-  const awaitingReadback = await verified.query('notification.get', { notificationId: fileNotice.id })
-  const retry = await verified.service.retryNotification({ groupId: 'native-group', notificationId: fileNotice.id,
-    expectedToken: taskNotificationRecovery(awaitingReadback).expectedToken })
+  } }))
+  assert.equal((await t.step(async () => verified.service.ingest(echo))).reason, 'own-notification', 'Early identity proof survives restart')
+  await t.step(async () => verified.service.whenIdle())
+  const awaitingReadback = await t.step(async () => verified.query('notification.get', { notificationId: fileNotice.id }))
+  const retry = await t.step(async () => verified.service.retryNotification({ groupId: 'native-group', notificationId: fileNotice.id,
+    expectedToken: taskNotificationRecovery(awaitingReadback).expectedToken }))
   assert.equal(retry.action, 'readback')
-  assert.equal((await verified.query('notification.get', { notificationId: fileNotice.id })).state, 'delivered')
-})
+  assert.equal((await t.step(async () => verified.query('notification.get', { notificationId: fileNotice.id }))).state, 'delivered')
+}))
 
-test('running reminder and coordinator clarification preserve one native shell job with received and consumed receipts', { timeout: 20000 }, async t => {
+test('running reminder and coordinator clarification preserve one native shell job with received and consumed receipts', { ...({ timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-running-feedback-'))
   const team = nativeVerificationTeam({ filePath: 'effect.txt', expected: 'once' })
   let h, delegated = false, clarified = false, executions = 0
   t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
-  h = await nativeTaskHost(root, async request => {
+  await t.beginBusiness()
+  h = await t.step(async () => nativeTaskHost(root, async request => {
     const topics = topicTaskCalls(request); if (topics) return topics
     const input = latestInput(request)
     const verification = team.execute(request, input); if (verification) return verification
@@ -279,42 +286,43 @@ test('running reminder and coordinator clarification preserve one native shell j
       return [call(nativeShell, { command, description: '运行原生作业并等待测试释放' })]
     }
     return [call('execution_submit', { output: { status: 'completed', summary: '已读取补充，原作业完成', evidence: [], limitations: [], artifacts: ['effect.txt'] } })]
-  })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'original', objective: '创建并保留原作业' })
-  try { await waitUntil(async () => { try { await readFile(join(root, 'started')); return true } catch { return false } }) }
-  catch (error) { throw new Error(JSON.stringify({ alerts: h.service.listAlerts(), executions: await h.query('execution.list'), results: h.toolResults }), { cause: error }) }
-  const before = (await h.query('execution.list'))[0]
-  await h.service.appendTaskContext({ taskId: task.taskId, requestId: 'reminder', context: '开发分支别搞错了', progressImpact: 'preserve', expectedRequirementRevision: 1, expectedControlRevision: 1 })
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).requirementRevision, 1, '普通提醒不能变成需求修订并取消原作业')
-  assert.equal((await h.query('execution.list'))[0].cancelRequested, false, '原作业不能被普通提醒取消')
-  await waitUntil(async () => (await h.query('execution.list'))[0].feedback?.length === 2)
-  const received = (await h.query('execution.list'))[0]
+  }))
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'original', objective: '创建并保留原作业' }))
+  try { await t.step(async () => waitUntil(async () => { try { await readFile(join(root, 'started')); return true } catch { return false } })) }
+  catch (error) { throw new Error(JSON.stringify({ alerts: h.service.listAlerts(), executions: await t.step(async () => h.query('execution.list')), results: h.toolResults }), { cause: error }) }
+  const before = (await t.step(async () => h.query('execution.list')))[0]
+  await t.step(async () => h.service.appendTaskContext({ taskId: task.taskId, requestId: 'reminder', context: '开发分支别搞错了', progressImpact: 'preserve', expectedRequirementRevision: 1, expectedControlRevision: 1 }))
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).requirementRevision, 1, '普通提醒不能变成需求修订并取消原作业')
+  assert.equal((await t.step(async () => h.query('execution.list')))[0].cancelRequested, false, '原作业不能被普通提醒取消')
+  await t.step(async () => waitUntil(async () => (await h.query('execution.list'))[0].feedback?.length === 2))
+  const received = (await t.step(async () => h.query('execution.list')))[0]
   assert.ok(received.feedback.every(item => item.receivedAt && !item.consumedAt))
   assert.equal(received.cancelRequested, before.cancelRequested)
-  await writeFile(join(root, 'release'), 'release')
-  await h.service.whenIdle()
-  const after = (await h.query('execution.list'))[0]
+  await t.step(async () => writeFile(join(root, 'release'), 'release'))
+  await t.step(async () => h.service.whenIdle())
+  const after = (await t.step(async () => h.query('execution.list')))[0]
   for (const key of ['executionId', 'sessionId', 'inputVersion', 'leaseEpoch']) assert.equal(after[key], before[key])
-  assert.equal((await h.query('execution.list')).length, 3)
-  assert.equal((await h.query('execution.list')).filter(item => item.key === 'original').length, 1)
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
+  assert.equal((await t.step(async () => h.query('execution.list'))).filter(item => item.key === 'original').length, 1)
   assert.ok(after.feedback.every(item => item.consumedAt && Number.isInteger(item.sequence)))
   assert.ok(after.feedback.every(item => item.modelStepEnteredAt === item.consumedAt && item.consumptionMeaning === 'native-model-step-admission'))
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify({
-    alerts: h.service.listAlerts(), recovery: (await h.query('task.get', { taskId: task.taskId })).providerRecovery,
-    executions: (await h.query('execution.list')).map(item => ({ key: item.key, status: item.status, error: item.result?.payload.error })),
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed', JSON.stringify({
+    alerts: h.service.listAlerts(), recovery: (await t.step(async () => h.query('task.get', { taskId: task.taskId }))).providerRecovery,
+    executions: (await t.step(async () => h.query('execution.list'))).map(item => ({ key: item.key, status: item.status, error: item.result?.payload.error })),
   }))
-  assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
-  const events = (await inspectSession(h.ctx.sessionPersistence, after.sessionId)).events
+  assert.equal((await t.step(async () => readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8'))).trim(), 'once')
+  const events = (await t.step(async () => inspectSession(h.ctx.sessionPersistence, after.sessionId))).events
   assert.equal(events.filter(event => event.type === 'user/message' && event.data.source?.executionFeedback).length, 2)
-})
+}))
 
 // The real Windows shell and three independent verification sessions exceed the old 15s budget.
-test('native completion race drains then resumes the original execution without replaying its shell effect', { timeout: 30000 }, async t => {
+test('native completion race drains then resumes the original execution without replaying its shell effect', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-feedback-completion-'))
   const team = nativeVerificationTeam({ filePath: 'effect.txt', expected: 'once' })
   let h, delegated = false, steps = 0, injected = false
   t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
-  h = await nativeTaskHost(root, async request => {
+  await t.beginBusiness()
+  h = await t.step(async () => nativeTaskHost(root, async request => {
     const topics = topicTaskCalls(request); if (topics) return topics
     const input = latestInput(request)
     const verification = team.execute(request, input); if (verification) return verification
@@ -326,7 +334,7 @@ test('native completion race drains then resumes the original execution without 
     }
     if (++steps === 1) return [call(nativeShell, { command: nativeShell === 'pwsh' ? 'Add-Content effect.txt once' : 'echo once >> effect.txt', description: '真实原生单次写入' })]
     return [call('execution_submit', { output: { status: 'completed', summary: steps === 2 ? '过时结果' : '已核对新补充', evidence: [], limitations: [], artifacts: ['effect.txt'] } })]
-  })
+  }))
   h.ctx.on('tools/post-execute', async (exec, result, next) => {
     const decision = await next()
     if (exec.name === 'execution_submit' && !result.isError && !injected) {
@@ -338,25 +346,26 @@ test('native completion race drains then resumes the original execution without 
     }
     return decision
   })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'completion-race', objective: '写入一次并核对输入' })
-  await h.service.whenIdle()
-  const [execution] = await h.query('execution.list')
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'completion-race', objective: '写入一次并核对输入' }))
+  await t.step(async () => h.service.whenIdle())
+  const [execution] = await t.step(async () => h.query('execution.list'))
   assert.equal(injected, true); assert.equal(execution.leaseEpoch, 2); assert.equal(execution.inputVersion, 1)
   assert.equal(execution.result.payload.error, null, JSON.stringify({ error: execution.result.payload.error, alerts: h.service.listAlerts() }))
   assert.equal(execution.result.payload.output.summary, '已核对新补充')
   assert.ok(execution.feedback[0].consumedAt)
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
-  assert.equal((await readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8')).trim(), 'once')
-  assert.equal((await h.query('operation.list')).filter(item => item.state === 'succeeded').length, 1)
-})
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal((await t.step(async () => readFile(join(root, 'tasks', task.taskId, 'effect.txt'), 'utf8'))).trim(), 'once')
+  assert.equal((await t.step(async () => h.query('operation.list'))).filter(item => item.state === 'succeeded').length, 1)
+}))
 
 // The scripted coordinator obeys the same required-read contract as a real model.
-for (const mode of ['missing', 'preserve', 'replan', 'cancel']) test(`real coordinator input enforces explicit context semantics without default cancellation: ${mode}`, { timeout: 15000 }, async t => {
+for (const mode of ['missing', 'preserve', 'replan', 'cancel']) test(`real coordinator input enforces explicit context semantics without default cancellation: ${mode}`, { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-input-semantics-'))
   let h, task, delegated = false, executionSteps = 0
   const reviews = new Set()
   t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
-  h = await nativeTaskHost(root, async request => {
+  await t.beginBusiness()
+  h = await t.step(async () => nativeTaskHost(root, async request => {
     const names = request.tools.map(tool => tool.name)
     if (names.includes('group_topic_route_submit')) {
       const calls = topicTaskCalls(request)
@@ -391,33 +400,33 @@ for (const mode of ['missing', 'preserve', 'replan', 'cancel']) test(`real coord
         : `touch '${started}'; while [ ! -f '${released}' ]; do sleep 0.02; done`, description: '真实原生作业等待输入' })]
     }
     return [call('execution_submit', { output: { status: 'completed', summary: '已核对补充', evidence: [], limitations: [], artifacts: [] } })]
-  })
-  task = await h.service.createTask({ groupId: 'native-group', requestId: 'initial', objective: '原始明确任务' })
-  await waitUntil(async () => { try { await readFile(join(root, 'started')); return true } catch { return false } }, 'original shell running')
-  await h.service.ingest({ groupId: 'native-group', messageId: 'semantic-input', senderOpenDingTalkId: 'native-user',
-    text: mode === 'cancel' ? '测试助手，明确取消原任务' : mode === 'replan' ? '测试助手，改为新的明确目标，停止旧目标' : '测试助手，开发分支别搞错了', timestamp: new Date().toISOString() })
+  }))
+  task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'initial', objective: '原始明确任务' }))
+  await t.step(async () => waitUntil(async () => { try { await readFile(join(root, 'started')); return true } catch { return false } }, 'original shell running'))
+  await t.step(async () => h.service.ingest({ groupId: 'native-group', messageId: 'semantic-input', senderOpenDingTalkId: 'native-user',
+    text: mode === 'cancel' ? '测试助手，明确取消原任务' : mode === 'replan' ? '测试助手，改为新的明确目标，停止旧目标' : '测试助手，开发分支别搞错了', timestamp: new Date().toISOString() }))
   if (mode === 'missing') {
     const rejected = () => h.toolResults.some(item => item.name === 'group_decision_submit' && item.result.isError)
       || h.requests.some(request => request.messages.some(message => message.role === 'tool' && JSON.stringify(message).includes('progressImpact')))
-    await waitUntil(async () => rejected() || (await h.query('task.get', { taskId: task.taskId })).requirementRevision !== 1, 'real tool schema rejects omitted classification')
-    const current = await h.query('task.get', { taskId: task.taskId }), [execution] = await h.query('execution.list')
+    await t.step(async () => waitUntil(async () => rejected() || (await h.query('task.get', { taskId: task.taskId })).requirementRevision !== 1, 'real tool schema rejects omitted classification'))
+    const current = await t.step(async () => h.query('task.get', { taskId: task.taskId })), [execution] = await t.step(async () => h.query('execution.list'))
     assert.equal(current.requirementRevision, 1); assert.equal(execution.cancelRequested, false); assert.equal(execution.drained, false)
     assert.equal(execution.feedback?.length ?? 0, 0)
     assert.equal(rejected(), true, '缺失字段须明确拒绝，不能默认为preserve')
-    await writeFile(join(root, 'release'), 'release')
+    await t.step(async () => writeFile(join(root, 'release'), 'release'))
     return
   }
-  await waitUntil(async () => {
+  await t.step(async () => waitUntil(async () => {
     const current = await h.query('task.get', { taskId: task.taskId }), [execution] = await h.query('execution.list')
     return mode === 'cancel' ? current.control === 'cancelled' : mode === 'replan' ? current.requirementRevision === 2 : execution.feedback?.length === 1
-  }, 'coordinator semantic action applied')
-  const current = await h.query('task.get', { taskId: task.taskId }), [execution] = await h.query('execution.list')
+  }, 'coordinator semantic action applied'))
+  const current = await t.step(async () => h.query('task.get', { taskId: task.taskId })), [execution] = await t.step(async () => h.query('execution.list'))
   if (mode === 'preserve' || mode === 'missing') {
     assert.equal(current.requirementRevision, 1); assert.equal(execution.cancelRequested, false); assert.equal(execution.drained, false)
-    await writeFile(join(root, 'release'), 'release')
+    await t.step(async () => writeFile(join(root, 'release'), 'release'))
   } else assert.equal(execution.cancelRequested, true)
-  await h.service.whenIdle()
-})
+  await t.step(async () => h.service.whenIdle())
+}))
 
 function requiredDecisionRead(request, input) {
   for (const source of input.sources ?? []) if (source.textFile && source.readRequired) {
@@ -449,7 +458,7 @@ async function nativeCase(t, prefix) {
   return { root, async host(decide, options) { const host = await nativeTaskHost(root, decide, options); hosts.push(host); return host } }
 }
 
-test('owner injects one authoritative source body across task, Web identity and materials', { timeout: 30000 }, async t => {
+test('owner injects one authoritative source body across task, Web identity and materials', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const fixture = await nativeCase(t, 'task-content-index-')
   const body = ('AUTHORIZATION_CORRECTION: analyze only; ' + 'boundary evidence '.repeat(150)).trim()
   const counts = [], metrics = []
@@ -466,42 +475,45 @@ test('owner injects one authoritative source body across task, Web identity and 
     if (required) return [required]
     return [decision('complete', 'only analysis')]
   })
-  await h.service.createTask({ groupId: 'native-group', requestId: 'indexed-web', objective: body, context: body })
-  await h.service.whenIdle()
+  await t.beginBusiness()
+
+  await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'indexed-web', objective: body, context: body }))
+  await t.step(async () => h.service.whenIdle())
   assert.ok(counts.length > 0, JSON.stringify(h.service.listAlerts()))
   t.diagnostic(JSON.stringify({ scope: 'actual native owner scripted adapter UTF-8 JSON bytes', bodyCopies: counts, metrics }))
   assert.equal(counts[0], 0, 'long authority is explicitly marked for lossless read')
   assert.ok(counts.every(count => count === 0), 'targeted native reads do not reinject the entire long authority body')
   assert.ok(h.toolResults.some(result => result.name === 'read'), 'the existing native file reader is used')
   assert.equal(h.service.listAlerts().length, 0)
-  const [source] = await h.query('source.list'), [task] = await h.query('task.list')
+  const [source] = await t.step(async () => h.query('source.list')), [task] = await t.step(async () => h.query('task.list'))
   assert.equal(source.text, body)
   assert.equal(source.requestIdentity.request.args.context, body, 'Web admission identity remains raw in the ledger')
-  const dto = await h.service.taskDetail(task.taskId)
+  const dto = await t.step(async () => h.service.taskDetail(task.taskId))
   assert.equal(dto.request, task.request)
   assert.deepEqual(dto.completion, task.completion, 'Observer still receives the original task completion')
   assert.equal(dto.executions.length, 0)
   assert.equal(task.status, 'completed', 'A direct analysis task does not need an execution member')
-  assert.equal((await h.query('execution.list', { taskId: task.taskId })).length, 0)
-  const saved = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
+  assert.equal((await t.step(async () => h.query('execution.list', { taskId: task.taskId }))).length, 0)
+  const saved = await t.step(async () => inspectSession(h.ctx.sessionPersistence, task.sessionId))
   const current = h.requests.at(-1).messages.find(message => message.source?.taskSession && !message.source.taskContextHistory)
   const raw = saved.events.flatMap(event => event.type === 'agent/inbox/spliced' ? event.data.inserted : []).find(message => message.id === current.source.rawHostMessageId)
   assert.ok(raw)
   assert.ok(raw.content[0].text.split(body).length - 1 > 1, 'raw admission audit is not deduplicated to shrink display')
   assert.equal(JSON.parse(raw.content[0].text).sources[0].requestIdentity.request.args.context, body)
-})
+}))
 
-test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保留原任务和会话', { timeout: 20000 }, async t => {
+test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保留原任务和会话', { ...({ timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   let h, backing, original, topicId, block = true
   t.after(async () => { await h?.close(); await backing?.close() })
   const fixture = await nativeCase(t, 'task-topic-auth-')
-  backing = await openDynamicTaskStore({ dbPath: join(fixture.root, 'dynamic.db'), instanceId: 'native-test', initialize: true })
+  await t.beginBusiness()
+  backing = await t.step(async () => openDynamicTaskStore({ dbPath: join(fixture.root, 'dynamic.db'), instanceId: 'native-test', initialize: true }))
   const store = { ...backing, command(input) {
     if (block && input.kind === 'task.reopen') throw new Error('TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
     return backing.command(input)
   } }
   const reviews = new Set()
-  h = await fixture.host(async request => {
+  h = await t.step(async () => fixture.host(async request => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
     if (input.trigger === 'task-facts') return topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
@@ -534,23 +546,23 @@ test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保�
       assert.ok(input.sources.some(source => source.actorId === 'colleague' && source.text === '测试助手，部署原修复到UAT2'))
     }
     return [decision('complete', original ? '已处理原任务续办' : '修复已完成，未部署')]
-  }, { store })
-  await h.service.ingest(message); await h.service.whenIdle()
-  ;[original] = await h.query('task.list'); topicId = original.topicRefs[0].topicId
+  }, { store }))
+  await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())
+  ;[original] = await t.step(async () => h.query('task.list')); topicId = original.topicRefs[0].topicId
   const followup = { ...message, messageId: 'deploy-followup', senderOpenDingTalkId: 'colleague', text: '测试助手，部署原修复到UAT2', occurredAt: '2026-10-13T10:02:00Z' }
-  await h.service.ingest(followup); await h.service.whenIdle()
+  await t.step(async () => h.service.ingest(followup)); await t.step(async () => h.service.whenIdle())
   const blocked = h.residentStore.getTopic(message.groupId, topicId).decisions.at(-1)
   assert.equal(blocked.error, 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
   assert.equal(blocked.status, 'blocked')
   assert.equal(blocked.operations.length, 1)
   assert.equal(blocked.operations[0].status, 'blocked')
   assert.equal(blocked.operations[0].lastError, 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED')
-  assert.equal((await h.query('task.list'))[0].requirementRevision, 1)
+  assert.equal((await t.step(async () => h.query('task.list')))[0].requirementRevision, 1)
   const sent = h.sent.length
   block = false
-  await h.service.retryMessage({ groupId: message.groupId, messageId: followup.messageId }); await h.service.whenIdle()
-  const [task] = await h.query('task.list')
-  assert.equal((await h.query('task.list')).length, 1)
+  await t.step(async () => h.service.retryMessage({ groupId: message.groupId, messageId: followup.messageId })); await t.step(async () => h.service.whenIdle())
+  const [task] = await t.step(async () => h.query('task.list'))
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
   assert.equal(task.taskId, original.taskId); assert.equal(task.sessionId, original.sessionId)
   assert.equal(task.ownerActorId, 'native-user'); assert.equal(task.runSequence, 2)
   assert.equal(task.requirementRevision, 2); assert.equal(task.status, 'completed')
@@ -564,11 +576,11 @@ test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保�
   assert.equal(recovered.operations[0].recoveryResolution, 'not-applied')
   assert.equal(recovered.operations[0].lastError, 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED', '恢复不抹除原 Host 接纳失败证据')
   assert.equal(h.residentStore.getTopic(message.groupId, topicId).processedRevision, 2)
-  await h.service.retryMessage({ groupId: message.groupId, messageId: followup.messageId }); await h.service.whenIdle()
-  assert.equal((await h.query('task.list'))[0].runSequence, 2)
-})
+  await t.step(async () => h.service.retryMessage({ groupId: message.groupId, messageId: followup.messageId })); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.list')))[0].runSequence, 2)
+}))
 
-for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague'], [false, 'native-user']]) test(`话题历史${ownEcho ? '自身通知不阻断人工补充' : '未准入真实消息仍拒绝更新且不发送成功回复'}-${followupActor}`, { timeout: 15000 }, async t => {
+for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague'], [false, 'native-user']]) test(`话题历史${ownEcho ? '自身通知不阻断人工补充' : '未准入真实消息仍拒绝更新且不发送成功回复'}-${followupActor}`, { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
   const fixture = await nativeCase(t, 'task-topic-source-')
   let topicId, originalTask, ownerCalls = 0
   const readReviews = new Set()
@@ -610,21 +622,22 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
     assert.ok(input.sources.every(source => source.messageId !== 'native-notification-1'))
     return [decision('complete', '已按补充要求核对分支')]
   }
-  h = await fixture.host(model, { config: { assistantActorId: 'native-user' } })
-  await h.service.ingest(message); await h.service.whenIdle()
-  ;[originalTask] = await h.query('task.list')
+  await t.beginBusiness()
+  h = await t.step(async () => fixture.host(model, { config: { assistantActorId: 'native-user' } }))
+  await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())
+  ;[originalTask] = await t.step(async () => h.query('task.list'))
   topicId = originalTask.topicRefs[0].topicId
   const echo = { ...message, messageId: ownEcho ? 'native-notification-1' : 'unadmitted-user-message',
     text: ownEcho ? h.sent[0].payload.text : '需要保留的真实历史指令', quotedMessage: { messageId: message.messageId, content: message.text }, occurredAt: '2026-10-13T10:01:00Z' }
-  await h.residentStore.ingest(echo)
-  await h.residentStore.routeMessages({ groupId: message.groupId, routeId: 'historical-echo-route', routingRevision: h.residentStore.getGroup(message.groupId).routingRevision, routes: [{ messageId: echo.messageId, messageVersion: 1,
-    topics: [{ topicId, relationship: 'continuation', reason: '历史话题上下文' }] }] })
+  await t.step(async () => h.residentStore.ingest(echo))
+  await t.step(async () => h.residentStore.routeMessages({ groupId: message.groupId, routeId: 'historical-echo-route', routingRevision: h.residentStore.getGroup(message.groupId).routingRevision, routes: [{ messageId: echo.messageId, messageVersion: 1,
+    topics: [{ topicId, relationship: 'continuation', reason: '历史话题上下文' }] }] }))
   const sentBefore = h.sent.filter(notification => notification.kind === 'topic-reply').length
-  await h.service.ingest({ ...message, senderOpenDingTalkId: followupActor, messageId: 'manual-followup', text: '先核对分支，不是批准例外', occurredAt: '2026-10-13T10:02:00Z' })
-  await h.service.whenIdle()
-  const [task] = await h.query('task.list')
-  assert.equal((await h.query('task.list')).length, 1)
-  assert.ok(!(await h.query('source.list')).some(source => source.messageId === echo.messageId))
+  await t.step(async () => h.service.ingest({ ...message, senderOpenDingTalkId: followupActor, messageId: 'manual-followup', text: '先核对分支，不是批准例外', occurredAt: '2026-10-13T10:02:00Z' }))
+  await t.step(async () => h.service.whenIdle())
+  const [task] = await t.step(async () => h.query('task.list'))
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+  assert.ok(!(await t.step(async () => h.query('source.list'))).some(source => source.messageId === echo.messageId))
   if (ownEcho) {
     assert.equal(task.status, 'active', JSON.stringify(h.service.listAlerts()))
     assert.equal(task.humanRequests[0].status, 'waiting-reply', '普通定位补充既不改变授权，也不能代答或清除operator技术申请')
@@ -640,30 +653,30 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
     assert.equal(blocked.error, 'TASK_TOPIC_SOURCE_VERSION_MISSING')
     // 模拟旧版先回复再失败，投影后的来源身份已改变。
     const notificationId = blocked.outboundId, topicRefs = [{ topicId, revision: blocked.revision }]
-    await h.residentStore.appendOutbox({ groupId: message.groupId, outboundId: notificationId, decisionId: blocked.decisionId,
+    await t.step(async () => h.residentStore.appendOutbox({ groupId: message.groupId, outboundId: notificationId, decisionId: blocked.decisionId,
       sourceMessageId: `topic-decision:${blocked.decisionId}`, text: blocked.decision.reply, topicRefs, taskIds: [originalTask.taskId],
-      replyToMessageId: 'manual-followup', replyToSenderOpenDingTalkId: 'native-user', atOpenDingTalkIds: ['native-user'] })
-    await h.service.store.command({ id: `prepare-notification:${notificationId}`, kind: 'notification.prepare', args: {
+      replyToMessageId: 'manual-followup', replyToSenderOpenDingTalkId: 'native-user', atOpenDingTalkIds: ['native-user'] }))
+    await t.step(async () => h.service.store.command({ id: `prepare-notification:${notificationId}`, kind: 'notification.prepare', args: {
       notificationId, taskId: originalTask.taskId, requirementRevision: 1, kind: 'topic-reply', payload: {
         text: blocked.decision.reply, topicRefs, taskIds: [originalTask.taskId], replyKind: 'substantive', conversationId: message.groupId,
         sourceMessageId: 'manual-followup', actorId: 'native-user', replyToMessageId: 'manual-followup',
         replyToSenderOpenDingTalkId: 'native-user', atOpenDingTalkIds: ['native-user'], fact: { topicRefs }, kind: 'topic-reply',
       },
-    } })
-    const started = await h.service.store.command({ id: 'fixture-old-reply-start', kind: 'notification.start', args: { notificationId } })
-    const delivered = await h.service.store.command({ id: 'fixture-old-reply-delivered', kind: 'notification.delivered', args: {
+    } }))
+    const started = await t.step(async () => h.service.store.command({ id: 'fixture-old-reply-start', kind: 'notification.start', args: { notificationId } }))
+    const delivered = await t.step(async () => h.service.store.command({ id: 'fixture-old-reply-delivered', kind: 'notification.delivered', args: {
       notificationId, dispatchToken: started.result.notification.dispatchToken, receipt: { messageId: 'historical-reply-id' },
-    } })
-    await projectTaskNotification({ residentStore: h.residentStore, notification: delivered.result.notification })
-    await h.service.store.command({ id: 'fixture-admit-historical-source', kind: 'source.record', args: {
+    } }))
+    await t.step(async () => projectTaskNotification({ residentStore: h.residentStore, notification: delivered.result.notification }))
+    await t.step(async () => h.service.store.command({ id: 'fixture-admit-historical-source', kind: 'source.record', args: {
       sourceId: 'fixture-historical-source', groupId: message.groupId, messageId: echo.messageId, version: 1,
       actorId: message.senderOpenDingTalkId, text: echo.text, timestamp: echo.occurredAt,
-    } })
+    } }))
     // A legacy partial commit is observed only after a real service restart.
     // Retain the test's transport audit across both instances; expected counts stay unchanged.
     const sentHistory = h.sent.slice()
-    await h.close(); readReviews.clear()
-    h = await fixture.host(model, { initialize: false, config: { assistantActorId: 'native-user' } })
+    await t.step(async () => h.close()); readReviews.clear()
+    h = await t.step(async () => fixture.host(model, { initialize: false, config: { assistantActorId: 'native-user' } }))
     h.sent.unshift(...sentHistory) // Preserve the diagnostic recorder across the two real instances.
     const append = h.residentStore.appendOutbox
     let duplicateAppends = 0
@@ -671,7 +684,7 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
       if (args.outboundId === notificationId) { duplicateAppends++; throw new Error('outbox_identity_duplicate') }
       return append(args)
     }
-    await h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' }); await h.service.whenIdle()
+    await t.step(async () => h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' })); await t.step(async () => h.service.whenIdle())
     h.residentStore.appendOutbox = append
     const recoveredReply = h.residentStore.getTopic(message.groupId, topicId).decisions.at(-1)
     assert.equal(duplicateAppends, 0, 'The frozen delivered notification is reused without appending its identity again')
@@ -679,27 +692,28 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
     assert.equal(recoveredReply.status, 'completed')
     assert.equal(recoveredReply.decisionId, blocked.decisionId)
     assert.ok(recoveredReply.operations.every(operation => operation.status === 'applied'))
-    await h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' }); await h.service.whenIdle()
-    assert.equal((await h.query('task.list'))[0].status, 'active', JSON.stringify(h.service.listAlerts()))
-    assert.equal((await h.query('task.list'))[0].humanRequests[0].status, 'waiting-reply')
+    await t.step(async () => h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' })); await t.step(async () => h.service.whenIdle())
+    assert.equal((await t.step(async () => h.query('task.list')))[0].status, 'active', JSON.stringify(h.service.listAlerts()))
+    assert.equal((await t.step(async () => h.query('task.list')))[0].humanRequests[0].status, 'waiting-reply')
     assert.equal(ownerCalls, 1)
-    assert.equal((await h.query('notification.get', { notificationId })).state, 'delivered')
+    assert.equal((await t.step(async () => h.query('notification.get', { notificationId }))).state, 'delivered')
     assert.equal(h.residentStore.getGroup(message.groupId).outbox.find(item => item.outboundId === notificationId).deliveredMessageId, 'historical-reply-id')
     assert.equal(h.sent.filter(notification => notification.kind === 'topic-reply').length, sentBefore)
-    const oldEcho = await h.service.ingest({ ...message, messageId: 'historical-reply-id', text: blocked.decision.reply })
+    const oldEcho = await t.step(async () => h.service.ingest({ ...message, messageId: 'historical-reply-id', text: blocked.decision.reply }))
     assert.equal(oldEcho.reason, 'own-notification', '重放 prepared 收据不能覆盖当前 delivered 的发送身份缓存')
     const sentAfter = h.sent.length
-    await h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' }); await h.service.whenIdle()
+    await t.step(async () => h.service.retryMessage({ groupId: message.groupId, messageId: 'manual-followup' })); await t.step(async () => h.service.whenIdle())
     assert.equal(h.sent.length, sentAfter, '已应用动作和已送达回复不能因重复重试再次执行')
     assert.equal(ownerCalls, 1)
   }
-})
+}))
 
-test('180 legacy task Host markers retire without changing audit or foreign context, including compacted surface replay', { timeout: 30000 }, async t => {
-  const { createUserMessage, createSystemMessage } = await import('@deepseek-ai/dsh-llm')
-  const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
-  const fixture = await nativeCase(t, 'task-host-retirement-')
-  const h = await fixture.host(async () => [])
+test('180 legacy task Host markers retire without changing audit or foreign context, including compacted surface replay', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+  await t.beginBusiness()
+  const { createUserMessage, createSystemMessage } = await t.step(async () => import('@deepseek-ai/dsh-llm'))
+  const { foldSurface, deriveEventMessage } = await t.step(async () => import('@deepseek-ai/dsh-session'))
+  const fixture = await t.step(async () => nativeCase(t, 'task-host-retirement-'))
+  const h = await t.step(async () => fixture.host(async () => []))
   const binding = { taskId: 'retirement-task', sessionId: 'retirement-session', leaseEpoch: 181 }
   const session = h.ctx.sessions.prepare(binding.sessionId)
   session.append('turn/start', { turn: 1 }); session.append('step/start', { turn: 1, step: 1 })
@@ -738,9 +752,9 @@ test('180 legacy task Host markers retire without changing audit or foreign cont
   t.diagnostic(JSON.stringify({ scope: 'actual native foldSurface UTF-8 JSON message bytes; source/task identity retained',
     legacyHostCount: 180, beforeBytes, afterBytes, newInputBytes: Buffer.byteLength(JSON.stringify(current)), retainedBaselineBytes: 0,
     afterCompactionBytes: Buffer.byteLength(JSON.stringify(restored)), rawAuditEvents: session.snapshotEvents().length }))
-})
+}))
 
-test('owner keeps one current Host snapshot and delegates non-recursive execution context across three generations', { timeout: 30000 }, async t => {
+test('owner keeps one current Host snapshot and delegates non-recursive execution context across three generations', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const fixture = await nativeCase(t, 'task-context-native-'), ownerRequests = []
   const scope = 'CURRENT_AUTHORIZATION_SCOPE_'.repeat(100)
   const h = await fixture.host(async request => {
@@ -780,14 +794,16 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
     }
     return [call('execution_submit', { output: { status: 'completed', summary: input.objective, evidence: [], limitations: [], artifacts: [] } })]
   })
-  await h.service.ingest({ ...message, text: message.text + scope }); await h.service.whenIdle()
-  const [task] = await h.query('task.list')
+  await t.beginBusiness()
+
+  await t.step(async () => h.service.ingest({ ...message, text: message.text + scope })); await t.step(async () => h.service.whenIdle())
+  const [task] = await t.step(async () => h.query('task.list'))
   assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
-  assert.equal((await h.query('execution.list')).length, 3)
-  const log = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
+  const log = await t.step(async () => inspectSession(h.ctx.sessionPersistence, task.sessionId))
   assert.ok(log.events.filter(event => event.type === 'user/message' && event.data.source?.taskSession && !event.data.source.taskContextHistory).length >= 4,
     '原始Host输入仍在审计日志')
-  const { foldSurface, deriveEventMessage } = await import('@deepseek-ai/dsh-session')
+  const { foldSurface, deriveEventMessage } = await t.step(async () => import('@deepseek-ai/dsh-session'))
   const folded = foldSurface(log.events)
   const visible = folded.nodes.map(seq => deriveEventMessage(log.events[seq], folded.projectedMessages)).filter(Boolean)
   assert.equal(visible.filter(message => message.source?.taskSession).length, 1)
@@ -795,10 +811,10 @@ test('owner keeps one current Host snapshot and delegates non-recursive executio
   const last = ownerRequests.at(-1)
   console.log(JSON.stringify({ contextProof: { ownerRequests: ownerRequests.length,
     latestInputBytes: Buffer.byteLength(JSON.stringify(latestInput(last))), totalRequestBytes: Buffer.byteLength(JSON.stringify(last)) } }))
-})
+}))
 
 // Full baseline and current native runs need about 140s for 32 generations and independent verification.
-test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { timeout: 240000 }, async t => {
+test('32 continuations bound owner Host input and execution-read tool results while preserving authority and unknown effects', { ...({ timeout: 240000 }), timeout: nativeLifecycleTimeout(240000) }, nativeLifecycle(240000, async (t) => {
   const fixture = await nativeCase(t, 'task-five-context-'), metrics = []
   const team = nativeVerificationTeam()
   let ownerSteps = 0
@@ -843,8 +859,10 @@ test('32 continuations bound owner Host input and execution-read tool results wh
     return [call('task_delegate', { key: 'continue-' + (execution?.inputVersion ?? 0), objective: 'generation-' + ((execution?.inputVersion ?? 0) + 1),
       ...(execution ? { executionId: execution.executionId } : {}), context: scope }), decision('wait', 'wait for result')]
   })
-  await h.service.ingest({ ...message, text: '测试助手，仅分析并汇总32轮观察。' + scope }); await h.service.whenIdle()
-  const [task] = await h.query('task.list'), executions = await h.query('execution.list')
+  await t.beginBusiness()
+
+  await t.step(async () => h.service.ingest({ ...message, text: '测试助手，仅分析并汇总32轮观察。' + scope })); await t.step(async () => h.service.whenIdle())
+  const [task] = await t.step(async () => h.query('task.list')), executions = await t.step(async () => h.query('execution.list'))
   assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
   assert.equal(executions.length, 3); assert.equal(executions.filter(item => item.inputVersion === 32).length, 1); assert.equal(executions[0].inputVersion, 32)
   assert.ok(metrics.length >= 33)
@@ -853,9 +871,9 @@ test('32 continuations bound owner Host input and execution-read tool results wh
   assert.ok(metrics.at(-1).currentInputBytes < metrics[0].currentInputBytes + 6000, 'input growth excludes recursive execution history')
   assert.ok(metrics.every(m => m.retainedBaselineBytes === 0), '没有被转移为基线的旧Host正文')
   assert.ok(metrics.at(-1).hostMessagesBytes - metrics.at(-1).currentInputBytes < 1500, 'Host包装开销不随续办轮数增长')
-})
+}))
 
-test('configured group responsibility reaches group and task models and its reply signature survives notification formatting', { timeout: 15000 }, async t => {
+test('configured group responsibility reaches group and task models and its reply signature survives notification formatting', { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
   const fixture = await nativeCase(t, 'task-group-reply-scope-')
   const responsibility = 'GROUP_REPLY_SCOPE_PROOF：日常回复末尾空一行附 - 测试群助理代回。'
   let groupRequests = 0, taskRequests = 0
@@ -871,18 +889,21 @@ test('configured group responsibility reaches group and task models and its repl
     assert.ok(requestSystemText(request).includes(responsibility), '任务统筹继承所属群已配置的边界与红线')
     return [decision('complete', '已完成当前目标。')]
   })
-  await h.residentStore.updateGroup({ groupId: 'native-group', responsibility })
-  await h.service.ingest(message); await h.service.whenIdle()
+  await t.beginBusiness()
+
+  await t.step(async () => h.residentStore.updateGroup({ groupId: 'native-group', responsibility }))
+  await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())
   assert.ok(groupRequests >= 2); assert.equal(taskRequests, 1, JSON.stringify(h.service.listAlerts()))
   assert.ok(h.sent.find(notification => notification.kind === 'topic-reply').payload.text.endsWith('\n\n- 测试群助理代回'))
-})
+}))
 
-test('simple existing-file delivery uses one executor and owner reads the delivered evidence', { timeout: 30000 }, async t => {
+test('simple existing-file delivery uses one executor and owner reads the delivered evidence', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const fixture = await nativeCase(t, 'task-simple-file-')
   const source = join(fixture.root, 'existing-template.txt'), contents = 'existing template, unchanged bytes\n'
-  await writeFile(source, contents)
+  await t.beginBusiness()
+  await t.step(async () => writeFile(source, contents))
   let delegated = false, executorStep = 0, ownerRead = false
-  const h = await fixture.host(async request => {
+  const h = await t.step(async () => fixture.host(async request => {
     const topicCalls = topicTaskCalls(request)
     if (topicCalls) return topicCalls
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
@@ -912,24 +933,24 @@ test('simple existing-file delivery uses one executor and owner reads the delive
     assert.ok(JSON.stringify(request.messages.filter(message => message.role === 'tool')).includes(contents.trim()))
     return [call('execution_submit', { output: { status: 'completed', summary: '原文件已复制并读回',
       evidence: ['delivered-template.txt'], limitations: ['仅验证本地文件交付，没有真实外发'], artifacts: ['delivered-template.txt'] } })]
-  })
-  await h.service.ingest({ ...message, messageId: 'existing-file-delivery', text: '测试助手，将现成模板原样交付到任务目录即可。' })
-  await h.service.whenIdle()
-  const [task] = await h.query('task.list'), [execution] = await h.query('execution.list')
+  }))
+  await t.step(async () => h.service.ingest({ ...message, messageId: 'existing-file-delivery', text: '测试助手，将现成模板原样交付到任务目录即可。' }))
+  await t.step(async () => h.service.whenIdle())
+  const [task] = await t.step(async () => h.query('task.list')), [execution] = await t.step(async () => h.query('execution.list'))
   assert.equal(task.status, 'completed', JSON.stringify(h.service.listAlerts()))
-  assert.equal((await h.query('execution.list')).length, 1)
-  assert.equal(await readFile(join(fixture.root, 'tasks', task.taskId, 'delivered-template.txt'), 'utf8'), contents)
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 1)
+  assert.equal(await t.step(async () => readFile(join(fixture.root, 'tasks', task.taskId, 'delivered-template.txt'), 'utf8')), contents)
   const writes = h.toolResults.filter(result => result.name === nativeShell)
   assert.equal(writes.length, 1)
   assert.equal(writes[0].sessionId, execution.sessionId)
   assert.equal(writes[0].result.isError, false)
   assert.ok(h.toolResults.some(result => result.name === 'read' && result.sessionId === task.sessionId && !result.result.isError))
-  await h.service.recover(); await h.service.whenIdle()
-  assert.equal((await h.query('execution.list')).length, 1)
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 1)
   assert.equal(h.toolResults.filter(result => result.name === nativeShell).length, 1, '完成后不重放文件交付')
-})
+}))
 
-test('native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback', { timeout: 30000 }, async t => {
+test('native service routes authenticated source, delegates parallel execution, persists wake before owner wait, and sends confirmation and completion with readback', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const fixture = await nativeCase(t, 'task-service-native-'), { root } = fixture
   const teamMessage = { ...message, text: '测试助手，分别生成 alpha、beta 和 gamma 的文件并用终端验证，再汇总结论。' }
   const steps = new Map(), executionStarted = new Set(), started = Promise.withResolvers()
@@ -1008,19 +1029,21 @@ test('native service routes authenticated source, delegates parallel execution, 
     assert.ok(JSON.stringify(request).includes(key), 'Native tool results must reach the model')
     return [call('execution_submit', { output: { status: 'completed', summary: key + ' 已验证', evidence: ['native-process-verified'], limitations: [], artifacts: [key + '-native-proof.txt', key + '-process-cwd.txt'] } })]
   })
-  const first = await h.service.ingest(teamMessage)
+  await t.beginBusiness()
+
+  const first = await t.step(async () => h.service.ingest(teamMessage))
   assert.equal(first.accepted, true)
-  await h.service.whenIdle()
-  assert.deepEqual((await h.service.recover()).failures, [])
-  const tasks = await h.query('task.list')
+  await t.step(async () => h.service.whenIdle())
+  assert.deepEqual((await t.step(async () => h.service.recover())).failures, [])
+  const tasks = await t.step(async () => h.query('task.list'))
   assert.equal(tasks.length, 1)
-  const task = tasks[0], executions = await h.query('execution.list', { taskId: task.taskId })
+  const task = tasks[0], executions = await t.step(async () => h.query('execution.list', { taskId: task.taskId }))
   assert.equal(new Set(executions.map(execution => execution.sessionId)).size, 3)
   for (const execution of executions) {
     assert.equal(execution.input.context, handoffs[execution.key])
     assert.deepEqual(execution.resourceKeys, ['file:' + execution.key])
   }
-  const executionViews = await h.service.taskExecutions(task.taskId)
+  const executionViews = await t.step(async () => h.service.taskExecutions(task.taskId))
   assert.ok(executionViews.executions.every(execution => execution.workspaceDir === join(root, 'tasks', task.taskId)
     && execution.workingDirectory === join(root, 'tasks', task.taskId)))
   assert.equal(task.status, 'completed', JSON.stringify({ alerts: h.service.listAlerts(), lastDecision: task.lastDecision,
@@ -1030,17 +1053,17 @@ test('native service routes authenticated source, delegates parallel execution, 
   assert.equal(ownerRounds, 2)
   assert.equal(sawResultsBeforeWait, true)
   assert.equal(lateNativeCalls, 0, '晚注册工具不能绕过统筹职责边界')
-  for (const file of ['owner-native-proof.txt', 'owner-shell-proof.txt']) await assert.rejects(readFile(join(root, 'tasks', task.taskId, file)), { code: 'ENOENT' })
+  for (const file of ['owner-native-proof.txt', 'owner-shell-proof.txt']) await t.step(async () => assert.rejects(readFile(join(root, 'tasks', task.taskId, file)), { code: 'ENOENT' }))
   assert.equal(readOverlap.peak, 3, 'Native concurrency-safe filesystem calls must overlap')
   assert.equal(h.sent.length, 2); assert.equal(h.readbacks.length, 2)
-  const echo = await h.service.ingest({ ...message, messageId: 'native-notification-2', senderOpenDingTalkId: 'notification-sender', text: 'completion echo' })
+  const echo = await t.step(async () => h.service.ingest({ ...message, messageId: 'native-notification-2', senderOpenDingTalkId: 'notification-sender', text: 'completion echo' }))
   assert.equal(echo.reason, 'own-notification')
-  await h.service.whenIdle()
-  assert.equal((await h.query('task.list')).length, 1, 'durable send receipt must exclude our own group echo')
-  assert.equal((await h.query('notification.list'))[0].state, 'delivered')
-  assert.equal((await h.query('source.get', { sourceId: first.sourceId })).actorId, message.senderOpenDingTalkId)
-  assert.equal((await h.query('source.get', { sourceId: first.sourceId })).routed, true)
-  const ownerLog = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
+  await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1, 'durable send receipt must exclude our own group echo')
+  assert.equal((await t.step(async () => h.query('notification.list')))[0].state, 'delivered')
+  assert.equal((await t.step(async () => h.query('source.get', { sourceId: first.sourceId }))).actorId, message.senderOpenDingTalkId)
+  assert.equal((await t.step(async () => h.query('source.get', { sourceId: first.sourceId }))).routed, true)
+  const ownerLog = await t.step(async () => inspectSession(h.ctx.sessionPersistence, task.sessionId))
   const delegated = ownerLog.events.filter(event => event.type === 'tool/call' && event.data.name === 'task_delegate')
   const firstWait = ownerLog.events.find(event => event.type === 'tool/call' && event.data.name === 'task_session_submit')
   assert.equal(delegated.length, 3)
@@ -1056,7 +1079,7 @@ test('native service routes authenticated source, delegates parallel execution, 
   assert.equal(ownerLog.events.filter(e => e.type === 'user/message' && e.data.source?.taskSession && !e.data.source.taskContextHistory).length, 2)
   for (const name of ['write', nativeShell, 'late_native_write']) assert.ok(h.toolResults.some(result => result.sessionId === task.sessionId && result.name === name && result.result.isError), '统筹的实际越界调用须被拒绝')
   for (const execution of executions) {
-    const log = await inspectSession(h.ctx.sessionPersistence, execution.sessionId), cwd = join(root, 'tasks', task.taskId)
+    const log = await t.step(async () => inspectSession(h.ctx.sessionPersistence, execution.sessionId)), cwd = join(root, 'tasks', task.taskId)
     assert.ok(log.events.some(event => event.type === 'permission/preset' && event.data.preset === 'danger-full-access'))
     assert.equal(log.meta.cwd, ownerLog.meta.cwd)
     assert.ok(!log.events.some(event => event.type === 'working-directory/change'), 'Executor cwd starts at the same immutable task root')
@@ -1066,35 +1089,35 @@ test('native service routes authenticated source, delegates parallel execution, 
     assert.ok(executionWorkspace.sessionIds.includes(execution.sessionId))
     assert.equal(executionWorkspace.id, ownerWorkspace.id)
     assert.equal(h.ctx.workspaceRegistry.list().filter(workspace => workspace.path.startsWith(join(root, 'tasks', task.taskId))).length, 1)
-    assert.equal(await readFile(join(cwd, execution.input.objective + '-native-proof.txt'), 'utf8'), execution.input.objective + '\n')
-    assert.equal((await readFile(join(cwd, execution.input.objective + '-process-cwd.txt'), 'utf8')).trim(), cwd)
+    assert.equal(await t.step(async () => readFile(join(cwd, execution.input.objective + '-native-proof.txt'), 'utf8')), execution.input.objective + '\n')
+    assert.equal((await t.step(async () => readFile(join(cwd, execution.input.objective + '-process-cwd.txt'), 'utf8'))).trim(), cwd)
     assert.ok(log.events.some(e => e.type === 'tool/call' && e.data.name === nativeShell))
     assert.ok(log.events.some(e => e.type === 'tool/result'))
-    assert.ok((await findSessionLog(root, execution.sessionId)).startsWith(taskSessionLogRoot(root, task.taskId)))
+    assert.ok((await t.step(async () => findSessionLog(root, execution.sessionId))).startsWith(taskSessionLogRoot(root, task.taskId)))
   }
-  assert.ok((await findSessionLog(root, task.sessionId)).startsWith(taskSessionLogRoot(root, task.taskId)))
-  assert.equal((await h.query('operation.list', { taskId: task.taskId })).length, 6)
-  assert.ok((await h.query('operation.list', { taskId: task.taskId })).every(operation => operation.state === 'succeeded'))
-  await h.service.ingest(teamMessage); await h.service.whenIdle(); await h.service.recover(); await h.service.whenIdle()
-  assert.equal((await h.query('task.list')).length, 1)
-  assert.equal((await h.query('execution.list')).length, 3)
+  assert.ok((await t.step(async () => findSessionLog(root, task.sessionId))).startsWith(taskSessionLogRoot(root, task.taskId)))
+  assert.equal((await t.step(async () => h.query('operation.list', { taskId: task.taskId }))).length, 6)
+  assert.ok((await t.step(async () => h.query('operation.list', { taskId: task.taskId }))).every(operation => operation.state === 'succeeded'))
+  await t.step(async () => h.service.ingest(teamMessage)); await t.step(async () => h.service.whenIdle()); await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
   assert.equal(h.sent.length, 2)
-  assert.ok((await readdir(join(root, 'tasks', task.taskId))).includes('alpha-native-proof.txt'))
-  await h.close()
-  const reopened = await fixture.host(() => { throw new Error('Completed native work must not be repeated after reopening SQLite') }, { initialize: false })
-  await reopened.service.recover(); await reopened.service.whenIdle()
-  assert.equal((await reopened.query('task.get', { taskId: task.taskId })).status, 'completed')
-  assert.deepEqual((await reopened.query('execution.list')).map(e => e.sessionId).sort(), executions.map(e => e.sessionId).sort())
-  assert.equal((await reopened.query('notification.list'))[0].state, 'delivered')
+  assert.ok((await t.step(async () => readdir(join(root, 'tasks', task.taskId)))).includes('alpha-native-proof.txt'))
+  await t.step(async () => h.close())
+  const reopened = await t.step(async () => fixture.host(() => { throw new Error('Completed native work must not be repeated after reopening SQLite') }, { initialize: false }))
+  await t.step(async () => reopened.service.recover()); await t.step(async () => reopened.service.whenIdle())
+  assert.equal((await t.step(async () => reopened.query('task.get', { taskId: task.taskId }))).status, 'completed')
+  assert.deepEqual((await t.step(async () => reopened.query('execution.list'))).map(e => e.sessionId).sort(), executions.map(e => e.sessionId).sort())
+  assert.equal((await t.step(async () => reopened.query('notification.list')))[0].state, 'delivered')
   assert.equal(reopened.sent.length, 0)
   assert.equal(reopened.requests.length, 0)
   for (const [sessionId, cwd] of [[task.sessionId, ownerLog.meta.cwd], ...executions.map(execution => [execution.sessionId, ownerLog.meta.cwd])]) {
-    assert.equal((await inspectSession(reopened.ctx.sessionPersistence, sessionId)).meta.cwd, cwd)
+    assert.equal((await t.step(async () => inspectSession(reopened.ctx.sessionPersistence, sessionId))).meta.cwd, cwd)
     assert.ok(reopened.ctx.workspaceRegistry.list().find(workspace => workspace.path === cwd)?.sessionIds.includes(sessionId))
   }
-})
+}))
 
-test('native sequential handoff preserves one executor before independent review of the fixed artifact', { timeout: 30000 }, async t => {
+test('native sequential handoff preserves one executor before independent review of the fixed artifact', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const fixture = await nativeCase(t, 'task-sequential-review-'), steps = new Map(), reviewed = new Set()
   const artifact = 'candidate.txt', content = 'candidate-v1\ncandidate-proof:7\n'
   const sha256 = createHash('sha256').update(content).digest('hex')
@@ -1154,31 +1177,33 @@ test('native sequential handoff preserves one executor before independent review
     return [call('execution_submit', { output: { status: 'completed', summary: input.objective,
       evidence: [artifact, 'sha256:' + sha256], limitations: ['仅核验固定本地产物，未部署或发送'], artifacts: [artifact] } })]
   })
-  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'sequential-review',
-    objective: '生成固定候选，沿原执行核对后独立只读核验；未完成所有核验前不要宣布完成，不部署或发送。' })
-  await h.service.whenIdle()
-  assert.deepEqual((await h.service.recover()).failures, [])
-  const executions = await h.query('execution.list', { taskId: created.taskId })
-  assert.equal((await h.query('task.list')).length, 1)
+  await t.beginBusiness()
+
+  const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'sequential-review',
+    objective: '生成固定候选，沿原执行核对后独立只读核验；未完成所有核验前不要宣布完成，不部署或发送。' }))
+  await t.step(async () => h.service.whenIdle())
+  assert.deepEqual((await t.step(async () => h.service.recover())).failures, [])
+  const executions = await t.step(async () => h.query('execution.list', { taskId: created.taskId }))
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
   assert.equal(executions.length, 2, 'Sequential continuation reuses the executor; only the independent review adds a member')
   const rejectedCompletions = h.toolResults.filter(item => item.name === 'task_session_submit' && item.result.isError)
   assert.equal(rejectedCompletions.length, 0, 'Two members may complete once the actual work is verified')
   assert.ok(executions.every(item => item.definition.executionBackend === 'dsh' && item.sessionBound))
   assert.equal(executions.find(item => item.key === 'candidate').continuations.length, 1)
   assert.equal(independentStartedAfterDrain, true)
-  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
-  assert.equal(createHash('sha256').update(await readFile(join(fixture.root, 'tasks', created.taskId, artifact))).digest('hex'), sha256)
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: created.taskId }))).status, 'completed')
+  assert.equal(createHash('sha256').update(await t.step(async () => readFile(join(fixture.root, 'tasks', created.taskId, artifact)))).digest('hex'), sha256)
   const reviewer = executions.find(item => item.key === 'independent-review')
-  const reviewLog = await inspectSession(h.ctx.sessionPersistence, reviewer.sessionId)
+  const reviewLog = await t.step(async () => inspectSession(h.ctx.sessionPersistence, reviewer.sessionId))
   const reviewTools = reviewLog.events.filter(event => event.type === 'tool/call').map(event => event.data.name)
   assert.ok(reviewTools.every(name => ['model_content_read', 'read', 'execution_submit'].includes(name)), 'Independent review only reads evidence and submits its result')
   assert.equal(reviewTools.filter(name => name === 'read').length, 1)
   assert.equal(reviewTools.filter(name => name === 'execution_submit').length, 1)
   assert.equal(reviewTools.at(-1), 'execution_submit')
-  assert.equal((await h.query('operation.list', { taskId: created.taskId })).length, 1, 'Verification creates no second write effect')
-})
+  assert.equal((await t.step(async () => h.query('operation.list', { taskId: created.taskId }))).length, 1, 'Verification creates no second write effect')
+}))
 
-test('native service runs eleven independent members within the configured concurrency and completes', { timeout: 45000 }, async t => {
+test('native service runs eleven independent members within the configured concurrency and completes', { ...({ timeout: 45000 }), timeout: nativeLifecycleTimeout(45000) }, nativeLifecycle(45000, async (t) => {
   const fixture = await nativeCase(t, 'task-eleven-members-'), steps = new Map()
   const objectives = Array.from({ length: 11 }, (_, index) => `independent-proof-${index + 1}`)
   let delegated = false, peakRunning = 0
@@ -1208,24 +1233,26 @@ test('native service runs eleven independent members within the configured concu
     assert.ok(JSON.stringify(read.result).includes(input.objective), 'Each native member reads back its own file before submitting')
     return [call('execution_submit', { output: { status: 'completed', summary: input.objective, evidence: [file], limitations: [], artifacts: [file] } })]
   }, { config: { maxConcurrentExecutions: 2 } })
-  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'eleven-members', objective: '分别生成并读取十一份互不依赖的证据文件，全部核验后完成' })
-  await h.service.whenIdle()
-  const executions = await h.query('execution.list', { taskId: created.taskId })
+  await t.beginBusiness()
+
+  const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'eleven-members', objective: '分别生成并读取十一份互不依赖的证据文件，全部核验后完成' }))
+  await t.step(async () => h.service.whenIdle())
+  const executions = await t.step(async () => h.query('execution.list', { taskId: created.taskId }))
   assert.equal(executions.length, 11, JSON.stringify(h.toolResults.filter(item => item.result.isError)))
   assert.equal(new Set(executions.map(item => item.sessionId)).size, 11)
   assert.ok(peakRunning > 0 && peakRunning <= 2)
-  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: created.taskId }))).status, 'completed', JSON.stringify(h.service.listAlerts()))
   for (const execution of executions) {
     assert.equal(execution.definition.executionBackend, 'dsh')
     assert.equal(execution.status, 'succeeded'); assert.equal(execution.drained, true); assert.equal(execution.sessionBound, true)
-    assert.equal(await readFile(join(fixture.root, 'tasks', created.taskId, `${execution.input.objective}.txt`), 'utf8'), execution.input.objective)
-    assert.match(await readFile(join(fixture.root, 'tasks', created.taskId, 'outputs', execution.executionId, 'round-1.md'), 'utf8'), new RegExp(execution.input.objective))
+    assert.equal(await t.step(async () => readFile(join(fixture.root, 'tasks', created.taskId, `${execution.input.objective}.txt`), 'utf8')), execution.input.objective)
+    assert.match(await t.step(async () => readFile(join(fixture.root, 'tasks', created.taskId, 'outputs', execution.executionId, 'round-1.md'), 'utf8')), new RegExp(execution.input.objective))
   }
-  assert.equal((await h.query('operation.list', { taskId: created.taskId })).length, 11)
+  assert.equal((await t.step(async () => h.query('operation.list', { taskId: created.taskId }))).length, 11)
   assert.ok(!h.toolResults.some(item => item.result.isError))
-})
+}))
 
-test('native executor resumes in the same titled task workspace and all task sessions share the process cwd', { timeout: 30000 }, async t => {
+test('native executor resumes in the same titled task workspace and all task sessions share the process cwd', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const fixture = await nativeCase(t, 'task-workspace-resume-')
   function model(continuing) {
     const steps = new Map()
@@ -1254,37 +1281,39 @@ test('native executor resumes in the same titled task workspace and all task ses
     }
   }
   const first = await fixture.host(model(false))
-  const created = await first.service.createTask({ groupId: 'native-group', requestId: 'workspace-resume', title: '恢复目录核对', objective: '核对执行会话恢复时的工作区' })
-  await first.service.whenIdle()
-  const [execution] = await first.query('execution.list'), taskRoot = join(fixture.root, 'tasks', created.taskId)
+  await t.beginBusiness()
+
+  const created = await t.step(async () => first.service.createTask({ groupId: 'native-group', requestId: 'workspace-resume', title: '恢复目录核对', objective: '核对执行会话恢复时的工作区' }))
+  await t.step(async () => first.service.whenIdle())
+  const [execution] = await t.step(async () => first.query('execution.list')), taskRoot = join(fixture.root, 'tasks', created.taskId)
   const runtimeCwd = taskRoot
-  await first.close()
-  const next = await fixture.host(model(true), { initialize: false })
-  await next.service.recover(); await next.service.whenIdle()
-  await next.service.appendTaskContext({ taskId: created.taskId, requestId: 'resume-executor', progressImpact: 'replan', context: '继续使用原执行会话完成第二次核对' })
-  await next.service.whenIdle()
-  assert.deepEqual((await next.service.recover()).failures, [])
-  const [resumed] = await next.query('execution.list')
+  await t.step(async () => first.close())
+  const next = await t.step(async () => fixture.host(model(true), { initialize: false }))
+  await t.step(async () => next.service.recover()); await t.step(async () => next.service.whenIdle())
+  await t.step(async () => next.service.appendTaskContext({ taskId: created.taskId, requestId: 'resume-executor', progressImpact: 'replan', context: '继续使用原执行会话完成第二次核对' }))
+  await t.step(async () => next.service.whenIdle())
+  assert.deepEqual((await t.step(async () => next.service.recover())).failures, [])
+  const [resumed] = await t.step(async () => next.query('execution.list'))
   assert.equal(resumed.sessionId, execution.sessionId)
   assert.equal(resumed.executionId, execution.executionId)
   assert.equal(resumed.input.objective, 'second')
-  assert.equal((await next.query('execution.list')).length, 1, 'A continuation does not add members to satisfy a headcount')
+  assert.equal((await t.step(async () => next.query('execution.list'))).length, 1, 'A continuation does not add members to satisfy a headcount')
   assert.equal(resumed.definition.executionBackend, 'dsh')
   assert.equal(resumed.status, 'succeeded')
-  assert.equal((await next.query('task.get', { taskId: created.taskId })).status, 'completed')
-  assert.equal(await readFile(join(runtimeCwd, 'resume-cwd.txt'), 'utf8'), runtimeCwd)
+  assert.equal((await t.step(async () => next.query('task.get', { taskId: created.taskId }))).status, 'completed')
+  assert.equal(await t.step(async () => readFile(join(runtimeCwd, 'resume-cwd.txt'), 'utf8')), runtimeCwd)
   const workspace = next.ctx.workspaceRegistry.list().find(item => item.path === taskRoot)
   assert.equal(workspace.title, '恢复目录核对')
   assert.ok(workspace.sessionIds.includes(created.session.sessionId) && workspace.sessionIds.includes(resumed.sessionId))
   assert.equal(next.ctx.workspaceRegistry.list().filter(item => item.path.startsWith(taskRoot)).length, 1)
-  const log = await inspectSession(next.ctx.sessionPersistence, resumed.sessionId)
+  const log = await t.step(async () => inspectSession(next.ctx.sessionPersistence, resumed.sessionId))
   assert.equal(log.meta.cwd, taskRoot)
   assert.ok(!log.events.some(event => event.type === 'working-directory/change'))
   assert.equal(log.events.findLast(event => event.type === 'session/title').data.title, execution.title, '同一执行保留稳定名称，续办key不改名')
   assert.equal(resumed.input.title, execution.title)
-})
+}))
 
-test('native service reopens an unknown notification for readback without resending completed business work', { timeout: 15000 }, async t => {
+test('native service reopens an unknown notification for readback without resending completed business work', { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
   const fixture = await nativeCase(t, 'task-service-notification-')
   let sends = 0, canRead = false, readbacks = 0
   const notifications = {
@@ -1299,33 +1328,35 @@ test('native service reopens an unknown notification for readback without resend
   const first = await fixture.host(async request => {
     return topicTaskCalls(request) ?? [decision('complete', '可用的已有证据已核验。')]
   }, { notifications })
+  await t.beginBusiness()
+
   try {
-    await first.service.ingest({ ...message, messageId: 'notification-request', text: '测试助手，核对已有记录并给出结论。' })
-    await first.service.whenIdle()
-    assert.equal((await first.query('task.list'))[0].status, 'completed')
-    const pending = (await first.query('notification.list')).find(notification => notification.payload.coveredEventIds?.length)
+    await t.step(async () => first.service.ingest({ ...message, messageId: 'notification-request', text: '测试助手，核对已有记录并给出结论。' }))
+    await t.step(async () => first.service.whenIdle())
+    assert.equal((await t.step(async () => first.query('task.list')))[0].status, 'completed')
+    const pending = (await t.step(async () => first.query('notification.list'))).find(notification => notification.payload.coveredEventIds?.length)
     assert.equal(pending.state, 'starting', 'Topic 发件箱将 ACK 与送达回查分开记录')
     assert.equal(pending.ack.messageId, 'durable-delivery-id')
     assert.equal(pending.readbackAttemptCount, 1)
     assert.ok(Date.parse(pending.nextAttemptAt) > Date.now())
     assert.equal(sends, 2)
-  } finally { await first.close() }
+  } finally { await t.step(async () => first.close()) }
   const readsBeforeRecovery = readbacks
   canRead = true
-  const second = await fixture.host(() => { throw new Error('Completed task must not invoke the model during receipt recovery') }, { notifications, initialize: false })
-  assert.equal((await second.query('notification.list')).find(notification => notification.payload.coveredEventIds?.length).state, 'unknown')
-  await second.service.recover(); await second.service.whenIdle()
+  const second = await t.step(async () => fixture.host(() => { throw new Error('Completed task must not invoke the model during receipt recovery') }, { notifications, initialize: false }))
+  assert.equal((await t.step(async () => second.query('notification.list'))).find(notification => notification.payload.coveredEventIds?.length).state, 'unknown')
+  await t.step(async () => second.service.recover()); await t.step(async () => second.service.whenIdle())
   assert.equal(readbacks, readsBeforeRecovery, 'Restart must preserve the persisted observation cooldown')
-  const retryAt = Math.max(...(await second.query('notification.list')).filter(notification => notification.state === 'unknown').map(notification => Date.parse(notification.nextAttemptAt)))
-  await new Promise(resolve => setTimeout(resolve, Math.max(0, retryAt - Date.now()) + 20))
-  await second.service.recover(); await second.service.whenIdle()
-  assert.ok((await second.query('notification.list')).every(notification => notification.state === 'delivered'))
-  assert.equal((await second.query('task.list')).length, 1)
+  const retryAt = Math.max(...(await t.step(async () => second.query('notification.list'))).filter(notification => notification.state === 'unknown').map(notification => Date.parse(notification.nextAttemptAt)))
+  await t.step(async () => new Promise(resolve => setTimeout(resolve, Math.max(0, retryAt - Date.now()) + 20)))
+  await t.step(async () => second.service.recover()); await t.step(async () => second.service.whenIdle())
+  assert.ok((await t.step(async () => second.query('notification.list'))).every(notification => notification.state === 'delivered'))
+  assert.equal((await t.step(async () => second.query('task.list'))).length, 1)
   assert.equal(sends, 2); assert.equal(readbacks, readsBeforeRecovery + 1)
   assert.equal(second.requests.length, 0)
-})
+}))
 
-test('native service cancellation stops the real execution process, drains the session, and rejects late completion', { timeout: 15000 }, async t => {
+test('native service cancellation stops the real execution process, drains the session, and rejects late completion', { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
   const fixture = await nativeCase(t, 'task-service-cancel-'), { root } = fixture
   let ownerStep = 0
   const h = await fixture.host(async request => {
@@ -1343,44 +1374,46 @@ test('native service cancellation stops the real execution process, drains the s
     })]
     return [call('execution_submit', { output: { status: 'completed', summary: 'This late result must not complete a cancelled task', evidence: [], limitations: [], artifacts: ['process-completed.txt'] } })]
   })
-  await h.service.ingest({ ...message, messageId: 'cancel-request' })
-  const execution = await waitUntil(async () => {
+  await t.beginBusiness()
+
+  await t.step(async () => h.service.ingest({ ...message, messageId: 'cancel-request' }))
+  const execution = await t.step(async () => waitUntil(async () => {
     const [execution] = await h.query('execution.list')
     if (!execution) return null
     const marker = join(root, 'tasks', execution.taskId, 'process-started.txt')
     return await readFile(marker, 'utf8').then(() => execution, error => error.code === 'ENOENT' ? null : Promise.reject(error))
-  }, 'real shell process started')
-  const oldBinding = await h.query('execution.binding', { executionId: execution.executionId })
-  const result = await h.service.cancelTask({ taskId: execution.taskId, requestId: 'cancel-once', reason: '停止本次执行' })
-  await h.service.whenIdle()
+  }, 'real shell process started'))
+  const oldBinding = await t.step(async () => h.query('execution.binding', { executionId: execution.executionId }))
+  const result = await t.step(async () => h.service.cancelTask({ taskId: execution.taskId, requestId: 'cancel-once', reason: '停止本次执行' }))
+  await t.step(async () => h.service.whenIdle())
   assert.equal(result.control, 'cancelled')
-  const task = await h.query('task.get', { taskId: execution.taskId }), stored = await h.query('execution.get', { executionId: execution.executionId })
+  const task = await t.step(async () => h.query('task.get', { taskId: execution.taskId })), stored = await t.step(async () => h.query('execution.get', { executionId: execution.executionId }))
   assert.equal(task.control, 'cancelled'); assert.equal(task.drained, true)
   assert.equal(stored.drained, true); assert.notEqual(stored.status, 'succeeded')
   assert.equal(h.ctx.agents.get(execution.sessionId), undefined)
   assert.equal(h.ctx.sessions.get(execution.sessionId), undefined)
-  await assert.rejects(readFile(join(root, 'tasks', task.taskId, 'process-completed.txt')), { code: 'ENOENT' })
+  await t.step(async () => assert.rejects(readFile(join(root, 'tasks', task.taskId, 'process-completed.txt')), { code: 'ENOENT' }))
   assert.equal(h.sent.length, 1)
-  assert.equal((await h.query('notification.list')).length, 1)
-  const operations = await h.query('operation.list', { taskId: task.taskId })
+  assert.equal((await t.step(async () => h.query('notification.list'))).length, 1)
+  const operations = await t.step(async () => h.query('operation.list', { taskId: task.taskId }))
   assert.equal(operations.length, 1)
   assert.ok(['unknown', 'cancelled'].includes(operations[0].state), 'Interrupted shell must not be asserted successful')
-  const saved = await inspectSession(h.ctx.sessionPersistence, execution.sessionId)
+  const saved = await t.step(async () => inspectSession(h.ctx.sessionPersistence, execution.sessionId))
   assert.ok(saved.events.some(event => event.type === 'tool/call' && event.data.name === nativeShell))
   assert.ok(saved.events.some(event => event.type === 'turn/end'))
-  await assert.rejects(h.service.store.command({ id: 'late-completion-after-cancel', kind: 'execution.result', args: {
+  await t.step(async () => assert.rejects(h.service.store.command({ id: 'late-completion-after-cancel', kind: 'execution.result', args: {
     binding: oldBinding, output: { status: 'completed', summary: 'stale late success', evidence: [], limitations: [], artifacts: [] },
-  } }), { code: 'DYNAMIC_EXECUTION_RESULT_CONFLICT' })
-  const webSources = (await h.query('source.list')).filter(source => source.channel === 'web')
+  } }), { code: 'DYNAMIC_EXECUTION_RESULT_CONFLICT' }))
+  const webSources = (await t.step(async () => h.query('source.list'))).filter(source => source.channel === 'web')
   assert.equal(webSources.length, 1)
   assert.equal(webSources[0].routed, true, 'Direct web cancellation must not be rerouted as a new group message on restart')
   const requests = h.requests.length
-  await h.service.recover(); await h.service.whenIdle()
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
   assert.equal(h.requests.length, requests)
-  assert.equal((await h.query('task.list')).length, 1)
-})
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+}))
 
-test('native requirement update resumes the same owner with new sources and fences the interrupted old execution result', { timeout: 15000 }, async t => {
+test('native requirement update resumes the same owner with new sources and fences the interrupted old execution result', { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
   const fixture = await nativeCase(t, 'task-service-revise-'), { root } = fixture
   let ownerStep = 0
   const revisedInputs = []
@@ -1400,18 +1433,20 @@ test('native requirement update resumes the same owner with new sources and fenc
       : "printf '%s' started > revision-process-started.txt; sleep 30; printf old-result > old-completed.txt",
       description: 'Hold the old requirement process until interrupted', timeoutMs: 60000 })]
   })
-  await h.service.ingest({ ...message, messageId: 'revision-original' })
-  const oldExecution = await waitUntil(async () => {
+  await t.beginBusiness()
+
+  await t.step(async () => h.service.ingest({ ...message, messageId: 'revision-original' }))
+  const oldExecution = await t.step(async () => waitUntil(async () => {
     const [execution] = await h.query('execution.list')
     if (!execution) return null
     const marker = join(root, 'tasks', execution.taskId, 'revision-process-started.txt')
     return await readFile(marker).then(() => execution, error => error.code === 'ENOENT' ? null : Promise.reject(error))
-  }, 'old real execution started')
-  const oldTask = await h.query('task.get', { taskId: oldExecution.taskId })
-  await h.service.appendTaskContext({ taskId: oldTask.taskId, requestId: 'revise-once', progressImpact: 'replan', expectedRequirementRevision: 1, expectedControlRevision: 1,
-    context: '最新要求：暂停生成文件，先核对旧操作结果，不要将旧结果当作新要求完成。' })
-  await h.service.whenIdle()
-  const task = await h.query('task.get', { taskId: oldTask.taskId }), execution = await h.query('execution.get', { executionId: oldExecution.executionId })
+  }, 'old real execution started'))
+  const oldTask = await t.step(async () => h.query('task.get', { taskId: oldExecution.taskId }))
+  await t.step(async () => h.service.appendTaskContext({ taskId: oldTask.taskId, requestId: 'revise-once', progressImpact: 'replan', expectedRequirementRevision: 1, expectedControlRevision: 1,
+    context: '最新要求：暂停生成文件，先核对旧操作结果，不要将旧结果当作新要求完成。' }))
+  await t.step(async () => h.service.whenIdle())
+  const task = await t.step(async () => h.query('task.get', { taskId: oldTask.taskId })), execution = await t.step(async () => h.query('execution.get', { executionId: oldExecution.executionId }))
   assert.equal(task.sessionId, oldTask.sessionId)
   assert.equal(task.requirementRevision, 2)
   assert.equal(task.status, 'active'); assert.equal(task.drained, true)
@@ -1425,21 +1460,21 @@ test('native requirement update resumes the same owner with new sources and fenc
   assert.equal(execution.drained, true)
   assert.equal(execution.result.current, false)
   assert.notEqual(execution.status, 'succeeded')
-  assert.equal((await h.query('task.list')).length, 1)
-  assert.equal((await h.query('execution.list')).length, 1)
-  assert.equal((await h.query('notification.list')).length, 1)
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 1)
+  assert.equal((await t.step(async () => h.query('notification.list'))).length, 1)
   assert.equal(h.sent.length, 1)
-  const saved = await inspectSession(h.ctx.sessionPersistence, task.sessionId)
+  const saved = await t.step(async () => inspectSession(h.ctx.sessionPersistence, task.sessionId))
   assert.equal(saved.events.filter(event => event.type === 'plugin:dingtalk/task-session').length, 1)
   assert.ok(saved.events.filter(event => event.type === 'user/message' && event.data.source?.taskSession).length >= 2)
-  assert.equal((await h.query('source.list')).find(source => source.channel === 'web').routed, true)
+  assert.equal((await t.step(async () => h.query('source.list'))).find(source => source.channel === 'web').routed, true)
   const requests = h.requests.length
-  await h.service.recover(); await h.service.whenIdle()
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
   assert.equal(h.requests.length, requests)
-  assert.equal((await h.query('task.list')).length, 1)
-})
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+}))
 
-for (const [maxConcurrentTasks, maxConcurrentExecutions] of [[1, 1], [1, 2], [2, 1], [2, 3]]) test(`native capacity queues promote every task and execution: tasks=${maxConcurrentTasks}, executions=${maxConcurrentExecutions}`, { timeout: 25000 }, async t => {
+for (const [maxConcurrentTasks, maxConcurrentExecutions] of [[1, 1], [1, 2], [2, 1], [2, 3]]) test(`native capacity queues promote every task and execution: tasks=${maxConcurrentTasks}, executions=${maxConcurrentExecutions}`, { ...({ timeout: 25000 }), timeout: nativeLifecycleTimeout(25000) }, nativeLifecycle(25000, async (t) => {
   const fixture = await nativeCase(t, 'task-service-capacity-'), gate = Promise.withResolvers(), steps = new Map()
   let entered = 0
   const h = await fixture.host(async request => {
@@ -1455,25 +1490,27 @@ for (const [maxConcurrentTasks, maxConcurrentExecutions] of [[1, 1], [1, 2], [2,
     if (step === 0) { entered++; await gate.promise; return [call('write', { file_path: input.objective + '-capacity-proof.txt', content: key })] }
     return [call('execution_submit', { output: { status: 'completed', summary: key, evidence: ['actual filesystem write'], limitations: [], artifacts: [input.objective + '-capacity-proof.txt'] } })]
   }, { config: { maxConcurrentTasks, maxConcurrentExecutions } })
-  try {
-    await h.service.createTask({ groupId: 'native-group', requestId: 'capacity-a', objective: 'first task' })
-    await h.service.createTask({ groupId: 'native-group', requestId: 'capacity-b', objective: 'second task' })
-    const admitted = Math.min(maxConcurrentTasks * 3, maxConcurrentExecutions)
-    await waitUntil(() => entered === admitted, 'available native executor slots admitted')
-    await waitUntil(async () => (await h.query('execution.list')).length === maxConcurrentTasks * 3, 'admitted owners persisted all three delegations')
-    assert.equal((await h.query('task.list')).filter(task => task.sessionBound).length, maxConcurrentTasks)
-    assert.equal((await h.query('execution.list')).filter(execution => execution.status === 'running').length, admitted)
-  } finally { gate.resolve() }
-  await h.service.whenIdle()
-  assert.equal(entered, 6, 'All six real execution sessions must run without a periodic recovery tick')
-  assert.ok((await h.query('task.list')).every(task => task.status === 'completed'))
-  for (const execution of await h.query('execution.list')) {
-    assert.equal(execution.status, 'succeeded'); assert.equal(execution.drained, true)
-    assert.equal(await readFile(join(fixture.root, 'tasks', execution.taskId, execution.input.objective + '-capacity-proof.txt'), 'utf8'), execution.taskId + ':' + execution.input.objective)
-  }
-})
+  await t.beginBusiness()
 
-test('native shared resources queue without occupying task capacity and promote on drain', { timeout: 45000 }, async t => {
+  try {
+    await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'capacity-a', objective: 'first task' }))
+    await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'capacity-b', objective: 'second task' }))
+    const admitted = Math.min(maxConcurrentTasks * 3, maxConcurrentExecutions)
+    await t.step(async () => waitUntil(() => entered === admitted, 'available native executor slots admitted'))
+    await t.step(async () => waitUntil(async () => (await h.query('execution.list')).length === maxConcurrentTasks * 3, 'admitted owners persisted all three delegations'))
+    assert.equal((await t.step(async () => h.query('task.list'))).filter(task => task.sessionBound).length, maxConcurrentTasks)
+    assert.equal((await t.step(async () => h.query('execution.list'))).filter(execution => execution.status === 'running').length, admitted)
+  } finally { gate.resolve() }
+  await t.step(async () => h.service.whenIdle())
+  assert.equal(entered, 6, 'All six real execution sessions must run without a periodic recovery tick')
+  assert.ok((await t.step(async () => h.query('task.list'))).every(task => task.status === 'completed'))
+  for (const execution of await t.step(async () => h.query('execution.list'))) {
+    assert.equal(execution.status, 'succeeded'); assert.equal(execution.drained, true)
+    assert.equal(await t.step(async () => readFile(join(fixture.root, 'tasks', execution.taskId, execution.input.objective + '-capacity-proof.txt'), 'utf8')), execution.taskId + ':' + execution.input.objective)
+  }
+}))
+
+test('native shared resources queue without occupying task capacity and promote on drain', { ...({ timeout: 45000 }), timeout: nativeLifecycleTimeout(45000) }, nativeLifecycle(45000, async (t) => {
   const fixture = await nativeCase(t, 'task-resource-capacity-'), gate = Promise.withResolvers(), steps = new Map(), entered = []
   const team = nativeVerificationTeam({ filePath: 'resource-proof.txt', expected: '' })
   const h = await fixture.host(async (request, host) => {
@@ -1496,33 +1533,35 @@ test('native shared resources queue without occupying task capacity and promote 
     }
     return [call('execution_submit', { output: { status: 'completed', summary: input.objective, evidence: ['actual write'], limitations: [], artifacts: ['resource-proof.txt'] } })]
   }, { config: { maxConcurrentTasks: 2, maxConcurrentExecutions: 2 } })
+  await t.beginBusiness()
+
   try {
-    await h.service.createTask({ groupId: 'native-group', requestId: 'resource-holder', objective: 'holder' })
-    await waitUntil(() => entered.includes('holder'), 'first execution holds resource')
-    const waiter = await h.service.createTask({ groupId: 'native-group', requestId: 'resource-waiter', objective: 'waiter' })
-    await waitUntil(async () => (await h.query('execution.list', { taskId: waiter.taskId }))[0]?.resources.state === 'waiting', 'same resource waits')
-    await h.service.createTask({ groupId: 'native-group', requestId: 'resource-independent', objective: 'independent' })
-    await waitUntil(() => entered.includes('independent'), 'waiting task gives capacity to independent resource')
+    await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'resource-holder', objective: 'holder' }))
+    await t.step(async () => waitUntil(() => entered.includes('holder'), 'first execution holds resource'))
+    const waiter = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'resource-waiter', objective: 'waiter' }))
+    await t.step(async () => waitUntil(async () => (await h.query('execution.list', { taskId: waiter.taskId }))[0]?.resources.state === 'waiting', 'same resource waits'))
+    await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'resource-independent', objective: 'independent' }))
+    await t.step(async () => waitUntil(() => entered.includes('independent'), 'waiting task gives capacity to independent resource'))
     assert.deepEqual(entered, ['holder', 'independent'])
-    const waiting = (await h.query('execution.list', { taskId: waiter.taskId }))[0]
+    const waiting = (await t.step(async () => h.query('execution.list', { taskId: waiter.taskId })))[0]
     assert.equal(waiting.status, 'queued'); assert.equal(waiting.leaseEpoch, 0)
     assert.equal(waiting.resources.blocking[0].resourceKey, 'uat2')
     assert.equal(h.service.listAlerts().length, 0)
     // 在持有者不释放期间，等待者不能反复进入模型或增加执行租约。
-    await new Promise(resolve => setTimeout(resolve, 80))
-    assert.equal((await h.query('execution.get', { executionId: waiting.executionId })).leaseEpoch, 0)
+    await t.step(async () => new Promise(resolve => setTimeout(resolve, 80)))
+    assert.equal((await t.step(async () => h.query('execution.get', { executionId: waiting.executionId }))).leaseEpoch, 0)
     assert.ok(h.requests.filter(request => { try { return latestInput(request).task?.taskId === waiter.taskId } catch { return false } }).length < 6, 'resource conflict must not create a model/claim hot loop')
   } finally { gate.resolve() }
-  await h.service.whenIdle()
+  await t.step(async () => h.service.whenIdle())
   assert.deepEqual(entered, ['holder', 'independent', 'waiter'])
-  assert.ok((await h.query('task.list')).every(task => task.status === 'completed'), JSON.stringify({ tasks: (await h.query('task.list')).map(item => ({ status: item.status, recovery: item.providerRecovery })), executions: (await h.query('execution.list')).map(item => ({ key: item.key, objective: item.input.objective, status: item.status, error: item.result?.payload.error })), errors: h.toolResults.filter(item => item.result.isError) }))
-  for (const execution of (await h.query('execution.list')).filter(item => item.key === 'run')) {
+  assert.ok((await t.step(async () => h.query('task.list'))).every(task => task.status === 'completed'), JSON.stringify({ tasks: (await t.step(async () => h.query('task.list'))).map(item => ({ status: item.status, recovery: item.providerRecovery })), executions: (await t.step(async () => h.query('execution.list'))).map(item => ({ key: item.key, objective: item.input.objective, status: item.status, error: item.result?.payload.error })), errors: h.toolResults.filter(item => item.result.isError) }))
+  for (const execution of (await t.step(async () => h.query('execution.list'))).filter(item => item.key === 'run')) {
     assert.equal(execution.resources.state, 'released')
-    assert.equal(await readFile(join(fixture.root, 'tasks', execution.taskId, 'resource-proof.txt'), 'utf8'), execution.input.objective)
+    assert.equal(await t.step(async () => readFile(join(fixture.root, 'tasks', execution.taskId, 'resource-proof.txt'), 'utf8')), execution.input.objective)
   }
-})
+}))
 
-test('native delegation rejects changed keys on receipt replay and preserves omitted continuation keys', { timeout: 30000 }, async t => {
+test('native delegation rejects changed keys on receipt replay and preserves omitted continuation keys', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const fixture = await nativeCase(t, 'task-resource-continuation-')
   const team = nativeVerificationTeam()
   let stage = 0, executions = 0
@@ -1546,11 +1585,13 @@ test('native delegation rejects changed keys on receipt replay and preserves omi
     if (execution.inputVersion === 2) { const more = team.owner(input, execution); if (more) return more }
     return [decision(execution.inputVersion === 2 && input.executions.length === 3 && input.executions.every(item => item.drained && item.status === 'succeeded') ? 'complete' : 'wait', '续办已核验')]
   })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'resource-continuation', objective: 'resource continuation' })
-  await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify(h.service.listAlerts()))
+  await t.beginBusiness()
+
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'resource-continuation', objective: 'resource continuation' }))
+  await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed', JSON.stringify(h.service.listAlerts()))
   assert.equal(executions, 2)
-  const all = await h.query('execution.list'); assert.equal(all.length, 3); assert.equal(all.filter(item => item.key === 'original').length, 1)
+  const all = await t.step(async () => h.query('execution.list')); assert.equal(all.length, 3); assert.equal(all.filter(item => item.key === 'original').length, 1)
   assert.deepEqual(all[0].resourceKeys, ['uat2']); assert.equal(all[0].inputVersion, 2)
   const results = h.toolResults.filter(item => item.name === 'task_delegate')
   assert.equal(results.filter(item => item.result.isError).length, 1)
@@ -1558,24 +1599,28 @@ test('native delegation rejects changed keys on receipt replay and preserves omi
   assert.match(JSON.stringify(results[2].result), /"status":"succeeded"/)
   assert.match(JSON.stringify(results[2].result), /"state":"released"/)
   assert.match(JSON.stringify(h.toolResults.find(item => item.name === 'task_execution_read').result), /"state":"released"/)
-})
+}))
 
-test('recovering an idle owner with no pending wake does not consume a task slot', { timeout: 10000 }, async t => {
+test('recovering an idle owner with no pending wake does not consume a task slot', { ...({ timeout: 10000 }), timeout: nativeLifecycleTimeout(10000) }, nativeLifecycle(10000, async (t) => {
   const fixture = await nativeCase(t, 'task-service-idle-slot-')
   let rounds = 0
   const h = await fixture.host(async () => { rounds++; return [decision('wait', '没有具体执行待办')] }, { config: { maxConcurrentTasks: 1 } })
-  await h.service.createTask({ groupId: 'native-group', requestId: 'idle-a', objective: 'wait for input' })
-  await h.service.whenIdle()
-  await h.service.recover(); await h.service.whenIdle()
-  await h.service.createTask({ groupId: 'native-group', requestId: 'idle-b', objective: 'another independent wait' })
-  await h.service.whenIdle()
-  assert.equal(rounds, 2)
-  assert.ok((await h.query('task.list')).every(task => task.sessionBound && task.drained))
-})
+  await t.beginBusiness()
 
-for (const persistent of [false, true]) test(`native session creation failure has bounded recovery retries: persistent=${persistent}`, { timeout: 10000 }, async t => {
+  await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'idle-a', objective: 'wait for input' }))
+  await t.step(async () => h.service.whenIdle())
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+  await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'idle-b', objective: 'another independent wait' }))
+  await t.step(async () => h.service.whenIdle())
+  assert.equal(rounds, 2)
+  assert.ok((await t.step(async () => h.query('task.list'))).every(task => task.sessionBound && task.drained))
+}))
+
+for (const persistent of [false, true]) test(`native session creation failure has bounded recovery retries: persistent=${persistent}`, { ...({ timeout: 10000 }), timeout: nativeLifecycleTimeout(10000) }, nativeLifecycle(10000, async (t) => {
   const fixture = await nativeCase(t, 'task-service-retry-')
   const h = await fixture.host(async () => [decision('complete', 'native session recovered')], { config: { retryIntervalMs: 2000 } })
+  await t.beginBusiness()
+
   const registry = h.ctx.agents, create = registry.create
   let attempts = 0
   h.ctx.agents.create = async function (options) {
@@ -1584,44 +1629,46 @@ for (const persistent of [false, true]) test(`native session creation failure ha
     return create.call(this, options)
   }
   t.after(() => { registry.create = create })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'setup-failure', objective: 'test native setup failure' })
-  await h.service.whenIdle()
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'setup-failure', objective: 'test native setup failure' }))
+  await t.step(async () => h.service.whenIdle())
   assert.equal(attempts, 1)
-  const failure = (await h.service.recover()).failures.find(value => value.id === task.taskId)
+  const failure = (await t.step(async () => h.service.recover())).failures.find(value => value.id === task.taskId)
   assert.ok(failure.retryAfter - Date.parse(failure.at) >= 2000, 'Persisted failure must retain the full configured retry delay')
-  for (let i = 0; i < 3; i++) { await h.service.recover(); await h.service.whenIdle() }
+  for (let i = 0; i < 3; i++) { await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle()) }
   assert.equal(attempts, 1, 'Explicit recovery cannot busy-loop inside the retry window')
-  await new Promise(resolve => setTimeout(resolve, Math.max(0, failure.retryAfter - Date.now()) + 10))
-  await h.service.recover(); await h.service.whenIdle()
+  await t.step(async () => new Promise(resolve => setTimeout(resolve, Math.max(0, failure.retryAfter - Date.now()) + 10)))
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
   assert.equal(attempts, 2)
-  const stored = await h.query('task.get', { taskId: task.taskId })
+  const stored = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
   assert.equal(stored.drained, true)
   assert.equal(stored.status, persistent ? 'active' : 'completed')
-  if (!persistent) assert.equal((await h.service.recover()).failures.some(value => value.id === task.taskId), false)
-})
+  if (!persistent) assert.equal((await t.step(async () => h.service.recover())).failures.some(value => value.id === task.taskId), false)
+}))
 
-for (const persistent of [false, true]) test(`native model failures settle without repeated owner requests: persistent=${persistent}`, { timeout: 10000 }, async t => {
+for (const persistent of [false, true]) test(`native model failures settle without repeated owner requests: persistent=${persistent}`, { ...({ timeout: 10000 }), timeout: nativeLifecycleTimeout(10000) }, nativeLifecycle(10000, async (t) => {
   const fixture = await nativeCase(t, 'task-service-model-failure-')
   let requests = 0
   const h = await fixture.host(async () => {
     if (++requests === 1 || persistent) throw new Error('CONTROLLED_MODEL_FAILURE')
     return [decision('complete', 'new source recovered the existing native owner')]
   })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'model-failure', objective: 'test native model failure' })
-  await h.service.whenIdle()
-  for (let i = 0; i < 3; i++) { await h.service.recover(); await h.service.whenIdle() }
+  await t.beginBusiness()
+
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'model-failure', objective: 'test native model failure' }))
+  await t.step(async () => h.service.whenIdle())
+  for (let i = 0; i < 3; i++) { await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle()) }
   assert.equal(requests, 1)
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).lastDecision.action, 'blocked')
-  await h.service.appendTaskContext({ taskId: task.taskId, requestId: 'model-retry-source', progressImpact: 'replan', context: 'Try this same task again with the new information.' })
-  await h.service.whenIdle()
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).lastDecision.action, 'blocked')
+  await t.step(async () => h.service.appendTaskContext({ taskId: task.taskId, requestId: 'model-retry-source', progressImpact: 'replan', context: 'Try this same task again with the new information.' }))
+  await t.step(async () => h.service.whenIdle())
   assert.equal(requests, 2)
-  const stored = await h.query('task.get', { taskId: task.taskId })
+  const stored = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
   assert.equal(stored.drained, true)
   assert.equal(stored.status, persistent ? 'active' : 'completed')
   assert.equal(stored.sessionId, task.session.sessionId)
-})
+}))
 
-test('empty owner recovery reviews the retained execution without replaying its completed native write', { timeout: 30000 }, async t => {
+test('empty owner recovery reviews the retained execution without replaying its completed native write', { ...({ timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const fixture = await nativeCase(t, 'task-empty-after-write-')
   const effect = join(fixture.root, 'effect.txt')
   const team = nativeVerificationTeam({ filePath: effect, expected: 'once' })
@@ -1648,62 +1695,66 @@ test('empty owner recovery reviews the retained execution without replaying its 
     }
     return [call('execution_submit', { output: { status: 'completed', summary: '已完成一次写入', evidence: ['原生写入成功'], limitations: [], artifacts: [] } })]
   })
-  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'empty-after-write', objective: '写一次后核对结果' })
-  await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: created.taskId })).providerRecovery.failure.code, 'TASK_SESSION_NO_SUBMISSION')
-  assert.deepEqual((await h.query('task.events')).events, [], 'An empty Owner turn cannot publish a business completion event')
+  await t.beginBusiness()
+
+  const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'empty-after-write', objective: '写一次后核对结果' }))
+  await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: created.taskId }))).providerRecovery.failure.code, 'TASK_SESSION_NO_SUBMISSION')
+  assert.deepEqual((await t.step(async () => h.query('task.events'))).events, [], 'An empty Owner turn cannot publish a business completion event')
   try {
     // 单独核对五秒退避后的恢复；后续成员核验沿真实调度排空，仍受外层三十秒总时限约束。
-    await waitUntil(() => reviewed, 'retained owner recovery', 10000)
-    await h.service.whenIdle()
-    assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'completed')
+    await t.step(async () => waitUntil(() => reviewed, 'retained owner recovery', 10000))
+    await t.step(async () => h.service.whenIdle())
+    assert.equal((await t.step(async () => h.query('task.get', { taskId: created.taskId }))).status, 'completed')
   }
-  catch (error) { throw new Error(JSON.stringify({ task: await h.query('task.get', { taskId: created.taskId }), executions: (await h.query('execution.list')).map(item => ({ key: item.key, status: item.status, error: item.result?.payload.error })), errors: h.toolResults.filter(item => item.result.isError) }), { cause: error }) }
+  catch (error) { throw new Error(JSON.stringify({ task: await t.step(async () => h.query('task.get', { taskId: created.taskId })), executions: (await t.step(async () => h.query('execution.list'))).map(item => ({ key: item.key, status: item.status, error: item.result?.payload.error })), errors: h.toolResults.filter(item => item.result.isError) }), { cause: error }) }
   assert.equal(reviewed, true)
-  assert.equal((await readFile(effect, 'utf8')).trim(), 'once')
-  const executions = await h.query('execution.list', { taskId: created.taskId })
+  assert.equal((await t.step(async () => readFile(effect, 'utf8'))).trim(), 'once')
+  const executions = await t.step(async () => h.query('execution.list', { taskId: created.taskId }))
   assert.equal(executions.length, 3); assert.equal(executions.filter(item => item.key === 'once').length, 1)
   assert.equal(executions[0].executionId, executionId)
   assert.equal(executions[0].inputVersion, 1)
-  assert.equal((await h.query('operation.list', { taskId: created.taskId })).filter(item => item.state === 'succeeded').length, 1)
+  assert.equal((await t.step(async () => h.query('operation.list', { taskId: created.taskId }))).filter(item => item.state === 'succeeded').length, 1)
   assert.equal(h.toolResults.filter(result => result.name === nativeShell).length, 1)
-  const events = (await h.query('task.events')).events
+  const events = (await t.step(async () => h.query('task.events'))).events
   assert.equal(events.length, 1)
   assert.equal(events[0].kind, 'task.completed')
   assert.equal(events[0].taskId, created.taskId)
-  const receipt = await h.query('receipt.get', { id: events[0].taskDecisionReceiptId })
+  const receipt = await t.step(async () => h.query('receipt.get', { id: events[0].taskDecisionReceiptId }))
   assert.equal(receipt.taskDecision.id, events[0].commandId)
   assert.equal(receipt.taskDecision.decision.action, 'complete')
   assert.deepEqual(receipt.completionEvent, events[0], 'The completion event is anchored to the exact formal Owner receipt')
-  const operations = await h.query('operation.list', { taskId: created.taskId })
-  await h.service.recover()
-  await h.service.whenIdle()
-  assert.deepEqual((await h.query('task.events')).events, events)
-  assert.deepEqual((await h.query('execution.list', { taskId: created.taskId })).map(item => ({ executionId: item.executionId, inputVersion: item.inputVersion })),
+  const operations = await t.step(async () => h.query('operation.list', { taskId: created.taskId }))
+  await t.step(async () => h.service.recover())
+  await t.step(async () => h.service.whenIdle())
+  assert.deepEqual((await t.step(async () => h.query('task.events'))).events, events)
+  assert.deepEqual((await t.step(async () => h.query('execution.list', { taskId: created.taskId }))).map(item => ({ executionId: item.executionId, inputVersion: item.inputVersion })),
     executions.map(item => ({ executionId: item.executionId, inputVersion: item.inputVersion })))
-  assert.deepEqual((await h.query('operation.list', { taskId: created.taskId })).map(item => item.operationId), operations.map(item => item.operationId))
+  assert.deepEqual((await t.step(async () => h.query('operation.list', { taskId: created.taskId }))).map(item => item.operationId), operations.map(item => item.operationId))
   assert.equal(h.toolResults.filter(result => result.name === nativeShell).length, 1)
-  assert.equal((await readFile(effect, 'utf8')).trim(), 'once')
-})
+  assert.equal((await t.step(async () => readFile(effect, 'utf8'))).trim(), 'once')
+}))
 
-for (const correctOnce of [false, true]) test(`native owner empty-summary corrections are bounded and may recover: correctOnce=${correctOnce}`, { timeout: 10000 }, async t => {
+for (const correctOnce of [false, true]) test(`native owner empty-summary corrections are bounded and may recover: correctOnce=${correctOnce}`, { ...({ timeout: 10000 }), timeout: nativeLifecycleTimeout(10000) }, nativeLifecycle(10000, async (t) => {
   const fixture = await nativeCase(t, 'task-service-invalid-summary-')
   let requests = 0
   const h = await fixture.host(async () => {
     assert.ok(++requests <= 4, 'Invalid owner decisions must stop before a fifth model request')
     return [decision('complete', correctOnce && requests > 1 ? '纠正为空的summary后完成' : '  ')]
   })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'empty-summary', objective: 'test owner decision correction' })
-  await h.service.whenIdle()
-  const stored = await h.query('task.get', { taskId: task.taskId })
+  await t.beginBusiness()
+
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'empty-summary', objective: 'test owner decision correction' }))
+  await t.step(async () => h.service.whenIdle())
+  const stored = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
   assert.equal(requests, correctOnce ? 2 : 3)
   assert.equal(stored.drained, true)
   assert.equal(stored.status, correctOnce ? 'completed' : 'active')
-  const completionEvents = (await h.query('task.events')).events
+  const completionEvents = (await t.step(async () => h.query('task.events'))).events
   assert.equal(completionEvents.length, correctOnce ? 1 : 0, 'Only a valid complete submission may publish the authoritative event')
   if (correctOnce) {
     assert.equal(completionEvents[0].taskId, task.taskId)
-    const receipt = await h.query('receipt.get', { id: completionEvents[0].taskDecisionReceiptId })
+    const receipt = await t.step(async () => h.query('receipt.get', { id: completionEvents[0].taskDecisionReceiptId }))
     assert.deepEqual(receipt.completionEvent, completionEvents[0])
     assert.equal(receipt.taskDecision.decision.action, 'complete')
   }
@@ -1715,12 +1766,12 @@ for (const correctOnce of [false, true]) test(`native owner empty-summary correc
     assert.match(stored.lastDecision.limitations.join(' '), /TASK_SESSION_DECISION_INVALID/)
     assert.equal(h.ctx.agents.get(stored.sessionId), undefined)
   }
-  const saved = await inspectSession(h.ctx.sessionPersistence, stored.sessionId)
+  const saved = await t.step(async () => inspectSession(h.ctx.sessionPersistence, stored.sessionId))
   assert.equal(saved.events.filter(event => event.type === 'tool/call' && event.data.name === 'task_session_submit').length, requests)
-  await h.service.whenIdle()
+  await t.step(async () => h.service.whenIdle())
   assert.equal(requests, correctOnce ? 2 : 3)
-  assert.deepEqual((await h.query('task.events')).events, completionEvents)
-})
+  assert.deepEqual((await t.step(async () => h.query('task.events'))).events, completionEvents)
+}))
 
 test('native topic routing rejects incomplete source coverage and accepts correction in the same real session', { timeout: 50000 }, async t => {
   let root, rootReady, opening, h, requests = 0, activity = 'host-preparation'
@@ -1776,58 +1827,63 @@ test('native topic routing rejects incomplete source coverage and accepts correc
   })
 })
 
-test('resident.apply boots and disposes with only its declared native service dependencies', { timeout: 15000 }, async t => {
+test('resident.apply boots and disposes with only its declared native service dependencies', { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
   const fixture = await nativeCase(t, 'task-resident-native-')
   const h = await fixture.host(() => { throw new Error('Startup must not invoke the model') }, { resident: true })
+  await t.beginBusiness()
+
   for (const name of resident.inject) assert.ok(h.ctx.get(name), 'Declared dependency available: ' + name)
   for (const name of ['subagents', 'goal', 'workflow', 'execution']) assert.equal(h.ctx.get(name), undefined, 'Retired dependency must not be required: ' + name)
   const probe = createServer()
-  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve))
+  await t.step(async () => new Promise(resolve => probe.listen(0, '127.0.0.1', resolve)))
   const port = probe.address().port
-  await new Promise(resolve => probe.close(resolve))
+  await t.step(async () => new Promise(resolve => probe.close(resolve)))
   const env = Object.fromEntries(['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy'].map(key => [key, process.env[key]]))
   t.after(() => { for (const [key, value] of Object.entries(env)) if (value === undefined) delete process.env[key]; else process.env[key] = value })
-  const fiber = await h.ctx.plugin(resident, { host: '127.0.0.1', port, agentWorkspaceDir: fixture.root, agentPreset: 'native-test', proxyUrl: '',
+  const fiber = await t.step(async () => h.ctx.plugin(resident, { host: '127.0.0.1', port, agentWorkspaceDir: fixture.root, agentPreset: 'native-test', proxyUrl: '',
     groups: [{ groupId: 'native-group', name: 'native group', responsibility: 'native startup test' }], dws: { enabled: false },
-    taskSessions: { dbPath: join(fixture.root, 'resident.db'), instanceId: 'resident-native', ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', initialize: true, recoveryIntervalMs: 60000 } })
+    taskSessions: { dbPath: join(fixture.root, 'resident.db'), instanceId: 'resident-native', ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', initialize: true, recoveryIntervalMs: 60000 } }))
   const read = path => new Promise((resolve, reject) => httpGet(`http://127.0.0.1:${port}${path}`, { agent: false }, response => {
     let body = ''; response.on('data', chunk => { body += chunk }); response.on('end', () => { try { resolve({ status: response.statusCode, body: JSON.parse(body) }) } catch (error) { reject(error) } })
   }).on('error', reject))
-  assert.deepEqual((await read('/health')).body.status, 'ok')
-  const groups = await read('/state/groups')
+  assert.deepEqual((await t.step(async () => read('/health'))).body.status, 'ok')
+  const groups = await t.step(async () => read('/state/groups'))
   assert.equal(groups.status, 200)
   assert.equal(groups.body[0].groupId, 'native-group')
-  assert.equal((await read('/state/agent-config')).body.workspaceDir, fixture.root)
+  assert.equal((await t.step(async () => read('/state/agent-config'))).body.workspaceDir, fixture.root)
   assert.equal(h.requests.length, 0)
-  await fiber.dispose()
-  await assert.rejects(read('/health'), { code: 'ECONNREFUSED' })
-})
+  await t.step(async () => fiber.dispose())
+  await t.step(async () => assert.rejects(read('/health'), { code: 'ECONNREFUSED' }))
+}))
 
-test('resident listener startup failure disposes native resources and permits reopening the same task database', { timeout: 15000 }, async t => {
+test('resident listener startup failure disposes native resources and permits reopening the same task database', { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
   const fixture = await nativeCase(t, 'task-resident-start-failure-')
   const occupied = createServer()
   t.after(() => occupied.listening ? new Promise(resolve => occupied.close(resolve)) : undefined)
-  await new Promise(resolve => occupied.listen(0, '127.0.0.1', resolve))
+  await t.beginBusiness()
+  await t.step(async () => new Promise(resolve => occupied.listen(0, '127.0.0.1', resolve)))
   const port = occupied.address().port
   const config = { host: '127.0.0.1', port, agentWorkspaceDir: fixture.root, agentPreset: 'native-test', proxyUrl: '', dws: { enabled: false },
     taskSessions: { dbPath: join(fixture.root, 'startup.db'), instanceId: 'startup-failure', ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', initialize: true } }
-  const failed = await fixture.host(() => { throw new Error('MODEL_NOT_EXPECTED') }, { resident: true })
-  await assert.rejects(resident.apply(failed.ctx, config), { code: 'EADDRINUSE' })
-  await failed.close()
-  await new Promise(resolve => occupied.close(resolve))
-  const next = await fixture.host(() => { throw new Error('MODEL_NOT_EXPECTED') }, { resident: true })
-  await resident.apply(next.ctx, { ...config, taskSessions: { ...config.taskSessions, initialize: false } })
-  const health = await new Promise((resolve, reject) => httpGet(`http://127.0.0.1:${port}/health`, { agent: false }, response => {
+  const failed = await t.step(async () => fixture.host(() => { throw new Error('MODEL_NOT_EXPECTED') }, { resident: true }))
+  await t.step(async () => assert.rejects(resident.apply(failed.ctx, config), { code: 'EADDRINUSE' }))
+  await t.step(async () => failed.close())
+  await t.step(async () => new Promise(resolve => occupied.close(resolve)))
+  const next = await t.step(async () => fixture.host(() => { throw new Error('MODEL_NOT_EXPECTED') }, { resident: true }))
+  await t.step(async () => resident.apply(next.ctx, { ...config, taskSessions: { ...config.taskSessions, initialize: false } }))
+  const health = await t.step(async () => new Promise((resolve, reject) => httpGet(`http://127.0.0.1:${port}/health`, { agent: false }, response => {
     let body = ''; response.on('data', chunk => { body += chunk }); response.on('end', () => resolve({ status: response.statusCode, body: JSON.parse(body) }))
-  }).on('error', reject))
+  }).on('error', reject)))
   assert.equal(health.status, 200)
   assert.equal(health.body.status, 'ok')
   assert.equal(next.requests.length, 0)
-})
+}))
 
 
-test('native board keeps a drained coordinator running while its delegated target is executing', { timeout: 20000 }, async t => {
+test('native board keeps a drained coordinator running while its delegated target is executing', { ...({ timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const fixture = await nativeCase(t, 'task-board-active-execution-'), release = Promise.withResolvers()
+t.onCancel(() => release.resolve())
+
   t.after(() => release.resolve())
   let delegated = false, prematureCompletion = false
   const h = await fixture.host(async request => {
@@ -1843,27 +1899,29 @@ test('native board keeps a drained coordinator running while its delegated targe
     if (!modelToolValues(request).some(value => value.taskId === input.task.taskId && Array.isArray(value.executions))) return [call('execution_team_read', {})]
     return [call('execution_submit', { output: { status: 'completed', summary: '已核对', evidence: [], limitations: [], artifacts: [] } })]
   })
+  await t.beginBusiness()
+
   try {
-    await h.service.ingest(message)
-    const task = await waitUntil(async () => {
+    await t.step(async () => h.service.ingest(message))
+    const task = await t.step(async () => waitUntil(async () => {
       const [task] = await h.query('task.list'), executions = await h.query('execution.list')
       return task?.drained && task.lastDecision?.action === 'wait' && executions.some(execution => execution.status === 'running' && !execution.drained) ? task : null
-    }, 'coordinator waits while native execution remains running')
-    const view = (await h.service.boardTasks()).find(item => item.taskId === task.taskId)
+    }, 'coordinator waits while native execution remains running'))
+    const view = (await t.step(async () => h.service.boardTasks())).find(item => item.taskId === task.taskId)
     assert.equal(view.state, 'running')
     assert.equal(view.waitingReason, '')
-    assert.equal((await h.service.taskDetail(task.taskId)).state, 'running')
+    assert.equal((await t.step(async () => h.service.taskDetail(task.taskId))).state, 'running')
     const rejection = h.toolResults.filter(item => item.name === 'task_session_submit' && item.result.isError)
     assert.equal(rejection.length, 1)
     const blockers = JSON.parse(rejection[0].result.error.message)
     assert.equal(blockers.executions.length, 1)
     assert.equal(blockers.executions[0].taskId, task.taskId)
     assert.equal(blockers.executions[0].drained, false)
-  } finally { release.resolve(); await h.service.whenIdle() }
-  assert.equal((await h.query('task.list'))[0].status, 'completed', 'The same single-member task completes only after physical drain')
-})
+  } finally { release.resolve(); await t.step(async () => h.service.whenIdle()) }
+  assert.equal((await t.step(async () => h.query('task.list')))[0].status, 'completed', 'The same single-member task completes only after physical drain')
+}))
 
-test('native single-member completion keeps an unknown tool effect unresolved without replay', { timeout: 20000 }, async t => {
+test('native single-member completion keeps an unknown tool effect unresolved without replay', { ...({ timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const fixture = await nativeCase(t, 'task-single-unknown-effect-')
   let delegated = false, attemptedComplete = false, executed = false
   const h = await fixture.host(async (request, host) => {
@@ -1889,13 +1947,15 @@ test('native single-member completion keeps an unknown tool effect unresolved wi
     }
     return [call('execution_submit', { output: { status: 'blocked', summary: '原工具回执失败，未重放写入', evidence: ['uncertain-effect.txt'], limitations: ['操作账仍为未知效果'], artifacts: [] } })]
   })
-  const created = await h.service.createTask({ groupId: 'native-group', requestId: 'single-unknown-effect', objective: '核对失败后原操作效果，不重放原动作' })
-  await h.service.whenIdle()
-  const [execution] = await h.query('execution.list', { taskId: created.taskId }), operations = await h.query('operation.list', { taskId: created.taskId })
+  await t.beginBusiness()
+
+  const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'single-unknown-effect', objective: '核对失败后原操作效果，不重放原动作' }))
+  await t.step(async () => h.service.whenIdle())
+  const [execution] = await t.step(async () => h.query('execution.list', { taskId: created.taskId })), operations = await t.step(async () => h.query('operation.list', { taskId: created.taskId }))
   assert.equal(execution.drained, true)
   assert.equal(operations.length, 1); assert.equal(operations[0].state, 'unknown')
-  assert.equal(await readFile(join(fixture.root, 'tasks', created.taskId, 'uncertain-effect.txt'), 'utf8'), 'once')
-  assert.equal((await h.query('task.get', { taskId: created.taskId })).status, 'active')
+  assert.equal(await t.step(async () => readFile(join(fixture.root, 'tasks', created.taskId, 'uncertain-effect.txt'), 'utf8')), 'once')
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: created.taskId }))).status, 'active')
   assert.equal(attemptedComplete, true)
   const rejection = h.toolResults.filter(item => item.name === 'task_session_submit' && item.result.isError)
   assert.equal(rejection.length, 1)
@@ -1903,35 +1963,38 @@ test('native single-member completion keeps an unknown tool effect unresolved wi
   assert.equal(blockers.operations.length, 1); assert.equal(blockers.operations[0].state, 'unknown')
   assert.equal(blockers.operations[0].operationId, operations[0].operationId)
   assert.equal(h.toolResults.filter(item => item.name === 'uncertain_native_write').length, 1)
-  assert.equal((await h.query('task.events')).events.length, 0, 'An unresolved effect cannot publish task completion')
-})
+  assert.equal((await t.step(async () => h.query('task.events'))).events.length, 0, 'An unresolved effect cannot publish task completion')
+}))
 
 
-test('native recovery no-op preserves an undrained task writer conflict alert', { timeout: 10000 }, async t => {
+test('native recovery no-op preserves an undrained task writer conflict alert', { ...({ timeout: 10000 }), timeout: nativeLifecycleTimeout(10000) }, nativeLifecycle(10000, async (t) => {
   const fixture = await nativeCase(t, 'task-live-conflict-alert-')
   const h = await fixture.host(async () => [decision('complete', '不应执行')], { config: { retryIntervalMs: 100 } })
+  await t.beginBusiness()
+
   const registry = h.ctx.agents, create = registry.create
   h.ctx.agents.create = async function (options) {
     if (options.meta?.cwd && basename(options.meta.cwd).startsWith('task-')) throw Object.assign(new Error('TASK_SESSION_ALREADY_LIVE'), { code: 'TASK_SESSION_ALREADY_LIVE', taskSessionDrained: false })
     return create.call(this, options)
   }
   t.after(() => { registry.create = create })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'live-conflict', objective: '保留原写者冲突诊断' })
-  await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).drained, false)
-  const original = (await h.service.recover()).failures.find(item => item.id === task.taskId)
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'live-conflict', objective: '保留原写者冲突诊断' }))
+  await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).drained, false)
+  const original = (await t.step(async () => h.service.recover())).failures.find(item => item.id === task.taskId)
   assert.equal(original.code, 'TASK_SESSION_ALREADY_LIVE')
-  await new Promise(resolve => setTimeout(resolve, 150))
-  const recovered = await h.service.recover()
+  await t.step(async () => new Promise(resolve => setTimeout(resolve, 150)))
+  const recovered = await t.step(async () => h.service.recover())
   assert.equal(recovered.failures.find(item => item.id === task.taskId)?.code, original.code)
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).drained, false)
-})
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).drained, false)
+}))
 
-test('execution document publication failure after claim drains the committed execution and exposes an alert', { timeout: 20000 }, async t => {
+test('execution document publication failure after claim drains the committed execution and exposes an alert', { ...({ timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'task-document-claim-failure-'))
   let h, backing, delegated = false, poisoned = false, executionCalls = 0, claimed
   t.after(async () => { try { await h?.close(); await backing?.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  backing = await openDynamicTaskStore({ dbPath: join(root, 'dynamic.db'), instanceId: 'native-test', initialize: true })
+  await t.beginBusiness()
+  backing = await t.step(async () => openDynamicTaskStore({ dbPath: join(root, 'dynamic.db'), instanceId: 'native-test', initialize: true }))
   const store = { ...backing, async command(input) {
     const receipt = await backing.command(input)
     if (!poisoned && input.kind === 'execution.claim') {
@@ -1944,7 +2007,7 @@ test('execution document publication failure after claim drains the committed ex
     }
     return receipt
   } }
-  h = await nativeTaskHost(root, async request => {
+  h = await t.step(async () => nativeTaskHost(root, async request => {
     const topics = topicTaskCalls(request); if (topics) return topics
     if (request.tools.some(tool => tool.name === 'task_delegate')) {
       if (!delegated) { delegated = true; return [call('task_delegate', { key: 'document-failure-check', objective: '只读核对当前材料' })] }
@@ -1952,51 +2015,52 @@ test('execution document publication failure after claim drains the committed ex
     }
     executionCalls++
     return [call('execution_submit', { output: { status: 'completed', summary: '不应在文档读取失败时执行', evidence: [], limitations: [], artifacts: [] } })]
-  }, { store })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'document-write-failure', objective: '只读核对当前材料' })
-  await h.service.whenIdle()
+  }, { store }))
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'document-write-failure', objective: '只读核对当前材料' }))
+  await t.step(async () => h.service.whenIdle())
   assert.equal(poisoned, true)
-  const execution = await h.query('execution.get', { executionId: claimed.executionId })
+  const execution = await t.step(async () => h.query('execution.get', { executionId: claimed.executionId }))
   assert.equal(execution.executionId, claimed.executionId); assert.equal(execution.leaseEpoch, claimed.leaseEpoch)
   assert.equal(execution.status, 'failed'); assert.equal(execution.drained, true); assert.equal(execution.sessionBound, false)
   assert.equal(execution.result.payload.error.code, 'EXECUTION_DOCUMENT_PATH_INVALID')
-  assert.equal(executionCalls, 0); assert.equal((await h.query('operation.list')).length, 0)
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'active')
+  assert.equal(executionCalls, 0); assert.equal((await t.step(async () => h.query('operation.list'))).length, 0)
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'active')
   assert.ok(h.service.listAlerts().some(item => item.alertId === `failure:execution-document:${execution.executionId}` && item.detail === 'EXECUTION_DOCUMENT_PATH_INVALID'))
-})
+}))
 
-testRunner('resource read retries preserve image facts and duplicate ingress reuses the source', { skip: !available ? reason : false, timeout: 20000 }, async t => {
-  const { openResidentStore } = await import('../packages/dingtalk-dsh-assistant/store.js')
-  const { openTaskSessionService } = await import('../packages/dingtalk-dsh-assistant/task-session-service.js')
-  const root = await mkdtemp(join(tmpdir(), 'native-ingress-phases-'))
+testRunner('resource read retries preserve image facts and duplicate ingress reuses the source', { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
+  await t.beginBusiness()
+  const { openResidentStore } = await t.step(async () => import('../packages/dingtalk-dsh-assistant/store.js'))
+  const { openTaskSessionService } = await t.step(async () => import('../packages/dingtalk-dsh-assistant/task-session-service.js'))
+  const root = await t.step(async () => mkdtemp(join(tmpdir(), 'native-ingress-phases-')))
   let h, reads = 0
   t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
-  h = await nativeTaskHost(root, request => {
+  h = await t.step(async () => nativeTaskHost(root, request => {
     const input = latestInput(request)
     return request.tools.some(tool => tool.name === 'group_topic_route_submit') ? [{ name: 'group_topic_route_submit', args: {
       requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
         ignoredRefs: [{ quote: item.text, reason: '隔离入站时钟验证，无业务执行' }], units: [] })) } }] : []
-  }, { resident: true })
-  h.residentStore = await openResidentStore(h.ctx.storageDomain)
-  await h.residentStore.subscribe({ groupId: 'phase-group', name: '隔离计时群' })
-  h.service = await openTaskSessionService({ ctx: h.ctx, residentStore: h.residentStore,
+  }, { resident: true }))
+  h.residentStore = await t.step(async () => openResidentStore(h.ctx.storageDomain))
+  await t.step(async () => h.residentStore.subscribe({ groupId: 'phase-group', name: '隔离计时群' }))
+  h.service = await t.step(async () => openTaskSessionService({ ctx: h.ctx, residentStore: h.residentStore,
     legacy: { getGroup: id => h.residentStore.getGroup(id), getAgentConfig: () => ({ workspaceDir: root, provider: 'native-task-test', model: 'controlled', agentPreset: 'native-test', agentNames: ['测试助手'] }) },
     config: { workspaceDir: root, dbPath: join(root, 'dynamic.db'), instanceId: 'native-ingress', initialize: true, ownerActorId: 'native-user', webActorId: 'native-user', provider: 'native-task-test' },
     readResource: async () => {
       if (++reads === 1) throw Object.assign(new Error('offline'), { code: 'OFFLINE' })
       return { image: { mediaType: 'image/png', data: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOQy7vzHwAEfgJodQLI1QAAAABJRU5ErkJggg==', 'base64') } }
-    }, notifications: { send: () => assert.fail('不得发送消息'), readback: () => assert.fail('不得读取渠道回执') } })
+    }, notifications: { send: () => assert.fail('不得发送消息'), readback: () => assert.fail('不得读取渠道回执') } }))
   const message = { groupId: 'phase-group', messageId: 'image-message', occurredAt: '2026-10-27T05:30:27.636Z', senderOpenDingTalkId: 'native-user', text: '图片入站计时', resourceRefs: [{ type: 'mediaId', resourceId: 'private-media' }] }
-  const first = await h.service.ingest(message)
-  const failed = await h.service.store.query({ kind: 'source.get', sourceId: first.sourceId })
-  const retry = await h.service.ingest(message)
-  await h.service.whenIdle() // Settle legitimate queue/router spans before checking duplicate-ingress stability.
-  const success = await h.service.store.query({ kind: 'source.get', sourceId: retry.sourceId })
+  const first = await t.step(async () => h.service.ingest(message))
+  const failed = await t.step(async () => h.service.store.query({ kind: 'source.get', sourceId: first.sourceId }))
+  const retry = await t.step(async () => h.service.ingest(message))
+  await t.step(async () => h.service.whenIdle()) // Settle legitimate queue/router spans before checking duplicate-ingress stability.
+  const success = await t.step(async () => h.service.store.query({ kind: 'source.get', sourceId: retry.sourceId }))
   assert.notEqual(retry.sourceId, first.sourceId)
   assert.equal(h.residentStore.getGroup('phase-group').messages[0].imageRefs.length, 1)
   assert.equal(JSON.stringify(success.stages).includes('private-media'), false)
-  const repeated = await h.service.ingest({ ...message, imageRefs: h.residentStore.getGroup('phase-group').messages[0].imageRefs })
+  const repeated = await t.step(async () => h.service.ingest({ ...message, imageRefs: h.residentStore.getGroup('phase-group').messages[0].imageRefs }))
   assert.equal(repeated.sourceId, retry.sourceId)
   assert.equal(h.residentStore.getGroup('phase-group').messages.filter(item => item.messageId === message.messageId).length, 1)
   assert.equal(reads, 2)
-})
+}))

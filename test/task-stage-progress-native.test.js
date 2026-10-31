@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
@@ -33,15 +34,19 @@ function completionReviews(proof) {
   }
 }
 
-test('integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation', { skip: !available ? reason : false, timeout: 30000 }, async t => {
+test('integrated stage evidence survives same-session provider recovery with new version binding and no duplicate operation', { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
   const root = await mkdtemp(join(tmpdir(), 'integrated-stage-provider-')), gate = Promise.withResolvers()
-  const proof = join(root, 'proof.txt'); await writeFile(proof, 'INTEGRATED_STAGE_PROOF')
+t.onCancel(() => gate.resolve())
+
+  const proof = join(root, 'proof.txt');
+  await t.beginBusiness()
+await t.step(async () => writeFile(proof, 'INTEGRATED_STAGE_PROOF'))
   const reviewers = completionReviews(proof)
   let steps = 0, sequence = 0
   const ownerInputs = [], documentReads = new Map()
   // 统筹配置优先于默认 Agent 配置；两者必须进入同一恢复测试 provider。
-  const h = await nativeTaskHost(root, async () => [], { config: { provider: 'integrated-stage-provider' }, agentConfig: { provider: 'integrated-stage-provider' }, serviceFactory: async options => {
+  const h = await t.step(async () => nativeTaskHost(root, async () => [], { config: { provider: 'integrated-stage-provider' }, agentConfig: { provider: 'integrated-stage-provider' }, serviceFactory: async options => {
     class Provider extends LlmAdapter {
       // 原生统筹预检按实际能力解析推理深度；恢复夹具也须声明其支持的 low。
       resolveModel(provider, model) { return { provider, id: model, name: model, reasoning: { efforts: [{ id: 'low', name: 'low' }], defaultEffort: 'low' } } }
@@ -88,14 +93,14 @@ test('integrated stage evidence survives same-session provider recovery with new
     }
     options.ctx.llm.registerAdapter(['integrated-stage-provider'], new Provider())
     return openTaskSessionService(options)
-  } })
+  } }))
   t.after(async () => { gate.resolve(); try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'integrated-stage-provider', objective: '仅核对原证据并报告阶段事实' })
-  await h.service.whenIdle()
-  const [before] = await h.query('execution.list')
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'integrated-stage-provider', objective: '仅核对原证据并报告阶段事实' }))
+  await t.step(async () => h.service.whenIdle())
+  const [before] = await t.step(async () => h.query('execution.list'))
   if (!before) {
-    const current = await h.query('task.get', { taskId: task.taskId })
-    const log = await inspectSession(h.ctx.sessionPersistence, current.sessionId).catch(error => ({ error: error.message }))
+    const current = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
+    const log = await t.step(async () => inspectSession(h.ctx.sessionPersistence, current.sessionId).catch(error => ({ error: error.message })))
     assert.fail('Owner never delegated: ' + JSON.stringify({ ownerInputs: ownerInputs.length, providerRecovery: current.providerRecovery,
       alerts: h.service.listAlerts(), native: log?.error ?? log?.events?.filter(event => ['agent/end', 'request/end', 'step/end'].includes(event.type)).slice(-5) }))
   }
@@ -103,34 +108,37 @@ test('integrated stage evidence survives same-session provider recovery with new
   assert.deepEqual(before.stageProgress.evidence, [proof])
   assert.equal(before.providerRecovery.attempts, 1)
   t.mock.timers.setTime(Date.parse(before.providerRecovery.nextAttemptAt) + 1)
-  await h.service.recover()
-  await waitUntil(() => steps >= 6 && documentReads.get(2)?.text.includes('恢复后已复核原证据'), 'owner natively reads the recovered round document')
-  const after = await h.query('execution.get', { executionId: before.executionId })
+  await t.step(async () => h.service.recover())
+  await t.step(async () => waitUntil(() => steps >= 6 && documentReads.get(2)?.text.includes('恢复后已复核原证据'), 'owner natively reads the recovered round document'))
+  const after = await t.step(async () => h.query('execution.get', { executionId: before.executionId }))
   assert.equal(after.sessionId, before.sessionId); assert.equal(after.inputVersion, 2)
   assert.equal(after.status, 'running'); assert.equal(after.drained, false)
   assert.equal(after.stageProgress.inputVersion, 2); assert.equal(after.stageProgress.leaseEpoch, after.leaseEpoch)
   assert.equal(after.results[0].payload.error.code, 'EXECUTION_PROVIDER_TRANSIENT')
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).humanRequests.length, 0)
-  assert.equal((await h.query('operation.list', { taskId: task.taskId })).length, 0, 'reads and internal reports do not create business effects')
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).humanRequests.length, 0)
+  assert.equal((await t.step(async () => h.query('operation.list', { taskId: task.taskId }))).length, 0, 'reads and internal reports do not create business effects')
   const input = ownerInputs.findLast(input => input.executions[0]?.document?.inputVersion === 2)
   assert.equal(input.executions[0].inputDigest, undefined, 'full native record is available through the catalog')
   assert.equal(input.executions[0].stageProgress, undefined, '阶段正文由执行文档承载，不重复内联')
   assert.ok(documentReads.get(2).text.includes(proof))
   assert.match(documentReads.get(2).text, /恢复后已复核原证据/)
   assert.notEqual(documentReads.get(1).path, documentReads.get(2).path)
-  gate.resolve(); await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify({ alerts: h.service.listAlerts(), toolErrors: h.toolResults.filter(item => item.result?.isError).map(({ name, result }) => ({ name, error: result.error })) }))
-  const completed = await h.query('execution.list')
+  gate.resolve(); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed', JSON.stringify({ alerts: h.service.listAlerts(), toolErrors: h.toolResults.filter(item => item.result?.isError).map(({ name, result }) => ({ name, error: result.error })) }))
+  const completed = await t.step(async () => h.query('execution.list'))
   assert.equal(completed.length, 3)
   assert.equal(completed.find(item => item.key === 'original').executionId, before.executionId)
-})
+}))
 
-for (const humanWait of [false, true]) test(`native nonterminal stage report continues execution and updates owner summary; human wait=${humanWait}`, { skip: !available ? reason : false, timeout: 30000 }, async t => {
+for (const humanWait of [false, true]) test(`native nonterminal stage report continues execution and updates owner summary; human wait=${humanWait}`, { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-stage-report-')), gate = Promise.withResolvers()
-  await writeFile(join(root, 'stage-proof.txt'), 'ACTUAL_STAGE_PROOF')
+t.onCancel(() => gate.resolve())
+
+  await t.beginBusiness()
+  await t.step(async () => writeFile(join(root, 'stage-proof.txt'), 'ACTUAL_STAGE_PROOF'))
   const reviewers = completionReviews(join(root, 'stage-proof.txt'))
   let ownerCalls = 0, executionCalls = 0, stageOwnerInput, stageEvidence, stageSummary, stageDocumentRead = false
-  const h = await nativeTaskHost(root, async request => {
+  const h = await t.step(async () => nativeTaskHost(root, async request => {
     if (!request.tools.some(tool => tool.name === 'task_delegate')) {
       const review = reviewers.execution(latestInput(request)); if (review) return review
       const step = ++executionCalls
@@ -163,27 +171,27 @@ for (const humanWait of [false, true]) test(`native nonterminal stage report con
       return [submit('wait', '已核对阶段证据，正在验证整体修复边界。')]
     }
     return [submit('wait', '已安排核对，等待执行进展。')]
-  })
+  }))
   t.after(async () => { gate.resolve(); try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const task = await h.service.createTask({ groupId: 'native-group', requestId: 'stage-report', objective: '核对样例差异并验证原执行范围' })
-  await waitUntil(() => executionCalls >= 4 && ownerCalls >= 2, 'execution reports a stage then reads again and continues running')
-  const [execution] = await h.query('execution.list')
+  const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'stage-report', objective: '核对样例差异并验证原执行范围' }))
+  await t.step(async () => waitUntil(() => executionCalls >= 4 && ownerCalls >= 2, 'execution reports a stage then reads again and continues running'))
+  const [execution] = await t.step(async () => h.query('execution.list'))
   assert.equal(execution.status, 'running'); assert.equal(execution.drained, false); assert.equal(execution.result, undefined)
   assert.match(execution.stageProgress.summary, /样例差异/)
   assert.equal(execution.stageProgress.activity, '验证修复边界')
   assert.equal(execution.timeline.segments.at(-1).activity, '验证修复边界')
-  const timeline = (await h.service.taskDetail(task.taskId)).timeline
+  const timeline = (await t.step(async () => h.service.taskDetail(task.taskId))).timeline
   assert.equal(timeline.executions[0].segments.at(-1).label, '验证修复边界')
   assert.equal(timeline.executions[0].milestones.length, 1)
   assert.equal(timeline.executions[0].milestones[0].activity, '验证修复边界')
   assert.deepEqual(timeline.executions[0].milestones[0].evidence, [join(root, 'stage-proof.txt')])
-  assert.equal((await h.query('operation.list', { taskId: task.taskId })).some(item => item.definition?.toolName === 'execution_report_progress'), false, 'internal reporting must not be an external business operation')
+  assert.equal((await t.step(async () => h.query('operation.list', { taskId: task.taskId }))).some(item => item.definition?.toolName === 'execution_report_progress'), false, 'internal reporting must not be an external business operation')
   if (humanWait) {
     assert.equal(stageOwnerInput, undefined, 'stage wake cannot bypass the real human request')
-    const current = await h.query('task.get', { taskId: task.taskId }), question = current.humanRequests[0]
-    await h.service.respondHumanRequest({ taskId: task.taskId, humanRequestId: question.requestId, requestId: 'stage-human-answer', reply: '继续原只读验证，不增加写入', expectedRequirementRevision: current.requirementRevision, expectedControlRevision: current.controlRevision })
+    const current = await t.step(async () => h.query('task.get', { taskId: task.taskId })), question = current.humanRequests[0]
+    await t.step(async () => h.service.respondHumanRequest({ taskId: task.taskId, humanRequestId: question.requestId, requestId: 'stage-human-answer', reply: '继续原只读验证，不增加写入', expectedRequirementRevision: current.requirementRevision, expectedControlRevision: current.controlRevision }))
   }
-  await waitUntil(async () => (await h.query('task.get', { taskId: task.taskId })).lastDecision?.summary === '已核对阶段证据，正在验证整体修复边界。', 'owner persists a new overall progress summary before execution completion')
+  await t.step(async () => waitUntil(async () => (await h.query('task.get', { taskId: task.taskId })).lastDecision?.summary === '已核对阶段证据，正在验证整体修复边界。', 'owner persists a new overall progress summary before execution completion'))
   assert.ok(stageOwnerInput)
   const wake = stageOwnerInput.wakes.find(item => item.kind === 'execution.stage.progress')
   assert.equal(wake.payload.executionId, execution.executionId); assert.equal(wake.payload.sequence, execution.stageProgress.sequence)
@@ -200,12 +208,12 @@ for (const humanWait of [false, true]) test(`native nonterminal stage report con
   assert.equal(visibleExecution.inputVersion, execution.inputVersion)
   assert.equal(visibleExecution.leaseEpoch, execution.leaseEpoch)
   assert.equal(visibleExecution.inputDigest, undefined, 'the native identity digest remains in the catalog rather than the default status row')
-  assert.equal((await h.query('execution.get', { executionId: execution.executionId })).status, 'running')
-  assert.ok((await h.service.taskDetail(task.taskId)).lastDecision.at)
-  gate.resolve(); await h.service.whenIdle()
-  assert.equal((await h.query('task.get', { taskId: task.taskId })).status, 'completed', JSON.stringify({ alerts: h.service.listAlerts(), toolErrors: h.toolResults.filter(item => item.result?.isError).map(({ name, result }) => ({ name, error: result.error })) }))
-  const completed = await h.query('execution.list')
+  assert.equal((await t.step(async () => h.query('execution.get', { executionId: execution.executionId }))).status, 'running')
+  assert.ok((await t.step(async () => h.service.taskDetail(task.taskId))).lastDecision.at)
+  gate.resolve(); await t.step(async () => h.service.whenIdle())
+  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).status, 'completed', JSON.stringify({ alerts: h.service.listAlerts(), toolErrors: h.toolResults.filter(item => item.result?.isError).map(({ name, result }) => ({ name, error: result.error })) }))
+  const completed = await t.step(async () => h.query('execution.list'))
   assert.equal(completed.length, 3)
   assert.equal(completed.filter(item => item.key === 'verify').length, 1, 'stage report must not spawn or restart the inspected execution')
   assert.equal(completed.find(item => item.key === 'verify').inputVersion, 1)
-})
+}))

@@ -1,5 +1,6 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rename, writeFile, rm } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
@@ -260,10 +261,11 @@ test('共享native凭据文件的不同实例隔离变量、相同runId快照及
   assert.equal((await context.credentials.readRecord(documentKey('instance-b'))).payload.instanceId, 'instance-b')
 })
 
-test('真实Resident以task-session启动，旧workflow配置HTTP返回410且保留历史凭据', { skip: !available ? reason : false }, async t => {
+test('真实Resident以task-session启动，旧workflow配置HTTP返回410且保留历史凭据', { ...({ skip: !available ? reason : false }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'resident-retired-workflow-'))
   const hosts = []
   t.after(async () => { try { for (const host of hosts.toReversed()) await host.close() } finally { await rm(directory, { recursive: true, force: true }) } })
+  await t.beginBusiness()
   assert.ok(residentInject.includes('credentials'))
   let first = true
   const start = async () => {
@@ -280,20 +282,20 @@ test('真实Resident以task-session启动，旧workflow配置HTTP返回410且保
     first = false
     return { host, base: 'http://127.0.0.1:' + port }
   }
-  const initial = await start()
-  const original = await initial.host.ctx.credentials.readRecord(documentKey('configuration-resident'))
+  const initial = await t.step(async () => start())
+  const original = await t.step(async () => initial.host.ctx.credentials.readRecord(documentKey('configuration-resident')))
   for (const path of ['/state/workflows/catalog', '/config/workflow-variables']) {
-    const response = await fetch(initial.base + path)
+    const response = await t.step(async () => fetch(initial.base + path))
     assert.equal(response.status, 410)
-    assert.equal((await response.json()).error, 'WORKFLOW_RETIRED')
+    assert.equal((await t.step(async () => response.json())).error, 'WORKFLOW_RETIRED')
   }
-  const mutation = await fetch(initial.base + '/config/workflow-variables/endpoint', { method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ value: 'must-not-save', expectedRevision: 0 }) })
+  const mutation = await t.step(async () => fetch(initial.base + '/config/workflow-variables/endpoint', { method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ value: 'must-not-save', expectedRevision: 0 }) }))
   assert.equal(mutation.status, 410)
-  assert.deepEqual(await initial.host.ctx.credentials.readRecord(documentKey('configuration-resident')), original)
-  await initial.host.close()
-  const resumed = await start()
-  assert.equal((await fetch(resumed.base + '/config/workflow-variables')).status, 410)
-  assert.deepEqual(await resumed.host.ctx.credentials.readRecord(documentKey('configuration-resident')), original)
+  assert.deepEqual(await t.step(async () => initial.host.ctx.credentials.readRecord(documentKey('configuration-resident'))), original)
+  await t.step(async () => initial.host.close())
+  const resumed = await t.step(async () => start())
+  assert.equal((await t.step(async () => fetch(resumed.base + '/config/workflow-variables'))).status, 410)
+  assert.deepEqual(await t.step(async () => resumed.host.ctx.credentials.readRecord(documentKey('configuration-resident'))), original)
   assert.equal(resumed.host.requests.length, 0)
-})
+}))

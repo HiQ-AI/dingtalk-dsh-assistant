@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import testRunner from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, realpath, writeFile, symlink, rm, readdir, copyFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, writeFile, symlink, rm, readdir, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -14,9 +15,9 @@ import { available, reason, nativeTaskHost, latestInput, topicTaskCalls, modelTo
 
 const exec = promisify(execFile)
 const source = fileURLToPath(new URL('../packages/dingtalk-dsh-assistant/', import.meta.url))
-const test = (name, run) => testRunner(name, { timeout: 30000, ...(!available ? { skip: reason } : {}) }, async t => {
+const test = (name, run) => testRunner(name, { timeout: nativeLifecycleTimeout(30000), ...(!available ? { skip: reason } : {}) }, nativeLifecycle(30000, async t => {
   const resources = {}
-  let body, closing
+  let closing
   const close = () => closing ??= (async () => {
     const h = await resources.host?.catch(() => undefined)
     if (t.signal.aborted && h) await diagnose(t, h)
@@ -26,25 +27,20 @@ const test = (name, run) => testRunner(name, { timeout: 30000, ...(!available ? 
       resources.stage?.('host-resources-closed')
     }
   })()
-  // A test timeout does not unwind an outstanding whenIdle()/plugin()/pack await.
-  // Cancel the real Host first, join the body, then remove its SQLite/files.
-  const abort = () => { void close().catch(() => {}) }
-  t.signal.addEventListener('abort', abort, { once: true })
   t.after(async () => {
     try {
       await close()
-      await body?.catch(() => {})
       if (resources.root) await rm(resources.root, { recursive: true, force: true })
       resources.stage?.('temporary-files-removed')
-    } finally { t.signal.removeEventListener('abort', abort); resources.restoreEnv?.() }
+    } finally { resources.restoreEnv?.() }
   })
-  body = run(t, resources)
-  try { await body }
+  try { await run(t, resources) }
   catch (error) {
     if (!t.signal.aborted) { const h = await resources.host?.catch(() => undefined); if (h) await diagnose(t, h) }
     throw error
-  } finally { await close() }
-})
+  }
+}))
+
 const call = (name, args) => ({ name, args })
 const finish = action => call('task_session_submit', { decision: { action, summary: 'Package verification.', evidence: [], limitations: [] } })
 
@@ -165,18 +161,19 @@ async function pack(t, resources) {
 }
 
 test('actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files', async (t, resources) => {
-  const f = await pack(t, resources), service = await import(pathToFileURL(join(f.dir, 'task-session-service.js')).href)
-  assert.equal((await import(pathToFileURL(join(f.dir, 'index.js')).href)).name, 'dingtalk-dsh-assistant-web')
+  await t.beginBusiness()
+  const f = await t.step(async () => pack(t, resources)), service = await t.step(async () => import(pathToFileURL(join(f.dir, 'task-session-service.js')).href))
+  assert.equal((await t.step(async () => import(pathToFileURL(join(f.dir, 'index.js')).href))).name, 'dingtalk-dsh-assistant-web')
   f.stage('runtime-imports-ready')
   const personal = join(f.root, 'personal'), work = join(f.root, 'runtime')
-  await mkdir(join(personal, 'external-guide'), { recursive: true }); await mkdir(work)
+  await t.step(async () => mkdir(join(personal, 'external-guide'), { recursive: true })); await t.step(async () => mkdir(work))
   t.signal.throwIfAborted()
-  await writeFile(join(personal, 'external-guide', 'SKILL.md'), '---\nname: external-guide\ndescription: External user-owned guide.\n---\nPACKED_PERSONAL_BODY\n')
+  await t.step(async () => writeFile(join(personal, 'external-guide', 'SKILL.md'), '---\nname: external-guide\ndescription: External user-owned guide.\n---\nPACKED_PERSONAL_BODY\n'))
   t.signal.throwIfAborted()
   let step = 0, reviewStarted = false, observedQueuedReview = false
   const reviewClaim = Promise.withResolvers()
   t.signal.addEventListener('abort', () => reviewClaim.resolve(), { once: true })
-  const h = await (resources.host = nativeTaskHost(work, async (request, host) => {
+  const h = await (t.step(async () => resources.host = nativeTaskHost(work, async (request, host) => {
     t.signal.throwIfAborted()
     assert.deepEqual(host.toolResults.filter(item => item.result.isError), [], 'The finite package script must not retry a rejected tool indefinitely')
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
@@ -228,48 +225,49 @@ test('actual npm tarball has only the generic runtime and runs a personal-skill 
       if (command.kind === 'task.wait' && observedQueuedReview) reviewClaim.resolve()
       return receipt
     } } })
-  } }))
+  } })))
   f.stage('native-host-ready')
   t.signal.throwIfAborted()
-  await h.service.ingest({ groupId: 'native-group', messageId: 'packed-skill', senderOpenDingTalkId: 'native-user', text: '测试助手，Read my external guide.', occurredAt: '2026-10-13T17:00:00Z', timestamp: '2026-10-13T17:00:00Z' })
+  await t.step(async () => h.service.ingest({ groupId: 'native-group', messageId: 'packed-skill', senderOpenDingTalkId: 'native-user', text: '测试助手，Read my external guide.', occurredAt: '2026-10-13T17:00:00Z', timestamp: '2026-10-13T17:00:00Z' }))
   f.stage('message-ingested')
-  await h.service.whenIdle()
+  await t.step(async () => h.service.whenIdle())
   t.signal.throwIfAborted()
   f.stage('native-task-idle')
-  assert.equal((await h.query('task.list'))[0].status, 'completed')
-  assert.equal((await h.query('task.list'))[0].topicRefs.length, 1)
+  assert.equal((await t.step(async () => h.query('task.list')))[0].status, 'completed')
+  assert.equal((await t.step(async () => h.query('task.list')))[0].topicRefs.length, 1)
   assert.equal(h.residentStore.listTopics('native-group').length, 1)
-  assert.deepEqual(await h.query('operation.list'), [])
-  assert.equal((await h.query('execution.list')).length, 3)
+  assert.deepEqual(await t.step(async () => h.query('operation.list')), [])
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
   assert.equal(observedQueuedReview, true, 'The Owner must wait for the actual queued/drained review before completing')
-  assert.ok((await h.query('execution.list')).every(item => item.status === 'succeeded' && item.drained))
+  assert.ok((await t.step(async () => h.query('execution.list'))).every(item => item.status === 'succeeded' && item.drained))
   assert.deepEqual(h.toolResults.filter(item => item.result.isError), [])
-  assert.deepEqual((await h.service.recover()).failures, [])
+  assert.deepEqual((await t.step(async () => h.service.recover())).failures, [])
   f.stage('native-task-verified')
 })
 
 test('actual extracted resident starts and serves health without legacy entrypoints or personal assets', async (t, resources) => {
-  const f = await pack(t, resources), resident = await import(pathToFileURL(join(f.dir, 'resident.js')).href)
-  const work = join(f.root, 'runtime'); await mkdir(work)
+  await t.beginBusiness()
+  const f = await t.step(async () => pack(t, resources)), resident = await t.step(async () => import(pathToFileURL(join(f.dir, 'resident.js')).href))
+  const work = join(f.root, 'runtime'); await t.step(async () => mkdir(work))
   t.signal.throwIfAborted()
-  const h = await (resources.host = nativeTaskHost(work, () => { throw new Error('Startup must not call a model') }, { resident: true }))
+  const h = await (t.step(async () => resources.host = nativeTaskHost(work, () => { throw new Error('Startup must not call a model') }, { resident: true })))
   f.stage('resident-host-ready')
   t.signal.throwIfAborted()
   const probe = createServer(), listening = once(probe, 'listening', { signal: t.signal })
-  probe.listen({ port: 0, host: '127.0.0.1', signal: t.signal }); await listening
-  const port = probe.address().port; await new Promise(resolve => probe.close(resolve))
+  probe.listen({ port: 0, host: '127.0.0.1', signal: t.signal }); await t.step(async () => listening)
+  const port = probe.address().port; await t.step(async () => new Promise(resolve => probe.close(resolve)))
   t.signal.throwIfAborted()
   const env = Object.fromEntries(['HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy','NO_PROXY','no_proxy'].map(key => [key, process.env[key]]))
   resources.restoreEnv = () => { for (const [key,value] of Object.entries(env)) if (value === undefined) delete process.env[key]; else process.env[key] = value }
   resources.fiber = h.ctx.plugin(resident, { host: '127.0.0.1', port, proxyUrl: '', agentWorkspaceDir: work, agentPreset: 'native-test',
     dws: { enabled: false }, taskSessions: { dbPath: join(work, 'resident.db'), instanceId: 'packed-runtime', initialize: true,
       ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', recoveryIntervalMs: 60000 } })
-  await resources.fiber
+  await t.step(async () => resources.fiber)
   t.signal.throwIfAborted()
   f.stage('resident-listening')
-  const health = await new Promise((resolve,reject) => get(`http://127.0.0.1:${port}/health`, { agent: false, signal: t.signal }, response => {
+  const health = await t.step(async () => new Promise((resolve,reject) => get(`http://127.0.0.1:${port}/health`, { agent: false, signal: t.signal }, response => {
     let text = ''; response.on('data', chunk => { text += chunk }); response.on('end', () => resolve({ status: response.statusCode, body: JSON.parse(text) }))
-  }).on('error', reject))
+  }).on('error', reject)))
   assert.equal(health.status, 200); assert.equal(health.body.status, 'ok')
   assert.equal(h.requests.length, 0)
   for (const name of ['workflow', 'execution', 'goal']) assert.equal(h.ctx.get(name), undefined)

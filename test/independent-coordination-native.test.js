@@ -1,7 +1,8 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import { lifecycleStages } from './fixtures/lifecycle-stages.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
@@ -35,9 +36,10 @@ function replyMatter(request, input, reply, actions = []) {
 }
 
 test('retired coordinator config cannot dispatch history or replay notices while a current Topic task continues',
-  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
     let host, routeAttempts = 0, turns = 0
-    const f = await retiredCoordinationHost(t, { name: 'coordination-paused-', tasks: [{ taskId: 'old-task' }], rows: {
+    await t.beginBusiness()
+    const f = await t.step(async () => retiredCoordinationHost(t, { name: 'coordination-paused-', tasks: [{ taskId: 'old-task' }], rows: {
       coordination: [{ id: 'paused-old', groupId: 'native-group', state: 'active', revision: 1, memberIds: ['paused-member'] }],
       coordination_members: [{ id: 'paused-member', coordinationId: 'paused-old', taskId: 'old-task', state: 'waiting',
         dependencies: [], instruction: '暂停期间不得应用', progressImpact: 'preserve' }],
@@ -59,81 +61,83 @@ test('retired coordinator config cannot dispatch history or replay notices while
         return routed
       }
       return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '等待后续补充', evidence: [], limitations: [] } } }]
-    } })
+    } }))
     host = f.host
-    const history = await host.query('coordination.get', { coordinationId: 'paused-old' })
+    const history = await t.step(async () => host.query('coordination.get', { coordinationId: 'paused-old' }))
     assert.equal(history.members[0].retirement.previousState, 'waiting')
-    await host.service.ingest({ groupId: 'native-group', messageId: 'ordinary', senderOpenDingTalkId: 'native-user',
-      text: '测试助手，检查文件并等待补充', timestamp: '2026-10-28T01:00:00Z' })
-    await host.service.whenIdle()
-    const task = (await host.query('task.list')).find(task => task.taskId !== 'old-task')
+    await t.step(async () => host.service.ingest({ groupId: 'native-group', messageId: 'ordinary', senderOpenDingTalkId: 'native-user',
+      text: '测试助手，检查文件并等待补充', timestamp: '2026-10-28T01:00:00Z' }))
+    await t.step(async () => host.service.whenIdle())
+    const task = (await t.step(async () => host.query('task.list'))).find(task => task.taskId !== 'old-task')
     assert.ok(task, JSON.stringify(host.service.listAlerts()))
     assert.ok(routeAttempts >= 2, 'retired route ownership must be rejected before a current Topic accepts it')
-    assert.deepEqual(await host.query('task.get', { taskId: 'old-task' }), f.beforeTasks[0])
-    assert.deepEqual(await host.query('coordination.get', { coordinationId: 'paused-old' }), history)
-    const notice = await host.query('notification.get', { notificationId: 'paused-notice' })
+    assert.deepEqual(await t.step(async () => host.query('task.get', { taskId: 'old-task' })), f.beforeTasks[0])
+    assert.deepEqual(await t.step(async () => host.query('coordination.get', { coordinationId: 'paused-old' })), history)
+    const notice = await t.step(async () => host.query('notification.get', { notificationId: 'paused-notice' }))
     assert.equal(notice.state, 'superseded'); assert.equal(notice.retirement.reason, 'coordination-feature-removed')
     assert.equal(host.sent.some(item => item.kind === 'coordination'), false)
-    await assert.rejects(host.service.retryNotification({ groupId: 'native-group', notificationId: notice.id,
-      expectedToken: taskNotificationRecovery(notice).expectedToken }), { code: 'INDEPENDENT_COORDINATION_RETIRED' })
-    for (const phase of ['coordination', 'coordination-context']) await assert.rejects(host.service.retryMessageProcessing({
+    await t.step(async () => assert.rejects(host.service.retryNotification({ groupId: 'native-group', notificationId: notice.id,
+      expectedToken: taskNotificationRecovery(notice).expectedToken }), { code: 'INDEPENDENT_COORDINATION_RETIRED' }))
+    for (const phase of ['coordination', 'coordination-context']) await t.step(async () => assert.rejects(host.service.retryMessageProcessing({
       groupId: 'native-group', messageId: 'ordinary', phase, requestId: 'paused-old', token: 'old-token',
-    }), { code: 'MESSAGE_RETRY_STALE' })
-    await host.service.appendTaskContext({ taskId: task.taskId, requestId: 'ordinary-context', context: '补充文件名',
-      expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision, progressImpact: 'preserve' })
-    await host.service.whenIdle()
-    assert.match((await host.query('task.get', { taskId: task.taskId })).request, /补充文件名/)
-    assert.equal((await host.query('task.list')).length, 2)
-    assert.deepEqual(await host.query('coordination.get', { coordinationId: 'paused-old' }), history)
-  })
+    }), { code: 'MESSAGE_RETRY_STALE' }))
+    await t.step(async () => host.service.appendTaskContext({ taskId: task.taskId, requestId: 'ordinary-context', context: '补充文件名',
+      expectedRequirementRevision: task.requirementRevision, expectedControlRevision: task.controlRevision, progressImpact: 'preserve' }))
+    await t.step(async () => host.service.whenIdle())
+    assert.match((await t.step(async () => host.query('task.get', { taskId: task.taskId }))).request, /补充文件名/)
+    assert.equal((await t.step(async () => host.query('task.list'))).length, 2)
+    assert.deepEqual(await t.step(async () => host.query('coordination.get', { coordinationId: 'paused-old' })), history)
+  }))
 
 test('retired observation HTTP mutations return gone while original task versions and historical observations remain intact',
-  { skip: !available ? reason : false, timeout: 30000 }, async t => {
-    const f = await retiredCoordinationHost(t, { name: 'retire-observation-native-',
+  { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+    await t.beginBusiness()
+    const f = await t.step(async () => retiredCoordinationHost(t, { name: 'retire-observation-native-',
       tasks: ['A', 'B', 'C', 'D'].map(taskId => ({ taskId, request: '原事项' + taskId })),
       rows: {
         coordination: [{ id: 'old-progress', groupId: 'native-group', state: 'active', revision: 1, memberIds: ['A', 'B', 'C', 'D'] }],
         coordination_members: ['A', 'B', 'C', 'D'].map(taskId => ({ id: taskId, taskId, coordinationId: 'old-progress',
           state: 'waiting', observation: true, dependencies: [], expectedRequirementRevision: 1, expectedContextRevision: 0, expectedRunSequence: 1 })),
       },
-    })
+    }))
     const host = f.host
-    await host.service.appendTaskContext({ taskId: 'A', requestId: 'changed-A', context: '新增事实',
-      expectedRequirementRevision: 1, expectedControlRevision: 1, progressImpact: 'preserve' })
-    await host.service.whenIdle()
-    const before = await host.query('task.list'), wakes = await host.query('wake.list')
-    const history = await host.query('coordination.get', { coordinationId: 'old-progress' }), modelCalls = f.requests.length
+    await t.step(async () => host.service.appendTaskContext({ taskId: 'A', requestId: 'changed-A', context: '新增事实',
+      expectedRequirementRevision: 1, expectedControlRevision: 1, progressImpact: 'preserve' }))
+    await t.step(async () => host.service.whenIdle())
+    const before = await t.step(async () => host.query('task.list')), wakes = await t.step(async () => host.query('wake.list'))
+    const history = await t.step(async () => host.query('coordination.get', { coordinationId: 'old-progress' })), modelCalls = f.requests.length
     const server = createServer((request, response) => handleRequest(request, response, host.service))
     t.after(() => new Promise(resolve => server.close(resolve)))
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+    await t.step(async () => new Promise(resolve => server.listen(0, '127.0.0.1', resolve)))
     const url = 'http://127.0.0.1:' + server.address().port
     for (const suffix of ['/check', '']) for (const expectedRevision of [1, 2]) {
-      const response = await fetch(url + '/coordination/old-progress/retire-observation' + suffix, { method: 'POST',
+      const response = await t.step(async () => fetch(url + '/coordination/old-progress/retire-observation' + suffix, { method: 'POST',
         headers: { 'content-type': 'application/json' }, body: JSON.stringify({ groupId: 'native-group',
-          expectedRevision, reason: '历史纯观察不再允许修改' }) })
+          expectedRevision, reason: '历史纯观察不再允许修改' }) }))
       assert.equal(response.status, 410)
-      assert.deepEqual(await response.json(), { error: 'INDEPENDENT_COORDINATION_RETIRED' })
+      assert.deepEqual(await t.step(async () => response.json()), { error: 'INDEPENDENT_COORDINATION_RETIRED' })
     }
     for (const path of ['/state/coordination-sources', '/state/coordination-work/dispatch:old-progress']) {
-      const response = await fetch(url + path)
+      const response = await t.step(async () => fetch(url + path))
       assert.equal(response.status, 410)
     }
-    await host.service.recover(); await host.service.whenIdle()
-    assert.deepEqual(await host.query('task.list'), before)
-    assert.deepEqual(await host.query('wake.list'), wakes)
-    assert.deepEqual(await host.query('coordination.get', { coordinationId: 'old-progress' }), history)
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    assert.deepEqual(await t.step(async () => host.query('task.list')), before)
+    assert.deepEqual(await t.step(async () => host.query('wake.list')), wakes)
+    assert.deepEqual(await t.step(async () => host.query('coordination.get', { coordinationId: 'old-progress' })), history)
     assert.equal(history.members[0].expectedContextRevision, 0, 'historical stale version is preserved, not rewritten to the new Task version')
-    assert.deepEqual(await host.query('notification.list'), [])
+    assert.deepEqual(await t.step(async () => host.query('notification.list')), [])
     assert.equal(host.sent.length, 0); assert.equal(f.requests.length, modelCalls)
-  })
+  }))
 
 test('即时进度询问经原生路由与query工具一次答复四项任务，恢复不唤醒或重发',
-  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'instant-task-progress-'))
     let host, ownerCalls = 0, queryTurns = 0, modelSteps = 0
     const taskIds = []
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
-    host = await nativeTaskHost(root, request => {
+    await t.beginBusiness()
+    host = await t.step(async () => nativeTaskHost(root, request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
       assert.ok(++modelSteps <= 40, JSON.stringify({ error: 'unexpected progress setup loop', tools: host.toolResults.slice(-2) }))
       if (input.trigger === 'task-facts' || input.requestId?.startsWith('coord-summary-')) return topicTaskCalls(request)
@@ -158,27 +162,27 @@ test('即时进度询问经原生路由与query工具一次答复四项任务，
         return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '原工作未结束', evidence: [], limitations: [] } } }]
       }
       return []
-    }, { config: { coordination: model } })
+    }, { config: { coordination: model } }))
     for (const title of ['终审只读UPR导入覆盖', '未保存草稿UPR导入', '草稿UPR物料名称回显', 'v4合并数据集UPR替换'])
-      taskIds.push((await host.service.createTask({ groupId: 'native-group', requestId: title, title, objective: title })).taskId)
-    await host.service.whenIdle()
-    const tasks = await host.query('task.list'), wakes = await host.query('wake.list'), calls = ownerCalls
-    await host.service.ingest({ groupId: 'native-group', messageId: 'progress', senderOpenDingTalkId: 'native-user', senderName: '同事',
-      text: '昨天关于导入的其他问题 修复了没', timestamp: '2026-10-28T01:44:09Z' })
-    await host.service.whenIdle()
+      taskIds.push((await t.step(async () => host.service.createTask({ groupId: 'native-group', requestId: title, title, objective: title }))).taskId)
+    await t.step(async () => host.service.whenIdle())
+    const tasks = await t.step(async () => host.query('task.list')), wakes = await t.step(async () => host.query('wake.list')), calls = ownerCalls
+    await t.step(async () => host.service.ingest({ groupId: 'native-group', messageId: 'progress', senderOpenDingTalkId: 'native-user', senderName: '同事',
+      text: '昨天关于导入的其他问题 修复了没', timestamp: '2026-10-28T01:44:09Z' }))
+    await t.step(async () => host.service.whenIdle())
     assert.equal(host.sent.length, 1)
     for (const task of tasks) assert.ok(host.sent[0].payload.text.includes(task.title))
-    assert.deepEqual(await host.query('coordination.list'), [])
+    assert.deepEqual(await t.step(async () => host.query('coordination.list')), [])
     assert.equal(host.residentStore.getGroup('native-group').outbox[0].status, 'sent')
-    assert.deepEqual(await host.query('task.list'), tasks)
-    assert.deepEqual(await host.query('wake.list'), wakes)
+    assert.deepEqual(await t.step(async () => host.query('task.list')), tasks)
+    assert.deepEqual(await t.step(async () => host.query('wake.list')), wakes)
     assert.equal(ownerCalls, calls)
-    await host.service.recover(); await host.service.whenIdle()
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
     assert.equal(host.sent.length, 1); assert.equal(ownerCalls, calls)
-    assert.deepEqual(await host.query('execution.list'), [])
-    assert.deepEqual(await host.query('coordination.schedule.list'), [])
-    assert.deepEqual(await host.query('coordination.occurrence.list'), [])
-  })
+    assert.deepEqual(await t.step(async () => host.query('execution.list')), [])
+    assert.deepEqual(await t.step(async () => host.query('coordination.schedule.list')), [])
+    assert.deepEqual(await t.step(async () => host.query('coordination.occurrence.list')), [])
+  }))
 
 // The removed coordinator no longer owns quoted deployment or re-evaluation.
 // Current Topic decisions retain the same quoted evidence and reopen only the original Task.
@@ -283,13 +287,14 @@ test('coordination context shares exact bounded inputs, including paired source 
 // Scheduled coordinator queries are gone. The retained read-only directory
 // guarantee is exercised through current Topic pagination; native platform timing has its own suite.
 for (const taskCount of [17, 41]) test(`current Topic reads ${taskCount} task summaries through bounded pages without full detail or Owner wake`,
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'topic-directory-query-'))
     let host, decisionTurns = 0, ownerCalls = 0
     const startedAt = performance.now(), phases = {}
     const observed = new Set(), offsets = []
     t.after(async () => { t.diagnostic(JSON.stringify({ taskCount, phases, ownerCalls, elapsedMs: performance.now() - startedAt })); await host?.close(); await rm(root, { recursive: true, force: true }) })
-    host = await nativeTaskHost(root, request => {
+    await t.beginBusiness()
+    host = await t.step(async () => nativeTaskHost(root, request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
       if (input.trigger === 'task-facts') return topicTaskCalls(request)
       if (names.includes('group_topic_route_submit')) return routeMatter(input, '当前群任务目录查询')
@@ -316,52 +321,55 @@ for (const taskCount of [17, 41]) test(`current Topic reads ${taskCount} task su
       ownerCalls++
       return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '保持原任务',
         evidence: [], limitations: [] } } }]
-    })
+    }))
     phases.hostReadyMs = performance.now() - startedAt
     for (let i = 0; i < taskCount; i++) {
       const taskId = 'T' + i
-      await host.service.store.command({ id: 'seed:' + i, kind: 'task.create',
-        args: { taskId, groupId: 'native-group', request: '原任务' + i } })
+      await t.step(async () => host.service.store.command({ id: 'seed:' + i, kind: 'task.create',
+        args: { taskId, groupId: 'native-group', request: '原任务' + i } }))
       if (i === 0) continue
       // These are already-waiting directory entries, not new work to execute.
       // Use real ledger transitions for their setup; one native Owner below
       // remains the live guard against a read-only query restarting work.
-      const { binding, wakeIds } = (await host.service.store.command({ id: 'seed-claim:' + i,
-        kind: 'task.claim', args: { taskId } })).result
-      await host.service.store.command({ id: 'seed-wait:' + i, kind: 'task.wait',
-        args: { binding, action: 'wait', summary: '保持原任务', evidence: [], limitations: [] } })
-      await host.service.store.command({ id: 'seed-ack:' + i, kind: 'wake.ack', args: { binding, wakeIds } })
-      await host.service.store.command({ id: 'seed-drained:' + i, kind: 'task.drained', args: { binding } })
+      const { binding, wakeIds } = (await t.step(async () => host.service.store.command({ id: 'seed-claim:' + i,
+        kind: 'task.claim', args: { taskId } }))).result
+      await t.step(async () => host.service.store.command({ id: 'seed-wait:' + i, kind: 'task.wait',
+        args: { binding, action: 'wait', summary: '保持原任务', evidence: [], limitations: [] } }))
+      await t.step(async () => host.service.store.command({ id: 'seed-ack:' + i, kind: 'wake.ack', args: { binding, wakeIds } }))
+      await t.step(async () => host.service.store.command({ id: 'seed-drained:' + i, kind: 'task.drained', args: { binding } }))
     }
     phases.tasksSeededMs = performance.now() - startedAt
-    await host.service.recover(); await host.service.whenIdle()
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
     phases.ownersIdleMs = performance.now() - startedAt
-    const before = await host.query('task.list'), wakes = await host.query('wake.list'), calls = ownerCalls
+    const before = await t.step(async () => host.query('task.list')), wakes = await t.step(async () => host.query('wake.list')), calls = ownerCalls
     assert.equal(calls, 1, 'one original Owner must really run and settle before the query')
     assert.equal(before.length, taskCount)
     assert.ok(before.every(task => task.drained && task.status === 'active' && task.lastDecision.action === 'wait'))
     assert.equal(wakes.length, taskCount); assert.ok(wakes.every(wake => wake.state === 'acked'))
-    await host.service.ingest({ groupId: 'native-group', messageId: 'directory-query', senderOpenDingTalkId: 'native-user',
-      text: '测试助手，查询当前群所有任务进度，通知我。', timestamp: '2026-10-21T00:00:00Z' })
-    await host.service.whenIdle()
+    await t.step(async () => host.service.ingest({ groupId: 'native-group', messageId: 'directory-query', senderOpenDingTalkId: 'native-user',
+      text: '测试助手，查询当前群所有任务进度，通知我。', timestamp: '2026-10-21T00:00:00Z' }))
+    await t.step(async () => host.service.whenIdle())
     phases.queryCompleteMs = performance.now() - startedAt
     assert.equal(observed.size, taskCount)
     assert.deepEqual(offsets, Array.from({ length: Math.ceil(taskCount / 10) }, (_, i) => i * 10))
     assert.equal(host.toolResults.some(tool => tool.name === 'group_task_context_get'), false)
-    assert.deepEqual(await host.query('task.list'), before); assert.deepEqual(await host.query('wake.list'), wakes)
+    assert.deepEqual(await t.step(async () => host.query('task.list')), before); assert.deepEqual(await t.step(async () => host.query('wake.list')), wakes)
     assert.equal(ownerCalls, calls); assert.equal(host.sent.length, 1)
-    assert.deepEqual(await host.query('coordination.schedule.list'), [])
-    assert.deepEqual(await host.query('execution.list'), [])
-  })
+    assert.deepEqual(await t.step(async () => host.query('coordination.schedule.list')), [])
+    assert.deepEqual(await t.step(async () => host.query('execution.list')), [])
+  }))
 
 test('current native source retry preserves failed attempt evidence and clears the alert after one clarification',
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'topic-recovered-alert-'))
     const agentConfig = { agentPreset: 'missing-fixture-preset' }
     const releaseFailureWrite = Promise.withResolvers()
+t.onCancel(() => releaseFailureWrite.resolve())
+
     let host, decisions = 0, delayedFailure
     t.after(async () => { releaseFailureWrite.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
-    host = await nativeTaskHost(root, request => {
+    await t.beginBusiness()
+    host = await t.step(async () => nativeTaskHost(root, request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
       if (names.includes('group_topic_route_submit')) return routeMatter(input, '查询对象待确认')
       if (names.includes('group_decision_submit')) {
@@ -369,7 +377,7 @@ test('current native source retry preserves failed attempt evidence and clears t
         return replyMatter(request, input, '要查询哪个原任务？')
       }
       return topicTaskCalls(request) ?? []
-    }, { agentConfig })
+    }, { agentConfig }))
     const updateRequest = host.residentStore.updateCoordinationRequest
     host.residentStore.updateCoordinationRequest = async (groupId, requestId, patch, ...rest) => {
       if (patch.status === 'exhausted' && patch.failurePhase === 'startup') {
@@ -378,33 +386,33 @@ test('current native source retry preserves failed attempt evidence and clears t
       }
       return updateRequest(groupId, requestId, patch, ...rest)
     }
-    await host.service.ingest({ groupId: 'native-group', messageId: 'retry-query', senderOpenDingTalkId: 'native-user',
-      text: '测试助手，查那个任务。', timestamp: '2026-10-21T00:00:00Z' })
-    await host.service.whenIdle()
+    await t.step(async () => host.service.ingest({ groupId: 'native-group', messageId: 'retry-query', senderOpenDingTalkId: 'native-user',
+      text: '测试助手，查那个任务。', timestamp: '2026-10-21T00:00:00Z' }))
+    await t.step(async () => host.service.whenIdle())
     // The native monitor exposes exhaustion before its asynchronous record write
     // completes. Exercise that window explicitly rather than racing Windows I/O.
-    await waitUntil(() => delayedFailure, 'native startup failure reached persistence')
+    await t.step(async () => waitUntil(() => delayedFailure, 'native startup failure reached persistence'))
     assert.equal(host.service.messageProcessingRequests('native-group').find(item => item.requestId === delayedFailure.requestId)?.status, 'exhausted')
     assert.notEqual(host.residentStore.getCoordinationRequest('native-group', delayedFailure.requestId)?.startupAttempt, 1)
     releaseFailureWrite.resolve()
-    const { failed, recorded } = await waitUntil(() => {
+    const { failed, recorded } = await t.step(async () => waitUntil(() => {
       const failed = host.service.messageProcessingRequests('native-group').find(item => item.requestId === delayedFailure.requestId && item.status === 'exhausted')
       const recorded = failed && host.residentStore.getCoordinationRequest('native-group', failed.requestId)
       return recorded?.status === 'exhausted' && recorded.startupAttempt === 1 && recorded.failurePhase === 'startup'
         ? { failed, recorded: structuredClone(recorded) } : null
-    }, 'durable native startup failure')
+    }, 'durable native startup failure'))
     host.residentStore.updateCoordinationRequest = updateRequest
     assert.equal(recorded.startupAttempt, 1); assert.equal(recorded.failurePhase, 'startup')
     assert.ok(host.service.listAlerts().length > 0)
-    const original = (await host.query('source.list'))[0], stages = structuredClone(original.stages)
+    const original = (await t.step(async () => host.query('source.list')))[0], stages = structuredClone(original.stages)
     assert.equal(decisions, 0)
     const message = host.residentStore.getGroup('native-group').messages[0]
     const retry = { groupId: 'native-group', messageId: message.messageId, messageVersion: message.messageVersion,
       activeUnitRefs: message.activeUnitRefs ?? [], phase: 'routing', requestId: failed.requestId, token: failed.retryToken }
     agentConfig.agentPreset = 'native-test'
-    await host.service.retryMessageProcessing(retry)
-    await host.service.whenIdle()
-    const current = (await host.query('source.list'))[0]
+    await t.step(async () => host.service.retryMessageProcessing(retry))
+    await t.step(async () => host.service.whenIdle())
+    const current = (await t.step(async () => host.query('source.list')))[0]
     assert.equal(current.sourceId, original.sourceId); assert.equal(current.version, original.version)
     for (const stage of stages) assert.ok(current.stages.some(saved => saved.spanId === stage.spanId), 'failed attempt evidence must remain')
     assert.ok(current.processingCompleted)
@@ -413,9 +421,9 @@ test('current native source retry preserves failed attempt evidence and clears t
     assert.equal(host.service.listAlerts().length, 0)
     assert.equal(decisions, 1)
     assert.equal(host.sent.filter(notice => notice.payload.text === '要查询哪个原任务？').length, 1)
-    await assert.rejects(host.service.retryMessageProcessing(retry), /MESSAGE_RETRY_STALE/)
-    assert.deepEqual(await host.query('task.list'), [])
-  })
+    await t.step(async () => assert.rejects(host.service.retryMessageProcessing(retry), /MESSAGE_RETRY_STALE/))
+    assert.deepEqual(await t.step(async () => host.query('task.list')), [])
+  }))
 
 const stageCases = [
   { name: 'software', objective: '需求X先方案评审，然后开发，开发完部署UAT', requirements: ['先完成方案评审', '评审后开发', '开发完成后部署UAT并验证'] },
@@ -424,13 +432,14 @@ const stageCases = [
   { name: 'translation-reversed', objective: '这份已有译稿先校对，再翻译修订内容', requirements: ['先校对已有译稿', '校对后翻译修订内容'] },
 ]
 for (const stageCase of stageCases) for (const existing of [false, true]) test(`one delivery preserves arbitrary user stages: ${stageCase.name}, existing=${existing}`,
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'single-task-stages-'))
     let host, admitted = false, delegated = false, ownerInput, stageTurns = 0
     const prompts = { route: '', decision: '', owner: '' }
     const { objective, requirements } = stageCase
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
-    host = await nativeTaskHost(root, request => {
+    await t.beginBusiness()
+    host = await t.step(async () => nativeTaskHost(root, request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
       assert.ok(++stageTurns <= 24, JSON.stringify({ error: 'unexpected stage model loop', tools: host.toolResults.slice(-2) }))
       if (input.trigger === 'task-facts' || input.requestId?.startsWith('coord-summary-')) return topicTaskCalls(request)
@@ -474,14 +483,14 @@ for (const stageCase of stageCases) for (const existing of [false, true]) test(`
       if (names.includes('execution_submit')) return [{ name: 'execution_submit', args: { output: {
         status: 'completed', summary: requirements[0], evidence: ['synthetic-first-stage'], limitations: requirements.slice(1), artifacts: [] } } }]
       return []
-    })
-    if (existing) await host.service.store.command({ id: 'original-create', kind: 'task.create',
-      args: { taskId: 'original', groupId: 'native-group', ownerActorId: 'native-user', request: requirements[0] } })
-    if (existing) { await host.service.recover(); await host.service.whenIdle() }
-    await host.service.ingest({ groupId: 'native-group', messageId: 'stages', senderOpenDingTalkId: 'native-user',
-      text: `测试助手，${objective}`, timestamp: '2026-10-21T01:00:00Z' })
-    await host.service.whenIdle()
-    const tasks = await host.query('task.list')
+    }))
+    if (existing) await t.step(async () => host.service.store.command({ id: 'original-create', kind: 'task.create',
+      args: { taskId: 'original', groupId: 'native-group', ownerActorId: 'native-user', request: requirements[0] } }))
+    if (existing) { await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle()) }
+    await t.step(async () => host.service.ingest({ groupId: 'native-group', messageId: 'stages', senderOpenDingTalkId: 'native-user',
+      text: `测试助手，${objective}`, timestamp: '2026-10-21T01:00:00Z' }))
+    await t.step(async () => host.service.whenIdle())
+    const tasks = await t.step(async () => host.query('task.list'))
     assert.match(prompts.route, /任意用户指定阶段/)
     assert.match(prompts.decision, /不按内部阶段分别生成new-task/)
     assert.match(prompts.decision, /不得套用默认阶段模板/)
@@ -496,25 +505,26 @@ for (const stageCase of stageCases) for (const existing of [false, true]) test(`
     assert.ok(ownerInput.sources.some(source => source.text.includes(objective)))
     assert.equal(task.status, 'active')
     assert.equal(task.completion, undefined)
-    const executions = await host.query('execution.list', { taskId: task.taskId })
+    const executions = await t.step(async () => host.query('execution.list', { taskId: task.taskId }))
     assert.equal(executions.length, 1)
     assert.equal(executions[0].status, 'succeeded')
-    await host.service.recover(); await host.service.whenIdle()
-    assert.equal((await host.query('task.list')).length, 1)
-    assert.equal((await host.query('task.get', { taskId: task.taskId })).status, 'active')
-  })
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    assert.equal((await t.step(async () => host.query('task.list'))).length, 1)
+    assert.equal((await t.step(async () => host.query('task.get', { taskId: task.taskId }))).status, 'active')
+  }))
 
 // Delayed coordinator creation is retired. Historical templates must not create
 // or start Tasks on recovery; current explicit creation carries the full start constraint to one Owner.
 for (const scheduled of [false, true]) test(`retired creation never auto-starts while current explicit scope keeps its constraint: scheduled=${scheduled}`,
-  { skip: !available ? reason : false, timeout: 15000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
     let admitted = false, ownerInput
     const objective = scheduled ? '创建新交付C，仅在明日明确授权的时间开始；现在等待，不执行'
       : '创建新交付C，仅在前置A的验收证据确认后开始；现在等待，不执行'
     const template = { id: 'create-B', coordinationId: 'old-create', state: 'waiting', creationKey: 'B',
       instruction: '旧明确交付B', dependencies: scheduled ? [] : ['A'], taskId: 'B' }
-    const f = await retiredCoordinationHost(t, { name: 'retired-creation-', tasks: [{ taskId: 'A' }, { taskId: 'B' }], rows: {
+    await t.beginBusiness()
+    const f = await t.step(async () => retiredCoordinationHost(t, { name: 'retired-creation-', tasks: [{ taskId: 'A' }, { taskId: 'B' }], rows: {
       coordination: [{ id: 'old-create', groupId: 'native-group', state: 'active', revision: 1, memberIds: ['create-B'] }],
       coordination_members: [template],
       coordination_schedules: scheduled ? [{ id: 'create-later', coordinationId: 'old-create', state: 'active',
@@ -534,34 +544,35 @@ for (const scheduled of [false, true]) test(`retired creation never auto-starts 
       if (admitted && !['A', 'B'].includes(input.task.taskId)) ownerInput = input
       return [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '明确启动条件未满足',
         evidence: [], limitations: ['不把旧日程或依赖事件视为新授权'] } } }]
-    } })
+    } }))
     const host = f.host
-    const history = await host.query('coordination.get', { coordinationId: 'old-create' })
-    t.mock.timers.tick(60000); await host.service.recover(); await host.service.whenIdle()
-    assert.deepEqual(await host.query('task.list'), f.beforeTasks)
-    assert.deepEqual(await host.query('execution.list'), [])
-    assert.deepEqual(await host.query('coordination.occurrence.list'), [])
-    await host.service.ingest({ groupId: 'native-group', messageId: 'new-create', senderOpenDingTalkId: 'native-user',
-      text: '测试助手，' + objective, timestamp: '2026-10-21T00:01:00Z' })
-    await host.service.whenIdle()
-    const tasks = await host.query('task.list'), created = tasks.find(task => !['A', 'B'].includes(task.taskId))
+    const history = await t.step(async () => host.query('coordination.get', { coordinationId: 'old-create' }))
+    t.mock.timers.tick(60000); await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    assert.deepEqual(await t.step(async () => host.query('task.list')), f.beforeTasks)
+    assert.deepEqual(await t.step(async () => host.query('execution.list')), [])
+    assert.deepEqual(await t.step(async () => host.query('coordination.occurrence.list')), [])
+    await t.step(async () => host.service.ingest({ groupId: 'native-group', messageId: 'new-create', senderOpenDingTalkId: 'native-user',
+      text: '测试助手，' + objective, timestamp: '2026-10-21T00:01:00Z' }))
+    await t.step(async () => host.service.whenIdle())
+    const tasks = await t.step(async () => host.query('task.list')), created = tasks.find(task => !['A', 'B'].includes(task.taskId))
     assert.equal(tasks.length, 3); assert.equal(created.objective, objective)
     assert.equal(created.status, 'active'); assert.equal(created.lastDecision.action, 'wait')
     assert.equal(ownerInput.task.objective, objective)
     assert.deepEqual(created.requirements, ['先核对启动条件，未满足不得开始执行'])
-    assert.deepEqual(await host.query('execution.list'), [])
-    assert.deepEqual(await host.query('coordination.get', { coordinationId: 'old-create' }), history)
-    for (const task of f.beforeTasks) assert.deepEqual(await host.query('task.get', { taskId: task.taskId }), task)
+    assert.deepEqual(await t.step(async () => host.query('execution.list')), [])
+    assert.deepEqual(await t.step(async () => host.query('coordination.get', { coordinationId: 'old-create' })), history)
+    for (const task of f.beforeTasks) assert.deepEqual(await t.step(async () => host.query('task.get', { taskId: task.taskId })), task)
     const count = host.sent.length
-    await host.service.recover(); await host.service.whenIdle()
-    assert.equal((await host.query('task.list')).length, 3); assert.equal(host.sent.length, count)
-  })
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    assert.equal((await t.step(async () => host.query('task.list'))).length, 3); assert.equal(host.sent.length, count)
+  }))
 
 test('current explicit A then B follow-ups use original Owners while retired completion dependencies never replay B',
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     const completions = []
     let decisions = 0
-    const f = await retiredCoordinationHost(t, { name: 'original-owner-sequence-', tasks: [
+    await t.beginBusiness()
+    const f = await t.step(async () => retiredCoordinationHost(t, { name: 'original-owner-sequence-', tasks: [
       { taskId: 'A', request: '原目标A' }, { taskId: 'B', request: '原目标B' }],
       rows: {
         coordination: [{ id: 'old-sequence', groupId: 'native-group', state: 'active', revision: 1, memberIds: ['a', 'b'] }],
@@ -589,20 +600,20 @@ test('current explicit A then B follow-ups use original Owners while retired com
         return [{ name: 'task_session_submit', args: { decision: { action: supplemented ? 'complete' : 'wait',
           summary: supplemented ? '已核验明确追加的材料' : '等候原任务补充', evidence: supplemented ? ['本轮材料已核对'] : [], limitations: [] } } }]
       },
-    })
-    const host = f.host, old = await host.query('coordination.get', { coordinationId: 'old-sequence' })
+    }))
+    const host = f.host, old = await t.step(async () => host.query('coordination.get', { coordinationId: 'old-sequence' }))
     const ingest = (messageId, text) => host.service.ingest({ groupId: 'native-group', messageId,
       senderOpenDingTalkId: 'native-user', text, timestamp: '2026-10-21T01:00:00Z' })
-    await ingest('continue-A', '测试助手，先核对A这份定位材料，B当前不要动。')
-    await host.service.whenIdle()
-    assert.equal((await host.query('task.get', { taskId: 'A' })).status, 'completed')
-    assert.deepEqual(await host.query('task.get', { taskId: 'B' }), f.beforeTasks.find(task => task.taskId === 'B'))
+    await t.step(async () => ingest('continue-A', '测试助手，先核对A这份定位材料，B当前不要动。'))
+    await t.step(async () => host.service.whenIdle())
+    assert.equal((await t.step(async () => host.query('task.get', { taskId: 'A' }))).status, 'completed')
+    assert.deepEqual(await t.step(async () => host.query('task.get', { taskId: 'B' })), f.beforeTasks.find(task => task.taskId === 'B'))
     assert.deepEqual(completions, ['A'])
-    await host.service.recover(); await host.service.whenIdle()
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
     assert.deepEqual(completions, ['A'], 'completion facts cannot restart retired dependency dispatch')
-    await ingest('continue-B', '测试助手，A已核验，现在继续B这份定位材料。')
-    await host.service.whenIdle()
-    const tasks = await host.query('task.list')
+    await t.step(async () => ingest('continue-B', '测试助手，A已核验，现在继续B这份定位材料。'))
+    await t.step(async () => host.service.whenIdle())
+    const tasks = await t.step(async () => host.query('task.list'))
     assert.equal(tasks.length, 2); assert.ok(tasks.every(task => task.status === 'completed'))
     assert.deepEqual(completions, ['A', 'B'])
     for (const task of tasks) {
@@ -610,16 +621,17 @@ test('current explicit A then B follow-ups use original Owners while retired com
       assert.equal(task.contextRevision, 1)
       assert.equal(task.sessionId, f.beforeTasks.find(original => original.taskId === task.taskId).sessionId)
     }
-    assert.deepEqual(await host.query('coordination.get', { coordinationId: 'old-sequence' }), old)
-    assert.deepEqual(await host.query('coordination.occurrence.list'), [])
+    assert.deepEqual(await t.step(async () => host.query('coordination.get', { coordinationId: 'old-sequence' })), old)
+    assert.deepEqual(await t.step(async () => host.query('coordination.occurrence.list')), [])
     const sent = host.sent.length
-    await host.service.recover(); await host.service.whenIdle()
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
     assert.deepEqual(completions, ['A', 'B']); assert.equal(host.sent.length, sent)
-  })
+  }))
 
 test('ambiguous current Topic asks one clarification without mutating either candidate Task',
-  { skip: !available ? reason : false, timeout: 15000 }, async t => {
-    const f = await retiredCoordinationHost(t, { name: 'topic-clarify-', tasks: [{ taskId: 'A' }, { taskId: 'B' }],
+  { ...({ skip: !available ? reason : false, timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
+    await t.beginBusiness()
+    const f = await t.step(async () => retiredCoordinationHost(t, { name: 'topic-clarify-', tasks: [{ taskId: 'A' }, { taskId: 'B' }],
       decide: request => {
         const names = request.tools.map(tool => tool.name), input = latestInput(request)
         if (names.includes('group_topic_route_submit')) return routeMatter(input, '对象待澄清')
@@ -627,27 +639,27 @@ test('ambiguous current Topic asks one clarification without mutating either can
         return topicTaskCalls(request) ?? [{ name: 'task_session_submit', args: { decision: {
           action: 'wait', summary: '保持原任务', evidence: [], limitations: [] } } }]
       },
-    })
-    const host = f.host, wakes = await host.query('wake.list'), owners = f.requests.filter(request => request.tools.some(tool => tool.name === 'task_session_submit')).length
-    await host.service.ingest({ groupId: 'native-group', messageId: 'ambiguous', senderOpenDingTalkId: 'native-user',
-      text: '测试助手，第二个先别动。', timestamp: '2026-10-21T01:00:00Z' })
-    await host.service.whenIdle()
-    assert.deepEqual(await host.query('task.list'), f.beforeTasks); assert.deepEqual(await host.query('wake.list'), wakes)
+    }))
+    const host = f.host, wakes = await t.step(async () => host.query('wake.list')), owners = f.requests.filter(request => request.tools.some(tool => tool.name === 'task_session_submit')).length
+    await t.step(async () => host.service.ingest({ groupId: 'native-group', messageId: 'ambiguous', senderOpenDingTalkId: 'native-user',
+      text: '测试助手，第二个先别动。', timestamp: '2026-10-21T01:00:00Z' }))
+    await t.step(async () => host.service.whenIdle())
+    assert.deepEqual(await t.step(async () => host.query('task.list')), f.beforeTasks); assert.deepEqual(await t.step(async () => host.query('wake.list')), wakes)
     assert.equal(f.requests.filter(request => request.tools.some(tool => tool.name === 'task_session_submit')).length, owners)
-    assert.deepEqual(await host.query('coordination.list'), [])
-    assert.deepEqual(await host.query('execution.list'), [])
-    const source = (await host.query('source.list')).find(source => source.messageId === 'ambiguous')
+    assert.deepEqual(await t.step(async () => host.query('coordination.list')), [])
+    assert.deepEqual(await t.step(async () => host.query('execution.list')), [])
+    const source = (await t.step(async () => host.query('source.list'))).find(source => source.messageId === 'ambiguous')
     assert.equal(source.routed, true); assert.ok(source.processingCompleted)
     assert.equal(host.sent.length, 1); assert.equal(host.sent[0].kind, 'topic-reply')
     assert.equal(host.sent[0].payload.text, '“第二个”指哪项已有任务？')
     assert.equal(host.residentStore.listTopics('native-group').filter(topic => topic.decisions.some(decision =>
       decision.decision.basisMessageIds?.includes('ambiguous') && decision.status === 'completed')).length, 1)
-    await host.service.recover(); await host.service.whenIdle()
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
     assert.equal(host.sent.length, 1)
-  })
+  }))
 
 test('retired due query keeps its original occurrence and receipt without reopening the observed Task',
-  { skip: !available ? reason : false, timeout: 15000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-21T00:00:00Z') })
     const occurrence = { id: 'due-query', scheduleId: 'old-schedule', coordinationId: 'old-query',
       plannedAt: '2026-10-21T00:01:00.000Z', actionState: 'succeeded', deliveryState: 'delivered',
@@ -656,25 +668,26 @@ test('retired due query keeps its original occurrence and receipt without reopen
       ack: { messageId: 'old-delivery-message' }, receipt: { messageId: 'old-delivery-message', visible: true },
       payload: { conversationId: 'native-group', atOpenDingTalkIds: ['native-user'], text: '原任务A等待补充',
         fact: { coordinationId: 'old-query', eventId: 'due-query', occurrenceId: 'due-query' } } }
-    const f = await retiredCoordinationHost(t, { name: 'retired-query-', tasks: [{ taskId: 'A' }], rows: {
+    await t.beginBusiness()
+    const f = await t.step(async () => retiredCoordinationHost(t, { name: 'retired-query-', tasks: [{ taskId: 'A' }], rows: {
       coordination: [{ id: 'old-query', groupId: 'native-group', state: 'active', revision: 1, memberIds: [] }],
       coordination_schedules: [{ id: 'old-schedule', coordinationId: 'old-query', state: 'active',
         nextDueAt: occurrence.plannedAt, rule: { kind: 'once', at: occurrence.plannedAt }, action: occurrence.action }],
       coordination_occurrences: [occurrence], notifications: [delivery],
-    } })
+    } }))
     let host = f.host
     const calls = f.requests.length
     t.mock.timers.tick(60000)
-    await host.service.recover(); await host.service.whenIdle()
-    assert.deepEqual(await host.query('task.list'), f.beforeTasks)
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    assert.deepEqual(await t.step(async () => host.query('task.list')), f.beforeTasks)
     assert.equal(f.requests.length, calls); assert.equal(host.sent.length, 0)
-    assert.deepEqual((await host.query('coordination.occurrence.list'))[0], occurrence)
-    assert.deepEqual(await host.query('notification.get', { notificationId: delivery.id }), delivery)
-    const schedule = (await host.query('coordination.schedule.list'))[0]
+    assert.deepEqual((await t.step(async () => host.query('coordination.occurrence.list')))[0], occurrence)
+    assert.deepEqual(await t.step(async () => host.query('notification.get', { notificationId: delivery.id })), delivery)
+    const schedule = (await t.step(async () => host.query('coordination.schedule.list')))[0]
     assert.equal(schedule.state, 'active'); assert.equal(schedule.retirement.previousState, 'active')
-    host = await f.restart(); await host.service.recover(); await host.service.whenIdle()
-    assert.deepEqual(await host.query('task.list'), f.beforeTasks)
+    host = await t.step(async () => f.restart()); await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    assert.deepEqual(await t.step(async () => host.query('task.list')), f.beforeTasks)
     assert.equal(f.requests.length, calls); assert.equal(host.sent.length, 0)
-    assert.deepEqual((await host.query('coordination.occurrence.list'))[0], occurrence)
-    assert.deepEqual(await host.query('notification.get', { notificationId: delivery.id }), delivery)
-  })
+    assert.deepEqual((await t.step(async () => host.query('coordination.occurrence.list')))[0], occurrence)
+    assert.deepEqual(await t.step(async () => host.query('notification.get', { notificationId: delivery.id })), delivery)
+  }))

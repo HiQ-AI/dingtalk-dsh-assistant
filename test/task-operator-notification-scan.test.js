@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
@@ -130,12 +131,17 @@ for (const scenario of ['recalled', 'not-due', 'no-adapter', 'due', 'expired-cla
   assert.equal(taskReads, ['due', 'expired-claim'].includes(scenario) ? 1 : 0, 'ineligible recalls must not perform task reads or occupy transport slots')
 })
 
-test('话题通知提交后即可发送，不等待同群另一独立事项的慢决策或恢复轮询', { skip: !available ? reason : false, timeout: 20000 }, async t => {
+test('话题通知提交后即可发送，不等待同群另一独立事项的慢决策或恢复轮询', { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'notification-plan-wake-'))
   const slowRelease = Promise.withResolvers(), sendRelease = Promise.withResolvers(), sent = []
+t.onCancel(() => slowRelease.resolve())
+
+t.onCancel(() => sendRelease.resolve())
+
   let host, slowFinished = false, slowStarted = false, decisionTurns = 0
   t.after(async () => { sendRelease.resolve(); slowRelease.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
-  host = await nativeTaskHost(root, async request => {
+  await t.beginBusiness()
+  host = await t.step(async () => nativeTaskHost(root, async request => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
     if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
       routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
@@ -162,34 +168,37 @@ test('话题通知提交后即可发送，不等待同群另一独立事项的�
       return { messageId: 'actual-topic-notice-' + sent.length }
     },
     async readback(notification) { return { visible: true, messageId: notification.ack.messageId } },
-  } })
+  } }))
   const ingest = (messageId, text) => host.service.ingest({ groupId: 'native-group', messageId,
     senderOpenDingTalkId: 'native-user', text, timestamp: new Date().toISOString() })
-  await ingest('first-matter', '测试助手，第一件独立事项')
-  await waitUntil(() => sent.length === 1, '第一条回复已准备并取得发送许可', 4000)
-  await ingest('second-matter', '测试助手，第二件独立事项')
-  await waitUntil(() => slowStarted, '另一独立事项的决策已挂起', 4000).catch(error => { throw new Error(`${error.message}: ${JSON.stringify(host.service.listAlerts())}`) })
+  await t.step(async () => ingest('first-matter', '测试助手，第一件独立事项'))
+  await t.step(async () => waitUntil(() => sent.length === 1, '第一条回复已准备并取得发送许可', 4000))
+  await t.step(async () => ingest('second-matter', '测试助手，第二件独立事项'))
+  await t.step(async () => waitUntil(() => slowStarted, '另一独立事项的决策已挂起', 4000).catch(error => { throw new Error(`${error.message}: ${JSON.stringify(host.service.listAlerts())}`) }))
   sendRelease.resolve()
-  await waitUntil(async () => (await host.query('notification.list')).some(item => item.state === 'delivered'), '第一条通知独立送达', 2000)
-    .catch(error => { throw new Error(JSON.stringify({ error: error.message, tools: host.toolResults.slice(-5), notifications: sent, alerts: host.service.listAlerts() })) })
+  await t.step(async () => waitUntil(async () => (await host.query('notification.list')).some(item => item.state === 'delivered'), '第一条通知独立送达', 2000)
+    .catch(error => { throw new Error(JSON.stringify({ error: error.message, tools: host.toolResults.slice(-5), notifications: sent, alerts: host.service.listAlerts() })) }))
   assert.equal(slowFinished, false)
   assert.equal(sent.length, 1)
   slowRelease.resolve()
-  await host.service.whenIdle()
+  await t.step(async () => host.service.whenIdle())
   assert.equal(sent.length, 2)
-  assert.deepEqual(await host.query('task.list'), [])
-  assert.equal((await host.query('notification.list')).every(item => item.kind === 'topic-reply' && item.state === 'delivered'), true)
-  await host.service.recover(); await host.service.whenIdle()
+  assert.deepEqual(await t.step(async () => host.query('task.list')), [])
+  assert.equal((await t.step(async () => host.query('notification.list'))).every(item => item.kind === 'topic-reply' && item.state === 'delivered'), true)
+  await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
   assert.equal(sent.length, 2, '恢复不能重发已送达的独立事项回复')
-})
+}))
 
 for (const firstOutcome of ['delivered', 'unknown', 'rate-limited']) test(`通知释放串行槽后自动递进并保留发送边界: ${firstOutcome}`,
-  { skip: !available ? reason : false, timeout: 20000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'notification-drain-'))
     const entered = Promise.withResolvers(), release = Promise.withResolvers(), sent = [], reads = []
+t.onCancel(() => release.resolve())
+
     let host
     t.after(async () => { release.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
-    host = await nativeTaskHost(root, request => topicTaskCalls(request) ?? [], { notifications: {
+    await t.beginBusiness()
+    host = await t.step(async () => nativeTaskHost(root, request => topicTaskCalls(request) ?? [], { notifications: {
       async send(notification) {
         sent.push(notification.id)
         if (notification.id === 'first') {
@@ -200,24 +209,24 @@ for (const firstOutcome of ['delivered', 'unknown', 'rate-limited']) test(`通�
       },
       async readback(notification) { reads.push(notification.id); return notification.id === 'first' && firstOutcome === 'unknown'
         ? undefined : { messageId: notification.id, visible: true } },
-    } })
-    for (const id of ['first', 'second']) await host.service.store.command({ id: `prepare-${id}`, kind: 'notification.prepare', args: {
+    } }))
+    for (const id of ['first', 'second']) await t.step(async () => host.service.store.command({ id: `prepare-${id}`, kind: 'notification.prepare', args: {
       notificationId: id, taskId: null, requirementRevision: 1, kind: 'topic-reply',
-      payload: { conversationId: 'native-group', sourceMessageId: 'source', actorId: 'native-user', text: id, fact: { topicRefs: [{ topicId: 'topic', revision: 1 }] } } } })
-    await host.service.recover()
-    await entered.promise
+      payload: { conversationId: 'native-group', sourceMessageId: 'source', actorId: 'native-user', text: id, fact: { topicRefs: [{ topicId: 'topic', revision: 1 }] } } } }))
+    await t.step(async () => host.service.recover())
+    await t.step(async () => entered.promise)
     assert.deepEqual(sent, ['first'])
     release.resolve()
     if (firstOutcome === 'rate-limited') {
-      await waitUntil(async () => (await host.query('notification.get', { notificationId: 'first' })).state === 'unknown', '限流结果落盘')
-      await host.service.recover()
+      await t.step(async () => waitUntil(async () => (await host.query('notification.get', { notificationId: 'first' })).state === 'unknown', '限流结果落盘'))
+      await t.step(async () => host.service.recover())
       assert.deepEqual(sent, ['first'], '主动续队不能绕过全局限流')
     } else {
-      await waitUntil(async () => (await host.query('notification.get', { notificationId: 'second' })).state === 'delivered', '无需第二轮恢复即可投递下一条', 2000)
+      await t.step(async () => waitUntil(async () => (await host.query('notification.get', { notificationId: 'second' })).state === 'delivered', '无需第二轮恢复即可投递下一条', 2000))
       assert.deepEqual(sent, ['first', 'second'])
       assert.deepEqual(reads, ['first', 'second'], '未知效果等待退避，不在续队时重发或循环回读')
     }
-  })
+  }))
 
 for (const scenario of ['prepared', 'unknown', 'starting', 'send-pending']) test('notification send/readback scheduling: ' + scenario, { timeout: 5000 }, async t => {
   const initialState = scenario === 'send-pending' ? 'prepared' : scenario

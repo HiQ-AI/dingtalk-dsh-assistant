@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, access, rm, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, access, rm, mkdir, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,39 +38,40 @@ async function createOwnedFixture(prefix) {
   } catch (error) { await rm(root, { recursive: true, force: true }); throw error }
 }
 test('受信原生完整模式允许原临时Git工作树及MSYS，默认模式保留产物边界',
-  { skip: !available ? reason : process.platform !== 'win32', timeout: 60000 }, async t => {
+  { ...({ skip: !available ? reason : process.platform !== 'win32', timeout: 60000 }), timeout: nativeLifecycleTimeout(60000) }, nativeLifecycle(60000, async (t) => {
     const root = await createOwnedFixture('artifact-git-')
     const repository = join(root, 'repository'), checkout = join(root, 'checkout')
-    await mkdir(repository)
+    await t.beginBusiness()
+    await t.step(async () => mkdir(repository))
     const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8', windowsHide: true })
     git('init', '-q'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'fixture')
     git('worktree', 'add', '-qb', 'candidate', checkout)
-    await writeFile(join(checkout, 'candidate.txt'), 'approved fixture')
+    await t.step(async () => writeFile(join(checkout, 'candidate.txt'), 'approved fixture'))
     const sh = join(git('--exec-path').trim(), '..', '..', '..', 'usr', 'bin', 'sh.exe')
-    const scope = await coordinationArtifactScope(root, { coordinationId: 'git-team', memberTaskIds: ['publisher'] })
-    const cwd = await taskWorkspace(root, 'publisher'), steps = new Map()
-    const host = await nativeTaskHost(root, async request => {
+    const scope = await t.step(async () => coordinationArtifactScope(root, { coordinationId: 'git-team', memberTaskIds: ['publisher'] }))
+    const cwd = await t.step(async () => taskWorkspace(root, 'publisher')), steps = new Map()
+    const host = await t.step(async () => nativeTaskHost(root, async request => {
       const label = latestInput(request).task.label
       const step = steps.get(label) ?? 0; steps.set(label, step + 1)
       if (step === 0) return [{ name: nativeShell, args: { description: '验证统一产物目录', command: `Set-Content -LiteralPath ${quote(join(scope.artifactRoot, label + '.txt'))} -Value ok` } }]
       if (step === 1) return [{ name: nativeShell, args: { description: '验证真实Git元数据写权限', command: `git -C ${quote(checkout)} add candidate.txt; exit $LASTEXITCODE` } }]
       if (step === 2) return [{ name: nativeShell, args: { description: '验证真实MSYS辅助进程', command: `& ${quote(sh)} -c 'exit 0'; exit $LASTEXITCODE` } }]
       return []
-    }, { fsSandbox: true })
+    }, { fsSandbox: true }))
     const handles = []
-    const router = await installTaskSessionPersistence(host.ctx, { root })
+    const router = await t.step(async () => installTaskSessionPersistence(host.ctx, { root }))
     t.after(async () => { for (const h of handles) await h.dispose(); await host.close(); await rm(root, { recursive: true, force: true }) })
     for (const label of ['default', 'full']) {
       const identity = { taskId: 'publisher', sessionId: 'git-' + label }
-      await router.register({ ...identity, cwd })
-      const handle = await router.runOwned(identity, () => host.ctx.agents.create({ sessionId: identity.sessionId, meta: { cwd }, agentOptions: { provider: 'native-task-test', model: 'controlled' }, setup: async (ctx, agent) => {
+      await t.step(async () => router.register({ ...identity, cwd }))
+      const handle = await t.step(async () => router.runOwned(identity, () => host.ctx.agents.create({ sessionId: identity.sessionId, meta: { cwd }, agentOptions: { provider: 'native-task-test', model: 'controlled' }, setup: async (ctx, agent) => {
         await host.ctx.agentPresets.mount(ctx, 'native-test')
         setSandboxMode(agent.session, label === 'full' ? 'danger-full-access' : 'workspace-write')
         await bindTaskArtifactScope(ctx, { root, scope, taskId: 'publisher', session: agent.session })
-      } }))
+      } })))
       handles.push(handle)
       handle.agent.steer(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: JSON.stringify({ task: { label } }) }] }))
-      await handle.agent.whenIdle()
+      await t.step(async () => handle.agent.whenIdle())
       const results = host.toolResults.filter(r => r.sessionId === handle.agent.id && r.name === nativeShell)
       assert.equal(results.length, 3, JSON.stringify({ results, all: host.toolResults, requests: host.requests.length, tail: handle.agent.session.snapshotEvents().slice(-3) }))
       assert.equal(results[0].result.value?.exitCode, 0, JSON.stringify(results))
@@ -85,31 +87,33 @@ test('受信原生完整模式允许原临时Git工作树及MSYS，默认模式�
       assert.equal(handle.agent.session.header.cwd, cwd)
       assert.equal(host.ctx.sessionProjections.stateOf(handle.agent.session, 'sandboxArtifactRoot').artifactRoot, scope.artifactRoot)
     }
-  })
+  }))
 test('原生Host已授权完整模式在恢复绑定时保留，原生逐次模式与只读模式均不改历史身份',
-  { skip: !available ? reason : false, timeout: 30000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
     const started = performance.now(), phases = [{ phase: 'begin', elapsedMs: 0 }]
     const mark = phase => phases.push({ phase, elapsedMs: Math.round(performance.now() - started) })
     t.after(() => t.diagnostic('Permission recovery phases: ' + JSON.stringify(phases)))
     const root = await createOwnedFixture('artifact-mode-')
     const host = await nativeTaskHost(root, () => { assert.fail('权限恢复不得调用模型') })
+    await t.beginBusiness()
+
     mark('host-ready')
     let handle
     t.after(async () => { await handle?.dispose(); await host.close(); await rm(root, { recursive: true, force: true }) })
-    const taskId = 'historical-owner', sessionId = 'original-owner', cwd = await taskWorkspace(root, taskId)
-    const scope = await coordinationArtifactScope(root, { coordinationId: 'original-team', memberTaskIds: [taskId] })
-    const router = await installTaskSessionPersistence(host.ctx, { root }), binding = { taskId, sessionId }
-    await router.register({ ...binding, cwd })
-    handle = await router.runOwned(binding, () => host.ctx.agents.create({ sessionId, meta: { cwd }, setup: async (_ctx, agent) => {
+    const taskId = 'historical-owner', sessionId = 'original-owner', cwd = await t.step(async () => taskWorkspace(root, taskId))
+    const scope = await t.step(async () => coordinationArtifactScope(root, { coordinationId: 'original-team', memberTaskIds: [taskId] }))
+    const router = await t.step(async () => installTaskSessionPersistence(host.ctx, { root })), binding = { taskId, sessionId }
+    await t.step(async () => router.register({ ...binding, cwd }))
+    handle = await t.step(async () => router.runOwned(binding, () => host.ctx.agents.create({ sessionId, meta: { cwd }, setup: async (_ctx, agent) => {
       setSandboxMode(agent.session, 'danger-full-access')
       host.ctx.sandboxPolicy.bindArtifactRoot(agent.session, { ownerId: scope.ownerId, artifactRoot: scope.artifactRoot })
-    } }))
+    } })))
     mark('created')
-    await host.ctx.sessions.flush(handle.agent.session)
-    const before = await inspectSession(host.ctx.sessionPersistence, sessionId)
-    await handle.dispose(); handle = undefined
+    await t.step(async () => host.ctx.sessions.flush(handle.agent.session))
+    const before = await t.step(async () => inspectSession(host.ctx.sessionPersistence, sessionId))
+    await t.step(async () => handle.dispose()); handle = undefined
     mark('disposed')
-    handle = await router.runOwned(binding, () => host.ctx.agents.resume({ resumeSessionId: sessionId, setup: async (ctx, agent) => {
+    handle = await t.step(async () => router.runOwned(binding, () => host.ctx.agents.resume({ resumeSessionId: sessionId, setup: async (ctx, agent) => {
       const session = agent.session, args = { root, scope, taskId, session }
       const seq = session.seq
       await assert.rejects(bindTaskArtifactScope(ctx, { ...args, taskId: 'foreign' }), { code: 'TASK_ARTIFACT_BINDING_INVALID' })
@@ -125,10 +129,10 @@ test('原生Host已授权完整模式在恢复绑定时保留，原生逐次模�
       await bindTaskArtifactScope(ctx, args)
       assert.equal(session.seq, readonlySeq)
       assert.equal(host.ctx.sandboxPolicy.resolve({ session }).mode, 'read-only')
-    } }))
+    } })))
     mark('resumed')
-    await host.ctx.sessions.flush(handle.agent.session)
-    const after = await inspectSession(host.ctx.sessionPersistence, sessionId)
+    await t.step(async () => host.ctx.sessions.flush(handle.agent.session))
+    const after = await t.step(async () => inspectSession(host.ctx.sessionPersistence, sessionId))
     mark('readback')
     assert.deepEqual(after.events.slice(0, before.events.length), before.events)
     assert.equal(handle.agent.session.id, sessionId)
@@ -136,16 +140,17 @@ test('原生Host已授权完整模式在恢复绑定时保留，原生逐次模�
     assert.deepEqual(after.events.slice(before.events.length).filter(e => e.type === 'sandbox/mode').map(e => e.data.mode), ['read-only'])
     assert.equal(after.events.filter(e => e.type === 'sandbox/mode' && e.data.artifactRoot).length, 1)
     assert.equal(host.requests.length, 0)
-  })
+  }))
 test('official execution artifact binding makes native FS and shell share one root and reject outside writes',
-  { skip: !available ? reason : false, timeout: 60000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 60000 }), timeout: nativeLifecycleTimeout(60000) }, nativeLifecycle(60000, async (t) => {
     const root = await createOwnedFixture('artifact-native-')
-    const scope = await coordinationArtifactScope(root, { coordinationId: 'coordination-team', memberTaskIds: ['task-a', 'task-b', 'task-c'] })
+    await t.beginBusiness()
+    const scope = await t.step(async () => coordinationArtifactScope(root, { coordinationId: 'coordination-team', memberTaskIds: ['task-a', 'task-b', 'task-c'] }))
     let host, manager
     const steps = new Map()
     t.after(async () => { await manager?.close(); await host?.close(); await rm(root, { recursive: true, force: true }) })
     const policyEntry = process.env.DSH_ARTIFACT_POLICY_MODULE
-    host = await nativeTaskHost(root, async (request, h) => {
+    host = await t.step(async () => nativeTaskHost(root, async (request, h) => {
       const { task } = latestInput(request)
       if (!task) return []
       const session = h.ctx.sessions.get(task.sessionId)
@@ -166,29 +171,29 @@ test('official execution artifact binding makes native FS and shell share one ro
         ? `$ErrorActionPreference='Stop'; [IO.File]::WriteAllText(${quote(outsideShell)},'forbidden')`
         : `printf 'forbidden' > ${quote(outsideShell)}` } }]
       return [{ name: 'execution_submit', args: { output: { answer: 'Scoped native filesystem and shell evidence retained.' } } }]
-    }, { resident: true, fsSandbox: true, artifactPolicyEntry: policyEntry })
+    }, { resident: true, fsSandbox: true, artifactPolicyEntry: policyEntry }))
     manager = createExecutionSessions({ ctx: host.ctx, isCurrent: async () => true,
       getWorkspaceDir: async ({ binding }) => taskWorkspace(root, binding.taskId), contentRoot: join(root, 'content') })
     for (const taskId of scope.memberTaskIds) {
       const binding = { kind: 'task-execution', taskId, executionId: 'execution-' + taskId, sessionId: 'execution-session-' + taskId,
         requirementRevision: 1, controlRevision: 1, inputVersion: 1, inputHistory: [], inputDigest: taskId, leaseEpoch: 1, sessionBound: false }
-      const result = await manager.run({ binding, input: { task: { taskId, sessionId: binding.sessionId }, artifactScope: scope },
+      const result = await t.step(async () => manager.run({ binding, input: { task: { taskId, sessionId: binding.sessionId }, artifactScope: scope },
         definition: { provider: 'native-task-test', model: 'controlled', prompt: 'Verify the existing formal artifact binding.', nativeTools: true, allowedTools: [],
           outputSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false } },
-        onSessionBound: async () => {}, onResult: async () => {}, onNativeExecution: async () => ({}) })
+        onSessionBound: async () => {}, onResult: async () => {}, onNativeExecution: async () => ({}) }))
       assert.equal(result.status, 'submitted', JSON.stringify(result))
       assert.ok(host.toolResults.some(item => item.name === nativeShell && item.result.value?.exitCode === 0), JSON.stringify(host.toolResults.filter(item => item.name === nativeShell)))
       const role = taskId.at(-1)
-      assert.equal(await readFile(join(scope.artifactRoot, role + '.txt'), 'utf8'), 'native-' + role)
-      assert.equal(await readFile(join(scope.artifactRoot, role + '-fs.txt'), 'utf8'), 'native-fs-' + role)
+      assert.equal(await t.step(async () => readFile(join(scope.artifactRoot, role + '.txt'), 'utf8')), 'native-' + role)
+      assert.equal(await t.step(async () => readFile(join(scope.artifactRoot, role + '-fs.txt'), 'utf8')), 'native-fs-' + role)
       for (const name of ['forbidden-fs.txt', 'forbidden-shell.txt']) {
         const file = join(root, 'tasks', taskId, name)
-        await assert.rejects(access(file), { code: 'ENOENT' }, `Outside file must remain absent: ${file}`)
+        await t.step(async () => assert.rejects(access(file), { code: 'ENOENT' }, `Outside file must remain absent: ${file}`))
       }
     }
     assert.equal(host.toolResults.filter(item => item.name === 'write' && item.result.isError).length, 3, JSON.stringify(host.toolResults))
     assert.equal(host.toolResults.filter(item => item.name === nativeShell && item.result.value?.sandbox?.denied && item.result.value?.exitCode !== 0).length, 3, JSON.stringify(host.toolResults))
-  })
+  }))
 
 // Historical scope is retained by the real upgrade path. New coordination
 // commands are never used to create this compatibility fixture.
@@ -238,16 +243,17 @@ const shellWrite = (file, text) => ({ name: nativeShell, args: { description: 'V
 // Replaces the removed automatic three-Task chain with one current Task whose
 // Owner delegates three dependent executions. The native boundary remains real.
 for (const denyOutside of [false, true]) test(`one Task Owner preserves retained scope across three ordered executions: denyOutside=${denyOutside}`,
-  { skip: !available ? reason : false, timeout: 60000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 60000 }), timeout: nativeLifecycleTimeout(60000) }, nativeLifecycle(60000, async (t) => {
     const root = await createOwnedFixture('artifact-stages-')
     let host, ownerSession
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
-    const artifactRoot = await existingScopedTask(root)
+    await t.beginBusiness()
+    const artifactRoot = await t.step(async () => existingScopedTask(root))
     const steps = new Map(), finished = [], bindings = []
     let completionAttempted = false, completionRejectionVerified = false, completionRejection
     const outsideFs = join(root, 'tasks', 'foreign-task', 'outside-fs.txt'), outsideShell = join(root, 'tasks', 'foreign-task', 'outside-shell.txt')
-    await mkdir(join(root, 'tasks', 'foreign-task'), { recursive: true })
-    host = await nativeTaskHost(root, async (request, h) => {
+    await t.step(async () => mkdir(join(root, 'tasks', 'foreign-task'), { recursive: true }))
+    host = await t.step(async () => nativeTaskHost(root, async (request, h) => {
       const input = latestInput(request), executing = request.tools.some(tool => tool.name === 'execution_submit')
       if (!executing) {
         assert.equal(input.task.taskId, 'A')
@@ -303,19 +309,19 @@ for (const denyOutside of [false, true]) test(`one Task Owner preserves retained
       if (stage === 3 && denyOutside && step === 4) return [shellWrite(outsideShell, 'forbidden')]
       finished.push(stage)
       return [executionComplete()]
-    }, { fsSandbox: true, initialize: false })
-    await host.service.recover(); await host.service.whenIdle()
+    }, { fsSandbox: true, initialize: false }))
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
     assert.deepEqual(finished, [1, 2, 3], JSON.stringify(host.service.listAlerts()))
-    const executions = await host.query('execution.list', { taskId: 'A' })
+    const executions = await t.step(async () => host.query('execution.list', { taskId: 'A' }))
     assert.equal(executions.length, 3); assert.ok(executions.every(execution => execution.status === 'succeeded' && execution.drained))
     assert.ok(bindings.length > 0 && bindings.every(binding => binding.taskId === 'A' && binding.root === artifactRoot && binding.cwd === join(root, 'tasks', 'A')))
     for (const stage of [1, 2, 3]) {
-      assert.equal(await readFile(join(artifactRoot, `stage-${stage}.txt`), 'utf8'), `stage-${stage}`)
-      assert.equal(await readFile(join(artifactRoot, `stage-${stage}-shell.txt`), 'utf8'), `shell-${stage}`)
+      assert.equal(await t.step(async () => readFile(join(artifactRoot, `stage-${stage}.txt`), 'utf8')), `stage-${stage}`)
+      assert.equal(await t.step(async () => readFile(join(artifactRoot, `stage-${stage}-shell.txt`), 'utf8')), `shell-${stage}`)
     }
     assert.ok(host.toolResults.filter(item => item.name === 'read').every(item => !item.result.isError))
-    for (const file of [outsideFs, outsideShell]) await assert.rejects(access(file), { code: 'ENOENT' }, `Outside file must remain absent: ${file}`)
-    const task = await host.query('task.get', { taskId: 'A' })
+    for (const file of [outsideFs, outsideShell]) await t.step(async () => assert.rejects(access(file), { code: 'ENOENT' }, `Outside file must remain absent: ${file}`))
+    const task = await t.step(async () => host.query('task.get', { taskId: 'A' }))
     if (denyOutside) {
       assert.equal(completionAttempted, true)
       assert.equal(completionRejectionVerified, true)
@@ -326,24 +332,25 @@ for (const denyOutside of [false, true]) test(`one Task Owner preserves retained
       assert.equal(submissions.at(-1).result.isError, false)
       assert.equal(host.toolResults.filter(item => item.name === 'write' && item.result.isError).length, 1)
       assert.equal(host.toolResults.filter(item => item.name === nativeShell && item.result.value?.sandbox?.denied && item.result.value?.exitCode !== 0).length, 1)
-      assert.ok((await host.query('operation.list', { taskId: 'A' })).some(operation => operation.state === 'unknown'))
+      assert.ok((await t.step(async () => host.query('operation.list', { taskId: 'A' }))).some(operation => operation.state === 'unknown'))
       assert.notEqual(task.status, 'completed')
     } else assert.equal(task.status, 'completed', JSON.stringify(task))
-    await host.service.recover(); await host.service.whenIdle()
-    assert.equal((await host.query('execution.list', { taskId: 'A' })).length, 3)
-    await assertRetiredDispatchFrozen(host)
-  })
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    assert.equal((await t.step(async () => host.query('execution.list', { taskId: 'A' }))).length, 3)
+    await t.step(async () => assertRetiredDispatchFrozen(host))
+  }))
 
 test('explicit Task reopen preserves original Owner, retained artifact scope and prior files while old daily dispatch stays retired',
-  { skip: !available ? reason : false, timeout: 60000 }, async t => {
+  { ...({ skip: !available ? reason : false, timeout: 60000 }), timeout: nativeLifecycleTimeout(60000) }, nativeLifecycle(60000, async (t) => {
     const root = await createOwnedFixture('artifact-reopen-')
     let host, ownerSession
     t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
-    const artifactRoot = await existingScopedTask(root)
+    await t.beginBusiness()
+    const artifactRoot = await t.step(async () => existingScopedTask(root))
     const steps = new Map(), bindings = []
     const outsideFs = join(root, 'tasks', 'foreign-task', 'reopen-fs.txt'), outsideShell = join(root, 'tasks', 'foreign-task', 'reopen-shell.txt')
-    await mkdir(join(root, 'tasks', 'foreign-task'), { recursive: true })
-    host = await nativeTaskHost(root, async (request, h) => {
+    await t.step(async () => mkdir(join(root, 'tasks', 'foreign-task'), { recursive: true }))
+    host = await t.step(async () => nativeTaskHost(root, async (request, h) => {
       const input = latestInput(request), executing = request.tools.some(tool => tool.name === 'execution_submit')
       if (!executing) {
         const task = input.task, round = task.runSequence
@@ -369,33 +376,33 @@ test('explicit Task reopen preserves original Owner, retained artifact scope and
       if (round === 2 && step === 3) return [{ name: 'write', args: { file_path: outsideFs, content: 'forbidden' } }]
       if (round === 2 && step === 4) return [shellWrite(outsideShell, 'forbidden')]
       return [executionComplete()]
-    }, { fsSandbox: true, initialize: false })
-    await host.service.recover(); await host.service.whenIdle()
-    const completed = await host.query('task.get', { taskId: 'A' }), originalExecutions = await host.query('execution.list', { taskId: 'A' })
+    }, { fsSandbox: true, initialize: false }))
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    const completed = await t.step(async () => host.query('task.get', { taskId: 'A' })), originalExecutions = await t.step(async () => host.query('execution.list', { taskId: 'A' }))
     assert.equal(completed.status, 'completed', JSON.stringify(host.service.listAlerts()))
     assert.equal(originalExecutions.length, 1)
-    for (let attempt = 0; attempt < 2; attempt++) { await host.service.recover(); await host.service.whenIdle() }
-    assert.deepEqual(await host.query('execution.list', { taskId: 'A' }), originalExecutions)
-    await assertRetiredDispatchFrozen(host)
+    for (let attempt = 0; attempt < 2; attempt++) { await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle()) }
+    assert.deepEqual(await t.step(async () => host.query('execution.list', { taskId: 'A' })), originalExecutions)
+    await t.step(async () => assertRetiredDispatchFrozen(host))
     const reopen = { id: 'explicit-reopen', kind: 'task.reopen', args: { taskId: 'A', request: 'Explicitly authorize the second scoped round; retain prior evidence.',
       expectedRequirementRevision: completed.requirementRevision, expectedControlRevision: completed.controlRevision } }
-    await host.service.store.command(reopen)
-    assert.equal((await host.service.store.command(reopen)).replayed, true)
-    await host.service.recover(); await host.service.whenIdle()
-    const current = await host.query('task.get', { taskId: 'A' }), executions = await host.query('execution.list', { taskId: 'A' })
+    await t.step(async () => host.service.store.command(reopen))
+    assert.equal((await t.step(async () => host.service.store.command(reopen))).replayed, true)
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    const current = await t.step(async () => host.query('task.get', { taskId: 'A' })), executions = await t.step(async () => host.query('execution.list', { taskId: 'A' }))
     assert.equal(current.sessionId, completed.sessionId); assert.equal(current.runSequence, completed.runSequence + 1)
     assert.equal(current.requirementRevision, completed.requirementRevision + 1)
     assert.equal(executions.length, 2); assert.deepEqual(executions.find(execution => execution.executionId === originalExecutions[0].executionId), originalExecutions[0])
     assert.ok(bindings.some(binding => binding.round === 1)); assert.ok(bindings.some(binding => binding.round === 2))
     assert.ok(bindings.every(binding => binding.taskId === 'A' && binding.root === artifactRoot && binding.cwd === join(root, 'tasks', 'A')))
     for (const round of [1, 2]) {
-      assert.equal(await readFile(join(artifactRoot, `round-${round}.txt`), 'utf8'), `round-${round}`)
-      assert.equal(await readFile(join(artifactRoot, `round-${round}-shell.txt`), 'utf8'), `shell-${round}`)
+      assert.equal(await t.step(async () => readFile(join(artifactRoot, `round-${round}.txt`), 'utf8')), `round-${round}`)
+      assert.equal(await t.step(async () => readFile(join(artifactRoot, `round-${round}-shell.txt`), 'utf8')), `shell-${round}`)
     }
-    for (const file of [outsideFs, outsideShell]) await assert.rejects(access(file), { code: 'ENOENT' }, `Outside file must remain absent: ${file}`)
+    for (const file of [outsideFs, outsideShell]) await t.step(async () => assert.rejects(access(file), { code: 'ENOENT' }, `Outside file must remain absent: ${file}`))
     assert.equal(host.toolResults.filter(item => item.name === 'write' && item.result.isError).length, 1)
     assert.equal(host.toolResults.filter(item => item.name === nativeShell && item.result.value?.sandbox?.denied && item.result.value?.exitCode !== 0).length, 1)
-    assert.ok((await host.query('operation.list', { taskId: 'A' })).some(operation => operation.state === 'unknown'))
+    assert.ok((await t.step(async () => host.query('operation.list', { taskId: 'A' }))).some(operation => operation.state === 'unknown'))
     assert.notEqual(current.status, 'completed')
-    await assertRetiredDispatchFrozen(host)
-  })
+    await t.step(async () => assertRetiredDispatchFrozen(host))
+  }))

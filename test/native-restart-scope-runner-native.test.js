@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, writeFile, utimes, rm } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, utimes, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -57,28 +58,29 @@ async function fixturePlan(root, observedExit = false, wrapper = false) {
  return { plan, scopeEvidence, operation: { operationId: binding.operationId, taskId: binding.taskId, job: { startedAt } } }
 }
 
-for (const [observedExit, wrapper] of [[false, false], [true, false], [true, true]]) test(`managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader: ${wrapper ? 'retained PG wrapper' : observedExit ? 'observed exit' : 'OOM'}`, { skip, timeout: 60000 }, async t => {
+for (const [observedExit, wrapper] of [[false, false], [true, false], [true, true]]) test(`managed probe passes authoritative LF-preserving bytes through real native pwsh, jobs, persistence and strict reader: ${wrapper ? 'retained PG wrapper' : observedExit ? 'observed exit' : 'OOM'}`, { ...({ skip, timeout: 60000 }), timeout: nativeLifecycleTimeout(60000) }, nativeLifecycle(60000, async (t) => {
  const root = await mkdtemp(join(tmpdir(), 'native-scope-runner-'))
- const { plan, scopeEvidence, operation } = await fixturePlan(root, observedExit, wrapper)
+ await t.beginBusiness()
+ const { plan, scopeEvidence, operation } = await t.step(async () => fixturePlan(root, observedExit, wrapper))
  const args = { expectedOperationDigest: plan.spec.binding.operationDigest, expectedScriptDigest: plan.scriptDigest, scopeEvidence }
  let step = 0
- const h = await nativeTaskHost(root, async () => ++step === 1 ? [{ name: restartScopeProbeToolName, args }]
-  : [{ name: 'execution_submit', args: { output: { answer: 'probe finished' } } }], { resident: true, promoteOnTimeout: true })
+ const h = await t.step(async () => nativeTaskHost(root, async () => ++step === 1 ? [{ name: restartScopeProbeToolName, args }]
+  : [{ name: 'execution_submit', args: { output: { answer: 'probe finished' } } }], { resident: true, promoteOnTimeout: true }))
  const binding = { kind: 'task-execution', taskId: operation.taskId, executionId: 'probe-execution', sessionId: 'probe-session',
   requirementRevision: 1, controlRevision: 1, inputVersion: 1, inputHistory: [], inputDigest: 'probe-input', leaseEpoch: 1, sessionBound: false }
  const phases = []
  const manager = createExecutionSessions({ ctx: h.ctx, isCurrent: async () => true,
   getWorkspaceDir: async () => join(root, 'tasks', binding.taskId), contentRoot: join(root, 'content') })
  t.after(async () => { await manager.close(); await h.close(); assert.equal(dirname(root), tmpdir()); await rm(root, { recursive: true, force: true }) })
- await mkdir(join(root, 'tasks', binding.taskId), { recursive: true })
- const result = await manager.run({ binding, input: { task: { taskId: binding.taskId }, readbackOperationId: operation.operationId },
+ await t.step(async () => mkdir(join(root, 'tasks', binding.taskId), { recursive: true }))
+ const result = await t.step(async () => manager.run({ binding, input: { task: { taskId: binding.taskId }, readbackOperationId: operation.operationId },
   definition: { provider: 'native-task-test', model: 'controlled', prompt: 'Run the bound read-only probe then submit.', nativeTools: true,
    recoveryReadOnly: true, allowedTools: [], outputSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false } },
   onSessionBound: async () => {}, onResult: async () => {}, readRestartScopeProbePlan: async received => { assert.deepEqual(received, args); return plan },
   onNativeExecution: async event => { phases.push(structuredClone(event)); return {} },
- })
+ }))
  assert.equal(result.status, 'submitted', JSON.stringify(result))
- const events = (await inspectSession(h.ctx.sessionPersistence, binding.sessionId)).events
+ const events = (await t.step(async () => inspectSession(h.ctx.sessionPersistence, binding.sessionId))).events
  const outer = events.find(event => event.type === 'tool/call' && event.data.name === restartScopeProbeToolName)
  const nativeCall = phases.find(event => event.phase === 'started' && event.toolName === 'pwsh')
  assert.ok(nativeCall, JSON.stringify(h.toolResults))
@@ -91,7 +93,7 @@ for (const [observedExit, wrapper] of [[false, false], [true, false], [true, tru
  assert.ok(!phases.some(event => event.toolName === restartScopeProbeToolName), 'Composite must not create a second operation for the same native call')
  const readback = { ...binding, status: 'succeeded', drained: true, recovering: false, definition: { recoveryReadOnly: true }, input: { readbackOperationId: operation.operationId } }
  const request = { ctx: h.ctx, plan, operation, evidence: { ...scopeEvidence, probeExecutionId: binding.executionId, probeCallId: nativeCall.callId }, executions: [readback] }
- assert.ok(await readRestartScopeProbe(request), JSON.stringify({ events: events.filter(e => /tool\/|job\//u.test(e.type)), results: h.toolResults }))
+ assert.ok(await t.step(async () => readRestartScopeProbe(request)), JSON.stringify({ events: events.filter(e => /tool\/|job\//u.test(e.type)), results: h.toolResults }))
  const changeResult = (list, change) => {
   const message = list.find(e => e.type === 'tool/result' && e.data.message?.toolCallId === outer.data.callId).data.message
   const value = JSON.parse(message.content[0].text); change(value); message.content[0].text = JSON.stringify(value)
@@ -111,24 +113,25 @@ for (const [observedExit, wrapper] of [[false, false], [true, false], [true, tru
   const tampered = structuredClone(events); alter(tampered)
   const ctx = { agents: { get: () => undefined }, sessions: { get: () => undefined },
    sessionPersistence: sessionPersistenceFixture(async () => ({ meta: { id: binding.sessionId }, events: tampered })) }
-  assert.equal(await readRestartScopeProbe({ ...request, ctx }), null, name)
+  assert.equal(await t.step(async () => readRestartScopeProbe({ ...request, ctx })), null, name)
  }
  assert.equal(hash({ command: nativeCall.arguments.command }), plan.scriptDigest)
-})
+}))
 
-test('managed native entry rejects tampering and policy denial; a failed real producer stays failed and its original call remains readable', { skip, timeout: 60000 }, async t => {
+test('managed native entry rejects tampering and policy denial; a failed real producer stays failed and its original call remains readable', { ...({ skip, timeout: 60000 }), timeout: nativeLifecycleTimeout(60000) }, nativeLifecycle(60000, async (t) => {
  const root = await mkdtemp(join(tmpdir(), 'native-scope-denied-'))
  t.after(async () => { assert.equal(dirname(root), tmpdir()); await rm(root, { recursive: true, force: true }) })
- const { plan, scopeEvidence, operation } = await fixturePlan(root)
+ await t.beginBusiness()
+ const { plan, scopeEvidence, operation } = await t.step(async () => fixturePlan(root))
  for (const mode of ['changed-bytes', 'stale-digest', 'command-injection', 'native-guard', 'native-execution-denied', 'post-policy-block', 'failed-native', 'failed-native-post-block']) {
-  const working = join(root, mode); await mkdir(working, { recursive: true })
+  const working = join(root, mode); await t.step(async () => mkdir(working, { recursive: true }))
   const args = { expectedOperationDigest: plan.spec.binding.operationDigest, expectedScriptDigest: plan.scriptDigest, scopeEvidence }
   if (mode === 'stale-digest') args.expectedScriptDigest = 'f'.repeat(64)
   if (mode === 'command-injection') args.command = 'Write-Output untrusted'
-  if (mode === 'failed-native') await rm(plan.spec.hostLogPath)
+  if (mode === 'failed-native') await t.step(async () => rm(plan.spec.hostLogPath))
   let step = 0, read = 0, denied = 0
-  const h = await nativeTaskHost(working, async () => ++step === 1 ? [{ name: restartScopeProbeToolName, args }]
-   : [{ name: 'execution_submit', args: { output: { answer: 'rejected; original effect unchanged' } } }], { resident: true, promoteOnTimeout: true })
+  const h = await t.step(async () => nativeTaskHost(working, async () => ++step === 1 ? [{ name: restartScopeProbeToolName, args }]
+   : [{ name: 'execution_submit', args: { output: { answer: 'rejected; original effect unchanged' } } }], { resident: true, promoteOnTimeout: true }))
   if (mode === 'native-guard') h.ctx.tools.guard(exec => { if (exec.name === 'pwsh') { denied++; return 'probe_denied_by_native_guard' } })
   if (mode === 'native-execution-denied') h.ctx.on('tools/execute', (exec, next) => { if (exec.name === 'pwsh') throw Error('probe_denied_at_native_dispatch'); return next() })
   if (['post-policy-block', 'failed-native-post-block'].includes(mode)) h.ctx.on('tools/post-execute', async (exec, result, next) => {
@@ -138,17 +141,17 @@ test('managed native entry rejects tampering and policy denial; a failed real pr
   const phases = []
   const binding = { kind: 'task-execution', taskId: operation.taskId, executionId: 'denied-probe', sessionId: 'denied-session',
    requirementRevision: 1, controlRevision: 1, inputVersion: 1, inputHistory: [], inputDigest: 'denied-input', leaseEpoch: 1, sessionBound: false }
-  const cwd = join(working, 'tasks', binding.taskId); await mkdir(cwd, { recursive: true })
+  const cwd = join(working, 'tasks', binding.taskId); await t.step(async () => mkdir(cwd, { recursive: true }))
   const manager = createExecutionSessions({ ctx: h.ctx, isCurrent: async () => true, getWorkspaceDir: async () => cwd, contentRoot: join(working, 'content') })
   try {
-   await manager.run({ binding, input: { task: { taskId: binding.taskId }, readbackOperationId: operation.operationId },
+   await t.step(async () => manager.run({ binding, input: { task: { taskId: binding.taskId }, readbackOperationId: operation.operationId },
     definition: { provider: 'native-task-test', model: 'controlled', prompt: 'Run the bound probe.', nativeTools: true, recoveryReadOnly: true,
      allowedTools: [], outputSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false } },
     onSessionBound: async () => {}, onResult: async () => {}, onNativeExecution: async event => { phases.push(event); return {} },
     readRestartScopeProbePlan: async () => { read++; return mode === 'changed-bytes' ? { ...plan, command: plan.command.trimEnd() } : plan },
-   })
+   }))
    assert.equal(h.toolResults.find(item => item.name === restartScopeProbeToolName)?.result.isError, true, mode)
-   const events = (await inspectSession(h.ctx.sessionPersistence, binding.sessionId)).events
+   const events = (await t.step(async () => inspectSession(h.ctx.sessionPersistence, binding.sessionId))).events
    if (['failed-native', 'post-policy-block', 'failed-native-post-block'].includes(mode)) {
     const original = phases.find(event => event.phase === 'started' && event.toolName === 'pwsh')
     const settled = phases.find(event => event.phase === 'settled' && event.callId === original?.callId)
@@ -158,7 +161,7 @@ test('managed native entry rejects tampering and policy denial; a failed real pr
      dispatchBinding: binding, key: `native:${binding.executionId}:${binding.inputVersion}:${binding.leaseEpoch}:${original.callId}`,
      state: settled.result.isError ? 'unknown' : 'succeeded', definition: { toolName: 'pwsh', argumentsDigest: hash(original.arguments) },
      result: { callId: original.callId, toolName: 'pwsh', isError: settled.result.isError, resultDigest: hash(settled.result.content) } }
-    const context = await readNativeOperationContext({ ctx: h.ctx, operation: failedOperation })
+    const context = await t.step(async () => readNativeOperationContext({ ctx: h.ctx, operation: failedOperation }))
     assert.ok(context, 'Failed managed child must remain readable using its original operation identity')
     assert.equal(context.operationId, failedOperation.operationId)
     assert.equal(context.arguments.command, plan.command)
@@ -169,8 +172,8 @@ test('managed native entry rejects tampering and policy denial; a failed real pr
      assert.notEqual(hash(context.finalPolicyResult.content), failedOperation.result.resultDigest)
      const readback = { ...binding, status: 'succeeded', drained: true, recovering: false,
       definition: { recoveryReadOnly: true }, input: { readbackOperationId: operation.operationId } }
-     assert.equal(await readRestartScopeProbe({ ctx: h.ctx, plan, operation,
-      evidence: { ...scopeEvidence, probeExecutionId: binding.executionId, probeCallId: original.callId }, executions: [readback] }), null)
+     assert.equal(await t.step(async () => readRestartScopeProbe({ ctx: h.ctx, plan, operation,
+      evidence: { ...scopeEvidence, probeExecutionId: binding.executionId, probeCallId: original.callId }, executions: [readback] })), null)
     }
     assert.equal(failedOperation.state, settled.result.isError ? 'unknown' : 'succeeded')
     assert.equal(failedOperation.result.callId, original.callId)
@@ -180,6 +183,6 @@ test('managed native entry rejects tampering and policy denial; a failed real pr
    }
    if (mode === 'command-injection') assert.equal(read, 0)
    if (mode === 'native-guard') assert.equal(denied, 1)
-  } finally { await manager.close(); await h.close() }
+  } finally { await t.step(async () => manager.close()); await t.step(async () => h.close()) }
  }
-})
+}))

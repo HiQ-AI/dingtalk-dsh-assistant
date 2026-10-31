@@ -1,6 +1,7 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -154,16 +155,18 @@ async function serviceFixture(t, replySignature, action = 'complete', legacyFoot
   return { service: host.service, config, host, get sent() { return host.sent.filter(notification => notification.payload.kind !== 'topic-reply' || notification.payload.replyKind === 'substantive') }, ingest }
 }
 
-test('完成及状态末尾统一署名，保留来源和真实@且最终结果不隐式引用', nativeOptions, async t => {
+test('完成及状态末尾统一署名，保留来源和真实@且最终结果不隐式引用', { ...(nativeOptions), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const f = await serviceFixture(t, '资料助理代回')
-  await f.ingest('original', '核对材料')
+  await t.beginBusiness()
+
+  await t.step(async () => f.ingest('original', '核对材料'))
   assert.equal(f.sent.length, 1)
-  await assertFinalReplySource(f.host, f.sent[0], 'original', 'owner')
+  await t.step(async () => assertFinalReplySource(f.host, f.sent[0], 'original', 'owner'))
   assert.equal(f.sent[0].payload.text, '核验完成。\n\n- 材料已核对。\n\n- 资料助理代回')
   assert.ok(f.host.sent.filter(row => row.payload.replyKind === 'confirmation').every(row => !row.payload.text.includes('资料助理代回')))
   for (const [messageId, signature] of [['renamed', 'Ada Support'], ['cleared', ''], ['unset', undefined]]) {
     f.config.replySignature = signature
-    await f.ingest(messageId, '状态')
+    await t.step(async () => f.ingest(messageId, '状态'))
     const payload = f.sent.at(-1).payload
     assert.equal(payload.text, `核验完成。${signature ? `\n\n- ${signature}` : ''}`)
     assert.equal(payload.replyToMessageId, messageId)
@@ -171,45 +174,51 @@ test('完成及状态末尾统一署名，保留来源和真实@且最终结果�
     assert.deepEqual(payload.atOpenDingTalkIds, ['owner'])
     assert.doesNotMatch(payload.text, /旧职责助理/u)
   }
-  const persisted = await f.service.store.query({ kind: 'notification.list' })
+  const persisted = await t.step(async () => f.service.store.query({ kind: 'notification.list' }))
   assert.equal(persisted.filter(row => row.payload.kind !== 'topic-reply' || row.payload.replyKind === 'substantive').length, 4)
   assert.equal(persisted.find(row => row.payload.coveredEventIds?.length).payload.text, f.sent[0].payload.text, 'already prepared delivery remains immutable')
-})
+}))
 
-test('任务提问使用显式Agent署名', nativeOptions, async t => {
+test('任务提问使用显式Agent署名', { ...(nativeOptions), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+  await t.beginBusiness()
   for (const signature of ['Mira Support', undefined]) {
-    await t.test(signature ?? 'unconfigured', async t => {
+    await t.step(async () => t.test(signature ?? 'unconfigured', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
       const f = await serviceFixture(t, signature, 'wait')
-      await f.ingest('question-source', '请核对日期')
+      await t.beginBusiness()
+
+      await t.step(async () => f.ingest('question-source', '请核对日期'))
       assert.equal(f.sent.length, 1)
       const payload = f.sent[0].payload
       assert.equal(payload.text, `请提供目标日期。${signature ? `\n\n- ${signature}` : ''}`)
-      await assertFinalReplySource(f.host, f.sent[0], 'question-source', 'owner')
+      await t.step(async () => assertFinalReplySource(f.host, f.sent[0], 'question-source', 'owner'))
       assert.doesNotMatch(payload.text, /资料助理|Ada|旧职责助理/u)
       f.config.replySignature = 'Changed Agent'
-      await f.service.recover()
-      await f.service.whenIdle()
-      const persisted = await f.service.store.query({ kind: 'notification.list' })
+      await t.step(async () => f.service.recover())
+      await t.step(async () => f.service.whenIdle())
+      const persisted = await t.step(async () => f.service.store.query({ kind: 'notification.list' }))
       assert.equal(persisted.find(row => row.payload.coveredEventIds?.length).payload.text, payload.text)
       assert.equal(f.sent.length, 1, 'Recovery must not send the question again')
-    })
+    })))
   }
-})
+}))
 
-test('真实完成出口将模型重复署名移到证据和限制后', nativeOptions, async t => {
+test('真实完成出口将模型重复署名移到证据和限制后', { ...(nativeOptions), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const f = await serviceFixture(t, 'Configured Agent', 'complete', true)
-  await f.ingest('legacy-footer', '核对材料')
+  await t.beginBusiness()
+
+  await t.step(async () => f.ingest('legacy-footer', '核对材料'))
   assert.equal(f.sent.length, 1)
   assert.equal(f.sent[0].payload.text, '核验完成。\n\n- 材料已核对。\n\n未部署。\n\n- Configured Agent')
-})
+}))
 
-for (const dialogueCase of [false, true]) test(`${dialogueCase ? 'Web对话' : 'Topic完成回复'}在公开入账前拒绝来源消息和人员标识，原轮订正保留业务编号与链接`, nativeOptions, async t => {
+for (const dialogueCase of [false, true]) test(`${dialogueCase ? 'Web对话' : 'Topic完成回复'}在公开入账前拒绝来源消息和人员标识，原轮订正保留业务编号与链接`, { ...(nativeOptions), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'reply-public-identity-'))
   const messageId = 'opaque-native-message-184', actorId = 'opaque-open-dingtalk-875'
   const businessText = '已核对 PR #253 与订单 SG18：https://example.com/orders/SG18'
   let host, modelFailure, steps = 0
   t.after(async () => { try { await host?.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  host = await nativeTaskHost(root, async (request, h) => {
+  await t.beginBusiness()
+  host = await t.step(async () => nativeTaskHost(root, async (request, h) => {
     try {
       assert.ok(h.requests.length <= 30, 'Rejected public text must be corrected in the original native turn')
       const incoming = latestInput(request), routed = topicTaskCalls(request)
@@ -244,29 +253,29 @@ for (const dialogueCase of [false, true]) test(`${dialogueCase ? 'Web对话' : '
         evidence: input.dialogue ? [`内部核查来源 ${source.messageId}`] : ['结果已核对'], limitations: [],
       } } }]
     } catch (error) { modelFailure = error; return [] }
-  })
-  await host.service.ingest({ groupId: 'native-group', messageId, senderOpenDingTalkId: actorId,
-    senderName: '真实发起人', text: '@测试助手 核对订单 SG18', occurredAt: '2026-10-23T08:00:00Z' })
-  await host.service.whenIdle()
+  }))
+  await t.step(async () => host.service.ingest({ groupId: 'native-group', messageId, senderOpenDingTalkId: actorId,
+    senderName: '真实发起人', text: '@测试助手 核对订单 SG18', occurredAt: '2026-10-23T08:00:00Z' }))
+  await t.step(async () => host.service.whenIdle())
   if (modelFailure) throw modelFailure
-  const [task] = await host.query('task.list')
+  const [task] = await t.step(async () => host.query('task.list'))
   if (dialogueCase) {
     assert.match(task.lastDecision.summary, new RegExp(messageId), 'Internal wait diagnostics retain source identity')
-    await host.service.sendTaskDialogue({ taskId: task.taskId, requestId: 'public-dialogue', text: '核查结果是什么？' })
-    await host.service.whenIdle()
+    await t.step(async () => host.service.sendTaskDialogue({ taskId: task.taskId, requestId: 'public-dialogue', text: '核查结果是什么？' }))
+    await t.step(async () => host.service.whenIdle())
     if (modelFailure) throw modelFailure
-    const dialogue = await host.service.taskDialogue(task.taskId)
+    const dialogue = await t.step(async () => host.service.taskDialogue(task.taskId))
     assert.equal(dialogue.messages.length, 1)
     assert.equal(dialogue.messages[0].reply, businessText)
-    assert.equal((await host.query('task.get', { taskId: task.taskId })).status, 'active')
+    assert.equal((await t.step(async () => host.query('task.get', { taskId: task.taskId }))).status, 'active')
     assert.equal(host.sent.filter(item => item.payload.kind === 'task-completed').length, 0)
   } else {
     assert.equal(task.status, 'completed')
     const notices = host.sent.filter(item => item.payload.coveredEventIds?.length)
     assert.equal(notices.length, 1)
     assert.equal(notices[0].payload.text, `${businessText}\n\n- 结果已核对`)
-    await assertFinalReplySource(host, notices[0], messageId, actorId)
+    await t.step(async () => assertFinalReplySource(host, notices[0], messageId, actorId))
   }
   assert.equal(steps, 3)
   assert.equal(host.toolResults.filter(item => item.name === (dialogueCase ? 'task_session_submit' : 'group_decision_submit') && JSON.stringify(item.result).includes('GROUP_REPLY_INTERNAL_DETAILS')).length, 2)
-})
+}))

@@ -1,8 +1,9 @@
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtemp, mkdir, readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { openTaskSessionHistory } from '../packages/dingtalk-dsh-assistant/task-session-history.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
@@ -104,20 +105,21 @@ test('historical conclusions and complete execution artifacts are readable witho
   assert.deepEqual(await snapshot(f.archive), before)
 })
 
-test('active task service ignores archived history and never exposes or imports retired tasks', async () => {
-  const f = await historicalFixture(), before = await snapshot(f.archive)
-  const h = await service(f.root, { config: { legacyDbPath: f.dbPath, legacyArtifactDirectory: f.artifactDirectory, legacyWorkspaceDir: f.workspace } })
+test('active task service ignores archived history and never exposes or imports retired tasks', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (_nativeContext) => {
+  await _nativeContext.beginBusiness()
+  const f = await _nativeContext.step(async () => historicalFixture()), before = await _nativeContext.step(async () => snapshot(f.archive))
+  const h = await _nativeContext.step(async () => service(f.root, { config: { legacyDbPath: f.dbPath, legacyArtifactDirectory: f.artifactDirectory, legacyWorkspaceDir: f.workspace } }))
   try {
-    assert.equal(await h.instance.taskDetail('legacy-task'), null)
-    assert.deepEqual((await h.instance.taskExecutions('legacy-task')).executions, [])
-    assert.deepEqual(await h.instance.store.query({ kind: 'task.list' }), [])
-    assert.deepEqual(await h.instance.store.query({ kind: 'execution.list' }), [])
-    assert.deepEqual(await h.instance.boardTasks(), [])
-    assert.deepEqual(await h.instance.store.query({ kind: 'legacy.list' }), [])
+    assert.equal(await _nativeContext.step(async () => h.instance.taskDetail('legacy-task')), null)
+    assert.deepEqual((await _nativeContext.step(async () => h.instance.taskExecutions('legacy-task'))).executions, [])
+    assert.deepEqual(await _nativeContext.step(async () => h.instance.store.query({ kind: 'task.list' })), [])
+    assert.deepEqual(await _nativeContext.step(async () => h.instance.store.query({ kind: 'execution.list' })), [])
+    assert.deepEqual(await _nativeContext.step(async () => h.instance.boardTasks()), [])
+    assert.deepEqual(await _nativeContext.step(async () => h.instance.store.query({ kind: 'legacy.list' })), [])
     assert.equal(h.inputs.length, 0)
-  } finally { await h.instance.close() }
-  assert.deepEqual(await snapshot(f.archive), before)
-})
+  } finally { await _nativeContext.step(async () => h.instance.close()) }
+  assert.deepEqual(await _nativeContext.step(async () => snapshot(f.archive)), before)
+}))
 
 test('missing configuration, corrupt contents and malformed historical refs are reported unavailable rather than invented evidence', async () => {
   const f = await historicalFixture()
@@ -138,7 +140,7 @@ test('missing configuration, corrupt contents and malformed historical refs are 
   assert.deepEqual(await snapshot(f.archive), before)
 })
 
-test('source text and actual attachment bytes are materialized into their own task and reused without downloading again', async () => {
+test('source text and actual attachment bytes are materialized into their own task and reused without downloading again', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (_nativeContext) => {
   const root = await temporary(), calls = []
   const imageBytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 0, 255])
   const h = await service(root, { readResource: async (groupId, messageId, resource) => {
@@ -146,38 +148,41 @@ test('source text and actual attachment bytes are materialized into their own ta
     return resource.resourceId === 'text' ? { text: '真实附件正文\nSELECT 1;', complete: true, mediaType: 'text/plain' }
       : { image: { data: imageBytes, mediaType: 'image/png', name: '../untrusted.png' } }
   } })
-  try {
+  await _nativeContext.beginBusiness()
+
+  _nativeContext.finallyCleanup(async () => { await h.instance.close() })
+{
     const source = { groupId: 'native-group', messageId: 'one', senderOpenDingTalkId: 'user', occurredAt: '2026-10-13T10:00:00Z', mediaUnavailable: [], text: '测试助手，分析这份材料', resourceRefs: [{ type: 'fileId', resourceId: 'text' }, { type: 'mediaId', resourceId: 'image' }] }
-    await h.instance.ingest(source); await h.instance.whenIdle()
-    await h.instance.ingest({ ...source, messageId: 'two', text: '测试助手，这是第二个独立任务' }); await h.instance.whenIdle()
-    const tasks = await h.instance.store.query({ kind: 'task.list' })
+    await _nativeContext.step(async () => h.instance.ingest(source)); await _nativeContext.step(async () => h.instance.whenIdle())
+    await _nativeContext.step(async () => h.instance.ingest({ ...source, messageId: 'two', text: '测试助手，这是第二个独立任务' })); await _nativeContext.step(async () => h.instance.whenIdle())
+    const tasks = await _nativeContext.step(async () => h.instance.store.query({ kind: 'task.list' }))
     assert.equal(tasks.length, 2); assert.equal(calls.length, 4)
     assert.equal(h.residentStore.listTopics('native-group').length, 2)
     assert.ok(tasks.every(task => task.topicRefs.length === 1))
     for (const task of tasks) {
       const directory = join(root, 'tasks', task.taskId, 'materials')
-      const name = (await readdir(directory)).find(name => name.startsWith('source-'))
-      const material = JSON.parse(await readFile(join(directory, name), 'utf8'))
+      const name = (await _nativeContext.step(async () => readdir(directory))).find(name => name.startsWith('source-'))
+      const material = JSON.parse(await _nativeContext.step(async () => readFile(join(directory, name), 'utf8')))
       assert.equal(material.taskId, task.taskId)
       assert.equal(material.path, join(directory, name))
       assert.equal(material.resources.length, 2)
       for (const entry of material.resources) {
         assert.equal(entry.status, 'read'); assert.equal(entry.complete, true)
         assert.equal(entry.path.startsWith(directory + sep), true)
-        const bytes = await readFile(entry.path)
+        const bytes = await _nativeContext.step(async () => readFile(entry.path))
         assert.equal(digest(bytes), entry.sha256)
         assert.equal(bytes.length, entry.bytes)
         if (entry.resource.resourceId === 'text') assert.equal(bytes.toString('utf8'), '真实附件正文\nSELECT 1;')
         else assert.deepEqual(bytes, Buffer.from(imageBytes))
       }
     }
-    await h.instance.ingest(source); await h.instance.whenIdle()
+    await _nativeContext.step(async () => h.instance.ingest(source)); await _nativeContext.step(async () => h.instance.whenIdle())
     assert.equal(calls.length, 4)
     assert.ok(h.inputs.every(input => input.materials.every(material => material.resources.every(resource => resource.path.includes(sep + 'materials' + sep)))))
-  } finally { await h.instance.close() }
-})
+  }
+}))
 
-for (const mode of ['throw', 'null', 'partial', 'metadata-only', 'unconfigured']) test(`resource ${mode} never becomes a successful material download`, async () => {
+for (const mode of ['throw', 'null', 'partial', 'metadata-only', 'unconfigured']) test(`resource ${mode} never becomes a successful material download`, { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (_nativeContext) => {
   const root = await temporary()
   const h = await service(root, { readResource: mode === 'unconfigured' ? undefined : async () => {
     if (mode === 'throw') throw Object.assign(new Error('connector detail must not be stored'), { code: 'CONNECTOR_UNAVAILABLE' })
@@ -185,61 +190,67 @@ for (const mode of ['throw', 'null', 'partial', 'metadata-only', 'unconfigured']
     if (mode === 'partial') return { text: 'only first page', complete: false }
     return { url: 'https://example.invalid/not-downloaded' }
   } })
-  try {
-    await h.instance.ingest({ groupId: 'native-group', messageId: mode, senderOpenDingTalkId: 'user', occurredAt: '2026-10-13T10:00:00Z', mediaUnavailable: [], text: '测试助手，读取材料', resourceRefs: [{ type: 'fileId', resourceId: 'missing' }] })
-    await h.instance.whenIdle()
-    const task = (await h.instance.store.query({ kind: 'task.list' }))[0]
-    const directory = join(root, 'tasks', task.taskId, 'materials'), names = await readdir(directory)
+  await _nativeContext.beginBusiness()
+
+  _nativeContext.finallyCleanup(async () => { await h.instance.close() })
+{
+    await _nativeContext.step(async () => h.instance.ingest({ groupId: 'native-group', messageId: mode, senderOpenDingTalkId: 'user', occurredAt: '2026-10-13T10:00:00Z', mediaUnavailable: [], text: '测试助手，读取材料', resourceRefs: [{ type: 'fileId', resourceId: 'missing' }] }))
+    await _nativeContext.step(async () => h.instance.whenIdle())
+    const task = (await _nativeContext.step(async () => h.instance.store.query({ kind: 'task.list' })))[0]
+    const directory = join(root, 'tasks', task.taskId, 'materials'), names = await _nativeContext.step(async () => readdir(directory))
     assert.equal(names.length, 1)
-    const material = JSON.parse(await readFile(join(directory, names[0]), 'utf8')), resource = material.resources[0]
+    const material = JSON.parse(await _nativeContext.step(async () => readFile(join(directory, names[0]), 'utf8'))), resource = material.resources[0]
     assert.equal(resource.status, 'unavailable'); assert.ok(resource.reason)
     assert.equal(resource.path, undefined); assert.equal(resource.value, undefined)
     assert.equal(JSON.stringify(material).includes('connector detail'), false)
     assert.equal(h.inputs[0].materials[0].resources[0].status, 'unavailable')
-  } finally { await h.instance.close() }
-})
+  }
+}))
 
-for (const mode of ['snapshot-link', 'snapshot-truncated', 'foreign-resource', 'resource-link', 'source-identity']) test(`cached material ${mode} is rejected before reaching any task model or connector`, async () => {
+for (const mode of ['snapshot-link', 'snapshot-truncated', 'foreign-resource', 'resource-link', 'source-identity']) test(`cached material ${mode} is rejected before reaching any task model or connector`, { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (_nativeContext) => {
   const root = await temporary(); let reads = 0
   const h = await service(root, { config: { retryIntervalMs: 60000 }, readResource: async () => { reads++; return { text: 'original bytes', complete: true } } })
-  try {
-    await h.instance.ingest({ groupId: 'native-group', messageId: mode, senderOpenDingTalkId: 'user', occurredAt: '2026-10-13T10:00:00Z', mediaUnavailable: [], text: '测试助手，读取自己的材料', resourceRefs: [{ type: 'fileId', resourceId: 'own' }] })
-    await h.instance.whenIdle()
-    const task = (await h.instance.store.query({ kind: 'task.list' }))[0]
-    const directory = join(root, 'tasks', task.taskId, 'materials'), name = (await readdir(directory)).find(name => name.startsWith('source-'))
-    const path = join(directory, name), originalSnapshot = await readFile(path), material = JSON.parse(originalSnapshot.toString('utf8'))
-    const foreign = join(root, 'tasks', 'foreign-task', 'materials'); await mkdir(foreign, { recursive: true })
-    const foreignFile = join(foreign, 'private.txt'); await writeFile(foreignFile, 'FOREIGN_SECRET_MUST_NOT_REACH_MODEL')
+  await _nativeContext.beginBusiness()
+
+  _nativeContext.finallyCleanup(async () => { await h.instance.close() })
+{
+    await _nativeContext.step(async () => h.instance.ingest({ groupId: 'native-group', messageId: mode, senderOpenDingTalkId: 'user', occurredAt: '2026-10-13T10:00:00Z', mediaUnavailable: [], text: '测试助手，读取自己的材料', resourceRefs: [{ type: 'fileId', resourceId: 'own' }] }))
+    await _nativeContext.step(async () => h.instance.whenIdle())
+    const task = (await _nativeContext.step(async () => h.instance.store.query({ kind: 'task.list' })))[0]
+    const directory = join(root, 'tasks', task.taskId, 'materials'), name = (await _nativeContext.step(async () => readdir(directory))).find(name => name.startsWith('source-'))
+    const path = join(directory, name), originalSnapshot = await _nativeContext.step(async () => readFile(path)), material = JSON.parse(originalSnapshot.toString('utf8'))
+    const foreign = join(root, 'tasks', 'foreign-task', 'materials'); await _nativeContext.step(async () => mkdir(foreign, { recursive: true }))
+    const foreignFile = join(foreign, 'private.txt'); await _nativeContext.step(async () => writeFile(foreignFile, 'FOREIGN_SECRET_MUST_NOT_REACH_MODEL'))
     const modelCalls = h.inputs.length
     if (mode === 'snapshot-link') {
-      const prior = join(root, 'external-snapshot.json'); await rename(path, prior)
+      const prior = join(root, 'external-snapshot.json'); await _nativeContext.step(async () => rename(path, prior))
       // Windows 无特权进程用原生 junction 覆盖最终路径重解析点拒绝；POSIX 保留文件 symlink。
-      await symlink(process.platform === 'win32' ? foreign : prior, path, process.platform === 'win32' ? 'junction' : 'file')
-    } else if (mode === 'snapshot-truncated') await writeFile(path, '{"sourceId":')
+      await _nativeContext.step(async () => symlink(process.platform === 'win32' ? foreign : prior, path, process.platform === 'win32' ? 'junction' : 'file'))
+    } else if (mode === 'snapshot-truncated') await _nativeContext.step(async () => writeFile(path, '{"sourceId":'))
     else if (mode === 'foreign-resource') {
       material.resources[0].path = foreignFile
-      material.resources[0].sha256 = digest(await readFile(foreignFile)); material.resources[0].bytes = (await readFile(foreignFile)).length
-      await writeFile(path, JSON.stringify(material))
+      material.resources[0].sha256 = digest(await _nativeContext.step(async () => readFile(foreignFile))); material.resources[0].bytes = (await _nativeContext.step(async () => readFile(foreignFile))).length
+      await _nativeContext.step(async () => writeFile(path, JSON.stringify(material)))
     } else if (mode === 'resource-link') {
-      await rename(material.resources[0].path, join(root, 'saved-resource.txt'))
-      await symlink(process.platform === 'win32' ? foreign : foreignFile, material.resources[0].path, process.platform === 'win32' ? 'junction' : 'file')
+      await _nativeContext.step(async () => rename(material.resources[0].path, join(root, 'saved-resource.txt')))
+      await _nativeContext.step(async () => symlink(process.platform === 'win32' ? foreign : foreignFile, material.resources[0].path, process.platform === 'win32' ? 'junction' : 'file'))
     } else {
       material.resources[0].resource.resourceId = 'another-users-resource'
-      await writeFile(path, JSON.stringify(material))
+      await _nativeContext.step(async () => writeFile(path, JSON.stringify(material)))
     }
-    await h.instance.store.command({ id: 'wake-cached-material', kind: 'task.revise', args: { taskId: task.taskId, expectedRequirementRevision: 1, request: task.request + '\n再次核对', sourceRefs: task.sourceRefs } })
-    await h.instance.recover(); await h.instance.whenIdle()
-    const observation = await h.instance.recover()
+    await _nativeContext.step(async () => h.instance.store.command({ id: 'wake-cached-material', kind: 'task.revise', args: { taskId: task.taskId, expectedRequirementRevision: 1, request: task.request + '\n再次核对', sourceRefs: task.sourceRefs } }))
+    await _nativeContext.step(async () => h.instance.recover()); await _nativeContext.step(async () => h.instance.whenIdle())
+    const observation = await _nativeContext.step(async () => h.instance.recover())
     assert.ok(observation.failures.some(failure => /^TASK_MATERIAL_/.test(failure.code)), JSON.stringify(observation))
     assert.equal(h.inputs.length, modelCalls)
     assert.equal(reads, 1)
     assert.equal(JSON.stringify(h.inputs).includes('FOREIGN_SECRET'), false)
-    assert.equal(await readFile(foreignFile, 'utf8'), 'FOREIGN_SECRET_MUST_NOT_REACH_MODEL')
-    assert.deepEqual(await readdir(foreign), ['private.txt'])
-    if (mode === 'snapshot-link') assert.deepEqual(await readFile(join(root, 'external-snapshot.json')), originalSnapshot)
-    if (mode === 'resource-link') assert.equal(await readFile(join(root, 'saved-resource.txt'), 'utf8'), 'original bytes')
-  } finally { await h.instance.close() }
-})
+    assert.equal(await _nativeContext.step(async () => readFile(foreignFile, 'utf8')), 'FOREIGN_SECRET_MUST_NOT_REACH_MODEL')
+    assert.deepEqual(await _nativeContext.step(async () => readdir(foreign)), ['private.txt'])
+    if (mode === 'snapshot-link') assert.deepEqual(await _nativeContext.step(async () => readFile(join(root, 'external-snapshot.json'))), originalSnapshot)
+    if (mode === 'resource-link') assert.equal(await _nativeContext.step(async () => readFile(join(root, 'saved-resource.txt'), 'utf8')), 'original bytes')
+  }
+}))
 
 test('persistence initialization failure releases the already-open dynamic store and permits a clean retry', async () => {
   const root = await temporary(), config = { dbPath: join(root, 'failed-start.sqlite'), instanceId: 'failed-start', initialize: true, workspaceDir: root }
