@@ -6,7 +6,7 @@ import { artifactPolicySource } from '../../scripts/sandbox-artifact-policy.mjs'
 import { pathToFileURL } from 'node:url'
 import { openResidentStore } from '../../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskSessionService } from '../../packages/dingtalk-dsh-assistant/task-session-service.js'
-import { registerNativeCleanup, nativeLifecycleSignal } from './native-lifecycle.js'
+import { registerNativeCleanup, nativeLifecycleSignal, nativeCleanupStage, instrumentNativeCleanupMethod } from './native-lifecycle.js'
 
 // Use one installed native composition, including its real preset and process providers.
 // No manager, agent, persistence, filesystem, shell, or control-store implementation is mocked.
@@ -34,7 +34,20 @@ export async function nativeTaskHost(root, decide, options = {}) {
   const ctx = new Context(), requests = [], auxiliaryRequests = [], sent = [], readbacks = [], toolResults = []
   const h = { ctx, requests, auxiliaryRequests, sent, readbacks, toolResults, root }
   let closing
-  h.close = () => closing ??= (async () => { try { await h.service?.close() } finally { try { await h.residentStore?.close() } finally { await ctx.fiber.dispose() } } })()
+  h.close = () => closing ??= (async () => {
+    const restore = [
+      instrumentNativeCleanupMethod(ctx.get?.('sessions'), 'flush', 'sessions.flush'),
+      instrumentNativeCleanupMethod(ctx.get?.('sessionPersistence'), 'flush', 'persistence.flush'),
+      instrumentNativeCleanupMethod(h.service?.store, 'close', 'task-store.close'),
+    ]
+    try {
+      try { await nativeCleanupStage('host.service.close', () => h.service?.close()) }
+      finally {
+        try { await nativeCleanupStage('host.resident-store.close', () => h.residentStore?.close()) }
+        finally { await nativeCleanupStage('host.fiber.dispose', () => ctx.fiber.dispose()) }
+      }
+    } finally { for (const undo of restore.toReversed()) undo() }
+  })()
   const construction = Promise.withResolvers(), signal = nativeLifecycleSignal()
   let ready = false
   registerNativeCleanup(async () => {
