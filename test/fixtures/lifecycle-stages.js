@@ -8,14 +8,15 @@ export async function lifecycleStages(t, { prepare, business, cleanup, limits = 
     const started = performance.now(), controller = new AbortController()
     active = controller
     const abort = () => controller.abort(t.signal.reason)
-    t.signal.addEventListener('abort', abort, { once: true })
+    // Outer cancellation stops acceptance work, but must not skip resource drain.
+    if (name !== 'cleanup') t.signal.addEventListener('abort', abort, { once: true })
     let timer
     const expired = () => Object.assign(new Error(`lifecycle ${name} exceeded ${budgets[name]}ms`), { code: 'TEST_STAGE_TIMEOUT', phase: name })
     const deadline = new Promise((_, reject) => {
       const fail = () => { const error = controller.signal.reason; reject(error) }
       controller.signal.addEventListener('abort', fail, { once: true })
       timer = setTimeout(() => controller.abort(expired()), budgets[name])
-      if (t.signal.aborted) abort()
+      if (name !== 'cleanup' && t.signal.aborted) abort()
     })
     const step = async operation => {
       controller.signal.throwIfAborted()
