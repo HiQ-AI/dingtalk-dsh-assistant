@@ -12,7 +12,7 @@ import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { openDynamicTaskStore, ingressTimestamp, pendingTaskHumanReview } from './dynamic-task-store.js'
+import { openDynamicTaskStore, ingressTimestamp, pendingTaskHumanReview, taskHumanWait } from './dynamic-task-store.js'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { readExecutionResourceCatalog, createExecutionResourceCatalog } from './execution-resource-catalog.js'
 import { createTaskSessions, isTaskProviderTransient, taskSessionModelSelection } from './task-session.js'
@@ -284,7 +284,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const task = await query('task.get', { taskId: id }).catch(() => null)
         again = !task?.archivedAt && task?.status === 'active' && task.control === 'active' && task.drained
           && retryReady(id)
-          && (pendingDialogue(task) || pendingTaskHumanReview(task, pending) || !task.humanRequests?.some(request => request.status === 'waiting-reply'))
+          && (pendingDialogue(task) || pendingTaskHumanReview(task, pending) || !taskHumanWait(task))
           && pending.some(item => item.state !== 'acked')
       }
       map.delete(id)
@@ -347,7 +347,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           if (!(review || execution.status === 'queued' && execution.providerRecovery?.nextAttemptAt) || !execution.drained || execution.recovering
             || Date.parse(review || execution.providerRecovery.nextAttemptAt) > Date.now()) continue
           const task = await requireTask(execution.taskId)
-          if (task.archivedAt || task.status !== 'active' || task.control !== 'active' || task.humanRequests?.some(item => item.status === 'waiting-reply')
+          if (task.archivedAt || task.status !== 'active' || task.control !== 'active' || taskHumanWait(task, execution.executionId)
             || !review && execution.requirementRevision !== task.requirementRevision || execution.controlRevision !== task.controlRevision
             || execution.cancelRequested) continue
           if ((await query('wake.list', { taskId: task.taskId })).some(item => item.kind === 'human.responded' && item.state !== 'acked')) continue
@@ -373,7 +373,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           if (closed) return
           if (task.archivedAt || !retryReady(task.taskId) || inflightTasks.has(task.taskId) || !task.drained || task.recovering || task.status !== 'active' || task.control !== 'active') continue
           const pending = await query('wake.list', { taskId: task.taskId })
-          if (!pendingDialogue(task) && !pendingTaskHumanReview(task, pending) && task.humanRequests?.some(request => request.status === 'waiting-reply')) continue
+          if (!pendingDialogue(task) && !pendingTaskHumanReview(task, pending) && taskHumanWait(task)) continue
           if (!taskSlots.has(task.taskId) && taskSlots.size >= taskLimit()) continue
           if (pending.some(item => item.state !== 'acked')) void kickTask(task.taskId)
         }
@@ -1136,7 +1136,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (!task.drained) return
       const pending = await query('wake.list', { taskId })
       const reviewPending = pendingTaskHumanReview(task, pending)
-      if (!pendingDialogue(task) && !reviewPending && task.humanRequests?.some(request => request.status === 'waiting-reply')) { taskSlots.delete(taskId); return }
+      if (!pendingDialogue(task) && !reviewPending && taskHumanWait(task)) { taskSlots.delete(taskId); return }
       if (!pending.some(item => item.state !== 'acked') || admissionHolds.has(taskId)) return
       const claimed = await command('task.claim', { taskId, ...(pendingDialogue(task) ? { dialogue: true } : reviewPending ? { humanReview: true } : {}) })
       const { binding, wakeIds, wakes, humanReview } = claimed.result
@@ -1232,8 +1232,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             const execution = await query('execution.get', { executionId })
             if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
             const current = await documentedExecution(executionId)
+            let observation
+            try { observation = executionBackend(execution) === 'claude-code'
+              ? await claudeExecutionSessions.readProgress({ execution }) : await readExecutionProgress({ ctx, execution }) }
+            catch (error) { observation = { readError: error.code ?? 'EXECUTION_PROGRESS_LOG_UNREADABLE', limitations: ['实际动作读取失败，不得据执行自述确认方向正常。'] } }
             return { available: true, executionId, sessionId: current.sessionId, status: current.status, drained: current.drained,
-              document: current.document, ...(current.progressReview ? { progressReview: current.progressReview } : {}) }
+              document: current.document, observation, ...(current.progressReview ? { progressReview: current.progressReview } : {}) }
           },
           reconcileOperation: async operationId => {
             if (humanReview) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
@@ -1283,6 +1287,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               `human-review:${taskId}:${humanReview.requestId}:${binding.leaseEpoch}`)).result
           },
           submit: async decision => {
+            if (decision.question?.trim() && decision.audience === undefined) decision = { ...decision, audience: 'topic' }
+            if (decision.question?.trim() && decision.executionIds) for (const id of decision.executionIds) {
+              const execution = await query('execution.get', { executionId: id })
+              if (execution?.taskId !== taskId) fail('TASK_EXECUTION_SCOPE_MISMATCH')
+              // Cancel joins the native turn; join its existing ledger finalizer too.
+              if (execution.cancelRequested && !execution.drained) await inflightExecutions.get(id)
+            }
             if (humanReview && (decision.action !== 'wait' || decision.question?.trim())) fail('DYNAMIC_HUMAN_REVIEW_READ_ONLY')
             if (decision.replySourceId !== undefined && (!humanReview || decision.action !== 'wait' || !humanReview.sourceIds.includes(decision.replySourceId))) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
             const publicInternalIds = decision.question?.trim() && decision.audience !== 'requester' || dialogue ? await replyInternalIds(task, sources) : []
@@ -1305,6 +1316,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
                 replyBindings: await taskReplyBindings(task) }, `complete:${taskId}:${binding.requirementRevision}`)
             } else {
               let humanReply, replyBindings = await taskReplyBindings(task)
+              if (decision.question?.trim() && decision.audience === 'topic' && !replyBindings.length) fail('TASK_COORDINATION_TOPIC_REQUIRED')
               if (decision.replySourceId) {
                 const source = sources.find(item => item.sourceId === decision.replySourceId)
                 if (!source) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
@@ -1313,7 +1325,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
               }
               await command('task.wait', { binding, ...decision, topicFacts: true, replyBindings, ...(humanReply ? { humanReply } : {}), ...(decision.question?.trim() ? { humanRequest: {
                 requestId: `human-${hash([taskId, binding.requirementRevision, binding.controlRevision, binding.leaseEpoch])}`,
-                reason: decision.summary, audience: decision.audience ?? 'operator', attemptedActions: decision.attemptedActions ?? [] } } : {}) }, `wait:${taskId}:${binding.leaseEpoch}`)
+                reason: decision.summary, audience: decision.audience ?? 'operator', ...(decision.executionIds ? { executionIds: decision.executionIds } : {}), attemptedActions: decision.attemptedActions ?? [] } } : {}) }, `wait:${taskId}:${binding.leaseEpoch}`)
               if (decision.question?.trim()) {
                 const current = await requireTask(taskId)
                 await queueHumanRequest(current, current.humanRequests.findLast(request => request.status === 'waiting-reply'))
@@ -1378,6 +1390,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   async function queueHumanRequest(task, request) {
     if (!request) return
     if (request.topicFactIds?.length) return
+    if (request.audience === 'topic') return // 归属 Topic 负责选择联系人与原群回复，绝不退回默认私聊。
     if (request.audience === 'requester') {
       const source = await sourceFor(task)
       return queueReply(task, source, { summary: request.question, evidence: [], limitations: [] },

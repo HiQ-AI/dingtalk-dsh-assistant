@@ -53,8 +53,8 @@ export function topicFactLedger({ db, get, put }) {
     const originId = task.metadata?.authorizationSourceId ?? task.sourceRefs?.[0]
     const origin = originId ? get('dynamic_sources', originId) : null
     const noGroupReply = !destinations.length && ['web', 'internal'].includes(origin?.channel ?? task.metadata?.channel)
-    const humanRequestId = kind === 'needs-input' && result.audience === 'requester'
-      ? task.humanRequests?.findLast(request => request.status === 'waiting-reply' && request.audience === 'requester')?.requestId : null
+    const humanRequestId = kind === 'needs-input' && ['requester', 'topic'].includes(result.audience)
+      ? task.humanRequests?.findLast(request => request.status === 'waiting-reply' && ['requester', 'topic'].includes(request.audience))?.requestId : null
     return (destinations.length ? destinations : [{ groupId: task.groupId, topicId: null, sourceIds: [] }]).map(destination => {
       const id = `topic-fact:${hash([commandId, destination.groupId, destination.topicId])}`
       const fact = { id, ...destination, taskId: task.taskId, taskTitle: task.title, kind,
@@ -110,7 +110,7 @@ export function topicFactLedger({ db, get, put }) {
         json_extract(body,'$.controlRevision') controlRevision, json_extract(body,'$.contextRevision') contextRevision,
         (SELECT json_group_array(json_object('requestId',json_extract(value,'$.requestId'),'question',substr(json_extract(value,'$.question'),1,800)))
           FROM (SELECT value FROM json_each(task_rows.body,'$.humanRequests') WHERE json_extract(value,'$.status')='waiting-reply'
-            AND json_extract(value,'$.audience')='requester' LIMIT 4)) pendingRequests,
+            AND json_extract(value,'$.audience') IN ('requester','topic') LIMIT 4)) pendingRequests,
         substr(coalesce(json_extract(body,'$.completion.summary'),json_extract(body,'$.lastDecision.summary')),1,800) summary
         FROM task_rows WHERE id IN (SELECT value FROM json_each(?)) OR
           (json_extract(body,'$.groupId')=? AND (EXISTS(SELECT 1 FROM json_each(body,'$.replyBindings')

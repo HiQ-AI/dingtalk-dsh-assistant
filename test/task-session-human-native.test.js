@@ -41,7 +41,7 @@ async function fixture(t, decide, options) {
 }
 async function pending(h) { return (await h.service.listAuthorizationRequests()).find(item => item.status === 'waiting-reply') }
 
-for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：${failure}`, { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+for (const failure of ['none', 'empty', 'tool-limit', 'topic']) test(`群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：${failure}`, { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   let original, topicId, resumed, reviewStep = 0
   const reviewLeases = [], answer = '测试助手，可以，但只允许 UAT2；点击编辑即持久化待提交，不能把变更延后到提交时。'
   const wait = summary => call('task_session_submit', { decision: { action: 'wait', summary, evidence: [], limitations: [] } })
@@ -51,10 +51,11 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
     if (incoming.requestId?.startsWith('coord-title-')) return [call('group_topic_title_submit', { requestId: incoming.requestId, topicId: incoming.topicId, title: '核对编辑持久化方案' })]
     const names = request.tools.map(tool => tool.name), routed = topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
-      for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId }]
+      if (topicId) for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId }]
       return routed
     }
     if (names.includes('group_decision_submit')) {
+      if (!original) return routed
       const review = modelToolValues(request).find(value => Array.isArray(value.candidates))
       if (!review) return [call('group_reply_review_get', { requestIds: [incoming.requestId] })]
       const args = routed[0].args
@@ -68,7 +69,7 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
     }
     if (routed) return routed
     const input = latestInput(request)
-    if (!input.task.humanRequests.length) return [requestHuman('requester')]
+    if (!input.task.humanRequests.length) return [requestHuman(failure === 'topic' ? 'topic' : 'requester')]
     if (input.humanReview) {
       const source = input.sources.find(item => input.humanReview.sourceIds.includes(item.sourceId))
       assert.equal(input.task.humanRequests[0].status, 'waiting-reply')
@@ -80,9 +81,9 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
       if (failure === 'empty' && reviewStep++ === 0) return []
       if (failure === 'tool-limit') return [call('task_human_resolve', { requestId: input.humanReview.requestId,
         sourceId: 'forged-source', reason: '伪造来源必须拒绝', evidence: ['无效来源'] })]
-      if (failure === 'none' && reviewStep++ === 0) return [call('task_delegate', { key: 'forbidden', objective: '不得提前执行' }),
+      if (['none', 'topic'].includes(failure) && reviewStep++ === 0) return [call('task_delegate', { key: 'forbidden', objective: '不得提前执行' }),
         call('write', { file_path: join(h.root, 'forbidden.txt'), content: 'must not write' }), finish('不得提前完成')]
-      if (failure === 'none') assert.match(JSON.stringify(request.messages), /task_human_review_read_only/)
+      if (['none', 'topic'].includes(failure)) assert.match(JSON.stringify(request.messages), /task_human_review_read_only/)
       return [call('task_human_resolve', { requestId: input.humanReview.requestId, sourceId: source.sourceId,
         reason: '原任务明确该成员负责业务条件，答复对应待答问题并限定 UAT2 及点击编辑即持久化；未新增权限', evidence: [answer] }),
         call('task_delegate', { key: 'still-read-only', objective: '解除成功仍不能在复核轮执行' }),
@@ -93,7 +94,7 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
   })
   await t.beginBusiness()
 
-  const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'business-review', title: '编辑持久化核对', objective: '由业务负责人 business-responsible 确认编辑持久化方案，现有授权只在 UAT2 验证' }))
+  const created = failure === 'topic' ? await t.step(async () => { await h.service.ingest({ groupId: 'native-group', messageId: 'origin-business-review', senderOpenDingTalkId: 'native-user', text: '测试助手，由业务负责人 business-responsible 确认编辑持久化方案，现有授权只在 UAT2 验证', occurredAt: new Date().toISOString() }); await h.service.whenIdle(); return (await h.query('task.list'))[0] }) : await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'business-review', title: '编辑持久化核对', objective: '由业务负责人 business-responsible 确认编辑持久化方案，现有授权只在 UAT2 验证' }))
   await t.step(async () => h.service.whenIdle())
   original = await t.step(async () => h.query('task.get', { taskId: created.taskId })); topicId = original.topicRefs[0].topicId
   await t.step(async () => h.service.ingest({ groupId: 'native-group', messageId: 'unrelated-owner', senderOpenDingTalkId: 'native-user', text: '测试助手，另外一件事下周讨论', occurredAt: new Date().toISOString() }))
@@ -107,7 +108,7 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
   assert.equal(h.requests.length, count, '未回答问题时消费本次来源，不主动空转')
   await t.step(async () => h.service.ingest({ groupId: 'native-group', messageId: 'business-answer', senderOpenDingTalkId: 'business-responsible', text: answer, occurredAt: new Date().toISOString() }))
   await t.step(async () => h.service.whenIdle())
-  if (failure !== 'none') {
+  if (!['none', 'topic'].includes(failure)) {
     const interrupted = await t.step(async () => h.query('task.get', { taskId: original.taskId })), wakes = await t.step(async () => h.query('wake.list', { taskId: original.taskId }))
     assert.equal(interrupted.humanRequests[0].status, 'waiting-reply')
     assert.ok(wakes.some(item => item.kind === 'task.supplement' && item.state !== 'acked'))
@@ -139,7 +140,7 @@ for (const failure of ['none', 'empty', 'tool-limit']) test(`群业务成员完�
   assert.equal(resumed.sources.find(item => item.actorId === 'business-responsible').text, answer)
   assert.equal((await t.step(async () => h.query('execution.list'))).length, 0, '复核工具无法派发执行')
   assert.equal((await t.step(async () => h.query('operation.list'))).length, 0, '复核没有写操作')
-  if (failure === 'none') assert.match(JSON.stringify(h.toolResults.find(item => item.name === 'write')), /task_tool_outside_role/)
+  if (['none', 'topic'].includes(failure)) assert.match(JSON.stringify(h.toolResults.find(item => item.name === 'write')), /task_tool_outside_role/)
   const decisions = await t.step(async () => h.query('task.decisions', { taskId: original.taskId }))
   assert.ok(decisions.decisions.some(item => item.decision.summary.includes('未回答环境')))
   assert.ok(decisions.decisions.some(item => item.decision.summary.includes('已保存完整业务答复')))
@@ -309,7 +310,7 @@ for (const permission of [false, true]) test(`operator technical reply retains b
       assert.match(request.tools.find(tool => tool.name === 'task_request_human').description, /已授权的目标持续完成/)
       const execution = input.executions[0]
       if (!execution) return [call('task_delegate', { key: 'prepare', objective: '准备原交付' }), call('task_session_submit', { decision: { action: 'wait', summary: '准备中', evidence: [], limitations: [] } })]
-      if (!input.task.humanRequests.length) return [call('task_request_human', { reason: '准备已完成，工具配置需操作人恢复', question: '请恢复原工具配置', evidence: ['原生配置诊断'], attemptedActions: ['原配置检查'] })]
+      if (!input.task.humanRequests.length) return [call('task_request_human', { audience: 'operator', reason: '准备已完成，工具配置需操作人恢复', question: '请恢复原工具配置', evidence: ['原生配置诊断'], attemptedActions: ['原配置检查'] })]
       if (execution.inputVersion === 1) return [call('task_delegate', { executionId: execution.executionId, key: 'continue', objective: '按原来源继续完整UAT交付' }), call('task_session_submit', { decision: { action: 'wait', summary: '沿原执行继续', evidence: [], limitations: [] } })]
       return [call('task_session_submit', { decision: { action: 'wait', summary: '原执行已收到完整来源，后续交付仍待统筹核验', evidence: [], limitations: ['本用例仅核验来源与原会话续办'] } })]
     }
@@ -445,7 +446,7 @@ test('人工外发问题在入账前拒绝已知运行标识，内部证据与�
     }
     assert.equal((await host.query('task.get', { taskId: input.task.taskId })).humanRequests.length, 0,
       '泄漏正文不能先生成待答申请，再让外发卡住')
-    const args = { reason: '需要核对业务信息', question: business, evidence: [`内部诊断：${operationId}`], attemptedActions: ['已核对现有资料'] }
+    const args = { audience: 'operator', reason: '需要核对业务信息', question: business, evidence: [`内部诊断：${operationId}`], attemptedActions: ['已核对现有资料'] }
     if (step === 0) args.question = `请处理 ${operationId}`
     if (step === 1) args.attemptedActions = [`已检查 ${operationId}`]
     step++
@@ -698,4 +699,136 @@ test('Web answer recalls its delivered operator notification once without recall
   const answered = (await t.step(async () => h.service.listAuthorizationRequests())).find(item => item.requestId === request.requestId)
   assert.equal(answered.status, 'answered')
   assert.equal(answered.notification.recall.state, 'recalled')
+}))
+
+
+test('Topic-scoped waiting keeps unrelated progress, inspection and recovery live and resumes its original member after answer', { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const release = Promise.withResolvers(), unrelated = Promise.withResolvers(), failProvider = Promise.withResolvers()
+  t.onCancel(() => { release.resolve(); unrelated.resolve(); failProvider.resolve() }); t.after(() => { release.resolve(); unrelated.resolve(); failProvider.resolve() })
+  let original, topicId, asked = false, resumed = false, continuation = false, otherSteps = 0, sawInspection = false, sawOtherResult = false, attemptedPremature = false
+  const reviewed = new Set()
+  const rounds = new Map(), wait = summary => call('task_session_submit', { decision: { action: 'wait', summary, evidence: [], limitations: [] } })
+  const answer = '沿现有 UAT 验证入口完成，只读核验，不新建数据库或修改基础设施。'
+  const coordination = requestHuman('topic'); delete coordination.args.audience
+  const h = await fixture(t, async request => {
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    if (input.trigger === 'task-facts') return topicTaskCalls(request)
+    const routed = topicTaskCalls(request)
+    if (names.includes('group_topic_route_submit')) {
+      if (topicId) for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId }]
+      return routed
+    }
+    if (names.includes('group_decision_submit')) {
+      if (!original) return routed
+      const review = modelToolValues(request).find(value => Array.isArray(value.candidates))
+      if (!review) return [call('group_reply_review_get', { requestIds: [input.requestId] })]
+      if (routed[0].name !== 'group_decision_submit') return routed
+      const args = routed[0].args
+      args.decision.actions = [{ kind: 'task-context', taskId: original.taskId, inputVersion: original.requirementRevision,
+        runSequence: original.runSequence, context: '已核对实际答复：' + answer, progressImpact: 'preserve',
+        topicRefs: [{ topicId: args.topicId, revision: args.revision }], basisUnitRefs: args.decision.basisUnitRefs }]
+      args.decision.reply = '已核对现有入口与只读限制，反馈原任务继续。'
+      args.decision.replyReview = { kind: 'substantive', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: review.candidates.map(item => item.outboundId), replaceOutboundIds: [] }
+      return routed
+    }
+    if (routed) return routed
+    if (!names.includes('task_delegate')) {
+      if (input.objective === '独立核对另一成果') {
+        otherSteps++
+        if (otherSteps === 1) { await unrelated.promise; return [call('execution_report_progress', { plan: '独立成果核验，不依赖A的路线', summary: 'B在A待答期间继续推进', evidence: ['B实际阶段成果'], activity: '继续独立核验' })] }
+        if (otherSteps === 2) { await failProvider.promise; return [] }
+        return [call('execution_submit', { output: { status: 'completed', summary: '另一成果沿原生技术恢复完成', evidence: ['独立结果'], limitations: [], artifacts: [] } })]
+      }
+      if (input.context?.includes(answer)) { resumed = true; return [call('execution_submit', { output: { status: 'completed', summary: '按原范围沿现有入口完成', evidence: [answer], limitations: [], artifacts: [] } })] }
+      const count = rounds.get(input.executionId) ?? 0; rounds.set(input.executionId, count + 1)
+      if (!count) return [call('execution_report_progress', { plan: '核验业务成果', summary: '外部环境绕障不能推进原验收，需要另选路线', evidence: ['已有成果保留'], activity: '等待安全停止' })]
+      await release.promise; return []
+    }
+    if (!input.executions.length) return [call('task_delegate', { key: 'original', objective: '核验业务成果，不建设基础设施' }),
+      call('task_delegate', { key: 'independent', objective: '独立核对另一成果' }), wait('两个独立目标并行')]
+    const execution = input.executions.find(item => item.key === 'original')
+    if (input.humanReview) return [call('task_human_resolve', { requestId: input.humanReview.requestId, sourceId: input.humanReview.sourceIds[0],
+      reason: 'Topic已将同一问题的真实答复与只读限制回流，未扩大范围', evidence: [answer] }), wait('保存真实答复，下一轮恢复原执行')]
+    if (!asked) { asked = true; coordination.args.executionIds = [execution.executionId]; return [call('task_execution_cancel', { executionId: execution.executionId, reason: '停止为当前路线新增的环境绕障，保留成果及原会话' }), coordination] }
+    if (input.task.humanRequests[0]?.status === 'waiting-reply') {
+      if (input.executions.some(item => item.key === 'independent' && item.status === 'succeeded')) sawOtherResult = true
+      if (!attemptedPremature) { attemptedPremature = true; return [call('task_delegate', { executionId: execution.executionId, key: 'premature-resume', objective: '核验业务成果，不建设基础设施' })] }
+      const reviews = input.wakes.filter(wake => wake.kind === 'execution.progress.review')
+      if (reviews.length) {
+        sawInspection = true
+        const key = JSON.stringify(reviews)
+        if (!reviewed.has(key)) { reviewed.add(key); return reviews.map(wake => call('task_execution_progress', { executionId: wake.payload.executionId })) }
+      }
+      return [wait('A等待Topic，继续核对B的实际动作与结果')]
+    }
+    if (input.task.humanRequests[0]?.status === 'answered' && !continuation) { continuation = true; return [call('task_delegate', {
+      executionId: execution.executionId, key: 'resume-approved-route', objective: '核验业务成果，不建设基础设施', context: answer }), wait('原会话沿已核对路线继续')] }
+    return [wait('保留原执行结果与独立成员成果')]
+  }, { providerError: request => {
+    try { return latestInput(request)?.objective === '独立核对另一成果' && otherSteps === 2
+      ? { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are currently overloaded. Please try again later.' } : null }
+    catch { return null } // Auxiliary summary/context requests have no execution envelope.
+  } })
+  await t.beginBusiness()
+  await t.step(() => h.service.ingest({ groupId: 'native-group', messageId: 'original-route-request', senderOpenDingTalkId: 'native-user', text: '测试助手，完成业务核验，外部环境仅用现有入口', occurredAt: new Date().toISOString() }))
+  await t.step(() => waitUntil(async () => (await h.query('task.list')).length === 1, 'original group request creates one task'))
+  const created = (await t.step(() => h.query('task.list')))[0]
+  await t.step(() => waitUntil(async () => (await h.query('execution.list')).some(item => item.cancelRequested), 'affected original receives safe cancellation'))
+  release.resolve()
+  await t.step(() => waitUntil(() => pending(h), 'Topic coordination pending after drain'))
+  await t.step(() => waitUntil(async () => (await h.query('execution.list')).find(item => item.key === 'original')?.drained, 'affected drain is durable'))
+  original = await t.step(() => h.query('task.get', { taskId: created.taskId })); topicId = original.topicRefs[0].topicId
+  const before = await t.step(() => h.query('execution.list')), stopped = before.find(item => item.key === 'original'), independent = before.find(item => item.key === 'independent')
+  assert.equal(stopped.drained, true); assert.equal(independent.status, 'running'); assert.equal(independent.cancelRequested, false)
+  assert.equal(original.humanRequests[0].audience, 'topic')
+  assert.equal(original.humanRequests[0].executionBindings[0].executionId, stopped.executionId)
+  unrelated.resolve()
+  await t.step(() => waitUntil(() => otherSteps >= 2, 'unrelated member reports real progress while Topic waits'))
+  const currentOther = await t.step(() => h.query('execution.get', { executionId: independent.executionId }))
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(currentOther.updatedAt) + 600001 })
+  try { await t.step(() => h.service.recover()) } finally { t.mock.timers.reset() }
+  await t.step(() => waitUntil(() => sawInspection && attemptedPremature, 'Owner independently inspects B during A coordination wait'))
+  await t.step(() => waitUntil(async () => (await h.query('task.get', { taskId: created.taskId })).drained, 'inspection Owner settles'))
+  assert.ok(h.toolResults.some(item => item.name === 'task_delegate' && JSON.stringify(item.result).includes('DYNAMIC_HUMAN_RESPONSE_REQUIRED')))
+  failProvider.resolve()
+  await t.step(() => waitUntil(async () => (await h.query('execution.get', { executionId: independent.executionId })).providerRecovery?.nextAttemptAt, 'B retains its native transient recovery during A waiting'))
+  const observed = h.toolResults.find(item => item.name === 'task_execution_progress' && item.result.value?.executionId === independent.executionId)
+  assert.ok(observed?.result.value.observation.excerpts.some(item => item.type === 'tool/call'))
+  const retrying = await t.step(() => h.query('execution.get', { executionId: independent.executionId }))
+  assert.equal(retrying.result.payload.error.code, 'EXECUTION_PROVIDER_TRANSIENT')
+  assert.equal(retrying.providerRecovery.terminal.sessionId, independent.sessionId)
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(retrying.providerRecovery.nextAttemptAt) + 1 })
+  try { await t.step(() => h.service.recover()) } finally { t.mock.timers.reset() }
+  await t.step(() => waitUntil(async () => { const item = await h.query('execution.get', { executionId: independent.executionId }); return item.status === 'succeeded' && item.drained }, 'B resumes its same native session and completes before A answer'))
+  const recoveredOther = await t.step(() => h.query('execution.get', { executionId: independent.executionId }))
+  assert.equal(recoveredOther.sessionId, independent.sessionId); assert.ok(recoveredOther.inputVersion > independent.inputVersion)
+  await t.step(() => waitUntil(() => sawOtherResult, 'Owner consumes unrelated completion while A is still awaiting Topic'))
+  assert.equal((await t.step(() => h.query('execution.get', { executionId: stopped.executionId }))).inputVersion, stopped.inputVersion)
+  assert.equal((await t.step(() => h.query('task.get', { taskId: created.taskId }))).humanRequests[0].status, 'waiting-reply')
+  await t.step(() => h.service.ingest({ groupId: 'native-group', messageId: 'route-answer', senderOpenDingTalkId: 'native-user', text: answer, occurredAt: new Date().toISOString() }))
+  await t.step(() => waitUntil(() => resumed, 'original execution resumes from real Topic answer'))
+  await t.step(() => h.service.whenIdle())
+  const after = await t.step(() => h.query('execution.list')), continued = after.find(item => item.executionId === stopped.executionId)
+  assert.equal(resumed, true); assert.equal(continued.status, 'succeeded'); assert.equal(continued.sessionId, stopped.sessionId)
+  assert.equal(continued.inputVersion, stopped.inputVersion + 1); assert.equal(after.length, 2)
+  assert.equal(after.find(item => item.executionId === independent.executionId).inputVersion, recoveredOther.inputVersion)
+  assert.equal((await t.step(() => h.query('task.get', { taskId: created.taskId }))).humanRequests[0].status, 'answered')
+}))
+
+
+for (const direct of [false, true]) test(`Topic coordination without a real group reply binding fails closed rather than contacting the requester or operator: direct=${direct}`, { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  let attempted = false
+  const h = await fixture(t, async request => {
+    if (latestInput(request).trigger === 'task-facts') return topicTaskCalls(request)
+    const routed = topicTaskCalls(request); if (routed) return routed
+    if (!attempted) { attempted = true; return direct ? [call('task_session_submit', { decision: { action: 'blocked', summary: '需要话题协调', question: '请协调现有验证入口', evidence: [], limitations: [] } })] : [requestHuman('topic')] }
+    return [call('task_session_submit', { decision: { action: 'wait', summary: '缺少真实群来源绑定，保留协调缺口而不猜收件范围', evidence: [], limitations: ['TASK_COORDINATION_TOPIC_REQUIRED'] } })]
+  })
+  await t.beginBusiness()
+  const created = await t.step(() => h.service.createTask({ groupId: 'native-group', requestId: 'unbound-topic-coordination', objective: '仅Web来源任务' }))
+  await t.step(() => h.service.whenIdle())
+  const task = await t.step(() => h.query('task.get', { taskId: created.taskId }))
+  assert.equal(task.humanRequests.length, 0)
+  assert.ok(h.toolResults.some(item => item.name === (direct ? 'task_session_submit' : 'task_request_human') && JSON.stringify(item.result).includes('TASK_COORDINATION_TOPIC_REQUIRED')))
+  assert.equal((await t.step(() => h.query('notification.list'))).length, 0)
 }))

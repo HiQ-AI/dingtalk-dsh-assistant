@@ -153,11 +153,11 @@ t.onCancel(() => gate.resolve())
     const input = latestInput(request)
     if (ownerTurns === 1) return [call('task_delegate', { key: 'original-read', objective: '读取actual-target.txt实际文件检查只读方向，不修改文件' })]
     if (!input.executions.length) return humanWait ? [call('task_request_human', {
-      reason: '后续范围需人工明确', question: '后续是否继续仅核对现有结果？', evidence: [], attemptedActions: ['已委派原只读核对'] })] : [submit('wait')]
+      audience: 'operator', reason: '后续范围需人工明确', question: '后续是否继续仅核对现有结果？', evidence: [], attemptedActions: ['已委派原只读核对'] })] : [submit('wait')]
     executionId = input.executions[0].executionId
     if (input.executions.every(execution => execution.drained)) return reviewers.owner(input)
     if (humanWait && !input.task.humanRequests?.some(item => item.status === 'answered')) return [call('task_request_human', {
-      reason: '原执行运行中，后续范围需人工明确', question: '后续是否继续仅核对现有结果？', evidence: [], attemptedActions: ['已委派原只读核对'] })]
+      audience: 'operator', reason: '原执行运行中，后续范围需人工明确', question: '后续是否继续仅核对现有结果？', evidence: [], attemptedActions: ['已委派原只读核对'] })]
     if (input.wakes.some(wake => wake.kind === 'execution.progress.review')) {
       progressInput = input
       reviewSteps++
@@ -244,8 +244,8 @@ t.onCancel(() => gate.resolve())
       if (steps === 1) return [call('read', { file_path: target })]
       if (detour && steps === 2) return [call('read', { file_path: extraTarget })]
       if (steps === (detour ? 3 : 2)) return [call('execution_report_progress', { plan: '只读verified-target.txt，核对标识后提交证据，不扩大范围。',
-        summary: detour ? '已读取verified-target.txt，也读取了范围外的unrelated-extra.txt；尚未提交结果。' : '已读取verified-target.txt并看到VERIFIED_TARGET_UNCHANGED；尚未提交结果。',
-        evidence: [target, ...(detour ? [extraTarget] : [])], activity: '等待提交原核对结果' })]
+        summary: '已读取verified-target.txt并看到VERIFIED_TARGET_UNCHANGED；自述方向正常，尚未提交结果。',
+        evidence: [target], activity: '等待提交原核对结果' })]
       await gate.promise
       return [call('execution_submit', { output: { status: 'completed', summary: '沿原目标核对完成', evidence: ['VERIFIED_TARGET_UNCHANGED'], limitations: [], artifacts: [] } })]
     }
@@ -293,11 +293,11 @@ t.onCancel(() => gate.resolve())
     assert.ok(documentRead && !documentRead.result.isError)
     const documentText = JSON.stringify(documentRead.result)
     assert.match(documentText, /本轮计划/); assert.match(documentText, /VERIFIED_TARGET_UNCHANGED|unrelated-extra\.txt/)
-    assert.equal(progress.excerpts, undefined, '统筹日常巡检只拿文档引用，不读原生日志摘录')
+    assert.ok(progress.observation.excerpts.some(item => item.type === 'tool/call'), '统筹独立收到实际原生动作，而非仅执行自述')
     assert.equal(record.document.path, progress.document.path)
-    const extraReads = documentText.includes('unrelated-extra.txt') ? 1 : 0
+    const extraReads = progress.observation.excerpts.some(item => item.type === 'tool/call' && item.preview.includes('unrelated-extra.txt')) ? 1 : 0
     if (detour && !record.feedback.length) {
-      assert.equal(extraReads, 1, '纠偏依据为实际read进入模型的当前文档报告')
+      assert.equal(extraReads, 1, '即使执行自述方向正常，统筹仍从真实read动作发现偏离')
       return [call('task_delegate', { executionId: execution.executionId, feedback: true, key: 'direction-same-file',
         objective: '原目标不变：当前执行文档记录读取无关文件，省略额外检查，直接报告目标文件的核对结果。' })]
     }

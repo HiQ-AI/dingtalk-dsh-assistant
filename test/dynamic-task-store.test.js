@@ -2266,3 +2266,32 @@ test('maintenance reopen retains an audited unknown Host job beside a native fai
  assert.deepEqual(await f.query({kind:'operation.get',operationId:f.operationId}),retained)
  assert.equal(retained.state,'unknown');assert.equal(retained.job.status,'running');assert.equal(hasRestartIsolation(retained),true)
 })
+
+
+test('execution-scoped Topic waiting admits unrelated Owner work and keeps affected continuations and completion blocked', async t => {
+  const f = await fixture(t), owner = await f.task(), affected = await f.execution(owner.binding, 'affected'), other = await f.execution(owner.binding, 'unrelated')
+  await f.command('execution.cancel', { binding: owner.binding, executionId: affected.executionId, reason: 'stop extra route' })
+  await f.command('execution.drained', { binding: affected })
+  const request = { requestId: 'route', audience: 'topic', executionIds: [affected.executionId], reason: 'coordinate route' }
+  const foreignOwner = await f.task('foreign'), foreign = await f.execution(foreignOwner.binding, 'foreign')
+  await assert.rejects(f.command('task.wait', { binding: owner.binding, summary: 'wrong task', question: 'route?', humanRequest: { ...request, executionIds: [foreign.executionId] } }), { code: 'DYNAMIC_EXECUTION_SCOPE_INVALID' })
+  await assert.rejects(f.command('task.wait', { binding: owner.binding, summary: 'still running', question: 'route?', humanRequest: { ...request, executionIds: [other.executionId] } }), { code: 'DYNAMIC_EXECUTION_BUSY' })
+  await assert.rejects(f.command('task.wait', { binding: owner.binding, summary: 'operator cannot narrow scope', question: 'route?', humanRequest: { ...request, audience: 'operator' } }), { code: 'DYNAMIC_ARGUMENT_INVALID' })
+  await f.command('task.wait', { binding: owner.binding, summary: 'A waits; B continues', question: 'route?', humanRequest: request })
+  await f.command('task.drained', { binding: owner.binding })
+  const saved = await f.query({ kind: 'task.get', taskId: 'task' })
+  assert.deepEqual(saved.humanRequests[0].executionBindings, [Object.fromEntries(['executionId','sessionId','inputVersion','leaseEpoch','inputDigest'].map(key => [key, affected[key]]))])
+  await f.command('task.wake', { taskId: 'task', kind: 'execution.progress.review', payload: { executionId: other.executionId } })
+  const next = (await f.command('task.claim', { taskId: 'task' })).result.binding
+  await assert.rejects(f.command('execution.continue', { binding: next, executionId: affected.executionId, key: 'premature', prompt: 'resume', input: {} }), { code: 'DYNAMIC_HUMAN_RESPONSE_REQUIRED' })
+  await f.command('execution.feedback', { binding: next, executionId: other.executionId, messageId: 'B-progress', text: 'keep original independent goal' })
+  await f.command('operation.prepare', { binding: other, key: 'B-still-authorized', definition: { toolName: 'read' }, resourceKeys: [] })
+  await assert.rejects(f.command('task.complete', { binding: next, summary: 'cannot drop unanswered scope' }), { code: 'DYNAMIC_HUMAN_RESPONSE_REQUIRED' })
+  await assert.rejects(f.command('task.wait', { binding: next, summary: 'cannot replace A question', question: 'new?', humanRequest: { ...request, requestId: 'new-route' } }), { code: 'DYNAMIC_HUMAN_REQUEST_PENDING' })
+  await f.command('task.wait', { binding: next, summary: 'B still advancing', evidence: [] })
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).humanRequests[0].status, 'waiting-reply')
+  await f.command('task.control', { taskId: 'task', control: 'paused' })
+  assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).control, 'paused')
+  assert.equal(await f.query({ kind: 'execution.current', binding: other }), false, 'explicit task-level pause still stops unrelated member admission')
+})
