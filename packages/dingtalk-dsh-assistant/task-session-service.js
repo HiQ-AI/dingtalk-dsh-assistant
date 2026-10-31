@@ -21,7 +21,7 @@ import { inspectSession } from './session-persistence.js'
 import { createStartupMetrics, createCloseObservation, observeClose } from './startup-metrics.js'
 import { createExecutionSessions } from './execution-session.js'
 import { createClaudeExecutionSessions, claudeExecutionLogPath } from './claude-execution-session.js'
-import { createTaskSessionObservability } from './task-session-observability.js'
+import { createTaskSessionObservability, createTaskObservationQueue } from './task-session-observability.js'
 import { activeFixedUnits, fixedTopicIds, fixedUnitRequestId, platformScheduleSessionId, platformScheduleOutboundId } from './fixed-topics.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { resolveTaskArtifactScope } from './task-artifact-scope.js'
@@ -218,15 +218,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (execution) return { taskId: execution.taskId, groupId: taskCache.get(execution.taskId)?.groupId, role: 'execution' }
     return null
   } })
-  let observationTail = Promise.resolve(), observationPending = 0
-  const stopObservation = ctx.on?.('session/event', (session, event) => {
-    observationTail = observationTail.then(() => observation.observe(session, event)).catch(error => failures.set('observability', { id: 'observability', code: error.code ?? error.message }))
-    if (closeTrace) {
-      observationPending++
-      const settled = () => { observationPending--; closeTrace.sample('service.observation-progress', () => ({ queued: observationPending })) }
-      observationTail.then(settled, settled)
-    }
+  const observationQueue = createTaskObservationQueue({
+    observe: (session, event) => observation.observe(session, event),
+    onError: error => failures.set('observability', { id: 'observability', code: error.code ?? error.message }),
+    ...(closeTrace ? { onProgress: queued => closeTrace.sample('service.observation-progress', () => ({ queued })) } : {}),
   })
+  const stopObservation = ctx.on?.('session/event', (session, event) => { observationQueue.enqueue(session, event) })
   residentStore?.setTaskSessionReader?.({ getTask: id => taskCache.get(id), listTasks: () => [...taskCache.values()],
     hasAppliedOperation: async operationId => !!await query('receipt.get', { id: `topic-operation:${operationId}` }),
     isTaskQuiescent: taskId => [...executionCache.values()].filter(item => item.taskId === taskId).every(item => item.drained && !item.recovering) })
@@ -1870,7 +1867,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     closed=true
     clearTimeout(providerRetryTimer)
     stopInboxProjection?.();stopObservation?.()
-    await observationTail
+    await observationQueue.close()
     await Promise.allSettled([topicCoordinator.close(),taskSessions.close(),executionSessions.close(),persistence.close(),observerGroupPage?.close()])
     if(!suppliedStore)await store.close()
     throw error
@@ -2017,10 +2014,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       nativeDws.close()
       clearTimeout(providerRetryTimer)
       stopObservation?.()
-      const counts = () => ({ observationPending, tasks: inflightTasks.size, executions: inflightExecutions.size, groups: inflightGroups.size,
+      const counts = () => ({ observationPending: observationQueue.pending, tasks: inflightTasks.size, executions: inflightExecutions.size, groups: inflightGroups.size,
         notifications: inflightNotifications.size, sourceProjections: sourceProjections.size,
         scheduling: !!scheduling, recovering: !!recovering, notificationScan: !!notificationScan })
-      await observeClose(closeTrace, 'service.observation-tail', () => observationTail, counts)
+      await observeClose(closeTrace, 'service.observation-tail', () => observationQueue.close(), counts)
       await observeClose(closeTrace, 'service.topic.close', () => topicCoordinator.close(), counts)
       await Promise.all([
         observeClose(closeTrace, 'service.owner.close', () => taskSessions.close(), counts),
