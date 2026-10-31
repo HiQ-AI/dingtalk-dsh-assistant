@@ -1,8 +1,8 @@
-import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp, nativeRemove as rm } from './fixtures/native-lifecycle.js'
 import { lifecycleStages } from './fixtures/lifecycle-stages.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { rm } from 'node:fs/promises'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'

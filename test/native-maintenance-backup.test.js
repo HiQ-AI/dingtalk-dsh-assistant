@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { lifecycleStages } from './fixtures/lifecycle-stages.js'
-import { nativeLifecycle, nativeTemporaryDirectory, registerNativeCleanup } from './fixtures/native-lifecycle.js'
+import { nativeLifecycle, nativeTemporaryDirectory, registerNativeCleanup, nativeCleanupStage, nativeRemove, instrumentNativeCleanupMethod } from './fixtures/native-lifecycle.js'
 
 test('maintenance backup preserves a fixed snapshot while WAL metadata changes', { timeout: 55000 }, async t => {
   let root, source, target, writer, child, timer, closed
@@ -215,4 +215,57 @@ test('native nested lifecycle inherits the parent business cancellation without 
   }, { cleanup: 1000 })(t), { code: 'TEST_STAGE_TIMEOUT', phase: 'business' })
   assert.equal(childClosed, true); assert.equal(continued, false)
   assert.equal(roots.length, 2); assert.ok(roots.every(root => !existsSync(root)))
+})
+
+
+test('cleanup timeout reports pending close and blocks deletion after the late close settles', async t => {
+  const release = Promise.withResolvers(), finished = Promise.withResolvers(), records = []
+  let root, closed = false, blocked = false
+  const context = { signal: t.signal, diagnostic: text => records.push(JSON.parse(text)) }
+  await assert.rejects(nativeLifecycle(1000, async n => {
+    root = await nativeTemporaryDirectory(join(tmpdir(), 'native-late-cleanup-'))
+    n.after(async () => {
+      try { await nativeCleanupStage('host.close', () => release.promise.then(() => { closed = true })) }
+      finally {
+        try { await nativeRemove(root, { recursive: true, force: true }) }
+        catch (error) { blocked = true; throw error }
+        finally { finished.resolve() }
+      }
+    })
+    await n.beginBusiness()
+  }, { cleanup: 20 })(context), { code: 'TEST_STAGE_TIMEOUT', phase: 'cleanup' })
+  assert.equal(closed, false)
+  assert.equal(existsSync(root), true)
+  const snapshot = records.find(record => record.cleanupEvent === 'deadline-unsettled')
+  assert.ok(snapshot.pending.some(item => item.stage === 'host.close'))
+  assert.ok(snapshot.pending.some(item => item.stage === 'after.hook'))
+  assert.equal(snapshot.ownedRootCount, 1)
+  release.resolve(); await finished.promise
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(closed, true); assert.equal(blocked, true)
+  assert.equal(existsSync(root), true, 'late completion cannot erase retained failure evidence')
+  assert.ok(records.some(record => record.cleanupEvent === 'late-settlement' && record.stage === 'host.close'))
+  assert.ok(records.some(record => record.cleanupEvent === 'removal-blocked'))
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('normal shared cleanup observes flush and removal while preserving method restoration and frozen APIs', async t => {
+  const order = [], original = () => { order.push('flush'); return Promise.resolve('flushed') }
+  const target = { flush: original }, frozen = Object.freeze({ close() { order.push('frozen-close') } })
+  let root
+  await nativeLifecycle(1000, async n => {
+    root = await nativeTemporaryDirectory(join(tmpdir(), 'native-cleanup-normal-'))
+    n.after(async () => {
+      const undo = instrumentNativeCleanupMethod(target, 'flush', 'sessions.flush')
+      const skip = instrumentNativeCleanupMethod(frozen, 'close', 'frozen.close')
+      try { assert.equal(await target.flush(), 'flushed'); frozen.close() }
+      finally { undo(); skip() }
+      assert.equal(target.flush, original)
+      await nativeRemove(root, { recursive: true, force: true })
+      order.push('removed')
+    })
+    await n.beginBusiness()
+  })(t)
+  assert.deepEqual(order, ['flush', 'frozen-close', 'removed'])
+  assert.equal(existsSync(root), false)
 })

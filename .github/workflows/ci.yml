@@ -3,10 +3,10 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: All mapped tests or historical workflows only
+        description: All mapped tests, historical workflows, or the fixed native-1 diagnostic lane
         type: choice
         default: all
-        options: [all, history]
+        options: [all, history, native-1]
 permissions:
   contents: read
 jobs:
@@ -15,8 +15,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: ${{ fromJSON(inputs.scope == 'history' && '["history"]' || '["unit","native-0","native-1","compat-0","compat-1","compat-2","history"]') }}
+        lane: ${{ fromJSON(inputs.scope == 'native-1' && '["native-1"]' || inputs.scope == 'history' && '["history"]' || '["unit","native-0","native-1","compat-0","compat-1","compat-2","history"]') }}
     env:
+      DSH_NATIVE_CLEANUP_DIAGNOSTICS: ${{ inputs.scope == 'native-1' && '1' || '' }}
       DSH_NATIVE_TEST_PROFILE: ${{ github.workspace }}/test/fixtures/native-profile/package.json
     steps:
       - uses: actions/checkout@v7

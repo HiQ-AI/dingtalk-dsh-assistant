@@ -1,7 +1,7 @@
-import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp } from './fixtures/native-lifecycle.js'
+import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mkdtemp, nativeRemove as rm } from './fixtures/native-lifecycle.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { rm } from 'node:fs/promises'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { available, reason, nativeTaskHost, topicTaskCalls, latestInput, waitUntil } from './fixtures/task-session-native-host.js'

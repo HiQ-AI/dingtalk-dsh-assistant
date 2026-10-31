@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, relative, isAbsolute, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { lifecycleStages } from './lifecycle-stages.js'
 
 const scope = new AsyncLocalStorage()
@@ -23,6 +24,58 @@ export function nativeTemporaryDirectory(...args) {
     state.directories.push(absoluteRoot)
     return root
   })
+}
+
+// Observe the real operation; a deadline does not claim to cancel its Promise.
+export function nativeCleanupStage(name, action) {
+  const trace = scope.getStore()?.cleanup
+  if (!trace) return action()
+  const entry = { stage: name, started: performance.now() }
+  trace.pending.add(entry)
+  if (trace.verbose) trace.emit('operation-start', entry)
+  const finish = outcome => {
+    trace.pending.delete(entry)
+    if (outcome === 'failed') trace.failed = true
+    if (trace.verbose || trace.signal.aborted) trace.emit(trace.signal.aborted ? 'late-settlement' : 'operation-settled', entry, outcome)
+  }
+  let result
+  try { result = action() } catch (error) { finish('failed'); throw error }
+  return Promise.resolve(result).then(value => { finish('settled'); return value }, error => { finish('failed'); throw error })
+}
+
+// Instrument only this disposable test Host's own public methods. Restore an
+// own descriptor only if nobody else replaced it while closing.
+export function instrumentNativeCleanupMethod(target, key, label) {
+  if (!scope.getStore() || !target || typeof target[key] !== 'function') return () => {}
+  const descriptor = Object.getOwnPropertyDescriptor(target, key), original = target[key]
+  const wrapped = function (...args) { return nativeCleanupStage(label, () => Reflect.apply(original, this, args)) }
+  try { Object.defineProperty(target, key, { value: wrapped, configurable: true, writable: true }) }
+  catch {
+    const trace = scope.getStore()?.cleanup
+    if (trace?.verbose) trace.emit('instrumentation-unavailable', { stage: label, started: performance.now() }, 'parent-span-only')
+    return () => {}
+  } // Frozen/private methods remain inside their parent close span.
+  return () => {
+    if (Object.getOwnPropertyDescriptor(target, key)?.value !== wrapped) return
+    if (descriptor) Object.defineProperty(target, key, descriptor)
+    else delete target[key]
+  }
+}
+
+// Imported as fs.rm only by the audited native test files. Outside a lifecycle,
+// and for business operations, preserve the original call and Promise exactly.
+export function nativeRemove(...args) {
+  const state = scope.getStore(), trace = state?.cleanup
+  if (!trace) return rm(...args)
+  const input = args[0]
+  const path = typeof input === 'string' ? resolve(input) : input instanceof URL ? resolve(fileURLToPath(input)) : Buffer.isBuffer(input) ? resolve(input.toString()) : null
+  const owned = path && state.directories.some(root => { const suffix = relative(root, path); return !isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith('..' + sep) })
+  if (!owned) return rm(...args)
+  if (trace.signal.aborted || trace.failed) {
+    trace.emit('removal-blocked')
+    return Promise.reject(trace.signal.reason ?? new Error('Native cleanup failed; owned directory retained'))
+  }
+  return nativeCleanupStage('directory.remove', () => rm(...args))
 }
 
 // Keep the original callback/lexical state and Node registration API. The one
@@ -87,11 +140,22 @@ export function nativeLifecycle(value, run, bounds = {}) {
         released.resolve()
         await body
       },
-      cleanup: async (gate, _signal, drain) => {
+      cleanup: async (gate, cleanupSignal, drain) => {
+        const trace = state.cleanup = { signal: cleanupSignal, pending: new Set(), failed: false, verbose: !!process.env.DSH_NATIVE_CLEANUP_DIAGNOSTICS }
+        trace.emit = (event, entry, outcome) => {
+          const message = JSON.stringify({
+            cleanupEvent: event, ...(entry ? { stage: entry.stage, elapsedMs: Math.round(performance.now() - entry.started), outcome } : {}),
+            pending: [...trace.pending].map(item => ({ stage: item.stage, elapsedMs: Math.round(performance.now() - item.started) })),
+            ownedRootCount: state.directories.length, aborted: cleanupSignal.aborted,
+          })
+          try { t.diagnostic(message) }
+          catch { try { process.stderr.write(message + '\n') } catch {} }
+        }
+        cleanupSignal.addEventListener('abort', () => trace.emit('deadline-unsettled'), { once: true })
         const errors = []
         const closeResources = async () => {
           for (const close of [...state.resources].toReversed()) {
-            try { await gate(close) } catch (error) { errors.push(error) }
+            try { await gate(() => nativeCleanupStage('resource.close', close)) } catch (error) { errors.push(error) }
           }
         }
         if (state.failure) {
@@ -107,11 +171,11 @@ export function nativeLifecycle(value, run, bounds = {}) {
         // Node t.after hooks run FIFO. Keep that order and their real assertions.
         // Normal cleanup uses the original hooks before the idempotent fallback.
         for (const hook of [...state.finalizers].toReversed().concat(state.hooks)) {
-          try { await gate(() => hook(context)) } catch (error) { errors.push(error) }
+          try { await gate(() => nativeCleanupStage('after.hook', () => hook(context))) } catch (error) { errors.push(error) }
         }
         await closeResources()
         if (errors.length) throw new AggregateError(errors, 'Native cleanup failed; temporary roots retained')
-        for (const root of state.directories.toReversed()) await gate(() => rm(root, { recursive: true, force: true }))
+        for (const root of state.directories.toReversed()) await gate(() => nativeRemove(root, { recursive: true, force: true }))
       },
     }))
   }
