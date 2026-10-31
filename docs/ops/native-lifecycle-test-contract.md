@@ -14,7 +14,7 @@
 
 ## 清理诊断和迟到操作
 
-手动 CI 的固定 `scope=native-1` 只运行原 native-1 组，沿用正式 Windows 环境；`all/history` 和 Release 六组门禁不变。该诊断入口输出共享 Host 的 service、可观测的 flush/store、resident store、fiber 和目录删除阶段；冻结/私有内部操作仍包含在父 close 阶段，不能据日志冒称内部阶段已单独验证。
+手动 CI 的固定 `scope=native-0/native-1` 分别只运行对应原生组，沿用正式 Windows 环境；`all/history` 和 Release 六组门禁不变。该诊断入口输出共享 Host 的 service、可观测的 flush/store、resident store、fiber 和目录删除阶段；冻结/私有内部操作仍包含在父 close 阶段，不能据日志冒称内部阶段已单独验证。
 
 清理 20 秒超时仍失败，输出当时未完成操作及耗时。不声称 JavaScript Promise 被强制中止：迟到关闭可继续排空并记录迟到结果，但超时或清理失败后，受管临时目录的后续 rm 会被拒绝，保留现场。已经在超时前合法开始的删除不能取消，日志会如实显示该在途操作；不会因此标记清理成功。未受管路径及业务阶段的 rm 保持原委托语义。测试覆盖迟到关闭完成后仍不误删、正常 FIFO/关闭/删除，以及方法装饰恢复。
 
