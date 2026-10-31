@@ -33,7 +33,7 @@ const currentFeedback = (execution, item) => item.requirementRevision === execut
 /** 只让问题创建后接纳的新群来源进入一次只读复核；执行结果和普通定时唤醒不能解除等待。 */
 export function pendingTaskHumanReview(task, wakes) {
   const request = task?.humanRequests?.findLast(item => item.status === 'waiting-reply')
-  if (request?.audience !== 'requester' || request.requirementRevision !== task.requirementRevision
+  if (!['requester', 'topic'].includes(request?.audience) || request.requirementRevision !== task.requirementRevision
     || request.controlRevision !== task.controlRevision) return null
   const replied = new Set((request.followupReplies ?? []).map(item => item.sourceId))
   const pending = wakes.filter(item => item.state !== 'acked' && item.kind === 'task.supplement'
@@ -579,7 +579,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       if (task.archivedAt || task.status !== 'active' || task.control !== 'active') fail('DYNAMIC_TASK_NOT_ACTIVE')
       if (a.expectedRequirementRevision !== task.requirementRevision || a.expectedControlRevision !== task.controlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
-      const request = task.humanRequests?.findLast(item => item.status === 'waiting-reply' && item.audience === 'requester')
+      const request = task.humanRequests?.findLast(item => item.status === 'waiting-reply' && ['requester', 'topic'].includes(item.audience))
       const reviewSources = request ? (a.sourceRefs ?? []).filter(id => !(task.sourceRefs ?? []).includes(id)).map(id => get('dynamic_sources', id))
         .filter(source => source.groupId === task.groupId && source.channel === 'im'
           && Date.parse(source.timestamp) >= Date.parse(request.createdAt) && Date.parse(source.timestamp) <= Date.parse(stamp)) : []
@@ -804,7 +804,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (!a.humanRequest) fail('DYNAMIC_HUMAN_REQUEST_REQUIRED')
         const requestId = text(a.humanRequest.requestId, 'requestId')
         const audience = a.humanRequest.audience ?? 'operator'
-        if (!['operator', 'requester'].includes(audience)) fail('DYNAMIC_ARGUMENT_INVALID', 'audience')
+        if (!['operator', 'requester', 'topic'].includes(audience)) fail('DYNAMIC_ARGUMENT_INVALID', 'audience')
         const request = { requestId, audience, status: 'waiting-reply', question: question.trim(), reason: text(a.humanRequest.reason ?? question.trim(), 'reason'),
           waitingReason: text(a.humanRequest.waitingReason ?? a.summary, 'waitingReason'), objective: task.objective, evidence: clone(a.evidence ?? []),
           attemptedActions: clone(array(a.humanRequest.attemptedActions ?? [])),
@@ -865,7 +865,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         && notice.receipt.conversationId === source.quote?.conversationId
       const webReply = source.channel === 'web' && typeof webActorId === 'string' && webActorId.trim() && source.actorId === webActorId
       const requesterReply = request.audience === 'requester' && source.actorId === task.ownerActorId
-      const reviewedReply = reviewed && request.audience === 'requester' && source.channel === 'im'
+      const reviewedReply = reviewed && ['requester', 'topic'].includes(request.audience) && source.channel === 'im'
         && task.sourceRefs.includes(source.sourceId) && Date.parse(source.timestamp) >= Date.parse(request.createdAt)
         && Date.parse(source.timestamp) <= Date.parse(stamp)
       if (source.groupId !== task.groupId || !(reviewed ? reviewedReply : webReply || privateReply || requesterReply)) fail('DYNAMIC_HUMAN_RESPONSE_FORBIDDEN')
@@ -1827,7 +1827,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           }
         }
         if (args.topicFacts === true && recordsDecision && (kind === 'task.complete'
-          || kind === 'task.wait' && (args.action === 'blocked' || args.humanReply || args.audience === 'requester' || args.humanRequest?.audience === 'requester'
+          || kind === 'task.wait' && (args.action === 'blocked' || args.humanReply || ['requester', 'topic'].includes(args.audience ?? args.humanRequest?.audience)
             || triggers.some(trigger => trigger.kind === 'execution.stage.progress')))) {
           const task = get('dynamic_tasks', args.binding.taskId)
           value.topicFacts = topicFacts.record(task, kind === 'task.complete' ? 'completed' : args.humanReply ? 'followup' : args.question ? 'needs-input' : args.action === 'blocked' ? 'blocked' : 'progress',
@@ -1836,7 +1836,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             const followup = task.humanRequests.find(item => item.requestId === args.humanReply.requestId)?.followupReplies?.at(-1)
             if (followup) followup.topicFactIds = value.topicFacts.map(fact => fact.id)
           }
-          if (args.question && (args.audience ?? args.humanRequest?.audience) === 'requester') {
+          if (args.question && ['requester', 'topic'].includes(args.audience ?? args.humanRequest?.audience)) {
             const request = task.humanRequests.find(item => item.requestId === args.humanRequest?.requestId)
             if (request) request.topicFactIds = value.topicFacts.map(fact => fact.id)
           }

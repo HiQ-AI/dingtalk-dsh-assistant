@@ -404,3 +404,30 @@ test('归档后仍以有界投影提供待处理任务状态和已送达回复',
   const replies = await f.query('topic.fact.replies', { groupId: 'group', topicId: f.topicId })
   assert.deepEqual(new Set(replies.map(reply => reply.deliveredMessageId)), new Set(['archived-delivery', 'later-delivery']))
 })
+
+
+test('Topic coordination freezes its selected responsible participant, not the requester, and correlates the pending question', async t => {
+  const f = await fixture(t), binding = await f.task('coordination'), other = await f.task('unrelated')
+  await f.resident.ingest({ groupId: 'group', messageId: 'infra-context', text: '我负责环境，可提供已有验证入口', senderOpenDingTalkId: 'infra-owner', occurredAt: new Date().toISOString() })
+  await f.resident.routeMessages({ groupId: 'group', routeId: 'infra-context-route', routingRevision: f.resident.getGroup('group').routingRevision,
+    routes: [{ messageId: 'infra-context', messageVersion: 1, topics: [{ topicId: f.topicId }] }] })
+  const revision = f.resident.getTopic('group', f.topicId).revision
+  await f.resident.acceptTopicDecision({ groupId: 'group', topicId: f.topicId, revision, decisionId: 'infra-context-noted', decision: { basisMessageIds: ['infra-context'], actions: [], reason: '上下文成员职责', topicUpdate: { summary: '环境负责人可提供入口' } } })
+  await f.resident.completeTopicDecision({ groupId: 'group', topicId: f.topicId, decisionId: 'infra-context-noted' })
+  await f.commit('task.wait', { binding, action: 'blocked', summary: '业务成果已完成，当前路线的环境搭建不能推进原验收', question: '请确认可复用的现有验证入口，或接受当前证据边界',
+    evidence: ['原目标只要求业务修改；实际工具正在搭建额外环境'], attemptedActions: ['已保留现有修改与验证结果'], audience: 'topic', topicFacts: true,
+    humanRequest: { requestId: 'route-choice', audience: 'topic', reason: '需要归属话题协调路线' } })
+  await f.commit('task.drained', { binding })
+  const context = await f.context(), fact = context.input.facts.find(item => item.taskId === 'coordination')
+  assert.equal((await f.query('topic.fact.get', { factId: fact.eventId })).humanRequestId, 'route-choice'); assert.equal(fact.audience, 'topic'); assert.match(fact.question, /验证入口/)
+  const request = f.submission(context, 'coordinate-with-infra', '请环境负责人提供已有验证入口；保留当前业务成果。')
+  delete request.decision.replyToMessageId; request.decision.atOpenDingTalkIds = ['infra-owner']
+  await f.submit(request)
+  const notice = (await f.query('notification.list')).find(item => item.payload.humanRequests?.length)
+  assert.deepEqual(notice.payload.atOpenDingTalkIds, ['infra-owner']); assert.equal(!!notice.payload.atAll, false)
+  assert.deepEqual(notice.payload.humanRequests, [{ taskId: 'coordination', requestId: 'route-choice' }])
+  assert.equal((await f.query('task.get', { taskId: 'unrelated' })).control, 'active')
+  await f.finish(other, '无关任务正常完成')
+  assert.equal((await f.query('task.get', { taskId: 'unrelated' })).status, 'completed')
+  await f.reopen(); assert.equal((await f.query('task.get', { taskId: 'coordination' })).humanRequests[0].audience, 'topic')
+})
