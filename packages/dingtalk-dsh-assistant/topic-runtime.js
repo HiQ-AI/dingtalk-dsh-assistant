@@ -344,7 +344,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     if (!agent) throw new Error(`resident_not_active:${groupId}`)
     if (!request) { agent.steer(textMessage(text, images)); return agent }
     request.text = text; request.images = images
-    const messageId = `message-${request.requestId}`
+    const messageId = `message-${request.requestId}${request.roundUpdate ? `-revision-${request.revision}` : ''}`
     request.messageId = messageId
     const state = store.getCoordinationRequest?.(groupId, request.requestId)
     if (state?.status === 'exhausted') { request.exhausted = true; return agent }
@@ -440,19 +440,33 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= topic.revision).map(unitKey))
     const deltaMessages = messages.filter((message) => deltaIds.has(unitKey(message)))
     const personAliases = referencedPersonAliases(store.getGroup(groupId), deltaMessages)
-    const requestId = requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision, promptCatalog,
+    let requestId = requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision, promptCatalog,
       ...(personAliases.length ? { personAliases } : {}),
       ...(rejected.length ? { rejectedDecisionIds: rejected.map(record => record.decisionId) } : {}) })
+    const versionRequestId = requestId
+    let continuing
     for (const [id, request] of decisions) {
       if (request.groupId !== groupId || request.topicId !== topic.topicId) continue
-      if (request.requestId === requestId) { request.dispatch?.(); return request }
+      if ((request.versionRequestId ?? request.requestId) === requestId) { request.dispatch?.(); return request }
+      if (request.trigger !== 'task-facts' && !request.exhausted && request.revision < topic.revision) {
+        continuing = request
+        requestId = request.requestId
+        break
+      }
       supersedeRequest(request, requestId, 'topic-revision-replaced')
       decisions.delete(id)
     }
     const removedUnitRefs = topic.entries.filter((entry) => entry.action === 'remove' && entry.revision > topic.processedRevision && entry.revision <= topic.revision).map(({ unitId, unitRevision, messageId }) => ({ unitId, unitRevision, messageId }))
     const removedMessageIds = [...new Set(topic.entries.filter((entry) => entry.action === 'remove' && entry.revision > topic.processedRevision && entry.revision <= topic.revision).map((entry) => entry.messageId))]
-    const request = { requestId, groupId, topicId: topic.topicId, revision: topic.revision, messages, personAliasMessages: deltaMessages, personAliases, removedUnitRefs, removedMessageIds, promptCatalog, readPromptRefs: new Map(), readPromptVersions: new Map(),
+    const nextRequest = { requestId, versionRequestId, groupId, topicId: topic.topicId, revision: topic.revision, messages, personAliasMessages: deltaMessages, personAliases, removedUnitRefs, removedMessageIds, promptCatalog, readPromptRefs: new Map(), readPromptVersions: new Map(),
       topicRefs: [{ topicId: topic.topicId, revision: topic.revision }], candidates: scopedCandidates(groupId, messages, [{ topicId: topic.topicId, revision: topic.revision }]), readReview: false }
+    // Keep the actual request object: native session/tool closures are bound to it.
+    const request = continuing ?? nextRequest
+    if (continuing) {
+      Object.assign(request, nextRequest, { roundUpdate: true, routingPaused: false, dispatchState: 'pending' })
+      delete request.retryAfterRouting
+      delete request.retryingAfterRouting
+    }
     decisions.set(request.requestId, request)
     const ownership = effectOwnership(groupId, topic.topicId, topic.revision, deltaMessages)
     const quoted = new Map(), sources = new Map()
@@ -535,7 +549,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const workflowAssessment = workflowPromptsEnabled ? '和适用流程 ID/版本及选择原因' : ''
     const workflowReading = workflowPromptsEnabled ? '流程索引为 promptIndex，按本请求 requestId 用 group_task_prompt_get 一次读取候选流程正文；不要猜测 section。' : ''
     const instruction = `按此 Topic 固定版本处理本次事项增量。仅本 Topic 拥有的当前事项可创建或更新 Task；每个 action 携带各自 basisUnitRefs。Unit用于引用来源，不是逐项建Task的指令；同一业务事项的多个需求项或Unit可共同支撑一个Task，优先补充适配的原任务。同一消息拆出多个事项时，new-task 必须提供 dispatchAssessment，分别写明业务对象、当前 Agent 交付、他人后续事项、来源 Unit${workflowAssessment}；不得把其他事项或他人验收写入当前目标。单事项任务也应按此核对。首包内联的 messages 和其他正文可直接使用，无需重复读取；仅遇到 section 指针时，用 group_decision_context_get 按 nextOffset 续读完整内容。${workflowReading}group_decision_context_get 只接受 contextSections 列出的 section。查询已有 Task 用 group_task_list 和 group_task_context_get；需要历史时用 group_topic_context_get。`
-    const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n${instruction}`
+    const body = `[GROUP_TOPIC_DECISION]\nTopic 请求：${JSON.stringify(envelope)}\n${continuing ? "同轮更新：保留本会话已读事实，当前完整快照替代旧版本；旧草稿不得提交，必须结合本次新增或修订来源重新判断，以当前revision提交。\n" : ""}${instruction}`
     if (Buffer.byteLength(body, 'utf8') > DECISION_OUTPUT_MAX_BYTES) throw new Error('decision_context_budget_exceeded')
     const dispatch = () => {
       const agent = send(groupId, body, deltaMessages.flatMap((message) => message.imageRefs ?? []), request)
@@ -993,6 +1007,15 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const args = groupDecisionSubmissionSchema.parse(input)
       const request = decisions.get(args.requestId)
       if (!request || request.groupId !== groupId || request.topicId !== args.topicId || request.revision !== args.revision) { await schedule(groupId); return { status: 'topic-stale', nextAction: 'use-current-request' } }
+      if (request.roundUpdate) {
+        const agent = getAgent(groupId, request)
+        // Derive from the current revision even while its async envelope is being built.
+        const updateMessageId = `message-${request.requestId}-revision-${request.revision}`
+        const pending = [...(agent?.inbox?.nextStep ?? []), ...(agent?.inbox?.nextTurn ?? [])]
+        const consumed = agent?.session?.snapshotEvents?.().some(event => event.type === 'user/message' && event.data.id === updateMessageId)
+        if (!consumed || pending.some(message => message.id === updateMessageId))
+          return { status: 'decision-update-unread', revision: request.revision, nextAction: 'consume-current-update' }
+      }
       if (!personAliasesCurrent(request)) { await schedule(groupId); return { status: 'topic-stale', reason: 'person-aliases-changed', nextAction: 'use-current-request' } }
       const basis = new Set(args.decision.basisMessageIds)
       const inferred = args.decision.basisMessageIds.flatMap((messageId) => {
@@ -1106,7 +1129,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       }
       return page
     })
-    const currentTopic = scope && coordinationRole(scope) === 'decision' ? { topicId: scope.topicId, revision: scope.revision } : null
+    const currentTopic = scope && coordinationRole(scope) === 'decision' ? scope : null
     tool('group_topic_context_get', `按需读取本群 Topic 固定版本及消息原文；摘要足以排除不同业务目标时直接路由，不因词面接近强读全文。返回不超过字符预算，按需用 nextOffset/nextTextOffset 续读相关原文；不为路由候选判断默认读取全部历史。${currentTopic ? '本会话唯一当前Topic与revision由Host绑定，{}直接读取当前固定版本；显式topicId可读取本群其他历史。' : '当前会话没有唯一Topic；确需历史时从输入topics或group_topic_list选择对应候选，原样复制其readCall.arguments（含topicId/revision），不可传{}。'}`, { type: 'object', properties: { topicId: { type: 'string', description: '从明确候选readCall.arguments.topicId复制，不从标题猜ID。' }, revision: { type: 'integer', description: '固定Topic版本，整数1..当前Topic revision；当前决策省略使用Host绑定版本，其他Topic省略使用当前版本。续读同一历史须保留原revision。' }, offset: { type: 'integer', description: '消息条目偏移，非负整数，默认0；续页使用返回的nextOffset。' }, limit: { type: 'integer', description: '请求的消息条数，非字符数，整数1..500，默认10；字符预算可能提前截断，按nextOffset/nextTextOffset续读。' }, textOffset: { type: 'integer', description: '本页首条消息的UTF-16字符偏移，非负整数且不超过该消息原文长度，默认0；仅按返回的nextTextOffset续读。' } }, required: currentTopic ? [] : ['topicId'], additionalProperties: false }, (args) => {
       const bound = currentTopic && (args.topicId === undefined || args.topicId === currentTopic.topicId)
       if (bound && (!decisions.has(scope.requestId) || store.getTopic(groupId, currentTopic.topicId)?.revision !== currentTopic.revision

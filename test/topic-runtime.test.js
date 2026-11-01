@@ -28,9 +28,10 @@ async function setup(t, options = {}) {
   if (!store.getGroup('g')) await store.subscribe({ groupId: 'g', responsibility: '处理测试任务' })
   await store.setAgentNames(['助理'])
   const sent = [], errors = [], tools = new Map(), applications = []
-  const agent = { session: options.session, inbox: options.inbox, steer(message) { sent.push(message.content[0].text); options.onSteer?.(message) }, whenIdle: options.whenIdle ?? (() => new Promise(() => {})) }
+  const consumedEvents = []
+  const agent = { session: options.session ?? { snapshotEvents: () => consumedEvents }, inbox: options.inbox, steer(message) { consumedEvents.push({ type: 'user/message', data: message }); sent.push(message.content[0].text); options.onSteer?.(message) }, whenIdle: options.whenIdle ?? (() => new Promise(() => {})) }
   const coordinator = createTopicCoordinator({
-    fixedTopicsEnabled: options.fixedTopicsEnabled, workflowPromptsEnabled: options.workflowPromptsEnabled, dispatchRequest: options.dispatchRequest, checkStartupRecovery: options.checkStartupRecovery, quotedReminderContext: options.quotedReminderContext,
+    taskFacts: options.taskFacts, fixedTopicsEnabled: options.fixedTopicsEnabled, workflowPromptsEnabled: options.workflowPromptsEnabled, dispatchRequest: options.dispatchRequest, checkStartupRecovery: options.checkStartupRecovery, quotedReminderContext: options.quotedReminderContext,
     store, getAgent: () => agent, assertSession(exec, groupId) { if (exec?.groupId !== groupId) throw new Error('wrong_session') },
     serializeTasks: options.serializeTasks ?? ((fn) => fn()), isClosing: options.isClosing ?? (() => false), retryDelayMs: options.retryDelayMs ?? 60_000,
     reviewCandidates: options.reviewCandidates ?? (() => []), onDecisionRequest: options.onDecisionRequest, maxRequestAttempts: options.maxRequestAttempts ?? 3,
@@ -985,7 +986,8 @@ test('待归类输入不阻止已准备的其他 Topic 决策进入公平队列'
 })
 
 test('待路由的新建任务草稿遇同话题撤销时失效，不能自动补建', async t => {
-  const h = await setup(t)
+  const session = Session.create('same-round-cancel')
+  const h = await setup(t, { session, onSteer: message => session.append('user/message', message, { surfaceOp: 'append' }) })
   await ingest(h, 'request-task')
   const a = (await route(h)).pendingDecisions[0]
   await ingest(h, 'cancel-task', { text: '@助理 先不要执行这个任务' })
@@ -995,8 +997,8 @@ test('待路由的新建任务草稿遇同话题撤销时失效，不能自动�
   await new Promise(resolve => setImmediate(resolve))
   const current = routed.pendingDecisions.find(request => request.topicId === a.topicId)
   assert.equal(current.revision, 2)
-  assert.notEqual(current.requestId, a.requestId)
-  assert.equal(h.store.getCoordinationRequest('g', a.requestId).status, 'superseded')
+  assert.equal(current.requestId, a.requestId)
+  assert.equal(h.store.getCoordinationRequest('g', a.requestId).status, 'pending')
   assert.equal(h.store.listTasks().length, 0)
   assert.equal(h.store.getGroup('g').outbox.length, 0)
   await complete(h, current)
@@ -1726,7 +1728,7 @@ test('Task 通知要求真实 Topic 引用及参与人，并拒绝旧 Task 输�
   assert.equal(h.store.getCoordinationRequest('g', request.requestId).status, 'superseded')
 })
 
-test('同Topic新版本替代内存请求时持久协调账同步落superseded终态', async (t) => {
+test('同Topic新版本保留尚未接纳的同轮请求与持久协调账', async (t) => {
   const h = await setup(t); await ingest(h, 'a1')
   const old = (await route(h)).pendingDecisions[0]
   await new Promise(resolve => setImmediate(resolve))
@@ -1736,9 +1738,9 @@ test('同Topic新版本替代内存请求时持久协调账同步落superseded�
   await new Promise(resolve => setImmediate(resolve))
   const current = h.envelope('[GROUP_TOPIC_DECISION]')
   const terminal = h.store.getCoordinationRequest('g', old.requestId)
-  assert.equal(terminal.status, 'superseded')
-  assert.equal(terminal.supersededBy, current.requestId)
-  assert.equal(terminal.supersedeReason, 'topic-revision-replaced')
+  assert.equal(terminal.status, 'pending')
+  assert.equal(current.requestId, old.requestId)
+  assert.equal(current.revision, 2)
 })
 
 test('普通Task通知与完成通知一致：引用消息时省略at默认关联发送人', async (t) => {
@@ -2993,4 +2995,52 @@ for (const atCommit of [false, true]) test('changed relevant person identity fen
   assert.notEqual(current.requestId, old.requestId)
   assert.deepEqual(current.personAliases, [{ alias: '小甲', name: '测试成员甲' }])
   assert.deepEqual(h.applications, []); assert.deepEqual(h.store.getGroup('g').outbox, [])
+})
+
+test('same-round latest input must be consumed; stale and queued submissions cannot commit; restart keeps accepted receipt', async t => {
+  const events = [], inbox = { nextStep: [], nextTurn: [] }
+  const h = await setup(t, { session: { snapshotEvents: () => events }, inbox, onSteer(message) {
+    if (message.id.includes('-revision-')) inbox.nextStep.push(message)
+    else events.push({ type: 'user/message', data: message })
+  } })
+  await ingest(h, 'round-one'); const first = (await route(h)).pendingDecisions[0]
+  await ingest(h, 'round-two'); const current = (await route(h, { 'round-two': first.topicId })).pendingDecisions[0]
+  assert.equal(first.requestId, current.requestId)
+  assert.equal((await h.call('group_decision_submit', submission(first))).status, 'topic-stale')
+  assert.equal((await h.call('group_decision_submit', submission(current))).status, 'decision-update-unread')
+  assert.equal(h.store.getTopic('g', first.topicId).decisions.length, 0)
+  const count = h.sent.length
+  await h.coordinator.schedule('g'); await h.coordinator.schedule('g')
+  assert.equal(h.sent.length, count)
+  events.push({ type: 'user/message', data: inbox.nextStep[0] })
+  assert.equal((await h.call('group_decision_submit', submission(current))).status, 'decision-update-unread', 'durable body alone is insufficient while still pending')
+  inbox.nextStep.length = 0
+  assert.equal((await h.call('group_decision_submit', submission(current))).status, 'accepted')
+  await h.coordinator.drain('g')
+  const recovered = await setup(t, { snapshot: h.snapshot })
+  await recovered.coordinator.recover(); await recovered.coordinator.drain('g')
+  assert.equal(recovered.store.getTopic('g', first.topicId).decisions.length, 1)
+  assert.equal(recovered.applications.length, 0)
+  await ingest(h, 'round-next'); const next = (await route(h, { 'round-next': first.topicId })).pendingDecisions[0]
+  assert.notEqual(next.requestId, first.requestId)
+})
+
+
+test('latest revision cannot borrow the old consumption marker while its envelope awaits Task facts', async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let reads = 0
+  const h = await setup(t, { taskFacts: { context: async () => null, tasks: async () => {
+    if (++reads === 2) { entered.resolve(); await release.promise }
+    return []
+  } } })
+  t.after(() => release.resolve())
+  await ingest(h, 'build-first'); const first = (await route(h)).pendingDecisions[0]
+  await ingest(h, 'build-second')
+  const updating = route(h, { 'build-second': first.topicId })
+  await entered.promise
+  const premature = await h.call('group_decision_submit', submission({ ...first, revision: 2 }))
+  assert.equal(premature.status, 'decision-update-unread')
+  assert.equal(h.store.getTopic('g', first.topicId).decisions.length, 0)
+  release.resolve(); await updating
+  assert.equal(h.envelope('[GROUP_TOPIC_DECISION]').revision, 2)
 })

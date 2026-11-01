@@ -58,8 +58,18 @@ export function createCoordinationResourceTools({ request, assertCurrent, readMe
   const allowed = new Set([...known.keys(), ...[...known.values()].map(message => message.quotedMessage?.messageId).filter(Boolean)])
   const loaded = new Map()
   const readOffsets = new Map()
+  let revision = request.revision
   const getMessage = async (messageId, exec) => {
     assertCurrent(exec)
+    if (revision !== request.revision) {
+      revision = request.revision
+      known.clear(); allowed.clear(); loaded.clear(); readOffsets.clear()
+      for (const message of request.messages ?? []) {
+        known.set(message.messageId, { ...message, text: message._sourceMessageText ?? message.text })
+        allowed.add(message.messageId)
+        if (message.quotedMessage?.messageId) allowed.add(message.quotedMessage.messageId)
+      }
+    }
     if (!allowed.has(messageId)) throw new Error('coordination_message_outside_request')
     let message = known.get(messageId)
     // 持久化入站投影可能不保留 fileId 资源；远端精确读回恢复当前引用身份。
