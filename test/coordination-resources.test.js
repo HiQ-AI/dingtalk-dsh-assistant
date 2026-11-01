@@ -262,3 +262,18 @@ for (const variant of ['success', 'wrong-node', 'partial', 'unknown-type', 'wron
  assert.equal((await readdir(cwd)).filter(name=>name.startsWith('coordination-resource-')).length,0)
  if(['wrong-node','partial','unknown-type','bare-envelope'].includes(variant))assert.equal(calls.length,1)
 })
+
+test('round revision refreshes message/material scope without retaining removed source permissions', async () => {
+  const h = harness()
+  h.request.revision = 1
+  h.request.messages = [{ messageId: 'a', text: 'old', sourceKind: 'internal' }]
+  assert.equal((await h.call('group_message_get', { messageId: 'a' })).message.text, 'old')
+  h.request.revision = 2
+  h.request.messages = [{ messageId: 'a', text: 'corrected', sourceKind: 'internal' }, { messageId: 'new', text: 'constraint', sourceKind: 'internal' }]
+  assert.equal((await h.call('group_message_get', { messageId: 'a' })).message.text, 'corrected')
+  assert.equal((await h.call('group_message_get', { messageId: 'new' })).message.text, 'constraint')
+  h.request.revision = 3
+  h.request.messages = [{ messageId: 'new', text: 'constraint', sourceKind: 'internal' }]
+  await assert.rejects(h.call('group_message_get', { messageId: 'a' }), /outside_request/)
+  await assert.rejects(h.call('group_message_get', { messageId: 'unrelated' }), /outside_request/)
+})
