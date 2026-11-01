@@ -870,6 +870,9 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
   function register(agentCtx, groupId, scope) {
     const tool = (name, description, parameters, execute) => {
       if (scope && !coordinationTools(coordinationRole(scope)).includes(name)) return
+      if (scope && name === 'group_topic_title_submit' && !scope.requestId.startsWith('coord-title-')) return
+      if (scope && name === 'group_topic_summary_submit' && !scope.requestId.startsWith('coord-summary-')) return
+      if (scope && name === 'group_task_prompt_get' && !workflowPromptsEnabled) return
       if (name === 'group_decision_submit' && !scope) decisionSubmitters.set(groupId, execute)
       return agentCtx.tools.register({ name, description, parameters, output: objectOutput, execute: async (args, exec) => {
       if (!live()) throw new Error('resident_runtime_closed')
