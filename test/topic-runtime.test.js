@@ -3044,3 +3044,14 @@ test('latest revision cannot borrow the old consumption marker while its envelop
   release.resolve(); await updating
   assert.equal(h.envelope('[GROUP_TOPIC_DECISION]').revision, 2)
 })
+
+for (const [kind, expected] of [['route', []], ['title', ['group_topic_title_submit']], ['summary', ['group_topic_summary_submit']]]) test('request-scoped maintenance tools: ' + kind, async t => {
+  const h = await setup(t, { scope: { requestId: 'coord-' + kind + '-fixture', groupId: 'g', messages: [] } })
+  for (const name of ['group_topic_title_submit', 'group_topic_summary_submit']) assert.equal(h.tools.has(name), expected.includes(name))
+  for (const name of ['group_topic_list','group_topic_context_get','group_topic_route_context_get','group_topic_route_submit']) assert.ok(h.tools.has(name), name)
+})
+for (const enabled of [false,true]) test('workflow prompt tool follows explicit program capability without narrowing business reads: ' + enabled, async t => {
+  const h = await setup(t, { workflowPromptsEnabled: enabled, scope: { requestId: 'coord-decision-fixture', groupId: 'g', topicId: 'fixture', revision: 1, messages: [] } })
+  assert.equal(h.tools.has('group_task_prompt_get'), enabled)
+  for (const name of ['group_topic_list','group_topic_context_get','group_decision_context_get','group_reply_review_get','group_decision_submit','group_topic_route_review']) assert.ok(h.tools.has(name), name)
+})
