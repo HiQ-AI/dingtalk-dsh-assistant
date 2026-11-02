@@ -560,3 +560,23 @@ for (const eligible of [false,true]) test('Web reopen of cancelled task requires
  assert.equal(result.status,eligible?'accepted':'task-state-invalid')
  await store.close()
 })
+
+test('消息接入暂停及恢复下界跨存储重开保留，不影响 Agent 配置', async () => {
+  const memory = memoryFacility()
+  const store = await openResidentStore(memory.facility)
+  assert.deepEqual(store.getMessageIngressState(), { paused: false })
+  await store.setAgentNames(['接入测试'])
+  const paused = { paused: true, pausedAt: '2026-10-20T00:00:00.000Z', recoveryFromAt: '2026-10-19T23:59:30.000Z' }
+  await store.setMessageIngressState(paused)
+  assert.deepEqual(residentDomainSpec.tables.scheduler.valueSchema.parse(memory.seed.get('scheduler:runtime')).messageIngress, paused)
+  await store.close()
+  const reopened = await openResidentStore(memoryFacility(memory.seed).facility)
+  assert.deepEqual(reopened.getMessageIngressState(), paused)
+  await reopened.setMessageIngressState({ paused: false, recoveryFromAt: paused.recoveryFromAt })
+  assert.equal(reopened.getMessageIngressState().recoveryFromAt, paused.recoveryFromAt)
+  await assert.rejects(reopened.setMessageIngressState({ paused: 'false' }))
+  await reopened.setMessageIngressState({ paused: false })
+  assert.deepEqual(reopened.getMessageIngressState(), { paused: false })
+  assert.deepEqual(reopened.getAgentNames(), ['接入测试'])
+  await reopened.close()
+})

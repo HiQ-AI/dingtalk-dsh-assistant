@@ -1,0 +1,9 @@
+case,round-1,evidence
+source-reference-index,PASS,round-1.md
+ownership-filter-and-clone-boundary,PASS,round-1.md
+projection-http-observer-65,PASS,round-1.md
+native-source-clock-and-multiple-units,PASS,round-1.md
+projection-output-equivalence-and-cost,PASS,round-1.md
+historical-summary-contract,FAIL_BASELINE_REPRODUCED,round-1.md
+native-routing-idempotency,FAIL_BASELINE_REPRODUCED,round-1.md
+installed-browser-latency,NOT_RUN,round-1.md

@@ -534,7 +534,7 @@ test('没有订阅群时 bridge 也会发布初始健康状态', async () => {
     onGroupSubscribed() { return () => undefined }, onOutboxAppended() { return () => undefined },
   }
   const stop = startDwsBridge({ runtime, adapter: {}, logger: { warn() {} }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0, onHealthChange: (value) => { health = value } })
-  assert.deepEqual(health, { healthy: true, groups: [], humanReplies: { state: 'unavailable', generation: 0, reconnect: { attempt: 0 } } })
+  assert.deepEqual(health, { ingress: { paused: false, recovering: false }, healthy: true, groups: [], humanReplies: { state: 'unavailable', generation: 0, reconnect: { attempt: 0 } } })
   await stop()
 })
 
@@ -1168,4 +1168,171 @@ test('task-session补拉保留本人手动消息和DWS发送标记，由统一�
     await callback({ conversation_id: 'g', message_id: 'event', content: '通知事件', sender_id: 'self', message_ai_send_flag: 'DWS' })
     assert.equal(received.find(message => message.messageId === 'event').messageAiSendFlag, 'DWS')
   } finally { await stop() }
+})
+
+// 真实桥生命周期 + 可控 DWS 传输；不连接线上群。
+function ingressFixture({ initial = { paused: false }, readRange, saveError = false } = {}) {
+  const groups = [{ groupId: 'pause-group', messages: [] }], subscriptions = [], reads = [], accepted = [], warnings = []
+  let persisted = structuredClone(initial), health, subscribed
+  const runtime = {
+    listGroups: () => groups, getGroup: id => groups.find(group => group.groupId === id),
+    isTaskSessionMode: () => true,
+    async ingest(message) {
+      if (!accepted.some(item => item.messageId === message.messageId)) {
+        accepted.push(message); groups.find(group => group.groupId === message.groupId).messages.push(message)
+      }
+      return { accepted: true }
+    },
+    onGroupSubscribed(fn) { subscribed = fn; return () => {} }, onOutboxAppended: () => () => {},
+  }
+  const adapter = {
+    startGroupSubscription(groupId, callback) {
+      const done = Promise.withResolvers(), ready = Promise.withResolvers()
+      const subscription = { groupId, callback, ready: ready.promise, done: done.promise, stop() { done.resolve({ exitCode: 0 }) } }
+      subscription.markReady = () => ready.resolve()
+      subscriptions.push(subscription)
+      return subscription
+    },
+    async readGroupRange(groupId, range) {
+      reads.push({ groupId, ...range })
+      return readRange ? readRange(groupId, range, reads.length) : { complete: true, messages: [] }
+    },
+  }
+  const stop = startDwsBridge({ runtime, adapter, ingressState: initial,
+    async saveIngressState(state) { if (saveError) throw new Error('disk_write_failed'); persisted = structuredClone(state) },
+    onHealthChange(value) { health = value }, logger: { warn(error) { warnings.push(error.message) } },
+    humanPollIntervalMs: 0, groupBackfillIntervalMs: 5, outboxRetryIntervalMs: 0,
+  })
+  return { stop, subscriptions, reads, accepted, warnings, get health() { return health }, get persisted() { return persisted },
+    subscribe(groupId) { const group = { groupId, messages: [] }; groups.push(group); subscribed(group) } }
+}
+const settleIngress = () => new Promise(resolve => setImmediate(resolve))
+async function untilIngress(predicate) {
+  const deadline = Date.now() + 2000
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('ingress_state_timeout')
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+const ingressEvent = (id, time = new Date().toISOString()) => ({ conversation_id: 'pause-group', message_id: id, content: id, event_time: time })
+
+test('群消息暂停停止事件与定时补拉，恢复先监听再补全旧区间并去重', async t => {
+  const history = [], f = ingressFixture({ readRange: async () => ({ complete: true, messages: history }) })
+  t.after(f.stop)
+  f.subscriptions[0].markReady()
+  await untilIngress(() => f.health.healthy)
+  await f.subscriptions[0].callback(ingressEvent('before-pause'))
+  const paused = await f.stop.setIngressPaused(true)
+  assert.equal(paused.ingress.paused, true)
+  assert.equal(f.health.healthy, false)
+  const checkpoint = f.persisted.recoveryFromAt, reads = f.reads.length
+  await f.subscriptions[0].callback(ingressEvent('late-event'))
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(f.reads.length, reads)
+  assert.deepEqual(f.accepted.map(item => item.messageId), ['before-pause'])
+  history.push({ messageId: 'during-pause', createTime: new Date().toISOString(), text: '补拉消息' })
+  const resumed = await f.stop.setIngressPaused(false)
+  assert.equal(resumed.ingress.recovering, true)
+  assert.equal(f.reads.length, reads, '监听未 ready 前不能把恢复当作补拉完成')
+  const resumedSubscription = f.subscriptions.at(-1)
+  await resumedSubscription.callback(ingressEvent('new-live-event'))
+  resumedSubscription.markReady()
+  await untilIngress(() => !f.health.ingress.recovering)
+  assert.ok(f.reads.slice(reads).some(range => range.start <= checkpoint))
+  assert.deepEqual(f.accepted.map(item => item.messageId).sort(), ['before-pause', 'during-pause', 'new-live-event'])
+  assert.deepEqual(f.persisted, { paused: false })
+  await resumedSubscription.callback(ingressEvent('during-pause'))
+  assert.equal(f.accepted.filter(item => item.messageId === 'during-pause').length, 1)
+})
+
+test('持久暂停重启不建群监听，新订阅群同样暂停；恢复失败保留下界重试', async t => {
+  const initial = { paused: true, pausedAt: '2026-10-01T00:00:00.000Z', recoveryFromAt: '2026-09-30T23:59:30.000Z' }
+  let failing = true
+  const f = ingressFixture({ initial, readRange: async () => {
+    if (failing) throw new Error('history_unavailable')
+    return { complete: true, messages: [] }
+  } })
+  t.after(f.stop)
+  assert.equal(f.subscriptions.length, 0)
+  f.subscribe('new-paused-group')
+  assert.equal(f.subscriptions.length, 0)
+  await f.stop.setIngressPaused(false)
+  f.subscriptions.forEach(item => item.markReady())
+  await untilIngress(() => f.health.groups.every(group => group.backfill.state === 'failed'))
+  assert.equal(f.persisted.recoveryFromAt, initial.recoveryFromAt)
+  assert.equal(f.health.ingress.recovering, true)
+  assert.ok(f.reads.every(range => range.start <= initial.recoveryFromAt))
+  failing = false
+  await untilIngress(() => !f.health.ingress.recovering)
+  assert.deepEqual(f.persisted, { paused: false })
+})
+
+test('暂停与进行中的历史请求交错，旧结果不越过暂停/恢复边界', async t => {
+  const blocked = Promise.withResolvers()
+  const f = ingressFixture({ readRange: async (_group, _range, count) => count === 1 ? blocked.promise : { complete: true, messages: [{ messageId: 'recovered', text: '恢复', createTime: new Date().toISOString() }] } })
+  t.after(f.stop)
+  f.subscriptions[0].markReady()
+  await untilIngress(() => f.reads.length === 1)
+  await f.stop.setIngressPaused(true)
+  await f.stop.setIngressPaused(false)
+  f.subscriptions.at(-1).markReady()
+  blocked.resolve({ complete: true, messages: [{ messageId: 'stale-history', createTime: new Date().toISOString() }] })
+  await untilIngress(() => !f.health.ingress.recovering)
+  assert.deepEqual(f.accepted.map(item => item.messageId), ['recovered'])
+})
+
+test('接入开关持久化失败不改变运行状态，重复请求幂等', async t => {
+  const f = ingressFixture({ saveError: true })
+  t.after(f.stop)
+  f.subscriptions[0].markReady()
+  await untilIngress(() => f.health.healthy)
+  await assert.rejects(f.stop.setIngressPaused(true), /disk_write_failed/)
+  assert.equal(f.health.ingress.paused, false)
+  assert.equal(f.subscriptions.length, 1)
+  assert.equal((await f.stop.setIngressPaused(false)).ingress.paused, false)
+})
+
+test('恢复进程重启仍沿持久下界补拉；无订阅群也能结束恢复', async t => {
+  const checkpoint = '2026-10-01T00:00:00.000Z'
+  const f = ingressFixture({ initial: { paused: false, recoveryFromAt: checkpoint } })
+  t.after(f.stop)
+  f.subscriptions[0].markReady()
+  await untilIngress(() => !f.health.ingress.recovering)
+  assert.ok(f.reads[0].start <= checkpoint)
+  const writes = [], snapshots = []
+  const stop = startDwsBridge({ runtime: { listGroups: () => [], onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {} },
+    adapter: {}, logger: { warn() {} }, ingressState: { paused: true, recoveryFromAt: checkpoint },
+    saveIngressState: async value => writes.push(value), onHealthChange: value => snapshots.push(value),
+    humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  t.after(stop)
+  await stop.setIngressPaused(false)
+  await untilIngress(() => snapshots.at(-1).ingress.recovering === false)
+  assert.deepEqual(writes.at(-1), { paused: false })
+})
+
+test('暂停成功回执等待已开始的可靠接收排空，不把已调度当作结束', async t => {
+  const receiving = Promise.withResolvers(), received = [], snapshots = []
+  let onEvent
+  const stop = startDwsBridge({ runtime: {
+    listGroups: () => [{ groupId: 'pause-group', messages: [] }], isTaskSessionMode: () => true,
+    async ingest(message) { await receiving.promise; received.push(message) },
+    onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {},
+  }, adapter: { startGroupSubscription(_group, callback) {
+    onEvent = callback
+    const done = Promise.withResolvers()
+    return { done: done.promise, stop() { done.resolve() } }
+  } }, logger: { warn() {} }, onHealthChange: health => snapshots.push(health),
+    humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+  t.after(stop)
+  const event = onEvent(ingressEvent('inflight'))
+  let completed = false
+  const pause = stop.setIngressPaused(true).then(() => { completed = true })
+  await settleIngress()
+  assert.equal(snapshots.at(-1).ingress.paused, true)
+  assert.equal(completed, false)
+  await onEvent(ingressEvent('not-accepted'))
+  receiving.resolve()
+  await Promise.all([event, pause])
+  assert.equal(completed, true)
+  assert.deepEqual(received.map(item => item.messageId), ['inflight'])
 })

@@ -122,6 +122,24 @@ function indexedTopicRefs(group, topic, revision) {
 }
 const topicPageIndexes = new WeakMap(), topicMessageIndexes = new WeakMap()
 export const topicMessageCount = (group,topic,revision) => indexedTopicRefs(group,topic,revision).length
+// 来源结算只需要身份及事项引用，不应展开整段话题的消息正文。
+const topicSourceIndexes = new WeakMap()
+export function topicSourceEntries(group, topic, revision, messageId, messageVersion) {
+  const refs = indexedTopicRefs(group, topic, revision)
+  let sources = topicSourceIndexes.get(refs)
+  if (!sources) {
+    sources = new Map()
+    for (const [, entry] of refs) {
+      let versions = sources.get(entry.messageId)
+      if (!versions) { versions = new Map(); sources.set(entry.messageId, versions) }
+      let entries = versions.get(entry.messageVersion)
+      if (!entries) { entries = []; versions.set(entry.messageVersion, entries) }
+      entries.push(entry)
+    }
+    topicSourceIndexes.set(refs, sources)
+  }
+  return sources.get(messageId)?.get(messageVersion) ?? []
+}
 export function topicMessages(group,topic,revision,{offset=0,limit=Infinity}={}) {
   let messages=topicMessageIndexes.get(group.messages)
   if(!messages){messages=new Map(group.messages.map(message=>[message.messageId,message]));topicMessageIndexes.set(group.messages,messages)}

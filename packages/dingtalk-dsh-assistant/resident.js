@@ -209,6 +209,8 @@ export async function apply(ctx, config = {}) {
       logger: ctx.logger,
       humanUserId: dwsConfig.humanUserId,
       currentDwsUserName: initialEnvironment.dws.user,
+      ingressState: store.getMessageIngressState(),
+      saveIngressState: state => store.setMessageIngressState(state),
       humanPollIntervalMs: dwsConfig.humanPollIntervalMs ?? 30_000,
       onHealthChange: (health) => {
         dwsBridgeHealth = health
@@ -216,6 +218,7 @@ export async function apply(ctx, config = {}) {
       },
     })
     : async () => undefined
+  runtime.setMessageIngressPaused = stopDws.setIngressPaused
   runtime.getDwsBridgeHealth = () => dwsBridgeHealth ?? { healthy: false, groups: [] }
   runtime.inspectEnvironment = async () => {
     const environment = await inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile })

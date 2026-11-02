@@ -787,3 +787,29 @@ test('历史Web补充归并后按原来源顺序读上下文，晚到归并不�
  assert.deepEqual(old.messages.map(message=>message.sequence),[1,3],'旧快照不加入当时未归属的Web来源')
  assert.equal(current.messages[2].messageId,'later-in-same-matter');await store.close()
 })
+
+test('来源引用索引保留版本、事项增删与历史修订且不读取正文', async () => {
+  const { topicSourceEntries, topicMessages } = await import('../packages/dingtalk-dsh-assistant/topic-model.js')
+  let scans = 0
+  const entries = [
+    { revision: 1, messageId: 'm', messageVersion: 1, unitId: 'a', unitRevision: 1 },
+    { revision: 2, messageId: 'm', messageVersion: 1, unitId: 'b', unitRevision: 1 },
+    { revision: 3, messageId: 'm', messageVersion: 1, unitId: 'a', action: 'remove' },
+    { revision: 4, messageId: 'm', messageVersion: 2, unitId: 'a', unitRevision: 2 },
+    { revision: 5, messageId: 'old', messageVersion: 1 },
+  ]
+  const topic = { revision: 5, get entries() { scans++; return entries } }
+  const group = { messages: [{ messageId: 'm', sequence: 1, messageVersion: 2,
+    get text() { assert.fail('来源结算不得展开正文') } }, { messageId: 'old', sequence: 2 }] }
+  assert.deepEqual(topicSourceEntries(group, topic, 2, 'm', 1).map(e => e.unitId), ['a', 'b'])
+  assert.deepEqual(topicSourceEntries(group, topic, 3, 'm', 1).map(e => e.unitId), ['b'])
+  assert.deepEqual(topicSourceEntries(group, topic, 5, 'm', 2).map(e => e.unitId), ['a'])
+  assert.deepEqual(topicSourceEntries(group, topic, 5, 'm', 1).map(e => e.unitId), ['b'])
+  assert.equal(topicSourceEntries(group, topic, 5, 'old', 1)[0].unitId, 'legacy:old')
+  const before = scans
+  for (let i = 0; i < 1000; i++) topicSourceEntries(group, topic, 5, 'missing', 1)
+  assert.equal(scans, before)
+  const changed = { revision: 6, entries: [...entries, { revision: 6, messageId: 'm', messageVersion: 1, unitId: 'b', action: 'remove' }] }
+  assert.deepEqual(topicSourceEntries(group, changed, 6, 'm', 1), [])
+  assert.throws(() => topicMessages(group, topic, 2), /topic_message_fact_missing:m:1/)
+})
