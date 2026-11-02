@@ -800,3 +800,54 @@ test('execution card slow refresh finishes once, keeps visible data on refresh e
  render(5);tree=render(5,'other');assert.equal(requests[3].signal.aborted,true);assert(!JSON.stringify(tree).includes('真实执行'));assert(requests.at(-1).path.includes('/other/executions?summary=true'))
  for(const effect of effects)effect?.cleanup?.()
 })
+
+test('群内分页在健康检查完成前启动，且保留选群、分页、取消与失败合同', async () => {
+  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
+  const fragment = source.slice(source.indexOf('    async function load('), source.indexOf('    function SidebarAction('))
+  for (const selectedGroupId of ['selected', 'missing']) {
+    const pending = new Map(), signal = new AbortController().signal
+    const load = runInNewContext(`${fragment}; load`, {
+      taskBuckets: [], get: (path, options) => {
+        assert.equal(options.signal, signal)
+        return new Promise((resolve, reject) => pending.set(path, { resolve, reject }))
+      }
+    })
+    let settled = false
+    const result = load({ activePage: 'groups', selectedGroupId, signal, messagePage: 2,
+      outboxPage: 3, messageDeliveryFilter: 'failed', outboxStatusFilter: 'delivered',
+      revisions: { messages: 'messages revision', outbox: 'outbox revision' } }).then(value => { settled = true; return value })
+    pending.get('/state/groups?summary=true').resolve([{ groupId: 'first' }, { groupId: 'selected' }])
+    await new Promise(resolve => setImmediate(resolve))
+    const groupId = selectedGroupId === 'selected' ? 'selected' : 'first'
+    const messages = `/state/groups/${groupId}/messages?offset=10&limit=10&filter=failed&pageRevision=messages%20revision`
+    const outbox = `/state/groups/${groupId}/outbox?offset=20&limit=10&filter=delivered&pageRevision=outbox%20revision`
+    assert.ok(pending.has(messages), '健康检查未完成时已发起收信箱')
+    assert.ok(pending.has(outbox), '健康检查未完成时已发起发信箱')
+    assert.equal(settled, false)
+    pending.get(messages).resolve({ items: [{ messageId: 'm' }], total: 1 })
+    pending.get(outbox).resolve({ items: [], total: 0 })
+    pending.get('/health').resolve({ status: 'ok' })
+    const value = await result
+    assert.equal(value.groupCollections.messages.groupId, groupId)
+    assert.equal(value.groupCollections.messages.items[0].messageId, 'm')
+    assert.equal(value.groupCollections.outbox.filter, 'delivered')
+  }
+  for (const activePage of ['groups', 'tasks']) {
+    const calls = []
+    const load = runInNewContext(`${fragment}; load`, { taskBuckets: [], get: async path => {
+      calls.push(path)
+      return path === '/state/groups?summary=true' ? [] : { items: [] }
+    } })
+    const value = await load({ activePage })
+    assert.equal(Object.keys(value.groupCollections).length, 0)
+    assert.equal(calls.some(path => /\/(messages|outbox)\?/.test(path)), false)
+  }
+  for (const failing of ['/state/groups?summary=true', '/health', '/messages?', '/outbox?']) {
+    const failure = new Error(failing)
+    const load = runInNewContext(`${fragment}; load`, { taskBuckets: [], get: async path => {
+      if (path.includes(failing)) throw failure
+      return path === '/state/groups?summary=true' ? [{ groupId: 'g' }] : { items: [] }
+    } })
+    await assert.rejects(load(), error => error === failure)
+  }
+})
