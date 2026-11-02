@@ -588,7 +588,11 @@ export async function openResidentStore(storageDomain) {
       return value ? JSON.parse(JSON.stringify(value)) : undefined
     },
     retrySourceDispatch: async () => { throw new Error('INDEPENDENT_COORDINATION_RETIRED') },
-    listSourceDispatchOwnership: groupId => JSON.parse(JSON.stringify(findGroupEntry(groupId)?.[1].sourceDispatchOwnership ?? [])),
+    listSourceDispatchOwnership: (groupId, source) => {
+      const ownership = findGroupEntry(groupId)?.[1].sourceDispatchOwnership ?? []
+      return JSON.parse(JSON.stringify(source ? ownership.filter(owner => owner.sourceSnapshot.messageId === source.messageId
+        && owner.sourceSnapshot.messageVersion === source.messageVersion) : ownership))
+    },
     reserveSourceDispatch: async () => { throw new Error('INDEPENDENT_COORDINATION_RETIRED') },
     // Upgrade-only domain operation: preserve original questions and Task links.
     async retireIndependentCoordination(retirement) {

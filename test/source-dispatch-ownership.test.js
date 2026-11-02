@@ -154,3 +154,25 @@ test('frozen historical handoff keeps original proof and generation; retirement 
   await assert.rejects(f.store.completeSourceDispatchHandoff({ groupId: 'g', ...ref(owner), expectedGeneration: 3, proof: handoff.proof }), /INDEPENDENT_COORDINATION_RETIRED/)
   assert.deepEqual(f.store.listSourceDispatchOwnership('g')[0], owner)
 })
+
+test('来源归属按消息版本过滤且返回隔离副本，重开后结果一致', async t => {
+  const f = await historical(t)
+  const expected = f.store.listSourceDispatchOwnership('g')
+  assert.deepEqual(f.store.listSourceDispatchOwnership('g', { messageId: 'message', messageVersion: 1 }), expected)
+  assert.deepEqual(f.store.listSourceDispatchOwnership('g', { messageId: 'message', messageVersion: 2 }), [])
+  assert.deepEqual(f.store.listSourceDispatchOwnership('g', { messageId: 'other', messageVersion: 1 }), [])
+  const copy = f.store.listSourceDispatchOwnership('g', { messageId: 'message', messageVersion: 1 })
+  copy[0].sourceSnapshot.text = 'changed'
+  assert.deepEqual(f.store.listSourceDispatchOwnership('g'), expected)
+  await f.reopen()
+  assert.deepEqual(f.store.listSourceDispatchOwnership('g', { messageId: 'message', messageVersion: 1 }), expected)
+})
+
+
+test('归属筛选先于快照序列化，不读取无关来源正文', async t => {
+  const f = await historical(t)
+  const group = f.store.getGroup('g')
+  const original = group.sourceDispatchOwnership[0].sourceSnapshot
+  Object.defineProperty(original, 'text', { configurable: true, get() { assert.fail('不得序列化无关来源正文') } })
+  assert.deepEqual(f.store.listSourceDispatchOwnership('g', { messageId: 'other', messageVersion: 1 }), [])
+})
