@@ -919,7 +919,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const phases = []
     try {
     if (closed) fail('TASK_SESSION_CLOSED')
-    if (!legacy.getGroup(message.groupId)) fail('group_not_subscribed')
+    // 订阅身份读取权威群记录，不为接入校验展开并过滤展示消息历史。
+    if (!residentStore.getGroup(message.groupId)) fail('group_not_subscribed')
     const actorId = message.senderOpenDingTalkId ?? message.actorId
     if (!actorId) fail('TASK_SESSION_AUTHENTICATED_SOURCE_REQUIRED')
     if (!isOwnNotification(message)) await nativeDws.beforeIngress(message.groupId)
@@ -1158,7 +1159,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           operations,
           operationCounts: Object.fromEntries(Object.entries(Object.groupBy(operations, operation => operation.state)).map(([state, items]) => [state, items.length])),
           blockers: await query('task.blockers', { taskId }) }, ...taskModelSelection(models(), legacy.getAgentConfig().taskSessionModel ?? config), agentPreset: legacy.getAgentConfig().agentPreset,
-          groupResponsibility: legacy.getGroup(task.groupId)?.responsibility ?? '',
+          groupResponsibility: residentStore.getGroup(task.groupId)?.responsibility ?? '',
           readDecisions: (args, current) => query('task.decisions', { ...args, taskId: current.taskId }),
           onSessionBound: async () => { await attachWorkspace(binding.sessionId, await taskWorkspace(root, taskId), task.title); return command('task.sessionBound', { binding }, `task-bound:${taskId}:${binding.leaseEpoch}`) },
           delegate: async args => {
@@ -1643,7 +1644,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')
     if (!args.requestId) fail('TASK_SESSION_REQUEST_ID_REQUIRED')
     const groupId = task?.groupId ?? args.groupId
-    if (!groupId || !legacy.getGroup(groupId)) fail('group_not_subscribed')
+    if (!groupId || !residentStore.getGroup(groupId)) fail('group_not_subscribed')
     const sourceId = `web:${hash([config.webActorId, groupId, args.requestId])}`
     const previous = await query('source.get', { sourceId })
     const identity = { args: clean(args), kind, taskId: task?.taskId ?? null }
@@ -1898,7 +1899,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     async retryNotification({ groupId, notificationId, expectedToken }) {
       const notification = typeof notificationId === 'string' && notificationId
         ? await query('notification.get', { notificationId }) : null
-      if (!groupId || !legacy.getGroup(groupId) || !notification || notification.payload.audience === 'operator'
+      if (!groupId || !residentStore.getGroup(groupId) || !notification || notification.payload.audience === 'operator'
         || notification.payload.conversationId !== groupId) throw notificationRecoveryError('TASK_NOTIFICATION_NOT_FOUND', 404)
       if (notification.kind === 'coordination') throw notificationRecoveryError('INDEPENDENT_COORDINATION_RETIRED')
       if (inflightNotifications.has(notificationId)) throw notificationRecoveryError('TASK_NOTIFICATION_RECOVERY_IN_PROGRESS')
@@ -1932,7 +1933,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     },
     async retryMessageProcessing(args) {
       const { groupId, messageId, phase, requestId } = args
-      if (closed || !legacy.getGroup(groupId)) fail('MESSAGE_RETRY_UNAVAILABLE')
+      if (closed || !residentStore.getGroup(groupId)) fail('MESSAGE_RETRY_UNAVAILABLE')
       const key = JSON.stringify([groupId, messageId])
       if (messageRecoveryFlights.has(key)) fail('MESSAGE_RETRY_IN_PROGRESS')
       messageRecoveryFlights.add(key)
@@ -1953,7 +1954,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     listTopics: groupId => residentStore.listTopics(groupId), getTopic: (groupId, topicId) => residentStore.getTopic(groupId, topicId),
     getTopicContext: args => residentStore.getTopicContext(args),
     async retryMessage({ groupId, messageId }) {
-      if (!legacy.getGroup(groupId)) fail('group_not_subscribed')
+      if (!residentStore.getGroup(groupId)) fail('group_not_subscribed')
       const sources = (await query('source.list', { groupId })).filter(source => source.messageId === messageId)
       if (!sources.length) {
         const message = residentStore.getGroup(groupId)?.messages.find(item => item.messageId === messageId)
@@ -1975,7 +1976,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       await recover()
       return { groupId, messageId, recoveryRequested: true }
     },
-    isGroup: groupId => !!legacy.getGroup(groupId),
+    isGroup: groupId => !!residentStore.getGroup(groupId),
     async archiveTask({ taskId }) {
       const task = await requireTask(taskId)
       if (!config.webActorId) fail('TASK_SESSION_WEB_ACTOR_REQUIRED')

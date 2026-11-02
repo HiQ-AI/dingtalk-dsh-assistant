@@ -17,6 +17,7 @@ import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { taskNotificationRecovery } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
 import { DatabaseSync } from 'node:sqlite'
+import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task-resident-runtime.js'
 
 testRunner('same-host recovery drains the original native process without replaying an unknown operation', { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-drain-retry-'))
@@ -2095,4 +2096,39 @@ testRunner('周期恢复与调度跨过百条已排空历史，不展开执行�
     assert.equal(modelCalls, 0)
     assert.deepEqual(result.failures, [])
   } finally { t.mock.restoreAll() }
+}))
+
+
+testRunner('群身份与入站校验不展开展示消息，展示层仍实时过滤通知', { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'native-group-identity-'))
+  let host, facade, visits = 0, models = 0
+  const history = Array.from({ length: 1000 }, (_, i) => ({ messageId: `history-${i}`, text: 'synthetic history' }))
+  t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+  await t.beginBusiness()
+  host = await t.step(async () => nativeTaskHost(root, () => { models++; throw Error('identity check must not start a model') }, {
+    serviceFactory: async options => {
+      facade = await openTaskResidentRuntime(options.ctx, { ...options.residentStore,
+        getGroup: id => { const group = options.residentStore.getGroup(id); return group && { ...group, messages: history } },
+      }, root)
+      facade.getAgentConfig = options.legacy.getAgentConfig
+      facade.isOwnNotification = message => { visits++; return message.messageId === 'history-0' }
+      return openTaskSessionService({ ...options, legacy: facade })
+    },
+  }))
+  assert.equal(facade.getGroup('native-group').messages.length, 999)
+  assert.equal(visits, 1000, '夹具确实走真实展示过滤器')
+  visits = 0
+  for (let i = 0; i < 100; i++) assert.equal(host.service.isGroup('native-group'), true)
+  assert.equal(host.service.isGroup('absent'), false)
+  await assert.rejects(host.service.ingest({ groupId: 'native-group', messageId: 'unauthenticated' }), /TASK_SESSION_AUTHENTICATED_SOURCE_REQUIRED/)
+  await assert.rejects(host.service.ingest({ groupId: 'absent', messageId: 'outside', senderOpenDingTalkId: 'native-user' }), /group_not_subscribed/)
+  assert.equal(visits, 0, '身份校验不得为每次入站重新过滤整个历史')
+  facade.isOwnNotification = message => { visits++; return message.messageId === 'history-1' }
+  const visible = facade.getGroup('native-group').messages
+  assert.equal(visible.length, 999)
+  assert.equal(visible.some(message => message.messageId === 'history-0'), true)
+  assert.equal(visible.some(message => message.messageId === 'history-1'), false, '通知身份变化不缓存旧展示')
+  await host.residentStore.removeGroup({ groupId: 'native-group' })
+  assert.equal(host.service.isGroup('native-group'), false, '群删除后身份即时失效')
+  assert.equal(models, 0)
 }))
