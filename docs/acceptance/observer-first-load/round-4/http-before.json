@@ -1,0 +1,942 @@
+{
+  "records": [
+    {
+      "at": 1793626266350,
+      "path": "/health",
+      "status": 200,
+      "ms": 11,
+      "firstByteMs": 10
+    },
+    {
+      "at": 1793626266353,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 9,
+      "firstByteMs": 9
+    },
+    {
+      "at": 1793626266566,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626266567,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 7,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626266774,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626266774,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626266992,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626266993,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626267208,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626267209,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626267428,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626267429,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626267645,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626267645,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626267864,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626267864,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 2,
+      "firstByteMs": 2
+    },
+    {
+      "at": 1793626268080,
+      "path": "/health",
+      "status": 200,
+      "ms": 7,
+      "firstByteMs": 7
+    },
+    {
+      "at": 1793626268080,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 9,
+      "firstByteMs": 8
+    },
+    {
+      "at": 1793626268300,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626268300,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626268516,
+      "path": "/health",
+      "status": 200,
+      "ms": 5589,
+      "firstByteMs": 5589
+    },
+    {
+      "at": 1793626268516,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 5590,
+      "firstByteMs": 5590
+    },
+    {
+      "at": 1793626274308,
+      "path": "/health",
+      "status": 200,
+      "ms": 840,
+      "firstByteMs": 840
+    },
+    {
+      "at": 1793626274308,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 841,
+      "firstByteMs": 841
+    },
+    {
+      "at": 1793626275352,
+      "path": "/health",
+      "status": 200,
+      "ms": 1165,
+      "firstByteMs": 1165
+    },
+    {
+      "at": 1793626275352,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 1166,
+      "firstByteMs": 1166
+    },
+    {
+      "at": 1793626276727,
+      "path": "/health",
+      "status": 200,
+      "ms": 272,
+      "firstByteMs": 272
+    },
+    {
+      "at": 1793626276727,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 273,
+      "firstByteMs": 273
+    },
+    {
+      "at": 1793626277204,
+      "path": "/health",
+      "status": 200,
+      "ms": 7,
+      "firstByteMs": 7
+    },
+    {
+      "at": 1793626277204,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 3,
+      "firstByteMs": 3
+    },
+    {
+      "at": 1793626277423,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626277423,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 2,
+      "firstByteMs": 2
+    },
+    {
+      "at": 1793626277644,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626277644,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 2,
+      "firstByteMs": 2
+    },
+    {
+      "at": 1793626277849,
+      "path": "/health",
+      "status": 200,
+      "ms": 7,
+      "firstByteMs": 7
+    },
+    {
+      "at": 1793626277849,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626278067,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 3
+    },
+    {
+      "at": 1793626278068,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626278284,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626278284,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626278499,
+      "path": "/health",
+      "status": 200,
+      "ms": 16,
+      "firstByteMs": 16
+    },
+    {
+      "at": 1793626278500,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 17,
+      "firstByteMs": 17
+    },
+    {
+      "at": 1793626278719,
+      "path": "/health",
+      "status": 200,
+      "ms": 124,
+      "firstByteMs": 124
+    },
+    {
+      "at": 1793626278719,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 124,
+      "firstByteMs": 124
+    },
+    {
+      "at": 1793626279059,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626279059,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626279273,
+      "path": "/health",
+      "status": 200,
+      "ms": 3,
+      "firstByteMs": 3
+    },
+    {
+      "at": 1793626279273,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626279488,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626279488,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626279706,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626279706,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626279921,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626279922,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626280138,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626280138,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 8,
+      "firstByteMs": 8
+    },
+    {
+      "at": 1793626280354,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626280354,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 3,
+      "firstByteMs": 3
+    },
+    {
+      "at": 1793626280573,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626280574,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626280790,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626280790,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 7,
+      "firstByteMs": 7
+    },
+    {
+      "at": 1793626281007,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626281008,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626281222,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626281222,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626281440,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626281440,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 2,
+      "firstByteMs": 2
+    },
+    {
+      "at": 1793626281655,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626281655,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 8,
+      "firstByteMs": 8
+    },
+    {
+      "at": 1793626281870,
+      "path": "/health",
+      "status": 200,
+      "ms": 7,
+      "firstByteMs": 7
+    },
+    {
+      "at": 1793626281871,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 3,
+      "firstByteMs": 3
+    },
+    {
+      "at": 1793626282086,
+      "path": "/health",
+      "status": 200,
+      "ms": 13,
+      "firstByteMs": 13
+    },
+    {
+      "at": 1793626282086,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 14,
+      "firstByteMs": 13
+    },
+    {
+      "at": 1793626282301,
+      "path": "/health",
+      "status": 200,
+      "ms": 3,
+      "firstByteMs": 3
+    },
+    {
+      "at": 1793626282301,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 2,
+      "firstByteMs": 2
+    },
+    {
+      "at": 1793626282507,
+      "path": "/health",
+      "status": 200,
+      "ms": 4834,
+      "firstByteMs": 4834
+    },
+    {
+      "at": 1793626282507,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 4835,
+      "firstByteMs": 4835
+    },
+    {
+      "at": 1793626287553,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626287554,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626287770,
+      "path": "/health",
+      "status": 200,
+      "ms": 372,
+      "firstByteMs": 372
+    },
+    {
+      "at": 1793626287771,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 373,
+      "firstByteMs": 373
+    },
+    {
+      "at": 1793626288345,
+      "path": "/health",
+      "status": 200,
+      "ms": 1134,
+      "firstByteMs": 1134
+    },
+    {
+      "at": 1793626288346,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 1135,
+      "firstByteMs": 1135
+    },
+    {
+      "at": 1793626289682,
+      "path": "/health",
+      "status": 200,
+      "ms": 298,
+      "firstByteMs": 297
+    },
+    {
+      "at": 1793626289683,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 299,
+      "firstByteMs": 299
+    },
+    {
+      "at": 1793626290193,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626290194,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626290412,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626290413,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 3,
+      "firstByteMs": 3
+    },
+    {
+      "at": 1793626290630,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626290630,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 2,
+      "firstByteMs": 2
+    },
+    {
+      "at": 1793626290848,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626290848,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626291066,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626291066,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626291279,
+      "path": "/health",
+      "status": 200,
+      "ms": 3,
+      "firstByteMs": 3
+    },
+    {
+      "at": 1793626291279,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626291494,
+      "path": "/health",
+      "status": 200,
+      "ms": 175,
+      "firstByteMs": 174
+    },
+    {
+      "at": 1793626291494,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 176,
+      "firstByteMs": 176
+    },
+    {
+      "at": 1793626291881,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626291881,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 7,
+      "firstByteMs": 7
+    },
+    {
+      "at": 1793626292097,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626292097,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626292314,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626292314,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626292535,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626292536,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626292752,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626292752,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 8,
+      "firstByteMs": 7
+    },
+    {
+      "at": 1793626292966,
+      "path": "/health",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626292966,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626293182,
+      "path": "/health",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626293183,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626293399,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626293400,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626293618,
+      "path": "/health",
+      "status": 200,
+      "ms": 8,
+      "firstByteMs": 8
+    },
+    {
+      "at": 1793626293618,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626293837,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626293837,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626294054,
+      "path": "/health",
+      "status": 200,
+      "ms": 9,
+      "firstByteMs": 9
+    },
+    {
+      "at": 1793626294055,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 4,
+      "firstByteMs": 4
+    },
+    {
+      "at": 1793626294268,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626294269,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626294483,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626294483,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626294696,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626294696,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 6,
+      "firstByteMs": 6
+    },
+    {
+      "at": 1793626294913,
+      "path": "/health",
+      "status": 200,
+      "ms": 5,
+      "firstByteMs": 5
+    },
+    {
+      "at": 1793626294913,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 7,
+      "firstByteMs": 7
+    },
+    {
+      "at": 1793626295127,
+      "path": "/health",
+      "status": 200,
+      "ms": 23,
+      "firstByteMs": 23
+    },
+    {
+      "at": 1793626295127,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 23,
+      "firstByteMs": 23
+    },
+    {
+      "at": 1793626295359,
+      "path": "/health",
+      "status": 200,
+      "ms": 4882,
+      "firstByteMs": 4881
+    },
+    {
+      "at": 1793626295360,
+      "path": "/state/groups?summary=true",
+      "status": 200,
+      "ms": 4882,
+      "firstByteMs": 4882
+    }
+  ]
+}

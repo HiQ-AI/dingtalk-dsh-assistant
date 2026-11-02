@@ -1,0 +1,63 @@
+{
+  "version": "modified",
+  "kind": "isolated-real-store-controlled-data-not-production",
+  "results": [
+    {
+      "round": 1,
+      "ms": 88.71,
+      "cpuMs": 110,
+      "parsedBytes": 6666675,
+      "parseCalls": 886,
+      "pendingUnknownOperations": 3,
+      "executionCandidates": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "groupCounts": [
+        389,
+        389
+      ]
+    },
+    {
+      "round": 2,
+      "ms": 105.21,
+      "cpuMs": 141,
+      "parsedBytes": 6666675,
+      "parseCalls": 886,
+      "pendingUnknownOperations": 3,
+      "executionCandidates": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "groupCounts": [
+        389,
+        389
+      ]
+    },
+    {
+      "round": 3,
+      "ms": 100.54,
+      "cpuMs": 93,
+      "parsedBytes": 6666675,
+      "parseCalls": 886,
+      "pendingUnknownOperations": 3,
+      "executionCandidates": [
+        [],
+        [],
+        [],
+        [],
+        []
+      ],
+      "groupCounts": [
+        389,
+        389
+      ]
+    }
+  ]
+}

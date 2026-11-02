@@ -2363,3 +2363,93 @@ test('execution-scoped Topic waiting admits unrelated Owner work and keeps affec
   assert.equal((await f.query({ kind: 'task.get', taskId: 'task' })).control, 'paused')
   assert.equal(await f.query({ kind: 'execution.current', binding: other }), false, 'explicit task-level pause still stops unrelated member admission')
 })
+
+test('后台恢复在 SQL 排除终态正文，仍返回全部未排空、queued 和未知效果', async t => {
+  const f = await fixture(t), db = new DatabaseSync(f.config.dbPath)
+  const put = (table, value) => db.prepare(`INSERT INTO dynamic_${table}(id,body) VALUES (?,?)`).run(value.id, JSON.stringify(value))
+  const marker = 'HISTORY_MUST_NOT_BE_PARSED_IN_JS'
+  try {
+    put('tasks', { id: 'done-task', drained: true, request: marker })
+    put('groups', { id: 'done-group', drained: true, text: marker })
+    put('executions', { id: 'done-execution', taskId: 'done-task', drained: true, status: 'succeeded', input: { objective: marker } })
+    for (const state of ['succeeded', 'failed', 'cancelled']) put('operations', { id: state, state, result: { text: marker } })
+    for (const state of ['delivered', 'failed']) put('notifications', { id: state, state, payload: { text: marker } })
+    for (const [id, drained] of [['missing', undefined], ['null', null], ['false', false], ['zero', 0]]) {
+      put('tasks', { id, drained }); put('groups', { id, drained })
+      put('executions', { id, drained, status: 'running' })
+    }
+    put('executions', { id: 'queued', drained: true, status: 'queued' })
+    for (const state of ['prepared', 'starting', 'unknown']) put('operations', { id: state, state, originalProof: { value: state } })
+    for (const state of ['prepared', 'starting', 'unknown', 'superseded']) put('notifications', { id: state, state })
+    const parse = JSON.parse
+    t.mock.method(JSON, 'parse', function (text, ...args) {
+      assert.equal(String(text).includes(marker), false, '终态正文不应送入 JS 解析或深拷贝')
+      return parse(text, ...args)
+    })
+    const result = await f.query({ kind: 'recovery.pending' })
+    assert.deepEqual(result.tasks.map(x => x.id), ['missing', 'null', 'false', 'zero'])
+    assert.deepEqual(result.groups.map(x => x.id), ['missing', 'null', 'false', 'zero'])
+    assert.deepEqual(result.executions.map(x => x.id), ['missing', 'null', 'false', 'zero', 'queued'])
+    assert.deepEqual(result.operations.map(x => x.state), ['prepared', 'starting', 'unknown'])
+    assert.deepEqual(result.notifications.map(x => x.state), ['prepared', 'starting', 'unknown', 'superseded'])
+    result.operations[2].originalProof.value = 'caller mutation'
+    assert.equal((await f.query({ kind: 'operation.get', operationId: 'unknown' })).originalProof.value, 'unknown')
+  } finally { db.close() }
+})
+
+test('执行索引分页保留后台所需元数据，但不展开历史输入和结果', async t => {
+  const f = await fixture(t), db = new DatabaseSync(f.config.dbPath), marker = 'LARGE_EXECUTION_BODY_MUST_STAY_IN_SQLITE'
+  try {
+    const insert = db.prepare('INSERT INTO dynamic_executions(id,body) VALUES (?,?)')
+    for (let i = 0; i < 103; i++) {
+      const value = { id: `e${i}`, executionId: `e${i}`, taskId: 't', status: i % 2 ? 'failed' : 'queued', drained: true,
+        definition: { executionBackend: i % 2 ? 'claude-code' : 'dsh' }, cancelRequested: i === 2,
+        providerRecovery: { nextReviewAt: '2030-01-01T00:00:00Z' }, progressReview: { checkedAt: '2026-01-01T00:00:00Z' },
+        input: { objective: marker }, result: { text: marker } }
+      insert.run(value.id, JSON.stringify(value))
+    }
+    const parse = JSON.parse
+    t.mock.method(JSON, 'parse', function (text, ...args) {
+      assert.equal(String(text).includes(marker), false)
+      return parse(text, ...args)
+    })
+    const first = await f.query({ kind: 'execution.index', limit: 100 }), second = await f.query({ kind: 'execution.index', after: first.nextAfter, limit: 100 })
+    assert.equal(first.items.length, 100); assert.equal(second.items.length, 3); assert.equal(second.nextAfter, null)
+    assert.equal(new Set([...first.items, ...second.items].map(x => x.executionId)).size, 103)
+    assert.deepEqual(first.items[1].definition, { executionBackend: 'claude-code' })
+    assert.equal(first.items[2].cancelRequested, 1)
+    assert.equal(first.items[1].providerRecovery.nextReviewAt, '2030-01-01T00:00:00Z')
+    assert.equal(first.items[1].progressReview.checkedAt, '2026-01-01T00:00:00Z')
+    assert.equal(Object.hasOwn(first.items[0], 'input'), false); assert.equal(Object.hasOwn(first.items[0], 'result'), false)
+  } finally { db.close() }
+})
+
+test('来源按群先筛选正文，完整列表与嵌套返回值仍独立于后续查询', async t => {
+  const f = await fixture(t), db = new DatabaseSync(f.config.dbPath)
+  try {
+    const insert = db.prepare('INSERT INTO dynamic_sources(id,body) VALUES (?,?)')
+    insert.run('a', JSON.stringify({ id: 'a', sourceId: 'a', groupId: 'selected', nested: { text: 'original' } }))
+    insert.run('b', JSON.stringify({ id: 'b', sourceId: 'b', groupId: 'other', text: 'UNRELATED_SOURCE_MUST_NOT_BE_PARSED' }))
+    const parse = JSON.parse
+    t.mock.method(JSON, 'parse', function (text, ...args) {
+      assert.equal(String(text).includes('UNRELATED_SOURCE_MUST_NOT_BE_PARSED'), false)
+      return parse(text, ...args)
+    })
+    const result = await f.query({ kind: 'source.list', groupId: 'selected' })
+    assert.equal(result.length, 1); result[0].nested.text = 'mutated'
+    assert.equal((await f.query({ kind: 'source.list', groupId: 'selected' }))[0].nested.text, 'original')
+    t.mock.restoreAll()
+    assert.equal((await f.query({ kind: 'source.list' })).length, 2)
+  } finally { db.close() }
+})
+
+test('完整任务和执行列表的嵌套对象不与账本或其他返回值共享', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const tasks = await f.query({ kind: 'task.list' }), executions = await f.query({ kind: 'execution.list' })
+  tasks[0].requirements.push('caller mutation'); tasks[0].metadata.mutated = true
+  executions[0].input.objective = 'caller mutation'; executions[0].resources.keys.push('caller mutation')
+  assert.deepEqual((await f.query({ kind: 'task.list' }))[0].requirements, [])
+  assert.deepEqual((await f.query({ kind: 'task.get', taskId: 'task' })).metadata, {})
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).input.objective, 'Inspect target')
+  assert.deepEqual((await f.query({ kind: 'execution.list' }))[0].resources.keys, [])
+})
