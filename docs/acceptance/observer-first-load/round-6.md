@@ -29,3 +29,7 @@
 确认并消除接入/身份校验不必要的全群历史展示遍历；不声称线上约2.2秒长尾已消除，候选未合并部署。序列化、文件检查和其他后台查询仍有成本，尚未完整归因。未主动运行CI或触发真实消息/通知重试。
 
 沿用 round-5 已部署基线证据（尚未被本轮候选现场复验替代）；本轮仅保留 CPU 汇总、验证摘要与本报告，临时日志在摘要核对后清理。已有历史本地资料不清理。
+
+## 交付
+
+产品提交 `525cf2b0269ff80a9010bf8c03747b5bd1f3d876`，PR https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/336 ，base main ← worktree-plugin-residual-blocking，独立回读 OPEN/MERGEABLE。本轮候选未部署。后续仅回填文档，不变更已验证产品源码。
