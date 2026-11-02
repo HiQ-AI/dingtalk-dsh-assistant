@@ -13,7 +13,7 @@ import { TaskRevisionError } from './task-input-revision.js'
 import { visiblePromptRefs, visibleSectionLength, visibleCoordinatorText, visibleToolOutputs, promptContent, compactSectionValue, buildMaterialManifest } from './coordination-context.js'
 import { taskProgressSnapshot } from './task-progress.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint } from './task-result.js'
-import { blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS, collectDecisionIssues } from './decision.js'
+import { compactReplyReviewCandidates, blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS, collectDecisionIssues } from './decision.js'
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
 const DECISION_SECTIONS = ['messages', 'summary', 'removedUnitRefs', 'rejectedDecisions', 'ownership', 'quotedMessages', 'sourceMessages', 'promptIndex']
@@ -440,7 +440,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const deltaIds = new Set(topic.entries.filter((entry) => entry.revision > topic.processedRevision && entry.revision <= topic.revision).map(unitKey))
     const deltaMessages = messages.filter((message) => deltaIds.has(unitKey(message)))
     const personAliases = referencedPersonAliases(store.getGroup(groupId), deltaMessages)
-    let requestId = requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision, promptCatalog,
+    const presentationFingerprint = fingerprint({ summary: topic.summary, summaryRevision: topic.summaryRevision, openQuestions: topic.openQuestions })
+    let requestId = requestIdentity('decision', { groupId, topicId: topic.topicId, revision: topic.revision, promptCatalog, presentationFingerprint,
       ...(personAliases.length ? { personAliases } : {}),
       ...(rejected.length ? { rejectedDecisionIds: rejected.map(record => record.decisionId) } : {}) })
     const versionRequestId = requestId
@@ -458,7 +459,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     }
     const removedUnitRefs = topic.entries.filter((entry) => entry.action === 'remove' && entry.revision > topic.processedRevision && entry.revision <= topic.revision).map(({ unitId, unitRevision, messageId }) => ({ unitId, unitRevision, messageId }))
     const removedMessageIds = [...new Set(topic.entries.filter((entry) => entry.action === 'remove' && entry.revision > topic.processedRevision && entry.revision <= topic.revision).map((entry) => entry.messageId))]
-    const nextRequest = { requestId, versionRequestId, groupId, topicId: topic.topicId, revision: topic.revision, messages, personAliasMessages: deltaMessages, personAliases, removedUnitRefs, removedMessageIds, promptCatalog, readPromptRefs: new Map(), readPromptVersions: new Map(),
+    const nextRequest = { requestId, versionRequestId, presentationFingerprint, groupId, topicId: topic.topicId, revision: topic.revision, messages, personAliasMessages: deltaMessages, personAliases, removedUnitRefs, removedMessageIds, promptCatalog, readPromptRefs: new Map(), readPromptVersions: new Map(),
       topicRefs: [{ topicId: topic.topicId, revision: topic.revision }], candidates: scopedCandidates(groupId, messages, [{ topicId: topic.topicId, revision: topic.revision }]), readReview: false }
     // Keep the actual request object: native session/tool closures are bound to it.
     const request = continuing ?? nextRequest
@@ -867,6 +868,18 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const issues = collectDecisionIssues(request, decision, { store, delta, ownership: effectOwnership(request.groupId, request.topicId, request.revision, request.messages), unitKey, archivedTasks })
     if (issues.length) { const error = new Error(issues[0].message); error.issues = issues; throw error }
   }
+  const presentationCurrent = request => {
+    const topic = store.getTopic(request.groupId, request.topicId)
+    return topic && request.presentationFingerprint === fingerprint({ summary: topic.summary, summaryRevision: topic.summaryRevision, openQuestions: topic.openQuestions })
+  }
+  function readReplyReview(groupId, requestIds, compact = false) {
+    if (typeof compact !== 'boolean') throw new Error('topic_review_format_invalid')
+    if (!Array.isArray(requestIds) || !requestIds.length || requestIds.length > 8 || new Set(requestIds).size !== requestIds.length) throw new Error('topic_review_request_invalid')
+    const requests = requestIds.map((id) => requestFor(groupId, id))
+    for (const request of requests) { refreshReview(request); request.readReview = true }
+    const candidates = [...new Map(requests.flatMap((request) => request.candidates).map((candidate) => [candidate.outboundId, candidate])).values()]
+    return { requestIds, ...(compact ? compactReplyReviewCandidates(candidates) : { candidates }), candidateCount: candidates.length }
+  }
   function register(agentCtx, groupId, scope) {
     const tool = (name, description, parameters, execute) => {
       if (scope && !coordinationTools(coordinationRole(scope)).includes(name)) return
@@ -1019,6 +1032,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         if (!consumed || pending.some(message => message.id === updateMessageId))
           return { status: 'decision-update-unread', revision: request.revision, nextAction: 'consume-current-update' }
       }
+      if (!presentationCurrent(request)) { await schedule(groupId); return { status: 'topic-stale', reason: 'topic-presentation-changed', nextAction: 'use-current-request' } }
       if (!personAliasesCurrent(request)) { await schedule(groupId); return { status: 'topic-stale', reason: 'person-aliases-changed', nextAction: 'use-current-request' } }
       const basis = new Set(args.decision.basisMessageIds)
       const inferred = args.decision.basisMessageIds.flatMap((messageId) => {
@@ -1068,6 +1082,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         return store.acceptTopicDecision({ groupId, topicId: args.topicId, revision: args.revision, decisionId: args.requestId, decision,
         expectedTaskVersions: decision.actions.filter((action) => action.taskId).map((action) => ({ taskId: action.taskId, inputVersion: action.inputVersion, runSequence: action.runSequence })),
         preflight: () => {
+          if (!presentationCurrent(request)) return { status: 'topic-stale', reason: 'topic-presentation-changed' }
           if (!personAliasesCurrent(request)) return { status: 'topic-stale', reason: 'person-aliases-changed' }
           if (validateSnapshot && validateSnapshot() !== true) return { status: 'task-stale' }
           validateBasis(request, decision, archivedTasks)
@@ -1155,12 +1170,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       }
       return context
     })
-    tool('group_reply_review_get', `读取 Topic 判断或 Task 通知绑定的完整历史回复候选。${scope ? '本会话唯一request由Host绑定，直接传{}；显式requestIds只能是当前请求。' : '必须显式提供requestIds。'}`, { type: 'object', properties: { requestIds: { type: 'array', items: { type: 'string' } } }, required: scope ? [] : ['requestIds'], additionalProperties: false }, ({ requestIds = scope ? [scope.requestId] : undefined }) => {
-      if (!Array.isArray(requestIds) || !requestIds.length || requestIds.length > 8 || new Set(requestIds).size !== requestIds.length) throw new Error('topic_review_request_invalid')
-      const requests = requestIds.map((id) => requestFor(groupId, id))
-      for (const request of requests) { refreshReview(request); request.readReview = true }
-      const candidates = [...new Map(requests.flatMap((request) => request.candidates).map((candidate) => [candidate.outboundId, candidate])).values()]
-      return { requestIds, candidates, candidateCount: candidates.length }
+    tool('group_reply_review_get', `读取 Topic 判断或 Task 通知绑定的完整历史回复候选。${scope ? '本会话唯一request由Host绑定，直接传{}；显式requestIds只能是当前请求。' : '必须显式提供requestIds。'}`, { type: 'object', properties: { requestIds: { type: 'array', items: { type: 'string' } }, compact: { type: 'boolean', description: '共享来源与任务事实用ref索引去重；false保留原展开格式，原文仍可通过消息/任务工具读取。' } }, required: scope ? [] : ['requestIds'], additionalProperties: false }, ({ requestIds = scope ? [scope.requestId] : undefined, compact = false }) => {
+      return readReplyReview(groupId, requestIds, compact)
     })
     tool('group_task_review_context_get', '按审阅请求和 section 续读目标、证据、消息或流程索引的完整 JSON 原文；按 nextOffset 连续读取。section=manifest 返回当前请求材料摘要、版本、当前上下文可见分页与缺口，不把摘要当正文。', { type: 'object', additionalProperties: false, required: ['requestId', 'section'], properties: {
       requestId: { type: 'string' }, section: { type: 'string' }, offset: { type: 'integer' },
@@ -1493,7 +1504,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       return result
   }
   return {
-    register, schedule, prepareReview, requestReview, requestReply, commitCompletionNotification, taskMessages, applyAccepted: resume, isCurrentRequest, messageProcessingRequests,
+    register, readReplyReview, schedule, prepareReview, requestReview, requestReply, commitCompletionNotification, taskMessages, applyAccepted: resume, isCurrentRequest, messageProcessingRequests,
     async retryMessageRequest({ groupId, messageId, messageVersion, activeUnitRefs, requestId, token }) {
       const validate = () => {
         const message = store.getGroup(groupId)?.messages.find(item => item.messageId === messageId)

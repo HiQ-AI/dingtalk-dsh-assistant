@@ -3055,3 +3055,66 @@ for (const enabled of [false,true]) test('workflow prompt tool follows explicit 
   assert.equal(h.tools.has('group_task_prompt_get'), enabled)
   for (const name of ['group_topic_list','group_topic_context_get','group_decision_context_get','group_reply_review_get','group_decision_submit','group_topic_route_review']) assert.ok(h.tools.has(name), name)
 })
+
+test('omitted Topic presentation fields retain values while explicit changes update independently', async t => {
+  const h=await setup(t)
+  await ingest(h,'summary-start');let request=(await route(h)).pendingDecisions[0]
+  await complete(h,request,{topicUpdate:{summary:'Stable scope',openQuestions:['pending fact']}})
+  await ingest(h,'summary-follow');request=(await route(h,{'summary-follow':request.topicId})).pendingDecisions[0]
+  await complete(h,request)
+  let topic=h.store.getTopic('g',request.topicId)
+  assert.equal(topic.summary,'Stable scope');assert.deepEqual(topic.openQuestions,['pending fact'])
+  await ingest(h,'summary-change');request=(await route(h,{'summary-change':request.topicId})).pendingDecisions[0]
+  await complete(h,request,{topicUpdate:{summary:'Updated scope',openQuestions:[]}})
+  topic=h.store.getTopic('g',request.topicId);assert.equal(topic.summary,'Updated scope');assert.deepEqual(topic.openQuestions,[])
+})
+for (const atCommit of [false,true]) test('concurrent same-revision summary change fences stale generated update: '+atCommit, async t=>{
+  const h=await setup(t);await ingest(h,'presentation-race');const request=(await route(h)).pendingDecisions[0]
+  const update=()=>h.store.updateTopicSummary({groupId:'g',topicId:request.topicId,expectedRevision:request.revision,expectedSummary:'',summary:'New concurrent fact'})
+  if(atCommit){const accept=h.store.acceptTopicDecision;h.store.acceptTopicDecision=async args=>{await update();return accept(args)}}else await update()
+  const result=await h.call('group_decision_submit',submission(request,{topicUpdate:{summary:'Stale overwrite'}}))
+  assert.equal(result.status,'topic-stale');assert.equal(h.store.getTopic('g',request.topicId).summary,'New concurrent fact');assert.equal(h.store.getTopic('g',request.topicId).decisions.length,0)
+})
+test('compact review still marks exact candidate snapshot read and rejects changed candidates before acceptance',async t=>{
+  let candidates=[{outboundId:'prior',sourceMessageId:'compact-review',replyKind:'substantive',reply:'prior result',taskIds:[],sourceMessages:[{messageId:'old',text:'original'}],tasks:[]}]
+  const h=await setup(t,{reviewCandidates:()=>candidates});await ingest(h,'compact-review');const request=(await route(h)).pendingDecisions[0]
+  const wire=await h.call('group_reply_review_get',{requestIds:[request.requestId],compact:true})
+  assert.equal(wire.candidates[0].sourceMessageRefs[0],wire.sourceMessages[0].ref)
+  assert.equal(wire.sourceMessages[0].value.text,'original')
+  assert.ok(!(await h.call('group_reply_review_get',{requestIds:[request.requestId]})).candidates[0].sourceMessageRefs)
+  candidates=[...candidates,{outboundId:'new',sourceMessageId:'compact-review',reply:'new result',taskIds:[],sourceMessages:[],tasks:[]}]
+  const result=await h.call('group_decision_submit',submission(request,{reply:'current reply',replyReview:{kind:'substantive',reviewedOutboundIds:['prior'],sameMatterOutboundIds:[],replaceOutboundIds:[]}}))
+  assert.equal(result.status,'review-required');assert.equal(h.store.getTopic('g',request.topicId).decisions.length,0)
+  assert.throws(()=>h.coordinator.readReplyReview('foreign',[request.requestId],true),/wrong_group/)
+})
+
+test('accepted presentation cannot overwrite a later concurrent summary while applying Task actions',async t=>{
+  let topicId
+  const h=await setup(t,{beforeAction:()=>h.store.updateTopicSummary({groupId:'g',topicId,expectedRevision:1,expectedSummary:'',summary:'Concurrent factual summary'})})
+  await ingest(h,'accepted-summary');const request=(await route(h)).pendingDecisions[0];topicId=request.topicId
+  const action={kind:'new-task',title:'Read-only check',objective:'Read-only check',acceptanceCriteria:['Evidence'],topicRefs:[{topicId,revision:1}]}
+  await complete(h,request,{actions:[action],reply:'Accepted read-only check',topicUpdate:{summary:'Old generated summary'}})
+  const topic=h.store.getTopic('g',topicId)
+  assert.equal(topic.summary,'Concurrent factual summary')
+  assert.equal(topic.decisions[0].status,'completed');assert.deepEqual(topic.decisions[0].appliedTopicUpdate,{})
+  const recovered=await setup(t,{snapshot:h.snapshot});await recovered.coordinator.recover();await recovered.coordinator.drain('g')
+  assert.equal(recovered.store.getTopic('g',topicId).summary,'Concurrent factual summary');assert.equal(recovered.applications.length,0)
+})
+
+
+test('historical presentation folds omitted fields and explicit clears across revisions', async t => {
+  const h = await setup(t)
+  await ingest(h, 'history-first')
+  const first = (await route(h)).pendingDecisions[0]
+  await complete(h, first, { topicUpdate: { summary: 'First factual summary', openQuestions: ['Pending evidence'] } })
+  await ingest(h, 'history-second')
+  const second = (await route(h, { 'history-second': first.topicId })).pendingDecisions[0]
+  await complete(h, second, { topicUpdate: { status: 'active' } })
+  await ingest(h, 'history-third')
+  const third = (await route(h, { 'history-third': first.topicId })).pendingDecisions[0]
+  await complete(h, third, { topicUpdate: { summary: 'New factual summary', openQuestions: [] } })
+  const historical = h.store.getTopicContext({ groupId: 'g', topicId: first.topicId, revision: second.revision })
+  assert.equal(historical.topic.summary, 'First factual summary')
+  assert.deepEqual(historical.topic.openQuestions, ['Pending evidence'])
+  assert.deepEqual(h.store.getTopic('g', first.topicId).openQuestions, [])
+})

@@ -367,3 +367,18 @@ export function collectDecisionIssues(request, decision, { store, delta, ownersh
   }
   return issues
 }
+
+
+// Wire-only shared facts. Host review validation keeps the original candidates.
+export function compactReplyReviewCandidates(candidates) {
+  const sourceMessages = [], tasks = [], sources = new Map(), taskFacts = new Map()
+  const intern = (value, values, index, prefix) => {
+    const key = JSON.stringify(value)
+    if (!index.has(key)) { const ref = `${prefix}-${values.length}`; index.set(key, ref); values.push({ ref, value }) }
+    return index.get(key)
+  }
+  return { candidates: candidates.map(({ sourceMessages: messages = [], tasks: facts = [], ...candidate }) => ({ ...candidate,
+    sourceMessageRefs: messages.map(value => intern(value, sourceMessages, sources, 'source')),
+    taskFactRefs: facts.map(value => intern(value, tasks, taskFacts, 'task')),
+  })), sourceMessages, tasks }
+}
