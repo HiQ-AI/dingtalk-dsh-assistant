@@ -220,7 +220,7 @@ export async function handleRequest(request, response, store, { testApiEnabled =
     const recoveryIssues = store.listRecoveryIssues()
     const inboundConfigured = transport === 'dws'
     const dwsBridge = inboundConfigured ? store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] } : undefined
-    const inboundProcessing = inboundConfigured && dwsBridge.healthy === true
+    const inboundProcessing = inboundConfigured && dwsBridge.healthy === true && !dwsBridge.ingress?.paused
     const activityAudit = store.getActivityAuditStatus?.()
     const executionStore = store.getWorkflowExecutionHealth?.()
     return send(response, 200, {
@@ -511,6 +511,15 @@ export async function handleRequest(request, response, store, { testApiEnabled =
       if(!store.listAlertPage)return send(response,503,{error:'observer_unavailable'})
       return send(response,200,await store.listAlertPage({view,type,offset:pageNumber(url,'offset',0),limit:pageNumber(url,'limit',10,100),revision:url.searchParams.get('pageRevision')||undefined}))
     }catch(error){return send(response,error.code==='OBSERVER_PAGE_STALE'?409:400,{error:error.message})}
+  }
+  if (request.method === 'PUT' && url.pathname === '/config/message-ingress') {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'message_ingress_local_identity_required' })
+    if (transport !== 'dws' || !store.setMessageIngressPaused) return send(response, 503, { error: 'message_ingress_unavailable' })
+    try {
+      const parsed = z.strictObject({ paused: z.boolean() }).safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'message_ingress_invalid' })
+      return send(response, 200, await store.setMessageIngressPaused(parsed.data.paused))
+    } catch (error) { return send(response, 503, { error: error.message }) }
   }
   if (request.method === 'GET' && url.pathname === '/state/dws-bridge') return send(response, 200, store.getDwsBridgeHealth?.() ?? { healthy: false, groups: [] })
   if (request.method === 'GET' && url.pathname === '/state/environment') return send(response, 200, await store.inspectEnvironment())

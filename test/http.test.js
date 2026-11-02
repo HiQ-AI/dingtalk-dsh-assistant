@@ -1006,3 +1006,23 @@ test('trace coordinator unit cursor is independent from event pagination and val
   assert.equal((await fetch(base+'/state/workflows/run/trace?unitCursor=-1')).status,400);assert.equal(calls.length,1)
  },{overrides:{getWorkflowMessageTrace:async(...args)=>{calls.push(args);return {items:[],coordinatorUnits:{total:101,returned:1,nextCursor:null}}}}})
 })
+
+test('消息接入开关严格验证布尔参数与本机身份，返回真实暂停/恢复状态', async () => {
+  const calls = []
+  await withServer(false, async base => {
+    const path = base + '/config/message-ingress'
+    const put = value => fetch(path, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) })
+    assert.equal((await rawRequest(path, { method: 'PUT', headers: { Host: 'remote.example', 'content-type': 'application/json' }, body: JSON.stringify({ paused: true }) })).status, 403)
+    for (const value of [{}, { paused: 'true' }, { paused: true, groupId: 'other' }, { paused: null }]) assert.equal((await put(value)).status, 400)
+    assert.deepEqual(calls, [])
+    for (const paused of [true, false]) {
+      const result = await put({ paused })
+      assert.equal(result.status, 200)
+      assert.deepEqual(await result.json(), { ingress: { paused, recovering: !paused } })
+    }
+    assert.deepEqual(calls, [true, false])
+  }, { transport: 'dws', overrides: { async setMessageIngressPaused(paused) { calls.push(paused); return { ingress: { paused, recovering: !paused } } } } })
+  await withServer(false, async base => {
+    assert.equal((await fetch(base + '/config/message-ingress', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ paused: true }) })).status, 503)
+  })
+})

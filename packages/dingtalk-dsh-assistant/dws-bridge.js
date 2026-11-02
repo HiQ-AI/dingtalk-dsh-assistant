@@ -96,7 +96,7 @@ export function parseWorkflowApprovalDecision(text) {
   return undefined
 }
 
-export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentDwsUserName, humanPollIntervalMs = 30_000, groupBackfillIntervalMs = 10_000, groupBackfillOverlapMs = 30_000, outboxRetryIntervalMs = 10_000, listenerReconnectBaseMs = 1_000, listenerReconnectMaxMs = 30_000, listenerReadyTimeoutMs = 15_000, onHealthChange }) {
+export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentDwsUserName, humanPollIntervalMs = 30_000, groupBackfillIntervalMs = 10_000, groupBackfillOverlapMs = 30_000, outboxRetryIntervalMs = 10_000, listenerReconnectBaseMs = 1_000, listenerReconnectMaxMs = 30_000, listenerReadyTimeoutMs = 15_000, onHealthChange, ingressState = { paused: false }, saveIngressState = async () => {} }) {
   const subscriptions = new Map()
   const bridgeEntries = new Map()
   const inflightMessages = new Map()
@@ -106,6 +106,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     listenerState: typeof adapter.startHumanReplySubscription === 'function' ? 'starting' : 'unavailable',
     reconnectAttempt: 0,
   }
+  let ingress = { ...ingressState }
+  let controlTail = Promise.resolve()
   let stopping = false
   let humanPollTimer
   let humanPollTail = Promise.resolve()
@@ -128,6 +130,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     }
   })
   const processMessage = (message) => {
+    if (ingress.paused || stopping) return Promise.resolve()
     const key = `${message.groupId}\u0000${message.messageId}`
     const existing = inflightMessages.get(key)
     if (existing !== undefined) return existing
@@ -197,13 +200,14 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     entry = {
       groupId,
       generation: 0,
-      listenerState: 'starting',
-      backfillState: 'never',
+      listenerState: ingress.paused ? 'paused' : 'starting',
+      backfillState: ingress.paused ? 'paused' : 'never',
       reconnectAttempt: 0,
       backfillRunning: false,
       recoveryQueued: false,
       recoveryEpoch: 0,
-      recoveryRequired: false,
+      recoveryRequired: !!ingress.recoveryFromAt,
+      recoveryFromAt: ingress.recoveryFromAt,
       backfillPromise: Promise.resolve(),
       carrierIssueTail: Promise.resolve(),
     }
@@ -268,7 +272,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     }
     const groupsHealthy = groups.length === 0 || groups.every((group) => group.listener.state === 'ready' && group.backfill.state === 'ok' && group.backfill.recoveryRequired !== true)
     return {
-      healthy: groupsHealthy && (humanReplies.state === 'ready' || humanReplies.state === 'unavailable'),
+      ingress: { ...ingress, recovering: !ingress.paused && !!ingress.recoveryFromAt },
+      healthy: !ingress.paused && groupsHealthy && (humanReplies.state === 'ready' || humanReplies.state === 'unavailable'),
       groups,
       humanReplies,
     }
@@ -279,6 +284,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   }
   const queueGroupBackfill = (groupId, { queueAfterActive = false, recovery = false } = {}) => {
     const entry = entryFor(groupId)
+    if (ingress.paused || stopping) return entry.backfillPromise
     if (typeof adapter.readGroupRange !== 'function') {
       entry.backfillState = 'unavailable'
       publishHealth()
@@ -295,7 +301,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     if (isRecovery || (entry.lastBackfillAt === undefined && entry.backfillState !== 'failed')) entry.backfillState = 'running'
     publishHealth()
     entry.backfillPromise = (async () => {
-      if (stopping || currentGroup(groupId) === undefined) return
+      if (stopping || ingress.paused || currentGroup(groupId) === undefined) return
       entry.lastBackfillStartedAt = now()
       publishHealth()
       try {
@@ -303,9 +309,11 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         const start = earlierIso(defaultBackfillStart(groupId), isRecovery ? entry.recoveryFromAt : undefined)
         entry.activeBackfillStartAt = start
         const history = await adapter.readGroupRange(groupId, { start, end })
+        if (stopping || ingress.paused || entry.recoveryEpoch !== recoveryEpoch || currentGroup(groupId) === undefined) return
         if (!Array.isArray(history.messages) || history.complete !== true || history.hasMore === true || (history.failedCount ?? 0) !== 0) throw new Error(`dws_backfill_partial:${groupId}`)
         const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
         for (const message of ordered) {
+          if (stopping || ingress.paused || entry.recoveryEpoch !== recoveryEpoch || currentGroup(groupId) === undefined) return
           entry.activeBackfillMessageId = message.messageId
           await processMessage(normalizeHistoryMessage(message, groupId))
         }
@@ -333,6 +341,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
             .catch((error) => logger.warn(error))
         }
       } catch (error) {
+        if (ingress.paused || stopping || entry.recoveryEpoch !== recoveryEpoch) return
         entry.backfillState = 'failed'
         entry.lastBackfillError = describeError(error)
         entry.lastBackfillErrorAt = now()
@@ -348,7 +357,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       const rerunAfterActive = entry.recoveryQueued
       entry.recoveryQueued = false
       publishHealth()
-      if (rerunAfterActive && !stopping && currentGroup(groupId) !== undefined) queueGroupBackfill(groupId)
+      if (rerunAfterActive && !stopping && !ingress.paused && currentGroup(groupId) !== undefined) queueGroupBackfill(groupId)
+      finishIngressRecovery()
     })
     return entry.backfillPromise
   }
@@ -617,7 +627,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     return humanPollTail
   }
   const processIncrementalGroupBackfill = () => {
-    if (stopping) return Promise.resolve([])
+    if (stopping || ingress.paused) return Promise.resolve([])
     return Promise.allSettled(runtime.listGroups().map((group) => queueGroupBackfill(group.groupId)))
   }
   const reportConsumerExit = async (groupId, result, error) => {
@@ -629,7 +639,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   }
   let attach
   const scheduleReconnect = (entry) => {
-    if (stopping || entry.retryTimer !== undefined || entry.subscription !== undefined || bridgeEntries.get(entry.groupId) !== entry) return
+    if (stopping || ingress.paused || entry.retryTimer !== undefined || entry.subscription !== undefined || bridgeEntries.get(entry.groupId) !== entry) return
     const base = Math.max(0, listenerReconnectBaseMs)
     const maximum = Math.max(base, listenerReconnectMaxMs)
     const delay = Math.min(maximum, base * (2 ** Math.max(0, entry.reconnectAttempt - 1)))
@@ -675,7 +685,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   }
   attach = (group) => {
     const entry = entryFor(group.groupId)
-    if (stopping || entry.subscription !== undefined || entry.retryTimer !== undefined) return
+    if (stopping || ingress.paused || entry.subscription !== undefined || entry.retryTimer !== undefined) return
     const generation = entry.generation + 1
     entry.generation = generation
     entry.listenerState = 'starting'
@@ -835,12 +845,62 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     return entry
   }
 
+  const recoveryComplete = () => !stopping && !ingress.paused && !!ingress.recoveryFromAt
+    && runtime.listGroups().every(group => {
+      const entry = bridgeEntries.get(group.groupId)
+      return entry?.listenerState === 'ready' && entry.backfillState === 'ok' && !entry.backfillRunning && !entry.recoveryRequired
+    })
+  const finishIngressRecovery = () => {
+    controlTail = controlTail.then(async () => {
+      if (!recoveryComplete()) return
+      const next = { paused: false }
+      await saveIngressState(next)
+      ingress = next
+      publishHealth()
+    }).catch(error => logger.warn(error))
+  }
+  const setIngressPaused = paused => {
+    const operation = controlTail.then(async () => {
+      if (stopping) throw new Error('MESSAGE_INGRESS_STOPPED')
+      if (ingress.paused === paused) return healthSnapshot()
+      const next = paused
+        ? { paused: true, pausedAt: now(), recoveryFromAt: earlierIso(ingress.recoveryFromAt, beforeOverlap(now())) }
+        : { paused: false, recoveryFromAt: ingress.recoveryFromAt }
+      // 先持久化，再切换接入；写入失败不谎报已暂停/恢复。
+      await saveIngressState(next)
+      ingress = next
+      if (paused) {
+        const closing = []
+        for (const group of runtime.listGroups()) {
+          const entry = entryFor(group.groupId)
+          if (entry.subscription) closing.push(entry.subscription.done)
+          stopEntry(group.groupId)
+          entry.listenerState = 'paused'
+          entry.backfillState = 'paused'
+          entry.recoveryRequired = true
+          entry.recoveryEpoch++
+          entry.recoveryFromAt = earlierIso(entry.recoveryFromAt, next.recoveryFromAt)
+        }
+        publishHealth()
+        await Promise.allSettled([...closing, ...inflightMessages.values()])
+      } else {
+        for (const group of runtime.listGroups()) attach(group)
+      }
+      publishHealth()
+      if (!paused) finishIngressRecovery()
+      return healthSnapshot()
+    })
+    controlTail = operation.catch(() => {})
+    return operation
+  }
+
   for (const group of runtime.listGroups()) attach(group)
   attachHumanReplies()
   const detachListener = runtime.onGroupSubscribed(attach)
   const detachUnsubscribeListener = (runtime.onGroupUnsubscribed ?? (() => () => undefined))(({ groupId }) => {
     stopEntry(groupId, { remove: true })
     publishHealth()
+    finishIngressRecovery()
   })
   const detachOutboxListener = runtime.onOutboxAppended(async (event) => {
     try { await processOutbound(event) } catch (error) { logger.warn(error) }
@@ -866,7 +926,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     outboxRetryTimer.unref?.()
   }
   publishHealth()
-  return async () => {
+  finishIngressRecovery()
+  const stop = async () => {
     stopping = true
     if (humanPollTimer !== undefined) clearInterval(humanPollTimer)
     if (groupBackfillTimer !== undefined) clearInterval(groupBackfillTimer)
@@ -890,6 +951,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     publishHealth()
     await Promise.allSettled(closingSubscriptions.map((subscription) => subscription.done))
     if (closingHumanReplySubscription !== undefined) await Promise.allSettled([closingHumanReplySubscription.done])
+    await controlTail
     await humanPollTail
     await Promise.allSettled(entries.map((entry) => entry.backfillPromise))
     await outboxRetryTail
@@ -899,4 +961,6 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     inflightMessages.clear()
     inflightHumanReplies.clear()
   }
+  stop.setIngressPaused = setIngressPaused
+  return stop
 }

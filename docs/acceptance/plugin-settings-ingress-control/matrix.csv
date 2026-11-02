@@ -1,0 +1,15 @@
+case,round-1,evidence
+core-config-with-slow-environment,PASS,client-reply-signature.test.js
+auxiliary-error-and-stale-refresh,PASS,client-reply-signature.test.js
+summary-groups-and-task-counts,PASS,round-1.md
+save-while-environment-pending,PASS,client-reply-signature.test.js
+pause-event-and-periodic-backfill,PASS,dws-bridge.test.js
+restart-paused-and-recovering,PASS,dws-bridge.test.js
+recovery-failure-retains-checkpoint,PASS,dws-bridge.test.js
+late-backfill-and-live-event-race,PASS,dws-bridge.test.js
+pause-drains-inflight-receipt,PASS,dws-bridge.test.js
+local-identity-and-boolean-input,PASS,http.test.js
+persist-state-and-preserve-settings,PASS,store.test.js
+reproducible-web-bundle,PASS,web-client-build.test.js
+native-host-client-registry,SKIP,missing-dsh-client-modules
+real-browser-and-dingtalk-e2e,NOT_RUN,no-deployment

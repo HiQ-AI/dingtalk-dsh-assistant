@@ -25,7 +25,7 @@ import { createTaskSessionObservability, createTaskObservationQueue } from './ta
 import { activeFixedUnits, fixedTopicIds, fixedUnitRequestId, platformScheduleSessionId, platformScheduleOutboundId } from './fixed-topics.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { resolveTaskArtifactScope } from './task-artifact-scope.js'
-import { resolveTopicMessages, stableId, replyTopicForMessage, canonicalReplyTopic, topicDecisionCoversEntry } from './topic-model.js'
+import { resolveTopicMessages, topicSourceEntries, stableId, replyTopicForMessage, canonicalReplyTopic, topicDecisionCoversEntry } from './topic-model.js'
 import { createTopicFactHandler } from './topic-facts.js'
 import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from './task-message-projections.js'
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, taskFilePath, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
@@ -603,7 +603,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     const group = residentStore.getGroup(source.groupId)
     const message = group?.messages.find(item => item.messageId === source.messageId)
     if (!message || message.routingStatus !== 'routed') return
-    const coordinated = (residentStore.listSourceDispatchOwnership?.(source.groupId) ?? [])
+    const coordinated = (residentStore.listSourceDispatchOwnership?.(source.groupId, { messageId: source.messageId, messageVersion: source.version }) ?? [])
       .filter(r => r.dispatchOwner === 'coordination' && r.sourceSnapshot.messageId === source.messageId && r.sourceSnapshot.messageVersion === source.version)
     if (source.version < message.messageVersion) {
       if (!source.routed || source.processingPending) await command('source.routed', { sourceId: source.sourceId,
@@ -616,24 +616,19 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       .filter(owner => message.activeUnitRefs?.some(ref => ref.unitId === owner.unitId && ref.unitRevision === owner.unitRevision))
       .map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
     const isRetired = entry => retiredUnits.some(ref => ref.unitId === entry.unitId && ref.unitRevision === entry.unitRevision)
-    const refs = residentStore.listTopics(source.groupId).filter(topic => resolveTopicMessages(group, topic.topicId, topic.revision)
-      .some(item => item.messageId === source.messageId && item.messageVersion === source.version))
-    const legacyComplete = !activeFixedUnits(message).length && refs.every(topic => {
-      const latest = new Map()
-      for (const entry of topic.entries) if (entry.messageId === source.messageId) latest.set(entry.unitId ?? 'legacy', entry)
-      return [...latest.values()].filter(entry => entry.action === 'add' && entry.messageVersion === source.version && !isRetired(entry)).every(entry =>
-        topic.processedRevision >= entry.revision && topic.decisions.some(record => record.status === 'completed' && topicDecisionCoversEntry(record, entry)))
-    })
+    const entriesFor = topic => topicSourceEntries(group, topic, topic.revision, source.messageId, source.version)
+    const refs = residentStore.listTopics(source.groupId).filter(topic => entriesFor(topic).length)
+    const legacyComplete = !activeFixedUnits(message).length && refs.every(topic =>
+      entriesFor(topic).filter(entry => !isRetired(entry)).every(entry =>
+        topic.processedRevision >= entry.revision && topic.decisions.some(record => record.status === 'completed' && topicDecisionCoversEntry(record, entry))))
     if (Array.isArray(message.activeUnitRefs)) {
       if (!sameProcessingRefs(source, message.activeUnitRefs) || source.processingCompleted && !legacyComplete
         || retiredUnits.some(ref => !source.coordinationRetirement?.units.some(old => old.unitId === ref.unitId && old.unitRevision === ref.unitRevision)))
         source = (await command('source.processingStarted', { sourceId: source.sourceId, messageVersion: source.version,
           activeUnitRefs: message.activeUnitRefs, legacyPending: !legacyComplete, retiredCoordinationUnits: retiredUnits })).result.source
-      const ownership = new Map((residentStore.listSourceDispatchOwnership?.(source.groupId) ?? [])
-        .map(item => [`${item.unitId}:${item.unitRevision}`, item]))
       const units = message.activeUnitRefs.map(ref => {
         const unit = message.units?.find(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
-        return unit && { ...ref, processingComplete: legacyComplete, dispatchOwner: ownership.get(`${ref.unitId}:${ref.unitRevision}`)?.dispatchOwner ?? unit.dispatchOwner ?? 'legacy-topic' }
+        return unit && { ...ref, processingComplete: legacyComplete, dispatchOwner: residentStore.getSourceDispatchOwnership?.(source.groupId, ref.unitId, ref.unitRevision)?.dispatchOwner ?? unit.dispatchOwner ?? 'legacy-topic' }
       })
       // route/units 是 Host 的持久事实；账本再次校验全部协调单元的决定，而非等待业务 settled。
       if (!source.processingCompleted && legacyComplete && units.every(Boolean)) {

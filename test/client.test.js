@@ -3,13 +3,10 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { apply, name, readResidentOverview, agentSaveSummary, createNativeModelBridge, createPickerDirectory, inject } from '../packages/dingtalk-dsh-assistant/client.js'
 
-test('概览在已移除任务表格同步接口后仍加载完整状态', async (t) => {
+test('核心概览只加载配置必需数据，不等待环境与任务统计', async (t) => {
   const responses = {
     '/health': { status: 'ok' },
     '/state/groups': [{ groupId: 'group-1' }],
-    '/state/tasks': [{ id: 'task-1', state: 'running' }],
-    '/state/supervisor/alerts': [],
-    '/state/environment': { dws: { installed: true } },
     '/state/agent-config': { agentNames: ['助理'], model: 'test-model' },
   }
   const requested = []
@@ -23,8 +20,7 @@ test('概览在已移除任务表格同步接口后仍加载完整状态', async
   const overview = await readResidentOverview()
   assert.deepEqual(requested.sort(), Object.keys(responses).sort())
   assert.deepEqual(overview, {
-    health: responses['/health'], groups: responses['/state/groups'], tasks: responses['/state/tasks'],
-    alerts: responses['/state/supervisor/alerts'], environment: responses['/state/environment'],
+    health: responses['/health'], groups: responses['/state/groups'],
     agentConfig: responses['/state/agent-config'],
   })
 })
@@ -59,7 +55,7 @@ test('Web bundle patch只挂载无副作用host face，不启动第二份residen
 
 test('设置页异步展示版本状态且版本检查不阻塞核心配置加载', async () => {
   const source = await readFile(new URL('../packages/dingtalk-dsh-assistant/client.js', import.meta.url), 'utf8')
-  assert.match(source, /setOverview\(next\); request\('\/state\/version'\)\.then/u)
+  assert.match(source, /void load\('version', request\('\/state\/version'\)\)/u)
   assert.match(source, /版本与更新/u)
   assert.match(source, /新版本检查失败/u)
   assert.match(source, /可更新/u)

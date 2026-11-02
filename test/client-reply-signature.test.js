@@ -9,7 +9,7 @@ const text = tree => tree == null ? '' : typeof tree === 'object' ? (tree.childr
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
 // Exercise the shipped bundle's state and callbacks; this is not a browser/DSH deployment test.
-function harness() {
+function harness({ fetchOverride, bundle = source } = {}) {
   const states = [], effects = [], scheduled = [], timers = [], writes = []
   let cursor = 0, component, config = { agentNames: ['资料助理'], model: 'fixture', workspaceDir: '/fixture' }, failSave = false
   const same = (a, b) => a && a.length === b.length && a.every((value, index) => value === b[index])
@@ -20,11 +20,13 @@ function harness() {
     useCallback(fn, deps) { const index = cursor++; if (!same(states[index]?.deps, deps)) states[index] = { fn, deps }; return states[index].fn },
     useEffect(fn, deps) { const index = cursor++; if (!same(effects[index], deps)) { effects[index] = deps; scheduled.push(fn) } },
   }
-  runInNewContext(source, {
+  runInNewContext(bundle, {
+    setInterval: () => 0, clearInterval() {},
     setTimeout: callback => { const timer = { callback }; timers.push(timer); return timer },
     clearTimeout: timer => { timer.cancelled = true },
     async fetch(url, options) {
       const path = new URL(url).pathname
+      if (fetchOverride) { const response = fetchOverride(url, options); if (response) return response }
       if (path === '/config/agent') {
         writes.push(JSON.parse(options.body))
         if (failSave) return { ok: false, json: async () => ({ error: '模拟保存失败' }) }
@@ -32,7 +34,8 @@ function harness() {
       }
       const value = path === '/state/agent-config' || path === '/config/agent' ? config
         : path === '/state/task-model-options' ? { available: true, reasoning: { efforts: [{ id: 'low' }] } }
-        : ['/state/groups', '/state/tasks', '/state/supervisor/alerts'].includes(path) ? [] : {}
+        : ['/state/tasks', '/state/supervisor/alerts'].includes(path) ? { total: 0, items: [] }
+        : path === '/state/groups' ? [] : {}
       return { ok: true, json: async () => structuredClone(path === '/state/agent-config' || path === '/config/agent' ? { taskSessionModel: { provider: 'openai-codex', model: 'gpt-6-astra', reasoningMode: 'explicit', reasoningEffort: 'low' }, ...value } : value) }
     },
     window: { __ModuleLoader__: { load: ({ factory }) => { component = factory(() => React).DingTalkDshAssistantCard } } },
@@ -87,4 +90,70 @@ test('settings bundle saves, clears and refreshes explicit personal signature wh
   h.setConfig({ agentNames: ['Unconfigured'], model: 'fixture', workspaceDir: '/clean-agent' })
   await button(h.render(), '刷新').props.onClick()
   assert.equal(field(h.render()).props.value, '', 'missing config from a different Agent must not retain the previous value')
+})
+
+test('slow environment does not delay config; stats failures and stale probes stay isolated', async () => {
+  const slow = [], requests = []
+  const h = harness({ fetchOverride(url) {
+    const u = new URL(url)
+    requests.push(u.pathname + u.search)
+    if (u.pathname === '/state/environment') {
+      const pending = Promise.withResolvers(); slow.push(pending); return pending.promise
+    }
+    if (u.pathname === '/state/tasks') return Promise.resolve({ ok: false, json: async () => ({ error: 'task_stats_offline' }) })
+  } })
+  h.setConfig({ agentNames: ['配置已加载'], replySignature: '不等待环境检查', model: 'fixture', workspaceDir: '/fixture' })
+  h.render(); await settle()
+  let tree = h.render()
+  assert.equal(field(tree).props.value, '不等待环境检查')
+  assert.match(text(tree), /活动 Task统计失败：task_stats_offline/u)
+  assert.ok(requests.includes('/state/groups?summary=true'))
+  assert.ok(!requests.includes('/state/tasks'))
+  assert.ok(requests.includes('/state/tasks?offset=0&limit=1&view=summary&state=running'))
+  assert.ok(requests.includes('/state/tasks?offset=0&limit=1&view=summary&state=waiting'))
+  await button(tree, '刷新').props.onClick()
+  slow[1].resolve({ ok: false, json: async () => ({ error: 'new_probe_failed' }) })
+  await settle()
+  tree = h.render()
+  const environment = elements(tree).find(item => typeof item.type === 'function' && item.type.name === 'Environment')
+  assert.equal(environment.props.value.error, 'new_probe_failed')
+  slow[0].resolve({ ok: true, json: async () => ({ dws: { installed: true } }) })
+  await settle()
+  assert.equal(elements(h.render()).find(item => item.type === environment.type).props.value.error, 'new_probe_failed')
+  assert.equal(field(h.render()).props.value, '不等待环境检查')
+})
+
+test('settings ingress buttons send pause/resume and show recovery rather than completion', async () => {
+  let ingress = { paused: false, recovering: false }
+  const writes = []
+  const h = harness({ fetchOverride(url, options) {
+    const path = new URL(url).pathname
+    if (path === '/config/message-ingress') {
+      const value = JSON.parse(options.body); writes.push(value)
+      ingress = { paused: value.paused, recovering: !value.paused }
+      return Promise.resolve({ ok: true, json: async () => ({ ingress }) })
+    }
+    if (path === '/health') return Promise.resolve({ ok: true, json: async () => ({ status: 'ok', dwsBridge: { ingress } }) })
+  } })
+  h.render(); await settle()
+  await button(h.render(), '暂停消息接入').props.onClick()
+  assert.match(text(h.render()), /已暂停接入/u)
+  await button(h.render(), '恢复接入并补拉').props.onClick()
+  assert.match(text(h.render()), /恢复中：正在补拉暂停期间的消息/u)
+  assert.deepEqual(writes, [{ paused: true }, { paused: false }])
+})
+
+test('saving config while environment is pending does not strand the probe or overwrite drafts', async () => {
+  const pending = Promise.withResolvers()
+  const h = harness({ fetchOverride(url) {
+    if (new URL(url).pathname === '/state/environment') return pending.promise
+  } })
+  h.render(); await settle(); h.flushTimers(); await settle()
+  field(h.render()).props.onChange({ target: { value: '保存不影响探测' } })
+  await elements(h.render()).find(item => item.type === 'form').props.onSubmit()
+  pending.resolve({ ok: true, json: async () => ({ dws: { installed: true } }) })
+  await settle()
+  const environment = elements(h.render()).find(item => typeof item.type === 'function' && item.type.name === 'Environment')
+  assert.equal(environment.props.value.dws.installed, true)
+  assert.equal(field(h.render()).props.value, '保存不影响探测')
 })
