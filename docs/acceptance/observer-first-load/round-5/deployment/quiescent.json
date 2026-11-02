@@ -1,0 +1,24 @@
+{
+  "ledger": {
+    "scope": "current-control",
+    "quiescent": true,
+    "candidateOnly": false,
+    "drained": true,
+    "pending": {
+      "tasks": 0,
+      "executions": 0,
+      "groups": 0
+    },
+    "ownerReleased": false,
+    "ownerProcessExited": true,
+    "staleOwner": true,
+    "unknownOperations": 3,
+    "unknownNotifications": 0
+  },
+  "pid": 8976,
+  "shutdown": "SIGINT",
+  "remainingDescendants": 0,
+  "creationDate": "2026-11-02T21:16:31.369549+08:00",
+  "runtimePortClosed": true,
+  "observedAt": "2026-11-02T14:00:23.0196352Z"
+}
