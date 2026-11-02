@@ -267,18 +267,23 @@ window.__ModuleLoader__.load({
     }
     async function load({ activePage='groups',signal,taskPages = {}, historyPage = 1, revisions = {}, selectedGroupId='', messagePage=1,outboxPage=1,messageDeliveryFilter='all',outboxStatusFilter='all',authorizationPage=1,authorizationFilter='all',alertType='all',resolvedAlertPage=1 } = {}) {
       const empty=()=>({items:[],total:0,offset:0,limit:10}), read=path=>get(path,{signal})
-      const [health, groups, taskCollections, alertPages, authorizationCollection, topicPage] = await Promise.all([
-        read('/health'), read('/state/groups?summary=true'),
+      const groupsRequest = read('/state/groups?summary=true')
+      // 群内分页只依赖群目录，不应等待健康检查或其他栏目请求。
+      const groupCollectionsRequest = groupsRequest.then(async groups => {
+        const groupId=groups.some(group=>group.groupId===selectedGroupId)?selectedGroupId:groups[0]?.groupId
+        const groupCollections=activePage==='groups'&&groupId?await Promise.all(['messages','outbox'].map(collection=>{
+          const page=collection==='messages'?messagePage:outboxPage,filter=collection==='messages'?messageDeliveryFilter:outboxStatusFilter
+          return read(`/state/groups/${encodeURIComponent(groupId)}/${collection}?offset=${(page-1)*10}&limit=10&filter=${encodeURIComponent(filter)}${revisions[collection]?`&pageRevision=${encodeURIComponent(revisions[collection])}`:''}`).then(value=>({...value,groupId,filter}))
+        })):[]
+        return groupCollections
+      })
+      const [health, groups, taskCollections, alertPages, authorizationCollection, topicPage, groupCollections] = await Promise.all([
+        read('/health'), groupsRequest,
         Promise.all([...taskBuckets.map(bucket => activePage==='tasks' ? read(`/state/tasks?state=${bucket.state}&offset=${((taskPages[bucket.state] || 1) - 1) * 10}&limit=10${revisions[bucket.state] ? `&revision=${encodeURIComponent(revisions[bucket.state])}` : ''}`) : empty()), activePage==='archive' ? read(`/state/tasks?archived=true&offset=${(historyPage - 1) * 20}&limit=20${revisions.archive ? `&revision=${encodeURIComponent(revisions.archive)}` : ''}`) : empty()]),
         Promise.all(['active','resolved'].map(view=>activePage==='alerts'?read(`/state/supervisor/alerts?view=${view}&type=${alertType}&offset=${(resolvedAlertPage-1)*10}&limit=10`):empty())),
         activePage==='authorizations'?read(`/state/authorizations?offset=${(authorizationPage-1)*10}&limit=10&filter=${authorizationFilter}${revisions.authorizations?`&pageRevision=${encodeURIComponent(revisions.authorizations)}`:''}`):empty(),
-        {topics:[]}
+        {topics:[]}, groupCollectionsRequest
       ])
-      const groupId=groups.some(group=>group.groupId===selectedGroupId)?selectedGroupId:groups[0]?.groupId
-      const groupCollections=activePage==='groups'&&groupId?await Promise.all(['messages','outbox'].map(collection=>{
-        const page=collection==='messages'?messagePage:outboxPage,filter=collection==='messages'?messageDeliveryFilter:outboxStatusFilter
-        return read(`/state/groups/${encodeURIComponent(groupId)}/${collection}?offset=${(page-1)*10}&limit=10&filter=${encodeURIComponent(filter)}${revisions[collection]?`&pageRevision=${encodeURIComponent(revisions[collection])}`:''}`).then(value=>({...value,groupId,filter}))
-      })):[]
       return { health, groups, groupCollections:Object.fromEntries(groupCollections.map((value,i)=>[['messages','outbox'][i],value])), tasks: taskCollections.flatMap(page => page.items), taskCollections: Object.fromEntries(taskBuckets.map((bucket,index) => [bucket.state,taskCollections[index]])), archiveCollection: taskCollections.at(-1), alerts:alertPages.flatMap(page=>page.items),alertCollections:Object.fromEntries(alertPages.map((page,i)=>[['active','resolved'][i],page])),authorizations:authorizationCollection.items,authorizationCollection:{...authorizationCollection,filter:authorizationFilter},topics: topicPage.topics }
     }
     function SidebarAction({ wide, onOpen }) {
