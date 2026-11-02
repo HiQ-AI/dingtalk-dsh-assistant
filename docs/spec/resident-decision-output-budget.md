@@ -21,3 +21,12 @@
 - `runtime.js`：状态查询基于必读增量的完整性，不以历史总量判定。
 - `fake-llm.js`、相关测试、README 和部署说明：同步新协议。
 - 使用现场输出统计与构造的百条历史、超长引用、多事项授权、跨群、过期、压缩、重启、独立反馈用例验收。部署前还须检查本机正在运行的 Task，避免中断。
+
+
+## Optional reuse of unchanged presentation and review facts
+
+Decision may omit unchanged `topicUpdate.summary` and `openQuestions`; omitted fields retain their persisted value. An explicit empty `openQuestions: []` clears that list. The Host fences presentation changes before acceptance, and applies accepted presentation fields only when their captured basis still matches. Task operations retain their original operation IDs and recovery behavior.
+
+`group_task_context_get({taskIds, includeReplyReview: true})` optionally returns Task facts and this Decision request's reply-review snapshot in one tool result. Route retains its existing Task read interface. The separate review tool remains available; `group_reply_review_get({compact: true})` uses `sourceMessageRefs` and `taskFactRefs` plus shared `{ref,value}` tables. Only byte-identical snapshots are shared. The default expanded format and full message/Task reads remain available. Review validation uses the original Host snapshots, not the wire references.
+
+This reduces repeated dynamic input and permits fewer sequential tool reads; it does not imply a measured model latency or token-cost reduction.

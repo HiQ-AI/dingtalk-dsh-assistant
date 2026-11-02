@@ -845,9 +845,17 @@ export async function openResidentStore(storageDomain) {
       const selectedRevision = revision ?? topic.revision
       const messages = topicMessages(group, topic, selectedRevision,{offset,limit})
       const visibleDecisions = selectedRevision===topic.revision?topic.decisions:topic.decisions.filter((item) => item.revision <= selectedRevision)
-      const priorUpdate = selectedRevision===topic.revision?undefined:[...visibleDecisions].reverse().find((item) => item.status === 'completed' && item.decision.topicUpdate)?.decision.topicUpdate
+      // Partial presentation updates retain prior fields, including in historical reads.
+      const priorUpdate = {}
+      for (const item of selectedRevision === topic.revision ? [] : visibleDecisions) {
+        if (item.status !== 'completed') continue
+        const update = item.appliedTopicUpdate ?? item.decision.topicUpdate
+        if (!update) continue
+        Object.assign(priorUpdate, update)
+        if (update.summary !== undefined) priorUpdate.summaryRevision = item.revision
+      }
       const snapshot = { ...topic, revision: selectedRevision, processedRevision: Math.min(topic.processedRevision, selectedRevision),
-        summary: topic.summaryRevision <= selectedRevision ? topic.summary : '', summaryRevision: topic.summaryRevision <= selectedRevision ? topic.summaryRevision : 0,
+        summary: topic.summaryRevision <= selectedRevision ? topic.summary : priorUpdate.summary ?? '', summaryRevision: topic.summaryRevision <= selectedRevision ? topic.summaryRevision : priorUpdate.summaryRevision ?? 0,
         status: selectedRevision === topic.revision ? topic.status : priorUpdate?.status ?? 'active', openQuestions: selectedRevision === topic.revision ? topic.openQuestions : priorUpdate?.openQuestions ?? [],
         entries: selectedRevision===topic.revision?topic.entries:topic.entries.filter((item) => item.revision <= selectedRevision), decisions: intentOffset === undefined ? visibleDecisions : visibleDecisions.slice(intentOffset,intentOffset+intentLimit) }
       return { groupId, topicId, revision: selectedRevision, topic: snapshot, messages, total: topicMessageCount(group,topic,selectedRevision), intentTotal: visibleDecisions.length, offset, limit,
@@ -1001,7 +1009,7 @@ export async function openResidentStore(storageDomain) {
         const now = new Date().toISOString()
         const operations = (decision.actions ?? []).map((action, actionIndex) => ({ operationId: `${decisionId}:action:${actionIndex}`, actionIndex, status: 'pending',
           ...(action.kind === 'new-task' ? { taskId: stableId('task', `${decisionId}:${actionIndex}`) } : action.taskId ? { taskId: action.taskId } : {}) }))
-        const record = { decisionId, revision, decision, fingerprint: digest, status: 'accepted', operations, outboundId: stableId('outbound', decisionId), createdAt: now, updatedAt: now }
+        const record = { decisionId, revision, decision, presentationBasis: { summary: topic.summary, summaryRevision: topic.summaryRevision, openQuestions: topic.openQuestions }, fingerprint: digest, status: 'accepted', operations, outboundId: stableId('outbound', decisionId), createdAt: now, updatedAt: now }
         result = { status: 'accepted', record }
         return { ...latest, topics: latest.topics.map((item) => item.topicId === topicId ? { ...item, decisions: [...item.decisions, record] } : item),
           taskReservations: [...latest.taskReservations, ...expectedTaskVersions.map((item) => ({ ...item, decisionId, topicId })),
@@ -1216,8 +1224,13 @@ export async function openResidentStore(storageDomain) {
         if (record.status === 'rejected') throw new Error('topic_decision_rejected')
         if (record.operations.some((operation) => operation.status !== 'applied')) throw new Error('topic_decision_operations_pending')
         const completedAt = new Date().toISOString()
-        result = { ...record, status: 'completed', completedAt, updatedAt: completedAt }
-        const update = record.decision.topicUpdate ?? {}
+        const proposed = record.decision.topicUpdate ?? {}
+        const basis = record.presentationBasis
+        const update = { ...proposed }
+        if (basis ? topic.summary !== basis.summary || topic.summaryRevision !== basis.summaryRevision : topic.summaryRevision > record.revision) delete update.summary
+        if (basis ? !isDeepStrictEqual(topic.openQuestions, basis.openQuestions) : topic.summaryRevision > record.revision) delete update.openQuestions
+        if (topic.revision !== record.revision) delete update.status
+        result = { ...record, appliedTopicUpdate: update, status: 'completed', completedAt, updatedAt: completedAt }
         const stillPending = topic.decisions.some(item => item.decisionId !== decisionId && isPendingDecision(item))
         const uncovered = topic.entries.some(entry => entry.revision > topic.processedRevision && entry.revision <= record.revision
           && !topicDecisionCoversEntry(record, entry))

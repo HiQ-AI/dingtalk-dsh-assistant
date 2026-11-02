@@ -1,3 +1,4 @@
+import { createTaskContextReadTool } from '../packages/dingtalk-dsh-assistant/task-topic-coordinator.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createRequire } from 'node:module'
@@ -47,6 +48,9 @@ test('native Decision round keeps one Agent across pending same-topic revisions;
         name = 'group_topic_route_submit'
         args = { requestId: request.requestId, routes: request.messages.map(m => ({ messageId: m.messageId, messageVersion: m.messageVersion,
           topics: m.messageId === 'other' ? [{ newTopicKey: 'other', title: 'Other matter' }] : topicId ? [{ topicId }] : [{ newTopicKey: 'same', title: 'Same matter' }] })) }
+      } else if (request.topicId === topicId && this.calls === 3) {
+        name = 'group_task_context_get'
+        args = { taskIds: ['fixture-read-only'], includeReplyReview: true }
       } else {
         name = 'group_decision_submit'
         args = { requestId: request.requestId, topicId: request.topicId, revision,
@@ -65,6 +69,7 @@ test('native Decision round keeps one Agent across pending same-topic revisions;
     const handle = await ctx.agentLoop.createAgent(ctx, { sessionId: entry.sessionId, agentOptions: { provider: entry.sessionId, model: 'fixture' }, setup(agentCtx) {
       agentCtx.on('agent/pre-step', createCoordinationStepGate(entry, request => coordinator.isCurrentRequest(request)))
       coordinator.register(agentCtx, 'g', entry.request)
+      if (entry.role === 'decision') agentCtx.tools.register(createTaskContextReadTool({ request: entry.request, assert: exec => manager.assert(exec.agent, 'g', entry.request.requestId), store: { getTask: () => ({ taskId: 'fixture-read-only', groupId: 'g', objective: 'Unchanged read-only scope' }) }, readReplyReview: (...args) => coordinator.readReplyReview(...args) }))
     } })
     handles.push({ entry, handle }); return handle
   } })
@@ -101,6 +106,9 @@ test('native Decision round keeps one Agent across pending same-topic revisions;
   assert.equal(body.includes('Business fact other'), false)
   const results = events.filter(e=>e.type==='tool/result').map(e=>JSON.parse(e.data.message.content[0].text))
   assert.ok(results.some(r=>r.status==='routing-required'))
+  const combined = results.find(r=>r.tasks && r.replyReview)
+  assert.equal(combined.tasks[0].taskId, 'fixture-read-only')
+  assert.equal(combined.replyReview.candidateCount, 0)
   assert.equal(store.getTopic('g',topicId).decisions.length,1)
   await ingest('fourth'); await coordinator.schedule('g')
   await until(()=>accepted.filter(a=>a.topicId===topicId).length===2)
