@@ -183,6 +183,24 @@ test('时间泳道图保留多区段、并行、人工介入底行以及触屏�
   assert.match(text(harness('TaskExecutionTimeline', {}).render()), /历史执行过程未记录/)
 })
 
+test('执行中时间泳道图刷新、结束与卸载只清理自身计时器', () => {
+  const timeline = { task: { startedAt: '2026-10-16T00:00:00Z', active: true }, executions: [], human: { id: 'human', segments: [], milestones: [] } }
+  const h = harness('TaskExecutionTimeline', { taskId: 'task', timeline })
+  h.render()
+  assert.equal(h.intervals.size, 1)
+  for (let refresh = 0; refresh < 13; refresh++) {
+    for (const timer of h.intervals.values()) timer.fn()
+    h.render({ taskId: 'task', timeline: { ...timeline, task: { ...timeline.task } } })
+    assert.equal(h.intervals.size, 1, '刷新后仅保留一个计时器')
+  }
+  h.render({ taskId: 'task', timeline: { ...timeline, task: { ...timeline.task, active: false, endedAt: '2026-10-16T00:01:00Z' } } })
+  assert.equal(h.intervals.size, 0, '任务结束停止计时')
+  h.render({ taskId: 'task', timeline })
+  assert.equal(h.intervals.size, 1)
+  h.unmount()
+  assert.equal(h.intervals.size, 0, '离开详情清理计时器且不访问父组件请求')
+})
+
 test('任务详情只有一个任务会话入口，动态执行与结果拥有独立数据', () => {
   const task = { taskId: 't', title: '核对服务', objective: '按实际情况核对', state: 'running', requirementRevision: 2, controlRevision: 3, controlState: 'active', session: { sessionId: 'task-session', workspaceDir: '/task', logPath: '/task/log' }, result: { summary: '进行中', evidence: ['proof'], limitations: ['尚未完成'] } }
   const h = harness('TaskSessionDetail', { task, onOpenSession() {}, onChanged() {}, onBack() {} })
