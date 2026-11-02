@@ -223,7 +223,9 @@ const platformScheduleSchema = z.object({
   timezone: z.string().min(1), title: z.string().min(1).max(120), prompt: z.string().min(1).max(8000), at: z.string().datetime(),
   scheduleId: z.string().optional(), outcome: z.enum(['replied', 'expired', 'superseded']).optional(), completedAt: z.string().optional(),
 })
+const messageIngressSchema = z.strictObject({ paused: z.boolean(), pausedAt: z.iso.datetime().optional(), recoveryFromAt: z.iso.datetime().optional() })
 const schedulerSchema = z.object({
+  messageIngress: messageIngressSchema.optional(),
   platformSchedule: platformScheduleSchema.optional(),
   executionBackend: z.enum(['dsh', 'claude-code']).optional(),
   taskSessionModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
@@ -663,6 +665,11 @@ export async function openResidentStore(storageDomain) {
     setAgentWorkspaceDir: async (agentWorkspaceDir) => {
       await scheduler.update('runtime', (current) => ({ ...current, agentWorkspaceDir }))
       return { workspaceDir: agentWorkspaceDir }
+    },
+    getMessageIngressState: () => scheduler.get('runtime')?.messageIngress ?? { paused: false },
+    setMessageIngressState: async value => {
+      const messageIngress = messageIngressSchema.parse(value)
+      await scheduler.update('runtime', current => ({ ...current, messageIngress }))
     },
     getProxyUrl: () => scheduler.get('runtime')?.proxyUrl,
     getExecutionBackend: () => scheduler.get('runtime')?.executionBackend,

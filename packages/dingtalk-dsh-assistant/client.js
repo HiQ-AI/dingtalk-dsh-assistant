@@ -40,8 +40,8 @@ async function request(path, options) {
   return value
 }
 export async function readResidentOverview() {
-  const [health, groups, tasks, alerts, environment, agentConfig] = await Promise.all(['/health', '/state/groups', '/state/tasks', '/state/supervisor/alerts', '/state/environment', '/state/agent-config'].map((path) => request(path)))
-  return { health, groups, tasks, alerts, environment, agentConfig }
+  const [health, groups, agentConfig] = await Promise.all(['/health', '/state/groups?summary=true', '/state/agent-config'].map((path) => request(path)))
+  return { health, groups, agentConfig }
 }
 
 // 复用宿主登记的组件，不使用会话 inject/select；选择只更新 Agent 配置草稿。
@@ -142,8 +142,9 @@ export function agentSaveSummary(desired, actual) {
 function Environment({ value }) {
   return React.createElement('section', { style: panel },
     React.createElement('strong', null, '环境检查'),
-    React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, 'dws'), React.createElement('span', null, value?.dws?.installed ? '已安装' : '未安装')),
-    React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '登录状态'), React.createElement('span', null, value?.dws?.authenticated && value?.dws?.tokenValid ? `已登录 · ${value.dws.user ?? ''}` : '未登录或登录失效')),
+    !value || value.error ? React.createElement('div', { role: value?.error ? 'alert' : 'status' }, value?.error ? `环境检查失败：${value.error}` : '正在检查…') : null,
+    React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, 'dws'), React.createElement('span', null, !value || value.error ? '—' : value.dws?.installed ? '已安装' : '未安装')),
+    React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '登录状态'), React.createElement('span', null, !value || value.error ? '—' : value.dws?.authenticated && value.dws?.tokenValid ? `已登录 · ${value.dws.user ?? ''}` : '未登录或登录失效')),
     value?.dws?.executable ? React.createElement('code', { style: { fontSize: 12, color: colors.muted, overflowWrap: 'anywhere' } }, value.dws.executable) : null
   )
 }
@@ -173,13 +174,27 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
   const [error, setError] = useState()
   const [updateFeedback, setUpdateFeedback] = useState()
   const [checkingVersion, setCheckingVersion] = useState(false)
+  const [ingressBusy, setIngressBusy] = useState(false)
+  const [ingressError, setIngressError] = useState('')
   const refreshGeneration = useRef(0)
+  const auxiliaryGeneration = useRef(0)
   const refresh = useCallback(async () => {
     const generation = ++refreshGeneration.current
-    try { const next = await readResidentOverview(); if (generation !== refreshGeneration.current) return; setOverview(next); request('/state/version').then((version) => setOverview((current) => ({ ...current, version }))).catch((cause) => setOverview((current) => ({ ...current, version: { error: cause instanceof Error ? cause.message : String(cause) } }))); if (!taskDirty.current) { setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ provider: next.agentConfig.provider, model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); } setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    const auxiliary = ++auxiliaryGeneration.current
+    const update = patch => { if (generation === refreshGeneration.current) setOverview(current => ({ ...current, ...patch })) }
+    // 辅助探测独立回显，不能拖住配置表单或覆盖后续刷新。
+    const updateAuxiliary = (key, value) => { if (auxiliary === auxiliaryGeneration.current) setOverview(current => ({ ...current, [key]: value })) }
+    const load = (key, operation) => operation.then(value => updateAuxiliary(key, value))
+      .catch(cause => updateAuxiliary(key, { error: cause instanceof Error ? cause.message : String(cause) }))
+    update({ environment: undefined, activeTasks: undefined, alerts: undefined, version: undefined })
+    void load('environment', request('/state/environment'))
+    void load('activeTasks', Promise.all(['running', 'waiting'].map(state => request(`/state/tasks?offset=0&limit=1&view=summary&state=${state}`))).then(pages => pages.reduce((sum, page) => sum + page.total, 0)))
+    void load('alerts', request('/state/supervisor/alerts?offset=0&limit=1').then(page => page.total))
+    void load('version', request('/state/version'))
+    try { const next = await readResidentOverview(); if (generation !== refreshGeneration.current) return; update(next); if (!taskDirty.current) { setAgentWorkspace(next.agentConfig.workspaceDir); setAgentNames((next.agentConfig.agentNames ?? []).join(',')); setReplySignature(next.agentConfig.replySignature ?? ''); setAgentModel({ provider: next.agentConfig.provider, model: next.agentConfig.model, reasoningEffort: next.agentConfig.reasoningEffort ?? '' }); setProxyUrl(next.agentConfig.proxyUrl ?? ''); } setDrafts(Object.fromEntries(next.groups.map((group) => [group.groupId, group.responsibility]))); setError(undefined) }
+    catch (cause) { if (generation === refreshGeneration.current) setError(cause instanceof Error ? cause.message : String(cause)) }
   }, [])
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => { refresh(); return () => { refreshGeneration.current++; auxiliaryGeneration.current++ } }, [refresh])
   useEffect(() => {
     if (!taskDirty.current && overview?.agentConfig?.taskSessionModel) setTaskModel(overview.agentConfig.taskSessionModel)
     if (!taskDirty.current) setExecutionBackend(overview?.agentConfig?.executionBackend ?? 'dsh')
@@ -250,7 +265,26 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
       setAddingGroup(false)
     }
   }
-  const activeTasks = overview?.tasks?.filter((task) => task.state === 'running' || task.state === 'waiting').length ?? 0
+  const ingress = overview?.health?.dwsBridge?.ingress
+  const setIngressPaused = async paused => {
+    setIngressBusy(true); setIngressError('')
+    try {
+      await request('/config/message-ingress', { method: 'PUT', body: JSON.stringify({ paused }) })
+      await refresh()
+    } catch (cause) { setIngressError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setIngressBusy(false) }
+  }
+  useEffect(() => {
+    if (!ingress?.recovering) return
+    let active = true
+    const timer = setInterval(() => {
+      request('/health').then(health => {
+        if (active) { setOverview(current => ({ ...current, health })); setIngressError('') }
+      }).catch(cause => { if (active) setIngressError(cause instanceof Error ? cause.message : String(cause)) })
+    }, 2000)
+    return () => { active = false; clearInterval(timer) }
+  }, [ingress?.recovering])
+  const countText = value => value === undefined ? '读取中' : value?.error ? '读取失败' : value
   const agentConfigChanged = agentModel.provider !== overview?.agentConfig?.provider || agentNames !== (overview?.agentConfig?.agentNames ?? []).join(',') || replySignature !== (overview?.agentConfig?.replySignature ?? '') || agentWorkspace !== overview?.agentConfig?.workspaceDir || agentModel.model !== overview?.agentConfig?.model || agentModel.reasoningEffort !== (overview?.agentConfig?.reasoningEffort ?? '') || proxyUrl !== (overview?.agentConfig?.proxyUrl ?? '') || executionBackend !== (overview?.agentConfig?.executionBackend ?? 'dsh')
 
   return React.createElement('div', { 'data-dingtalk-assistant-settings': '', style: { display: 'grid', gap: ui.space4 } }, React.createElement('style', null, settingsCss),
@@ -258,10 +292,17 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, React.createElement('div', null, React.createElement('strong', null, '钉钉个人助理'), React.createElement('div', { style: { color: colors.muted, fontSize: 12 } }, 'resident runtime')), React.createElement('button', { type: 'button', style: button, onClick: refresh }, '刷新')),
       error ? React.createElement('div', { style: { color: colors.danger, fontSize: 13 } }, error) : null,
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '运行状态'), React.createElement('span', null, overview?.health?.status ?? '连接中')),
-      React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '渠道 / 活动 Task / 告警'), React.createElement('span', null, `${overview?.health?.transport ?? '-'} / ${activeTasks} / ${overview?.alerts?.length ?? 0}`)),
+      React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '渠道 / 活动 Task / 告警'), React.createElement('span', null, `${overview?.health?.transport ?? '-'} / ${countText(overview?.activeTasks)} / ${countText(overview?.alerts)}`)),
+      ...['activeTasks', 'alerts'].filter(key => overview?.[key]?.error).map(key => React.createElement('div', { key, role: 'alert', style: { color: colors.danger } }, `${key === 'activeTasks' ? '活动 Task' : '告警'}统计失败：${overview[key].error}`)),
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '群消息接收与处理'), React.createElement('span', null, overview?.health?.inboundProcessing ? '已启用' : '未启用')),
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '自动回复群聊'), React.createElement('span', null, overview?.health?.outboundAuthorized ? '已启用' : '未启用')),
       React.createElement('div', { style: row }, React.createElement('span', { style: { color: colors.muted } }, '处理模型'), React.createElement('span', null, overview?.health?.modelMode === 'real' ? '真实模型' : '测试模型'))),
+    ingress ? React.createElement('section', { style: panel },
+      React.createElement('strong', null, '群消息接入'),
+      React.createElement('div', { role: 'status' }, ingress.paused ? '已暂停接入' : ingress.recovering ? '恢复中：正在补拉暂停期间的消息，失败会保留恢复下界并重试。' : '接入中'),
+      React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '仅暂停订阅群的新消息接收；已接纳任务、消息发送和操作者私聊审批继续运行。恢复后补拉暂停期间的群消息，受钉钉历史消息可读范围限制。'),
+      ingressError ? React.createElement('div', { role: 'alert', style: { color: colors.danger } }, ingressError) : null,
+      React.createElement('button', { type: 'button', style: button, disabled: ingressBusy, onClick: () => setIngressPaused(!ingress.paused) }, ingressBusy ? '正在切换…' : ingress.paused ? '恢复接入并补拉' : '暂停消息接入')) : null,
     React.createElement('section', { style: panel },
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 } },
         React.createElement('strong', null, '版本与更新'),
