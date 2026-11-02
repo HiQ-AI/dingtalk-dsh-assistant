@@ -1280,7 +1280,7 @@ window.__ModuleLoader__.load({
         if (!live) return
         setNow(Date.now())
         const timer = window.setInterval(() => setNow(Date.now()), 1000)
-        return () => { window.clearInterval(timer); pendingRefresh.current?.controller.abort(); pendingRefresh.current=null }
+        return () => window.clearInterval(timer)
       }, [live, timeline])
       if (!timeline) return React.createElement('section', { className: 'detail-panel detail-timeline', 'aria-label': '执行时间泳道图' }, React.createElement('h2', null, '执行时间'), React.createElement('p', { className: 'detail-muted' }, '历史执行过程未记录。'), React.createElement(TaskOutcomeRecords, { taskId, timeline, readonly }))
       const rows = [...timeline.executions, timeline.human]
