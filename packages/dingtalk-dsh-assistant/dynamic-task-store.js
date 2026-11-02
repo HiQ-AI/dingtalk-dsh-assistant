@@ -179,6 +179,18 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     put('dynamic_wakes', { id, wakeId: id, taskId, kind, payload: clone(payload), state: 'pending', leaseEpoch: null, createdAt: now() })
     return id
   }
+  // Only unclaimed observations of the same native round can be superseded.
+  // Keep their durable receipts; never consume a wake already owned by an Owner,
+  // another member, a different input, or a different recovery lease.
+  const supersedePendingProgress = (execution, replacementId, kinds) => {
+    for (const item of wakes(execution.taskId)) {
+      if (item.id === replacementId || item.state !== 'pending' || !kinds.includes(item.kind)
+        || item.payload?.executionId !== execution.executionId
+        || item.payload.inputVersion !== execution.inputVersion || item.payload.leaseEpoch !== execution.leaseEpoch) continue
+      item.state = 'acked'; item.ackedAt = now(); item.supersededBy = replacementId
+      put('dynamic_wakes', item)
+    }
+  }
   const inputScope = (task, inputVersion) => ({ kind: 'existing', taskId: task.taskId, inputVersion,
     requirementRevision: task.requirementRevision, controlRevision: task.controlRevision,
     runSequence: task.runSequence, contextRevision: task.contextRevision ?? 0, instructionIds: [], boundAt: now() })
@@ -1151,6 +1163,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       put('dynamic_executions', execution)
       const wakeId = wake(execution.taskId, 'execution.stage.progress', { executionId: execution.executionId, ...report }, `execution-stage:${commandId}`)
+      supersedePendingProgress(execution, wakeId, ['execution.stage.progress'])
       return changed({ execution, wakeId })
     }
     if (kind === 'execution.sessionBound' || kind === 'execution.drainFailed' || kind === 'execution.drained' || kind === 'execution.result' || kind === 'execution.cancel') {
@@ -1238,7 +1251,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
               execution.providerRecovery = { ...execution.providerRecovery, exhausted: true, nextAttemptAt: null, coldAttempts, retryNotBefore,
                 terminal: clone(terminal), nextReviewAt: reviewAttempts < 3 && coldAttempts < 3 ? retryNotBefore : null }
             }
-            wake(execution.taskId, 'execution.result', { executionId: execution.executionId, current }, `execution-result:${execution.executionId}:${execution.inputVersion}`)
+            const resultWakeId = wake(execution.taskId, 'execution.result', { executionId: execution.executionId, current }, `execution-result:${execution.executionId}:${execution.inputVersion}`)
+            supersedePendingProgress(execution, resultWakeId, ['execution.stage.progress', 'execution.progress.review'])
           }
           if (a.error?.phase === 'provider') execution.result.recovery = { decision: execution.providerRecovery?.nextAttemptAt ? 'scheduled'
             : recoverable ? 'exhausted' : 'not-admitted', attempts: execution.providerRecovery?.attempts ?? 0,

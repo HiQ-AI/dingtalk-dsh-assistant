@@ -451,6 +451,74 @@ async function fixture(t, options = {}) {
   return { root, config, command, query, task, execution, async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }); return store } }
 }
 
+test('pending stage wakes coalesce within one native round while retaining every receipt and the latest report', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding)
+  const report = (sequence, extra = {}) => f.command('execution.progressReported', {
+    binding, sequence, summary: 'Current necessary evidence', evidence: ['original-proof'], ...extra,
+  })
+  const first = await report(1)
+  const repeated = await report(2)
+  assert.ok(repeated.result.wakeId)
+  assert.equal(repeated.result.execution.stageProgress.sequence, 2)
+  const next = await report(3, { evidence: ['new-proof'] })
+  const wakes = await f.query({ kind: 'wake.list', taskId: 'task' })
+  assert.equal(wakes.find(item => item.id === first.result.wakeId).supersededBy, repeated.result.wakeId)
+  assert.equal(wakes.find(item => item.id === repeated.result.wakeId).supersededBy, next.result.wakeId)
+  assert.deepEqual(wakes.filter(item => item.kind === 'execution.stage.progress' && item.state === 'pending').map(item => item.id), [next.result.wakeId])
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'execution.get', executionId: binding.executionId })).stageProgress.sequence, 3)
+  // Recovery does not restart business work or rearm the superseded wake.
+  assert.equal((await f.query({ kind: 'execution.list', taskId: 'task' })).length, 1)
+  assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).find(item => item.id === first.result.wakeId).state, 'acked')
+})
+
+test('a result supersedes only pending progress of its exact round, preserving other members and claimed observations', async t => {
+  const f = await fixture(t), owner = await f.task(), binding = await f.execution(owner.binding), other = await f.execution(owner.binding, 'other-member')
+  await f.command('task.wait', { binding: owner.binding, summary: 'Wait for evidence' })
+  await f.command('wake.ack', { binding: owner.binding, wakeIds: owner.wakeIds })
+  await f.command('task.drained', { binding: owner.binding })
+  const stage = (await f.command('execution.progressReported', { binding, sequence: 1, summary: 'First evidence', evidence: [] })).result
+  const review = (await f.command('task.claim', { taskId: 'task' })).result
+  assert.ok(review.wakeIds.includes(stage.wakeId))
+  const pending = (await f.command('execution.progressReported', { binding, sequence: 2, summary: 'Additional evidence', evidence: [] })).result
+  const sibling = (await f.command('execution.progressReported', { binding: other, sequence: 1, summary: 'Sibling evidence', evidence: [] })).result
+  const timed = (await f.command('execution.progressReviewed', { executionId: binding.executionId, inputVersion: binding.inputVersion,
+    leaseEpoch: binding.leaseEpoch, inputDigest: binding.inputDigest,
+    observation: { lastSequence: 9, lastActivityAt: null, newEventCount: 0, changed: false } })).result
+  await f.command('execution.result', { binding, output: { summary: 'Final original result' } })
+  const resultId = `execution-result:${binding.executionId}:${binding.inputVersion}`
+  let wakes = await f.query({ kind: 'wake.list', taskId: 'task' })
+  assert.equal(wakes.find(item => item.id === stage.wakeId).state, 'claimed')
+  for (const id of [pending.wakeId, timed.wakeId]) assert.equal(wakes.find(item => item.id === id).supersededBy, resultId)
+  assert.equal(wakes.find(item => item.id === sibling.wakeId).state, 'pending')
+  assert.equal(wakes.find(item => item.id === resultId).state, 'pending')
+  await assert.rejects(f.command('execution.feedback', { binding: review.binding, executionId: binding.executionId, messageId: 'late', text: 'Reworded reminder' }), { code: 'DYNAMIC_EXECUTION_NOT_CURRENT' })
+  await f.command('execution.drained', { binding })
+  await f.command('task.wait', { binding: review.binding, summary: 'Read original result before final acceptance' })
+  await f.command('wake.ack', { binding: review.binding, wakeIds: review.wakeIds })
+  await f.command('task.drained', { binding: review.binding })
+  await f.reopen()
+  const next = (await f.command('task.claim', { taskId: 'task' })).result
+  assert.ok(next.wakeIds.includes(resultId))
+  assert.ok(next.wakeIds.includes(sibling.wakeId))
+  assert.ok(!next.wakeIds.includes(pending.wakeId))
+  assert.equal((await f.query({ kind: 'operation.list', taskId: 'task' })).length, 0)
+})
+
+test('recovery lease changes do not deduplicate identical stage facts across native rounds', async t => {
+  const f = await fixture(t), owner = await f.task(), old = await f.execution(owner.binding)
+  const first = (await f.command('execution.progressReported', { binding: old, sequence: 1, summary: 'Unchanged business facts', evidence: [] })).result
+  await f.command('execution.drained', { binding: old })
+  const fresh = (await f.command('execution.claim', { executionId: old.executionId })).result.binding
+  const second = (await f.command('execution.progressReported', { binding: fresh, sequence: 2, summary: 'Unchanged business facts', evidence: [] })).result
+  assert.ok(second.wakeId)
+  assert.notEqual(fresh.leaseEpoch, old.leaseEpoch)
+  const wakes = await f.query({ kind: 'wake.list', taskId: 'task' })
+  assert.equal(wakes.find(item => item.id === first.wakeId).state, 'pending')
+  assert.equal(wakes.find(item => item.id === second.wakeId).state, 'pending')
+  await assert.rejects(f.command('execution.progressReported', { binding: old, sequence: 3, summary: 'Late historical event', evidence: [] }), { code: 'DYNAMIC_EXECUTION_LEASE_STALE' })
+})
+
 test('every coordinator decision retains its explanation across replacement, retry, completion and restart', async t => {
   const f = await fixture(t), owner = await f.task()
   const first = { binding: owner.binding, action: 'wait', summary: '首次发现对象偏离，已要求原执行回到目标文件', evidence: ['log:12'], limitations: ['尚未确认反馈落实'] }
