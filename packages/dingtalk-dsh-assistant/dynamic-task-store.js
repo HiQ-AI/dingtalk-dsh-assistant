@@ -1903,7 +1903,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         conditions.push('rowid>?'); params.push(after, limit + 1)
         const names = ['id','taskId','executionId','groupId','status','state','control','drained','recovering','createdAt','updatedAt','archivedAt',
           'requirementRevision','contextRevision','controlRevision','runSequence','sessionId','sessionBound','leaseEpoch','inputVersion','inputDigest',
-          'sourceId','revision','nextDueAt','aggregateDigest']
+          'sourceId','revision','nextDueAt','aggregateDigest',
+          ...(q.kind === 'execution.index' ? ['definition','providerRecovery','progressReview','cancelRequested'] : [])]
         const projection = names.flatMap(name => [`'${name}'`, `json_extract(body,'$.${name}')`]).join(',')
         const rows = db.prepare(`SELECT rowid AS sequence,json_object(${projection},'title',substr(json_extract(body,'$.title'),1,400),
           'lastDecision',json_object('action',json_extract(body,'$.lastDecision.action'),'summary',substr(json_extract(body,'$.lastDecision.summary'),1,400))) body
@@ -1987,16 +1988,21 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'resource.list') value = db.prepare('SELECT resource_key AS resourceKey,holder FROM dynamic_resource_locks ORDER BY resource_key').all()
       else if (q.kind === 'resource.catalog') value = resourceCatalog.snapshot
       else if (q.kind === 'source.get') value = get('dynamic_sources', q.sourceId, true)
-      else if (q.kind === 'source.list') value = all('dynamic_sources').filter(item => (!q.groupId || item.groupId === q.groupId) && (!q.unrouted || !item.routed) && (!q.status || (q.status === 'routed' ? !!item.routed : !item.routed)))
+      else if (q.kind === 'source.list') value = all('dynamic_sources', q.groupId ? "WHERE json_extract(body,'$.groupId')=?" : '', q.groupId ? [q.groupId] : []).filter(item => (!q.groupId || item.groupId === q.groupId) && (!q.unrouted || !item.routed) && (!q.status || (q.status === 'routed' ? !!item.routed : !item.routed)))
       else if (q.kind === 'group.get') value = get('dynamic_groups', q.groupId, true)
       else if (q.kind === 'group.list') value = all('dynamic_groups')
       else if (q.kind === 'receipt.get') { const row = readReceiptRow(db, q.id); value = row ? JSON.parse(row.body) : null }
-      else if (q.kind === 'recovery.pending') value = { tasks: all('dynamic_tasks').filter(item => !item.drained),
-        groups: all('dynamic_groups').filter(item => !item.drained), executions: all('dynamic_executions').filter(item => !item.drained || item.status === 'queued'),
-        operations: ops().filter(item => operationBlocksRecovery(item)), notifications: all('dynamic_notifications').filter(item => !['delivered','failed'].includes(item.state)), legacy: legacy() }
+      else if (q.kind === 'recovery.pending') value = {
+        tasks: all('dynamic_tasks', "WHERE json_extract(body,'$.drained') IS NOT 1").filter(item => !item.drained),
+        groups: all('dynamic_groups', "WHERE json_extract(body,'$.drained') IS NOT 1").filter(item => !item.drained),
+        executions: all('dynamic_executions', "WHERE json_extract(body,'$.drained') IS NOT 1 OR json_extract(body,'$.status')='queued'").filter(item => !item.drained || item.status === 'queued'),
+        operations: all('dynamic_operations', "WHERE coalesce(json_extract(body,'$.state'),'') NOT IN ('succeeded','failed','cancelled') ORDER BY rowid").filter(operationBlocksRecovery),
+        notifications: all('dynamic_notifications', "WHERE coalesce(json_extract(body,'$.state'),'') NOT IN ('delivered','failed')").filter(item => !['delivered','failed'].includes(item.state)), legacy: legacy() }
       else fail('DYNAMIC_QUERY_UNKNOWN', q.kind)
       if (q.kind === 'task.get' && value && restartReopenEligible(value)) value = { ...value, restartRecoveryEligible: true }
       if (q.kind === 'task.list') value = value.map(task => restartReopenEligible(task) ? { ...task, restartRecoveryEligible: true } : task)
+      // 这些查询的全部嵌套值已由 SQLite 正文新解析；不再为隔离副本重复展开历史。
+      if (['task.list', 'execution.list', 'source.list', 'recovery.pending'].includes(q.kind)) return value
       return clone(value)
     },
     async close() {

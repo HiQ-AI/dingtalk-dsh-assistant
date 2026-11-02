@@ -110,6 +110,14 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   let observerGroupPage
   const sourceHeldNotifications = new Map()
   const query = (kind, args = {}) => store.query({ kind, ...args })
+  async function* executionIndex() {
+    let after = 0
+    do {
+      const page = await query('execution.index', { after, limit: 100 })
+      yield* page.items
+      after = page.nextAfter
+    } while (after !== null)
+  }
   if (residentStore.retireIndependentCoordination)
     await residentStore.retireIndependentCoordination(await query('coordination.retirement'))
   const taskCache = new Map(), operationCache = new Map(), notificationCache = new Map(), executionCache = new Map()
@@ -340,7 +348,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     scheduling = (async () => {
       while (scheduleRequested && !closed) {
         scheduleRequested = false
-        for (const execution of await query('execution.list')) {
+        for await (const execution of executionIndex()) {
           if (closed) return
           if (admissionHolds.has(execution.taskId)) continue
           const review = execution.status === 'failed' && execution.providerRecovery?.nextReviewAt
@@ -354,7 +362,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           let binding
           try {
             binding = await query('execution.binding', { executionId: execution.executionId })
-            await verifyProviderTerminal(execution, binding)
+            await verifyProviderTerminal(await query('execution.get', { executionId: execution.executionId }), binding)
             await command(review ? 'execution.review-provider' : 'execution.retry-provider', { binding },
               `provider-${review ? 'review' : 'retry'}:${execution.executionId}:${execution.inputVersion}${review ? ':' + execution.providerRecovery.nextReviewAt : ''}`)
             failures.delete(execution.executionId)
@@ -377,10 +385,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           if (!taskSlots.has(task.taskId) && taskSlots.size >= taskLimit()) continue
           if (pending.some(item => item.state !== 'acked')) void kickTask(task.taskId)
         }
-        for (const execution of await query('execution.list')) {
+        for await (const execution of executionIndex()) {
           if (closed || inflightExecutions.size >= executionLimit()) break
-          if (admissionHolds.has(execution.taskId) || execution.providerRecovery?.nextAttemptAt || !retryReady(execution.executionId) || inflightExecutions.has(execution.executionId) || !execution.drained || execution.recovering || execution.status !== 'queued' || execution.cancelRequested || execution.resources?.state === 'waiting') continue
+          if (admissionHolds.has(execution.taskId) || execution.providerRecovery?.nextAttemptAt || !retryReady(execution.executionId) || inflightExecutions.has(execution.executionId) || !execution.drained || execution.recovering || execution.status !== 'queued' || execution.cancelRequested) continue
           if (!taskSlots.has(execution.taskId) && taskSlots.size >= taskLimit()) continue
+          if ((await query('execution.get', { executionId: execution.executionId }))?.resources?.state === 'waiting') continue
           void kickExecution(execution.executionId)
         }
       }
@@ -1588,7 +1597,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         await persistence.register({ taskId: task.taskId, sessionId: task.sessionId, cwd })
         await attachWorkspace(task.sessionId, cwd, task.title)
       }
-      for (const execution of await query('execution.list')) if (execution.sessionBound && executionBackend(execution) === 'dsh') {
+      for await (const execution of executionIndex()) if (execution.sessionBound && executionBackend(execution) === 'dsh') {
         const cwd = await taskWorkspace(root, execution.taskId)
         await persistence.register({ taskId: execution.taskId, sessionId: execution.sessionId, cwd })
         await attachWorkspace(execution.sessionId, cwd, (await requireTask(execution.taskId)).title)
@@ -1602,7 +1611,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         const current = await query('source.get', { sourceId: source.sourceId })
         if (!current.routed || current.processingPending) void kickGroup(source.groupId)
       }
-      for (const execution of await query('execution.list')) {
+      for await (const candidate of executionIndex()) {
+        if (!executionProgressDue(candidate)) continue
+        const execution = await query('execution.get', { executionId: candidate.executionId })
         const task = await query('task.get', { taskId: execution.taskId })
         if (!task || task.archivedAt || task.status !== 'active' || task.control !== 'active' || !executionProgressDue(execution)) continue
         let observation
@@ -1621,7 +1632,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         }
       }
       for (const task of await query('task.list')) void kickTask(task.taskId)
-      for (const execution of await query('execution.list')) if (execution.drained && execution.status === 'queued') void kickExecution(execution.executionId)
+      for await (const execution of executionIndex()) if (execution.drained && execution.status === 'queued') void kickExecution(execution.executionId)
       void schedulePending()
       await deliverNotifications()
       return { failures: [...failures.values()], recovery: pending }

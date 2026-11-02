@@ -16,6 +16,7 @@ import { retireTaskContext } from '../packages/dingtalk-dsh-assistant/task-sessi
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { taskNotificationRecovery } from '../packages/dingtalk-dsh-assistant/notification-delivery.js'
+import { DatabaseSync } from 'node:sqlite'
 
 testRunner('same-host recovery drains the original native process without replaying an unknown operation', { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-drain-retry-'))
@@ -2063,4 +2064,35 @@ testRunner('resource read retries preserve image facts and duplicate ingress reu
   assert.equal(repeated.sourceId, retry.sourceId)
   assert.equal(h.residentStore.getGroup('phase-group').messages.filter(item => item.messageId === message.messageId).length, 1)
   assert.equal(reads, 2)
+}))
+
+
+testRunner('周期恢复与调度跨过百条已排空历史，不展开执行正文也不启动模型', { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'native-background-scan-'))
+  let host, modelCalls = 0, forbiddenReads = 0
+  t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
+  await t.beginBusiness()
+  host = await t.step(async () => nativeTaskHost(root, () => { modelCalls++; throw new Error('history must not start a model') }))
+  const db = new DatabaseSync(join(root, 'dynamic.db'))
+  const marker = 'TERMINAL_EXECUTION_BODY_MUST_NOT_REACH_BACKGROUND_JS'
+  try {
+    const insert = db.prepare('INSERT INTO dynamic_executions(id,body) VALUES (?,?)')
+    for (let i = 0; i < 103; i++) {
+      const execution = { id: `history-${i}`, executionId: `history-${i}`, taskId: 'historical-task', status: i % 2 ? 'succeeded' : 'stale',
+        drained: true, sessionBound: false, definition: { executionBackend: i % 2 ? 'claude-code' : 'dsh' }, input: { objective: marker } }
+      insert.run(execution.id, JSON.stringify(execution))
+    }
+  } finally { db.close() }
+  const parse = JSON.parse
+  t.mock.method(JSON, 'parse', function (text, ...args) {
+    if (String(text).includes(marker)) { forbiddenReads++; throw new Error('terminal history body expanded') }
+    return parse(text, ...args)
+  })
+  try {
+    const result = await t.step(async () => host.service.recover())
+    await t.step(async () => host.service.whenIdle())
+    assert.equal(forbiddenReads, 0, '包括调度异常被记录的情况，不允许静默吞掉历史展开')
+    assert.equal(modelCalls, 0)
+    assert.deepEqual(result.failures, [])
+  } finally { t.mock.restoreAll() }
 }))
