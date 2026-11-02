@@ -53,3 +53,7 @@ CPU 样本跨度 31885 ms，recover inclusive 4519 ms / 14.2%，store query、al
 ## 交付回读
 
 产品代码提交 `33a1735d00a2f44b359d01a101d508817c1d4dd1`；后续仅更新验收文档，不改变已验证产品源码。PR #335： https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/335 ，独立回读为 OPEN / MERGEABLE，base main、head worktree-plugin-background-blocking。验证汇总及两产品源码 SHA256 保留于 round-4/validation-summary.json。尚未部署或现场复测，临时源码 loader、测试日志与中间库清理；其他任务及历史部署资料保留。
+
+## 对照再生成
+
+在仓库根使用 PowerShell 7：先 `New-Item -ItemType Directory -Force docs/tmp`，再 `git show c0fc2e86c1969f479c6f641ceefabec0dc3b9455:packages/dingtalk-dsh-assistant/dynamic-task-store.js > docs/tmp/background-scan-baseline.txt`。执行 `node docs/acceptance/observer-first-load/scripts/compare-background-scans.mjs docs/tmp/background-scan-baseline.txt` 得基线 JSON，执行同一命令不传最后的文件参数得当前 JSON。脚本创建自己的隔离目录并在 finally 删除，不依赖本轮临时目录保留；生成结果与本报告是不同机器/轮次的独立样本，不覆盖原轮次证据。读回结果后删除本次生成的 baseline.txt。

@@ -1,6 +1,6 @@
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 const baseline = process.argv[2]
@@ -10,7 +10,9 @@ if (baseline) {
   registerHooks({ load(url, context, next) { return url === moduleUrl ? { format: 'module', source, shortCircuit: true } : next(url, context) } })
 }
 const { openDynamicTaskStore } = await import(moduleUrl)
-const root = await mkdtemp(resolve('docs/tmp/plugin-background-blocking/isolated-bench-'))
+const scratch = resolve('docs/tmp')
+await mkdir(scratch, { recursive: true })
+const root = await mkdtemp(join(scratch, 'background-scan-'))
 let store, db
 try {
   const dbPath = join(root, 'ledger.sqlite')
