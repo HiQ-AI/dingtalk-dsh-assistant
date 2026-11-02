@@ -49,3 +49,7 @@ CPU 样本跨度 31885 ms，recover inclusive 4519 ms / 14.2%，store query、al
 ## 产物与交付边界
 
 最终 CPU/HTTP 基线与隔离对照在 round-4/。原始 HAR 留在用户指定路径，不复制凭据或业务正文。临时基线 loader、日志和中间库在验证摘要核对后清理；此前轮次报告保留，其他任务资料不动。当前目标为修复后 PR 交付；不自动合并或部署新的 PR，不触发 CI。现场新版本延迟与浏览器复验尚未执行。
+
+## 交付回读
+
+产品代码提交 `33a1735d00a2f44b359d01a101d508817c1d4dd1`；后续仅更新验收文档，不改变已验证产品源码。PR #335： https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/335 ，独立回读为 OPEN / MERGEABLE，base main、head worktree-plugin-background-blocking。验证汇总及两产品源码 SHA256 保留于 round-4/validation-summary.json。尚未部署或现场复测，临时源码 loader、测试日志与中间库清理；其他任务及历史部署资料保留。

@@ -1,0 +1,50 @@
+{
+  "sourceCommit": "33a1735d00a2f44b359d01a101d508817c1d4dd1",
+  "deployed": false,
+  "productSha256": {
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "d5bc7c75ac49db778fc11b5c80e7c2ac489cbf8ae19897858c8afe9b7454f699",
+    "packages/dingtalk-dsh-assistant/task-session-service.js": "df9c8938cf8b7cf77bc8948fa956f6e4f233a24de457cb688184ae97ddc1436e"
+  },
+  "checks": [
+    {
+      "log": "related-tests.log",
+      "counts": {
+        "tests": 218,
+        "pass": 218,
+        "fail": 0,
+        "skipped": 0
+      },
+      "expectedBaselineFailure": false
+    },
+    {
+      "log": "native-tests.log",
+      "counts": {
+        "tests": 23,
+        "pass": 23,
+        "fail": 0,
+        "skipped": 0
+      },
+      "expectedBaselineFailure": false
+    },
+    {
+      "log": "unknown-recovery-tests.log",
+      "counts": {
+        "tests": 4,
+        "pass": 4,
+        "fail": 0,
+        "skipped": 0
+      },
+      "expectedBaselineFailure": false
+    },
+    {
+      "log": "native-scan-baseline.log",
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "skipped": 0
+      },
+      "expectedBaselineFailure": true
+    }
+  ]
+}
