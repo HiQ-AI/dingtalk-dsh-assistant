@@ -1,0 +1,15 @@
+{
+  "sourceCommit": "c80d42bf747cb950aa03ab7906194123bfc5683a",
+  "releaseSmoke": {
+    "tests": 14,
+    "pass": 14,
+    "fail": 0,
+    "skipped": 0
+  },
+  "installedProductSourceMatches": true,
+  "browserResult": "PASS",
+  "httpResult": "PASS",
+  "businessWrites": 0,
+  "ciTriggered": false,
+  "officialHostModified": false
+}

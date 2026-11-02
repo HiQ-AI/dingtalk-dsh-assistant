@@ -1,0 +1,50 @@
+[
+  {
+    "ProcessId": 55116,
+    "ParentProcessId": 35984,
+    "Name": "dws.exe",
+    "CreationDate": "2026-11-02T22:03:46.821466+08:00",
+    "ExecutablePath": "C:\\Users\\64554\\.local\\bin\\dws.exe",
+    "CommandLineSha256": "58afda5490338a5fe11660f241c22d26346207fe1eca87a5baa74f8d6244a73d"
+  },
+  {
+    "ProcessId": 16624,
+    "ParentProcessId": 35984,
+    "Name": "dws.exe",
+    "CreationDate": "2026-11-02T22:03:46.942415+08:00",
+    "ExecutablePath": "C:\\Users\\64554\\.local\\bin\\dws.exe",
+    "CommandLineSha256": "22a6ee4bb0184bf185cd2f7e9649f868938e6269362d84453bf85c86471e7663"
+  },
+  {
+    "ProcessId": 46360,
+    "ParentProcessId": 35984,
+    "Name": "dws.exe",
+    "CreationDate": "2026-11-02T22:03:47.038727+08:00",
+    "ExecutablePath": "C:\\Users\\64554\\.local\\bin\\dws.exe",
+    "CommandLineSha256": "d1b74fa66229312c5b6aa7505c5ff3c302a7464d6f68f015f571fbac6f9ff0bc"
+  },
+  {
+    "ProcessId": 54416,
+    "ParentProcessId": 55116,
+    "Name": "conhost.exe",
+    "CreationDate": "2026-11-02T22:03:46.852823+08:00",
+    "ExecutablePath": "C:\\WINDOWS\\system32\\conhost.exe",
+    "CommandLineSha256": "417222c4a0ecb4d60a457ebe8e26fddf3d5406bffb16a5c59af8eeb241beca51"
+  },
+  {
+    "ProcessId": 11928,
+    "ParentProcessId": 16624,
+    "Name": "conhost.exe",
+    "CreationDate": "2026-11-02T22:03:46.966358+08:00",
+    "ExecutablePath": "C:\\WINDOWS\\system32\\conhost.exe",
+    "CommandLineSha256": "417222c4a0ecb4d60a457ebe8e26fddf3d5406bffb16a5c59af8eeb241beca51"
+  },
+  {
+    "ProcessId": 15180,
+    "ParentProcessId": 46360,
+    "Name": "conhost.exe",
+    "CreationDate": "2026-11-02T22:03:47.062961+08:00",
+    "ExecutablePath": "C:\\WINDOWS\\system32\\conhost.exe",
+    "CommandLineSha256": "417222c4a0ecb4d60a457ebe8e26fddf3d5406bffb16a5c59af8eeb241beca51"
+  }
+]

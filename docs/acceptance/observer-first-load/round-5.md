@@ -31,3 +31,5 @@ PR https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/335 已合并，部署�
 官方宿主冷加载与 session/list 明确不改；JSON 持久化等剩余贡献尚未完整归因。本轮不为验证发群消息、重试通知、改任务或恢复未知操作，故不声称真实钉钉写入业务验收通过。用户授权的合并、部署和上述验证已完成；进一步削减残余长尾属于后续修复。
 
 最终保留本轮报告、JSON 证据及复用脚本；本轮临时打包副本与测试日志在结果摘要落盘后清理，持久安装包保留。旧 round-1/round-3 与 topic-page-latency 本地资料属于既有工作，不清理或混入提交。
+
+旧轮原始明细清理：browser-final.json与http-after.json已在round-7完成最终证据归档和核对后删除；本报告的原轮次结果与摘要保留，当前现场结论以round-7.md为准。

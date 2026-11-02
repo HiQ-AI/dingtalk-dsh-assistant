@@ -1,0 +1,78 @@
+{
+  "packageSha256": "faf1d05f364af010e61642caa596db92e2343fbf7a4f1792b03dbed0c308b826",
+  "taskEnabled": true,
+  "health": {
+    "status": "ok",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 0,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "ingress": {
+        "paused": false,
+        "recovering": false
+      },
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-11-02T14:24:03.729Z",
+            "readyAt": "2026-11-02T14:24:12.568Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-11-02T14:24:12.8Z",
+            "succeededAt": "2026-11-02T14:24:14.919Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-11-02T14:24:03.84Z",
+            "readyAt": "2026-11-02T14:24:12.988Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-11-02T14:24:13.094Z",
+            "succeededAt": "2026-11-02T14:24:15.569Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-11-02T14:24:03.943Z",
+        "readyAt": "2026-11-02T14:24:13.262Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+  "backupCreated": false,
+  "newPid": 29252,
+  "creationDate": "2026-11-02T22:23:16.760333+08:00",
+  "installedVersion": "2.3.0"
+}

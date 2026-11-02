@@ -1,0 +1,34 @@
+{
+  "pid": 35984,
+  "writes": 0,
+  "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+  "checkOnly": true,
+  "console": {
+    "consolePids": [
+      16060,
+      35984,
+      42684
+    ],
+    "checkOnly": true,
+    "targetPid": 35984,
+    "signals": 0
+  },
+  "packageSha256": "faf1d05f364af010e61642caa596db92e2343fbf7a4f1792b03dbed0c308b826",
+  "ledger": {
+    "scope": "current-control",
+    "quiescent": true,
+    "candidateOnly": true,
+    "drained": true,
+    "pending": {
+      "tasks": 0,
+      "executions": 0,
+      "groups": 0
+    },
+    "ownerReleased": false,
+    "ownerProcessExited": false,
+    "staleOwner": false,
+    "unknownOperations": 3,
+    "unknownNotifications": 0
+  },
+  "signals": 0
+}

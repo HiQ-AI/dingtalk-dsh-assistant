@@ -1,0 +1,41 @@
+{
+  "sourceCommit": "c80d42bf747cb950aa03ab7906194123bfc5683a",
+  "kind": "local-packages-from-merged-code-not-npm-release",
+  "newPid": 29252,
+  "oldPid": 35984,
+  "oldProcessExists": false,
+  "ports": [
+    {
+      "LocalPort": 18998,
+      "OwningProcess": 29252
+    },
+    {
+      "LocalPort": 3080,
+      "OwningProcess": 29252
+    }
+  ],
+  "taskEnabled": true,
+  "packages": [
+    {
+      "name": "@zzusp/dingtalk-dsh-assistant",
+      "version": "2.3.0",
+      "sha256": "faf1d05f364af010e61642caa596db92e2343fbf7a4f1792b03dbed0c308b826",
+      "path": "D:/dsh_home/packages/by-sha256/faf1d05f364af010e61642caa596db92e2343fbf7a4f1792b03dbed0c308b826/package.tgz"
+    },
+    {
+      "name": "@zzusp/dingtalk-dsh-observer",
+      "version": "2.3.0",
+      "sha256": "ad7f6b7efd5fa775fd4a578553d376df4bd3e28a1c3a29c9ae503ee10f1eb074",
+      "path": "D:/dsh_home/packages/by-sha256/ad7f6b7efd5fa775fd4a578553d376df4bd3e28a1c3a29c9ae503ee10f1eb074/package.tgz"
+    }
+  ],
+  "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+  "serviceSha256": "867d1d7f6e6f873284e2c4b502600237d47d768151f199fe41018c3a8ffd4d6b",
+  "hostVersion": "0.2.1-rc.2",
+  "health": {
+    "status": "ok",
+    "inboundProcessing": true,
+    "bridgeHealthy": true,
+    "recoveryIssueCount": 0
+  }
+}

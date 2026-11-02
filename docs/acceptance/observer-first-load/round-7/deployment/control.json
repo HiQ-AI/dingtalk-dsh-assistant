@@ -1,0 +1,16 @@
+{
+  "pid": 35984,
+  "creationDate": "2026-11-02T22:00:45.717655+08:00",
+  "executablePath": "D:\\soft\\node-v24.19.0\\node.exe",
+  "packageSha256": "faf1d05f364af010e61642caa596db92e2343fbf7a4f1792b03dbed0c308b826",
+  "taskEnabled": true,
+  "backupCreated": false,
+  "observerManifestSha256": "93352d237e892f863ff9ea95a2ebc8ec8eeb9d6ec8ea10dfd397cba5f3085141",
+  "commandLineSha256": "d0c35b1788ee259b72b9e5eab027400a3c8f5c111944e64d88be9cc6ef4afac8",
+  "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+  "name": "node.exe",
+  "package": {
+    "verifiedFiles": 95,
+    "sha256": "faf1d05f364af010e61642caa596db92e2343fbf7a4f1792b03dbed0c308b826"
+  }
+}
