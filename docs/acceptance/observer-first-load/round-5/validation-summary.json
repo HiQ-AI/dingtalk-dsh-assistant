@@ -1,0 +1,16 @@
+{
+  "sourceCommit": "f9b1b38d60f0202aced9e0f96f2b202b0acf6aab",
+  "releaseSmoke": {
+    "tests": 14,
+    "pass": 14,
+    "fail": 0,
+    "skipped": 0
+  },
+  "firstAttempt": {
+    "pass": 12,
+    "skipped": 2,
+    "reason": "DSH_NATIVE_TEST_PROFILE incorrectly pointed to a directory; corrected to package.json and reran unchanged suite"
+  },
+  "ciTriggered": false,
+  "officialHostModified": false
+}

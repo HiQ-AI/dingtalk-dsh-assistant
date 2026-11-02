@@ -1,0 +1,52 @@
+{
+  "baseCommit": "f9b1b38d60f0202aced9e0f96f2b202b0acf6aab",
+  "productState": "tested product commit 525cf2b0269ff80a9010bf8c03747b5bd1f3d876; later changes are documentation only",
+  "sourceSha256": {
+    "packages/dingtalk-dsh-assistant/task-session-service.js": "867d1d7f6e6f873284e2c4b502600237d47d768151f199fe41018c3a8ffd4d6b",
+    "test/task-session-service-native.test.js": "81066cbf40d104662c9a20bc89b1c0d0e6be4039a7c5e21105d8cc3d75c700af"
+  },
+  "checks": [
+    {
+      "name": "baseline",
+      "tests": 1,
+      "pass": 0,
+      "fail": 1,
+      "skipped": 0,
+      "expectedBaselineFailure": true
+    },
+    {
+      "name": "fixed",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "skipped": 0,
+      "expectedBaselineFailure": false
+    },
+    {
+      "name": "identity-tests",
+      "tests": 11,
+      "pass": 11,
+      "fail": 0,
+      "skipped": 0,
+      "expectedBaselineFailure": false
+    },
+    {
+      "name": "service-tests",
+      "tests": 23,
+      "pass": 23,
+      "fail": 0,
+      "skipped": 0,
+      "expectedBaselineFailure": false
+    }
+  ],
+  "historyPredicateVisits": {
+    "before": 101000,
+    "after": 0,
+    "historySize": 1000,
+    "isGroupCalls": 100,
+    "unauthenticatedIngressCalls": 1
+  },
+  "deployed": false,
+  "ciTriggered": false,
+  "inspectorClosed": true
+}

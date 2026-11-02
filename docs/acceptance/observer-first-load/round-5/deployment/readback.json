@@ -1,0 +1,78 @@
+{
+  "creationDate": "2026-11-02T22:00:45.717655+08:00",
+  "backupCreated": false,
+  "health": {
+    "status": "ok",
+    "transport": "dws",
+    "inboundConfigured": true,
+    "inboundProcessing": true,
+    "outboundAuthorized": true,
+    "modelMode": "real",
+    "recoveryIssueCount": 0,
+    "activityAudit": {
+      "total": null,
+      "pending": null,
+      "audited": null,
+      "unavailableCount": 0
+    },
+    "dwsBridge": {
+      "ingress": {
+        "paused": false,
+        "recovering": false
+      },
+      "healthy": true,
+      "groups": [
+        {
+          "groupId": "cidq+PGRQW098/2Qh23wrl/ZQ==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-11-02T14:03:46.717Z",
+            "readyAt": "2026-11-02T14:03:55.38Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-11-02T14:03:55.572Z",
+            "succeededAt": "2026-11-02T14:03:58.071Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        },
+        {
+          "groupId": "cid2HnVI0zvC2dOr5RmJ5ZCJg==",
+          "listener": {
+            "state": "ready",
+            "generation": 1,
+            "startedAt": "2026-11-02T14:03:46.85Z",
+            "readyAt": "2026-11-02T14:03:55.744Z"
+          },
+          "backfill": {
+            "state": "ok",
+            "completionScope": "durable-receipt",
+            "startedAt": "2026-11-02T14:03:55.861Z",
+            "succeededAt": "2026-11-02T14:03:58.805Z"
+          },
+          "reconnect": {
+            "attempt": 0
+          }
+        }
+      ],
+      "humanReplies": {
+        "state": "ready",
+        "generation": 1,
+        "startedAt": "2026-11-02T14:03:46.963Z",
+        "readyAt": "2026-11-02T14:03:56.047Z",
+        "reconnect": {
+          "attempt": 0
+        }
+      }
+    }
+  },
+  "newPid": 35984,
+  "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+  "packageSha256": "85b476c13c8cd69b39cd7f8996baa945c6d574a471b3f16c0e28236fd766e6a2",
+  "installedVersion": "2.3.0",
+  "taskEnabled": true
+}

@@ -1,0 +1,357 @@
+{
+  "durationMs": 31947,
+  "exclusive": [
+    {
+      "function": "(idle)",
+      "url": "",
+      "line": 0,
+      "ms": 10875,
+      "percent": 34
+    },
+    {
+      "function": "(anonymous)",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-resident-runtime.js",
+      "line": 33,
+      "ms": 1902,
+      "percent": 6
+    },
+    {
+      "function": "stat",
+      "url": "",
+      "line": 0,
+      "ms": 1227,
+      "percent": 3.8
+    },
+    {
+      "function": "serialize",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-storage-json/lib/index.js",
+      "line": 72,
+      "ms": 760,
+      "percent": 2.4
+    },
+    {
+      "function": "(program)",
+      "url": "",
+      "line": 0,
+      "ms": 719,
+      "percent": 2.3
+    },
+    {
+      "function": "utf8Write",
+      "url": "node:internal/buffer",
+      "line": 982,
+      "ms": 590,
+      "percent": 1.8
+    },
+    {
+      "function": "all",
+      "url": "",
+      "line": 0,
+      "ms": 565,
+      "percent": 1.8
+    },
+    {
+      "function": "serialize",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-storage-json/lib/index.js",
+      "line": 72,
+      "ms": 542,
+      "percent": 1.7
+    },
+    {
+      "function": "all",
+      "url": "",
+      "line": 0,
+      "ms": 510,
+      "percent": 1.6
+    },
+    {
+      "function": "(anonymous)",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "line": 140,
+      "ms": 477,
+      "percent": 1.5
+    },
+    {
+      "function": "all",
+      "url": "",
+      "line": 0,
+      "ms": 476,
+      "percent": 1.5
+    },
+    {
+      "function": "clone",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "line": 69,
+      "ms": 450,
+      "percent": 1.4
+    },
+    {
+      "function": "(garbage collector)",
+      "url": "",
+      "line": 0,
+      "ms": 432,
+      "percent": 1.4
+    },
+    {
+      "function": "lstat",
+      "url": "",
+      "line": 0,
+      "ms": 418,
+      "percent": 1.3
+    },
+    {
+      "function": "get",
+      "url": "",
+      "line": 0,
+      "ms": 366,
+      "percent": 1.1
+    },
+    {
+      "function": "all",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "line": 140,
+      "ms": 358,
+      "percent": 1.1
+    },
+    {
+      "function": "all",
+      "url": "",
+      "line": 0,
+      "ms": 328,
+      "percent": 1
+    },
+    {
+      "function": "prepare",
+      "url": "",
+      "line": 0,
+      "ms": 312,
+      "percent": 1
+    },
+    {
+      "function": "(anonymous)",
+      "url": "",
+      "line": 0,
+      "ms": 307,
+      "percent": 1
+    },
+    {
+      "function": "get",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "line": 144,
+      "ms": 305,
+      "percent": 1
+    },
+    {
+      "function": "serialize",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-storage-json/lib/index.js",
+      "line": 72,
+      "ms": 255,
+      "percent": 0.8
+    },
+    {
+      "function": "groupView",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-resident-runtime.js",
+      "line": 33,
+      "ms": 226,
+      "percent": 0.7
+    },
+    {
+      "function": "projectSource",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-session-service.js",
+      "line": 610,
+      "ms": 209,
+      "percent": 0.7
+    },
+    {
+      "function": "lstat",
+      "url": "node:internal/fs/promises",
+      "line": 1080,
+      "ms": 202,
+      "percent": 0.6
+    },
+    {
+      "function": "groupView",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-resident-runtime.js",
+      "line": 33,
+      "ms": 185,
+      "percent": 0.6
+    }
+  ],
+  "inclusive": [
+    {
+      "function": "(root)",
+      "url": "",
+      "line": 0,
+      "ms": 31946,
+      "percent": 100
+    },
+    {
+      "function": "(idle)",
+      "url": "",
+      "line": 0,
+      "ms": 10875,
+      "percent": 34
+    },
+    {
+      "function": "processTicksAndRejections",
+      "url": "node:internal/process/task_queues",
+      "line": 72,
+      "ms": 3464,
+      "percent": 10.8
+    },
+    {
+      "function": "(anonymous)",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-session-service.js",
+      "line": 1546,
+      "ms": 3360,
+      "percent": 10.5
+    },
+    {
+      "function": "processTimers",
+      "url": "node:internal/timers",
+      "line": 556,
+      "ms": 2778,
+      "percent": 8.7
+    },
+    {
+      "function": "listOnTimeout",
+      "url": "node:internal/timers",
+      "line": 576,
+      "ms": 2734,
+      "percent": 8.6
+    },
+    {
+      "function": "(anonymous)",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-session-service.js",
+      "line": 900,
+      "ms": 2206,
+      "percent": 6.9
+    },
+    {
+      "function": "query",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-session-service.js",
+      "line": 112,
+      "ms": 1982,
+      "percent": 6.2
+    },
+    {
+      "function": "query",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "line": 1887,
+      "ms": 1963,
+      "percent": 6.1
+    },
+    {
+      "function": "(anonymous)",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-resident-runtime.js",
+      "line": 33,
+      "ms": 1902,
+      "percent": 6
+    },
+    {
+      "function": "groupView",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-resident-runtime.js",
+      "line": 33,
+      "ms": 1902,
+      "percent": 6
+    },
+    {
+      "function": "getGroup",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-resident-runtime.js",
+      "line": 117,
+      "ms": 1902,
+      "percent": 6
+    },
+    {
+      "function": "ingest",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-session-service.js",
+      "line": 915,
+      "ms": 1902,
+      "percent": 6
+    },
+    {
+      "function": "(anonymous)",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dws-bridge.js",
+      "line": 137,
+      "ms": 1902,
+      "percent": 6
+    },
+    {
+      "function": "processMessage",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dws-bridge.js",
+      "line": 132,
+      "ms": 1902,
+      "percent": 6
+    },
+    {
+      "function": "(anonymous)",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dws-bridge.js",
+      "line": 303,
+      "ms": 1902,
+      "percent": 6
+    },
+    {
+      "function": "pollWatches",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@deepseek-ai/dsh-client-hmr/lib/index.js",
+      "line": 79,
+      "ms": 1324,
+      "percent": 4.1
+    },
+    {
+      "function": "query",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "line": 1887,
+      "ms": 1315,
+      "percent": 4.1
+    },
+    {
+      "function": "query",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/task-session-service.js",
+      "line": 112,
+      "ms": 1315,
+      "percent": 4.1
+    },
+    {
+      "function": "all",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "line": 140,
+      "ms": 1310,
+      "percent": 4.1
+    },
+    {
+      "function": "runMicrotasks",
+      "url": "",
+      "line": 0,
+      "ms": 1257,
+      "percent": 3.9
+    },
+    {
+      "function": "(anonymous)",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dws-bridge.js",
+      "line": 303,
+      "ms": 1241,
+      "percent": 3.9
+    },
+    {
+      "function": "stat",
+      "url": "",
+      "line": 0,
+      "ms": 1227,
+      "percent": 3.8
+    },
+    {
+      "function": "processIncrementalGroupBackfill",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dws-bridge.js",
+      "line": 629,
+      "ms": 1062,
+      "percent": 3.3
+    },
+    {
+      "function": "get",
+      "url": "file:///D:/dsh_home/profiles/web/node_modules/@zzusp/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "line": 144,
+      "ms": 948,
+      "percent": 3
+    }
+  ]
+}

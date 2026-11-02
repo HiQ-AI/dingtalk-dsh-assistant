@@ -1,0 +1,2027 @@
+{
+  "installedHost": true,
+  "browserCache": "fresh-context",
+  "cases": [
+    {
+      "phase": "board-first-open",
+      "dataMs": 177.38
+    },
+    {
+      "phase": "1:话题",
+      "dataMs": 114.09
+    },
+    {
+      "phase": "1:任务看板",
+      "dataMs": 202.14
+    },
+    {
+      "phase": "1:人工介入",
+      "dataMs": 198.16
+    },
+    {
+      "phase": "1:历史任务",
+      "dataMs": 141.96
+    },
+    {
+      "phase": "1:告警",
+      "dataMs": 91.29
+    },
+    {
+      "phase": "1:群消息",
+      "dataMs": 99.78
+    },
+    {
+      "phase": "2:话题",
+      "dataMs": 100.4
+    },
+    {
+      "phase": "2:任务看板",
+      "dataMs": 116.15
+    },
+    {
+      "phase": "2:人工介入",
+      "dataMs": 166.95
+    },
+    {
+      "phase": "2:历史任务",
+      "dataMs": 133.12
+    },
+    {
+      "phase": "2:告警",
+      "dataMs": 100.41
+    },
+    {
+      "phase": "2:群消息",
+      "dataMs": 99.38
+    }
+  ],
+  "requests": [
+    {
+      "phase": "host-cold",
+      "route": "3080/",
+      "method": "GET",
+      "type": "document",
+      "elapsedMs": 5.92,
+      "firstByteMs": 4.59,
+      "bytes": 0,
+      "status": 303
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/",
+      "method": "GET",
+      "type": "document",
+      "elapsedMs": 7.84,
+      "firstByteMs": 7.13,
+      "bytes": 6511,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/plugins/:@deepseek-ai/dsh-client-modules",
+      "method": "GET",
+      "type": "script",
+      "elapsedMs": 266.76,
+      "firstByteMs": 261.29,
+      "bytes": 14949,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/assets/vendor-DV2921Zo.css",
+      "method": "GET",
+      "type": "stylesheet",
+      "elapsedMs": 273.01,
+      "firstByteMs": 264.38,
+      "bytes": 8091,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/assets/index-BxpfOGf3.css",
+      "method": "GET",
+      "type": "stylesheet",
+      "elapsedMs": 283.23,
+      "firstByteMs": 272.01,
+      "bytes": 18825,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/assets/vendor-DcuzkuQH.js",
+      "method": "GET",
+      "type": "script",
+      "elapsedMs": 300.63,
+      "firstByteMs": 269.13,
+      "bytes": 210207,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/assets/index-CN7NIWNw.js",
+      "method": "GET",
+      "type": "script",
+      "elapsedMs": 319.82,
+      "firstByteMs": 271.25,
+      "bytes": 319763,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/plugins/:@deepseek-ai/dsh-api-remote-access,@deepseek-ai/dsh-api-remotes,@deepseek-ai/dsh-api-session-controller,@deepseek-ai/dsh-api-workspace-controller,@deepseek-ai/dsh-client-connection,@deepseek-ai/dsh-client-file-upload,@deepseek-ai/dsh-client-ui-deliverables,@deepseek-ai/dsh-client-ui-directory-picker-native,@deepseek-ai/dsh-client-ui-trajectory,@deepseek-ai/dsh-session-log-export,@deepseek-ai/dsh-typert-registry,@zzusp/dingtalk-dsh-assistant,@zzusp/dingtalk-dsh-observer",
+      "method": "GET",
+      "type": "script",
+      "elapsedMs": 345.99,
+      "firstByteMs": 265.05,
+      "bytes": 653293,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/plugins/:@deepseek-ai/dsh-api-gateway,@deepseek-ai/dsh-api-job-controller,@deepseek-ai/dsh-api-terminal-controller,@deepseek-ai/dsh-api-workspace-files,@deepseek-ai/dsh-client-hmr,@deepseek-ai/dsh-client-locale,@deepseek-ai/dsh-client-resources,@deepseek-ai/dsh-client-shortcuts,@deepseek-ai/dsh-client-ui-agent-preset,@deepseek-ai/dsh-client-ui-approval,@deepseek-ai/dsh-client-ui-attachment,@deepseek-ai/dsh-client-ui-brand-official,@deepseek-ai/dsh-client-ui-chat,@deepseek-ai/dsh-client-ui-commands,@deepseek-ai/dsh-client-ui-conversation,@deepseek-ai/dsh-client-ui-cordis,@deepseek-ai/dsh-client-ui-deepseek-model-label-1017,@deepseek-ai/dsh-client-ui-goal,@deepseek-ai/dsh-client-ui-input-trigger,@deepseek-ai/dsh-client-ui-jobs,@deepseek-ai/dsh-client-ui-layout,@deepseek-ai/dsh-client-ui-message-feedback,@deepseek-ai/dsh-client-ui-model-selection,@deepseek-ai/dsh-client-ui-open-in-app,@deepseek-ai/dsh-client-ui-permission-presets,@deepseek-ai/dsh-client-ui-plan,@deepseek-ai/dsh-client-ui-plugin-manager,@deepseek-ai/dsh-client-ui-reference,@deepseek-ai/dsh-client-ui-renderer,@deepseek-ai/dsh-client-ui-schedule,@deepseek-ai/dsh-client-ui-secret-mask,@deepseek-ai/dsh-client-ui-session,@deepseek-ai/dsh-client-ui-settings,@deepseek-ai/dsh-client-ui-settings-account,@deepseek-ai/dsh-client-ui-settings-agent-loop,@deepseek-ai/dsh-client-ui-settings-general,@deepseek-ai/dsh-client-ui-settings-models,@deepseek-ai/dsh-client-ui-settings-plugin-inventory,@deepseek-ai/dsh-client-ui-settings-plugins,@deepseek-ai/dsh-client-ui-settings-session-log,@deepseek-ai/dsh-client-ui-settings-shell,@deepseek-ai/dsh-client-ui-settings-subagent,@deepseek-ai/dsh-client-ui-settings-web-search,@deepseek-ai/dsh-client-ui-shortcuts,@deepseek-ai/dsh-client-ui-sidebar,@deepseek-ai/dsh-client-ui-sidebar-documentpreview,@deepseek-ai/dsh-client-ui-sidebar-files,@deepseek-ai/dsh-client-ui-sidebar-right,@deepseek-ai/dsh-client-ui-sidebar-terminal,@deepseek-ai/dsh-client-ui-skill,@deepseek-ai/dsh-client-ui-subagent,@deepseek-ai/dsh-client-ui-theme,@deepseek-ai/dsh-client-ui-tool,@deepseek-ai/dsh-client-ui-user-questions,@deepseek-ai/dsh-client-ui-workflow-run,@deepseek-ai/dsh-client-ui-workspace,@deepseek-ai/dsh-cordis-client-runner",
+      "method": "GET",
+      "type": "script",
+      "elapsedMs": 760.71,
+      "firstByteMs": 199.07,
+      "bytes": 4218233,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/settings/describe",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 170.37,
+      "firstByteMs": 147.34,
+      "bytes": 8283,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/dynamicCordisRunner/syncInspectManifest",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 116.42,
+      "firstByteMs": 113.08,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/credentials/describe",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 91.23,
+      "firstByteMs": 87.73,
+      "bytes": 173,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/dynamicCordisRunner/inventory",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 36.69,
+      "firstByteMs": 32.49,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/session/modelCatalog",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 58.01,
+      "firstByteMs": 56.59,
+      "bytes": 339,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/agentPresets/list",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 29.32,
+      "firstByteMs": 20.75,
+      "bytes": 200,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/credentials/describe",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 20.43,
+      "firstByteMs": 15.67,
+      "bytes": 173,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/credentials/describe",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 21.29,
+      "firstByteMs": 15.37,
+      "bytes": 172,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/credentials/describe",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 21.4,
+      "firstByteMs": 14.73,
+      "bytes": 173,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/permissionPresets/catalog",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 29.88,
+      "firstByteMs": 27.48,
+      "bytes": 220,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/dynamicCordisRunner/inventory",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 29.73,
+      "firstByteMs": 27.08,
+      "bytes": 132,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/favicon.svg",
+      "method": "GET",
+      "type": "other",
+      "elapsedMs": 72.1,
+      "firstByteMs": 38.76,
+      "bytes": 1754,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/agentPresets/list",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 108.02,
+      "firstByteMs": 67.93,
+      "bytes": 197,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/agentPresets/list",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 108.37,
+      "firstByteMs": 67.98,
+      "bytes": 198,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/session/modelCatalog",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 310.5,
+      "firstByteMs": 270.77,
+      "bytes": 341,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/settings/describe",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 310.08,
+      "firstByteMs": 270.31,
+      "bytes": 8298,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/dynamicCordisRunner/syncInspectManifest",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 309.21,
+      "firstByteMs": 270.33,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/credentials/describe",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 25.09,
+      "firstByteMs": 11.78,
+      "bytes": 172,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/credentials/describe",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 26.31,
+      "firstByteMs": 23.53,
+      "bytes": 172,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/credentials/describe",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 26.67,
+      "firstByteMs": 22.93,
+      "bytes": 172,
+      "status": 200
+    },
+    {
+      "phase": "board-first-open",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 3.59,
+      "firstByteMs": 3.16,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "board-first-open",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 7.34,
+      "firstByteMs": 6.14,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "board-first-open",
+      "route": "18998/state/groups/:id/messages",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.63,
+      "firstByteMs": 3.92,
+      "bytes": 10907,
+      "status": 200
+    },
+    {
+      "phase": "board-first-open",
+      "route": "18998/state/groups/:id/outbox",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 9.84,
+      "firstByteMs": 8.63,
+      "bytes": 18694,
+      "status": 200
+    },
+    {
+      "phase": "1:话题",
+      "route": "18998/state/fixed-topics",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.8,
+      "firstByteMs": 2.18,
+      "bytes": 173,
+      "status": 200
+    },
+    {
+      "phase": "1:话题",
+      "route": "18998/state/topics",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.61,
+      "firstByteMs": 4.04,
+      "bytes": 7966,
+      "status": 200
+    },
+    {
+      "phase": "1:话题",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 6.86,
+      "firstByteMs": 6.2,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "1:话题",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 9.11,
+      "firstByteMs": 8.51,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "1:话题",
+      "route": "18998/state/topics",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.11,
+      "firstByteMs": 1.19,
+      "bytes": 7966,
+      "status": 200
+    },
+    {
+      "phase": "1:任务看板",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 3.45,
+      "firstByteMs": 2.69,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "1:任务看板",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.33,
+      "firstByteMs": 3.36,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "1:任务看板",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 7.74,
+      "firstByteMs": 6.72,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "1:任务看板",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 10.98,
+      "firstByteMs": 9.27,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "1:任务看板",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 14.8,
+      "firstByteMs": 13.11,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "1:任务看板",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 55.17,
+      "firstByteMs": 28.33,
+      "bytes": 325095,
+      "status": 200
+    },
+    {
+      "phase": "1:人工介入",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 8.14,
+      "firstByteMs": 7.46,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "1:人工介入",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 9.73,
+      "firstByteMs": 8.88,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "1:人工介入",
+      "route": "18998/state/authorizations",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 94.69,
+      "firstByteMs": 93.64,
+      "bytes": 54775,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/open-in-app/apps",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 1354.6,
+      "firstByteMs": 1353.59,
+      "bytes": 42,
+      "status": 200
+    },
+    {
+      "phase": "1:历史任务",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.34,
+      "firstByteMs": 3.67,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "1:历史任务",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 24.97,
+      "firstByteMs": 22.91,
+      "bytes": 403631,
+      "status": 200
+    },
+    {
+      "phase": "1:历史任务",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 27.29,
+      "firstByteMs": 26.25,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "1:告警",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.02,
+      "firstByteMs": 1.48,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "1:告警",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 5.3,
+      "firstByteMs": 4.62,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "1:告警",
+      "route": "18998/state/supervisor/alerts",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 8.54,
+      "firstByteMs": 7.74,
+      "bytes": 125,
+      "status": 200
+    },
+    {
+      "phase": "1:告警",
+      "route": "18998/state/supervisor/alerts",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 10.97,
+      "firstByteMs": 10.26,
+      "bytes": 125,
+      "status": 200
+    },
+    {
+      "phase": "1:群消息",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.28,
+      "firstByteMs": 1.5,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "1:群消息",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 5.49,
+      "firstByteMs": 4.02,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "1:群消息",
+      "route": "18998/state/groups/:id/messages",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.9,
+      "firstByteMs": 2.16,
+      "bytes": 10907,
+      "status": 200
+    },
+    {
+      "phase": "1:群消息",
+      "route": "18998/state/groups/:id/outbox",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.61,
+      "firstByteMs": 3.57,
+      "bytes": 18694,
+      "status": 200
+    },
+    {
+      "phase": "2:话题",
+      "route": "18998/state/fixed-topics",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.05,
+      "firstByteMs": 1.54,
+      "bytes": 173,
+      "status": 200
+    },
+    {
+      "phase": "2:话题",
+      "route": "18998/state/topics",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.16,
+      "firstByteMs": 3.42,
+      "bytes": 7966,
+      "status": 200
+    },
+    {
+      "phase": "2:话题",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.92,
+      "firstByteMs": 4.13,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "2:话题",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 7.9,
+      "firstByteMs": 7.2,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "2:话题",
+      "route": "18998/state/topics",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 3.11,
+      "firstByteMs": 2.37,
+      "bytes": 7966,
+      "status": 200
+    },
+    {
+      "phase": "2:任务看板",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 1.45,
+      "firstByteMs": 0.95,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "2:任务看板",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.83,
+      "firstByteMs": 2.01,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "2:任务看板",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.23,
+      "firstByteMs": 3.47,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "2:任务看板",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.86,
+      "firstByteMs": 4.23,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "2:任务看板",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 7.33,
+      "firstByteMs": 6.73,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "2:任务看板",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 31.28,
+      "firstByteMs": 22.23,
+      "bytes": 325095,
+      "status": 200
+    },
+    {
+      "phase": "2:人工介入",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 1.88,
+      "firstByteMs": 1.35,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "2:人工介入",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.15,
+      "firstByteMs": 3.15,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "2:人工介入",
+      "route": "18998/state/authorizations",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 78.52,
+      "firstByteMs": 77.14,
+      "bytes": 54775,
+      "status": 200
+    },
+    {
+      "phase": "2:历史任务",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 3.25,
+      "firstByteMs": 2.62,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "2:历史任务",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 6.54,
+      "firstByteMs": 5.35,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "2:历史任务",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 38.69,
+      "firstByteMs": 26.24,
+      "bytes": 403631,
+      "status": 200
+    },
+    {
+      "phase": "2:告警",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.38,
+      "firstByteMs": 1.84,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "2:告警",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.6,
+      "firstByteMs": 3.65,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "2:告警",
+      "route": "18998/state/supervisor/alerts",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 7.84,
+      "firstByteMs": 6.68,
+      "bytes": 125,
+      "status": 200
+    },
+    {
+      "phase": "2:告警",
+      "route": "18998/state/supervisor/alerts",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 10.76,
+      "firstByteMs": 9.58,
+      "bytes": 125,
+      "status": 200
+    },
+    {
+      "phase": "2:群消息",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.72,
+      "firstByteMs": 2.19,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "2:群消息",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 5.69,
+      "firstByteMs": 4.84,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "2:群消息",
+      "route": "18998/state/groups/:id/messages",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 4.57,
+      "firstByteMs": 4.07,
+      "bytes": 10907,
+      "status": 200
+    },
+    {
+      "phase": "2:群消息",
+      "route": "18998/state/groups/:id/outbox",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 5.99,
+      "firstByteMs": 5.26,
+      "bytes": 18694,
+      "status": 200
+    },
+    {
+      "phase": "task-detail-readonly",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 2.02,
+      "firstByteMs": 1.56,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "task-detail-readonly",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 5.22,
+      "firstByteMs": 4.31,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "task-detail-readonly",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 8.59,
+      "firstByteMs": 7.86,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "task-detail-readonly",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 10.9,
+      "firstByteMs": 10.04,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "task-detail-readonly",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 13.19,
+      "firstByteMs": 12.34,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "task-detail-readonly",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 35.41,
+      "firstByteMs": 27.25,
+      "bytes": 325095,
+      "status": 200
+    },
+    {
+      "phase": "task-detail-readonly",
+      "route": "18998/state/tasks/:id/detail",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 248.08,
+      "firstByteMs": 242.51,
+      "bytes": 1184538,
+      "status": 200
+    },
+    {
+      "phase": "task-detail-readonly",
+      "route": "18998/state/tasks/:id/decisions",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 69.91,
+      "firstByteMs": 69.27,
+      "bytes": 45211,
+      "status": 200
+    },
+    {
+      "phase": "task-detail-readonly",
+      "route": "18998/state/tasks/:id/executions",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 174.8,
+      "firstByteMs": 154.5,
+      "bytes": 993778,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 7.12,
+      "firstByteMs": 5.99,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 10.09,
+      "firstByteMs": 7.93,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 12.13,
+      "firstByteMs": 9.83,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 13.88,
+      "firstByteMs": 11.68,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 17.01,
+      "firstByteMs": 14.81,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 33.3,
+      "firstByteMs": 29.52,
+      "bytes": 325095,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 20.4,
+      "firstByteMs": 19.2,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 23.17,
+      "firstByteMs": 21.86,
+      "bytes": 1141,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 25.79,
+      "firstByteMs": 24.43,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 27.99,
+      "firstByteMs": 26.58,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 29.78,
+      "firstByteMs": 28.11,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 47.41,
+      "firstByteMs": 45.14,
+      "bytes": 325095,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/groups",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 30.04,
+      "firstByteMs": 29.27,
+      "bytes": 4617,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/health",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 31.51,
+      "firstByteMs": 30.08,
+      "bytes": 1159,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 33.31,
+      "firstByteMs": 31.17,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 35.68,
+      "firstByteMs": 33.39,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 36.49,
+      "firstByteMs": 34.38,
+      "bytes": 131,
+      "status": 200
+    },
+    {
+      "phase": "host-session-list-terminal",
+      "route": "18998/state/tasks",
+      "method": "GET",
+      "type": "fetch",
+      "elapsedMs": 52.55,
+      "firstByteMs": 48.94,
+      "bytes": 325095,
+      "status": 200
+    },
+    {
+      "phase": "host-cold",
+      "route": "3080/api/session/list",
+      "method": "POST",
+      "type": "fetch",
+      "elapsedMs": 20163.49,
+      "firstByteMs": 19312.44,
+      "bytes": 837261,
+      "status": 200
+    }
+  ],
+  "errors": [],
+  "businessWrites": 0,
+  "hostEntryMs": 1776.67,
+  "taskDetail": "PASS",
+  "fetches": [
+    {
+      "route": "api/settings/describe",
+      "startedMs": 867.4,
+      "completedMs": 1251.7,
+      "headersMs": 307.2,
+      "jsonMs": 77.1,
+      "status": 200
+    },
+    {
+      "route": "api/dynamicCordisRunner/syncInspectManifest",
+      "startedMs": 925.1,
+      "completedMs": 1258.2,
+      "headersMs": 318.9,
+      "jsonMs": 14.2,
+      "status": 200
+    },
+    {
+      "route": "api/credentials/describe",
+      "startedMs": 950.9,
+      "completedMs": 1258.2,
+      "headersMs": 293.5,
+      "jsonMs": 13.8,
+      "status": 200
+    },
+    {
+      "route": "api/dynamicCordisRunner/inventory",
+      "startedMs": 1006.2,
+      "completedMs": 1258.2,
+      "headersMs": 238.5,
+      "jsonMs": 13.5,
+      "status": 200
+    },
+    {
+      "route": "open-in-app/apps",
+      "startedMs": 1056.8,
+      "completedMs": 2442.8,
+      "headersMs": 1385.4,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "api/session/modelCatalog",
+      "startedMs": 1068.1,
+      "completedMs": 1258.6,
+      "headersMs": 176.9,
+      "jsonMs": 13.6,
+      "status": 200
+    },
+    {
+      "route": "api/agentPresets/list",
+      "startedMs": 1230.7,
+      "completedMs": 1286.6,
+      "headersMs": 28.1,
+      "jsonMs": 27.8,
+      "status": 200
+    },
+    {
+      "route": "api/credentials/describe",
+      "startedMs": 1254.8,
+      "completedMs": 1291.3,
+      "headersMs": 32.4,
+      "jsonMs": 4.1,
+      "status": 200
+    },
+    {
+      "route": "api/credentials/describe",
+      "startedMs": 1255.4,
+      "completedMs": 1291.3,
+      "headersMs": 31.9,
+      "jsonMs": 4.0,
+      "status": 200
+    },
+    {
+      "route": "api/credentials/describe",
+      "startedMs": 1255.8,
+      "completedMs": 1291.3,
+      "headersMs": 31.5,
+      "jsonMs": 4.0,
+      "status": 200
+    },
+    {
+      "route": "api/session/list",
+      "startedMs": 1259.8,
+      "completedMs": 21485.2,
+      "headersMs": 19315.8,
+      "jsonMs": 909.6,
+      "status": 200
+    },
+    {
+      "route": "api/permissionPresets/catalog",
+      "startedMs": 1260.9,
+      "completedMs": 1291.7,
+      "headersMs": 30.2,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "api/dynamicCordisRunner/inventory",
+      "startedMs": 1261.8,
+      "completedMs": 1292.2,
+      "headersMs": 29.4,
+      "jsonMs": 1.0,
+      "status": 200
+    },
+    {
+      "route": "api/agentPresets/list",
+      "startedMs": 1262.5,
+      "completedMs": 1371.6,
+      "headersMs": 87.1,
+      "jsonMs": 22.0,
+      "status": 200
+    },
+    {
+      "route": "api/agentPresets/list",
+      "startedMs": 1262.8,
+      "completedMs": 1372,
+      "headersMs": 86.9,
+      "jsonMs": 22.3,
+      "status": 200
+    },
+    {
+      "route": "api/session/modelCatalog",
+      "startedMs": 1263.3,
+      "completedMs": 1574.6,
+      "headersMs": 271.5,
+      "jsonMs": 39.8,
+      "status": 200
+    },
+    {
+      "route": "api/settings/describe",
+      "startedMs": 1265.3,
+      "completedMs": 1577.9,
+      "headersMs": 271.2,
+      "jsonMs": 41.4,
+      "status": 200
+    },
+    {
+      "route": "api/dynamicCordisRunner/syncInspectManifest",
+      "startedMs": 1266.3,
+      "completedMs": 1587.9,
+      "headersMs": 271.3,
+      "jsonMs": 50.3,
+      "status": 200
+    },
+    {
+      "route": "api/credentials/describe",
+      "startedMs": 1581.6,
+      "completedMs": 1608.1,
+      "headersMs": 13.9,
+      "jsonMs": 12.6,
+      "status": 200
+    },
+    {
+      "route": "api/credentials/describe",
+      "startedMs": 1583,
+      "completedMs": 1610.8,
+      "headersMs": 26.3,
+      "jsonMs": 1.5,
+      "status": 200
+    },
+    {
+      "route": "api/credentials/describe",
+      "startedMs": 1584.3,
+      "completedMs": 1612.3,
+      "headersMs": 25.3,
+      "jsonMs": 2.7,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 1820.2,
+      "completedMs": 1837.1,
+      "headersMs": 16.3,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 1820.6,
+      "completedMs": 1837.7,
+      "headersMs": 16.0,
+      "jsonMs": 1.1,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups/:id/messages",
+      "startedMs": 1837.2,
+      "completedMs": 1843,
+      "headersMs": 5.3,
+      "jsonMs": 0.5,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups/:id/outbox",
+      "startedMs": 1837.5,
+      "completedMs": 1848.4,
+      "headersMs": 10.5,
+      "jsonMs": 0.4,
+      "status": 200
+    },
+    {
+      "route": "18998/state/fixed-topics",
+      "startedMs": 1987.3,
+      "completedMs": 2000.2,
+      "headersMs": 11.9,
+      "jsonMs": 1.0,
+      "status": 200
+    },
+    {
+      "route": "18998/state/topics",
+      "startedMs": 1987.6,
+      "completedMs": 2000.2,
+      "headersMs": 11.8,
+      "jsonMs": 0.8,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 1987.8,
+      "completedMs": 2000.3,
+      "headersMs": 11.6,
+      "jsonMs": 0.9,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 1988,
+      "completedMs": 2000.3,
+      "headersMs": 11.5,
+      "jsonMs": 0.8,
+      "status": 200
+    },
+    {
+      "route": "18998/state/topics",
+      "startedMs": 2004.1,
+      "completedMs": 2007.6,
+      "headersMs": 3.0,
+      "jsonMs": 0.5,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 2100.4,
+      "completedMs": 2115,
+      "headersMs": 13.2,
+      "jsonMs": 1.4,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 2100.6,
+      "completedMs": 2115.1,
+      "headersMs": 13.6,
+      "jsonMs": 0.9,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 2100.8,
+      "completedMs": 2115.1,
+      "headersMs": 13.1,
+      "jsonMs": 1.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 2100.9,
+      "completedMs": 2116.7,
+      "headersMs": 15.4,
+      "jsonMs": 0.4,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 2100.9,
+      "completedMs": 2115.1,
+      "headersMs": 13.6,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 2101.1,
+      "completedMs": 2158.9,
+      "headersMs": 31.0,
+      "jsonMs": 26.8,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 2302.9,
+      "completedMs": 2312.7,
+      "headersMs": 9.5,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 2303.2,
+      "completedMs": 2313.4,
+      "headersMs": 10.0,
+      "jsonMs": 0.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/authorizations",
+      "startedMs": 2303.3,
+      "completedMs": 2399.1,
+      "headersMs": 95.2,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 2500,
+      "completedMs": 2512.8,
+      "headersMs": 12.5,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 2500.2,
+      "completedMs": 2529.4,
+      "headersMs": 28.8,
+      "jsonMs": 0.4,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 2500.3,
+      "completedMs": 2529,
+      "headersMs": 25.6,
+      "jsonMs": 3.1,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 2635.5,
+      "completedMs": 2646.5,
+      "headersMs": 10.2,
+      "jsonMs": 0.8,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 2635.7,
+      "completedMs": 2646.5,
+      "headersMs": 10.2,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/state/supervisor/alerts",
+      "startedMs": 2635.8,
+      "completedMs": 2646.5,
+      "headersMs": 10.2,
+      "jsonMs": 0.5,
+      "status": 200
+    },
+    {
+      "route": "18998/state/supervisor/alerts",
+      "startedMs": 2635.9,
+      "completedMs": 2647.8,
+      "headersMs": 11.6,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 2732.4,
+      "completedMs": 2746.8,
+      "headersMs": 14.0,
+      "jsonMs": 0.4,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 2732.8,
+      "completedMs": 2747.4,
+      "headersMs": 13.7,
+      "jsonMs": 0.9,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups/:id/messages",
+      "startedMs": 2746.9,
+      "completedMs": 2751.1,
+      "headersMs": 3.6,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups/:id/outbox",
+      "startedMs": 2747.2,
+      "completedMs": 2752.8,
+      "headersMs": 5.2,
+      "jsonMs": 0.4,
+      "status": 200
+    },
+    {
+      "route": "18998/state/fixed-topics",
+      "startedMs": 2834.6,
+      "completedMs": 2846.8,
+      "headersMs": 11.3,
+      "jsonMs": 0.9,
+      "status": 200
+    },
+    {
+      "route": "18998/state/topics",
+      "startedMs": 2834.9,
+      "completedMs": 2846.9,
+      "headersMs": 11.2,
+      "jsonMs": 0.8,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 2835.1,
+      "completedMs": 2846.9,
+      "headersMs": 11.1,
+      "jsonMs": 0.7,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 2835.3,
+      "completedMs": 2846.9,
+      "headersMs": 11.0,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/state/topics",
+      "startedMs": 2849.4,
+      "completedMs": 2853.7,
+      "headersMs": 4.0,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 2932.6,
+      "completedMs": 2947.8,
+      "headersMs": 13.7,
+      "jsonMs": 1.5,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 2932.8,
+      "completedMs": 2947.9,
+      "headersMs": 13.8,
+      "jsonMs": 1.3,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 2932.9,
+      "completedMs": 2947.9,
+      "headersMs": 13.9,
+      "jsonMs": 1.1,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 2933.1,
+      "completedMs": 2947.9,
+      "headersMs": 13.7,
+      "jsonMs": 1.1,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 2933.2,
+      "completedMs": 2947.9,
+      "headersMs": 13.7,
+      "jsonMs": 1.0,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 2933.2,
+      "completedMs": 2967,
+      "headersMs": 24.1,
+      "jsonMs": 9.7,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 3049.8,
+      "completedMs": 3062.4,
+      "headersMs": 12.0,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 3050.1,
+      "completedMs": 3062.4,
+      "headersMs": 11.9,
+      "jsonMs": 0.4,
+      "status": 200
+    },
+    {
+      "route": "18998/state/authorizations",
+      "startedMs": 3050.2,
+      "completedMs": 3130,
+      "headersMs": 79.1,
+      "jsonMs": 0.7,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 3225.8,
+      "completedMs": 3230.1,
+      "headersMs": 4.0,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 3226.1,
+      "completedMs": 3233.3,
+      "headersMs": 6.9,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 3226.2,
+      "completedMs": 3267.3,
+      "headersMs": 27.7,
+      "jsonMs": 13.4,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 3351.2,
+      "completedMs": 3363.2,
+      "headersMs": 11.4,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 3351.5,
+      "completedMs": 3363.2,
+      "headersMs": 11.2,
+      "jsonMs": 0.5,
+      "status": 200
+    },
+    {
+      "route": "18998/state/supervisor/alerts",
+      "startedMs": 3351.6,
+      "completedMs": 3363.2,
+      "headersMs": 11.1,
+      "jsonMs": 0.5,
+      "status": 200
+    },
+    {
+      "route": "18998/state/supervisor/alerts",
+      "startedMs": 3351.7,
+      "completedMs": 3363.2,
+      "headersMs": 11.4,
+      "jsonMs": 0.1,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 3455.1,
+      "completedMs": 3463.6,
+      "headersMs": 7.9,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 3455.4,
+      "completedMs": 3464,
+      "headersMs": 7.8,
+      "jsonMs": 0.8,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups/:id/messages",
+      "startedMs": 3463.6,
+      "completedMs": 3469,
+      "headersMs": 5.1,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups/:id/outbox",
+      "startedMs": 3463.9,
+      "completedMs": 3470.4,
+      "headersMs": 6.3,
+      "jsonMs": 0.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 3550.4,
+      "completedMs": 3562.6,
+      "headersMs": 11.5,
+      "jsonMs": 0.7,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 3550.7,
+      "completedMs": 3562.6,
+      "headersMs": 11.4,
+      "jsonMs": 0.5,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 3550.8,
+      "completedMs": 3562.7,
+      "headersMs": 11.4,
+      "jsonMs": 0.5,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 3550.9,
+      "completedMs": 3562.7,
+      "headersMs": 11.6,
+      "jsonMs": 0.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 3550.9,
+      "completedMs": 3564.5,
+      "headersMs": 13.5,
+      "jsonMs": 0.1,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 3551,
+      "completedMs": 3588.5,
+      "headersMs": 28.6,
+      "jsonMs": 8.9,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks/:id/detail",
+      "startedMs": 3670.6,
+      "completedMs": 3929.5,
+      "headersMs": 250.7,
+      "jsonMs": 8.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks/:id/decisions",
+      "startedMs": 4056.9,
+      "completedMs": 4128,
+      "headersMs": 70.5,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks/:id/executions",
+      "startedMs": 4057.3,
+      "completedMs": 4250.5,
+      "headersMs": 156.4,
+      "jsonMs": 36.8,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 8557.9,
+      "completedMs": 8566.4,
+      "headersMs": 8.1,
+      "jsonMs": 0.4,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 8558.6,
+      "completedMs": 8569.9,
+      "headersMs": 10.9,
+      "jsonMs": 0.4,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 8559,
+      "completedMs": 8572.1,
+      "headersMs": 12.8,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 8559.3,
+      "completedMs": 8574.1,
+      "headersMs": 14.4,
+      "jsonMs": 0.4,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 8559.4,
+      "completedMs": 8577.5,
+      "headersMs": 17.8,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 8559.6,
+      "completedMs": 8596.6,
+      "headersMs": 34.1,
+      "jsonMs": 2.9,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 13551.4,
+      "completedMs": 13573.6,
+      "headersMs": 21.6,
+      "jsonMs": 0.6,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 13551.7,
+      "completedMs": 13575.5,
+      "headersMs": 23.7,
+      "jsonMs": 0.1,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 13551.8,
+      "completedMs": 13578.5,
+      "headersMs": 26.5,
+      "jsonMs": 0.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 13551.8,
+      "completedMs": 13580.7,
+      "headersMs": 28.7,
+      "jsonMs": 0.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 13551.9,
+      "completedMs": 13582.1,
+      "headersMs": 30.1,
+      "jsonMs": 0.1,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 13552,
+      "completedMs": 13601.9,
+      "headersMs": 47.9,
+      "jsonMs": 2.0,
+      "status": 200
+    },
+    {
+      "route": "18998/state/groups",
+      "startedMs": 18551.8,
+      "completedMs": 18582.9,
+      "headersMs": 30.8,
+      "jsonMs": 0.3,
+      "status": 200
+    },
+    {
+      "route": "18998/health",
+      "startedMs": 18552.1,
+      "completedMs": 18584.1,
+      "headersMs": 31.8,
+      "jsonMs": 0.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 18552.1,
+      "completedMs": 18586,
+      "headersMs": 33.7,
+      "jsonMs": 0.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 18552.3,
+      "completedMs": 18588.5,
+      "headersMs": 36.0,
+      "jsonMs": 0.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 18552.3,
+      "completedMs": 18589.5,
+      "headersMs": 37.0,
+      "jsonMs": 0.2,
+      "status": 200
+    },
+    {
+      "route": "18998/state/tasks",
+      "startedMs": 18552.4,
+      "completedMs": 18607.8,
+      "headersMs": 53.2,
+      "jsonMs": 2.2,
+      "status": 200
+    },
+    {
+      "route": "api/session/create",
+      "startedMs": 21521.5,
+      "completedMs": null,
+      "headersMs": null,
+      "jsonMs": null,
+      "status": null
+    },
+    {
+      "route": "api/llm/listProviders",
+      "startedMs": 21535,
+      "completedMs": null,
+      "headersMs": null,
+      "jsonMs": null,
+      "status": null
+    },
+    {
+      "route": "api/llm/listConfigurableProviders",
+      "startedMs": 21535.4,
+      "completedMs": null,
+      "headersMs": null,
+      "jsonMs": null,
+      "status": null
+    }
+  ],
+  "result": "PASS"
+}
