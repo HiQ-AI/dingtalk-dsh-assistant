@@ -97,7 +97,7 @@ async function serviceFixture(t, replySignature, action = 'complete', legacyFoot
       if (names.includes('group_topic_route_submit')) {
         const calls = topicTaskCalls(request, { title: '核对材料' })
         const existing = h.residentStore.listTopics('native-group')[0]
-        if (existing) for (const route of calls[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId: existing.topicId }]
+        if (existing) for (const route of calls[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId: existing.topicId, reason: '核对材料事项的后续消息' }]
         return calls
       }
       if (names.includes('group_decision_submit')) {

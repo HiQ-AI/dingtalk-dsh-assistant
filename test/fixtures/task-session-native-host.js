@@ -305,7 +305,7 @@ export function topicTaskCalls(request, { title = '原消息交办', objective }
   } }]
   if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes: input.messages.map(message => ({
     messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
-    units: [{ unitKey: 'request', summary: title, sourceRefs: [{ quote: message.text }], topics: [{ newTopicKey: message.messageId, title }] }],
+    units: [{ unitKey: 'request', summary: title, sourceRefs: [{ quote: message.text }], topics: [{ newTopicKey: message.messageId, title, reason: '当前消息是新的交付事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '当前测试消息是独立交付事项' })) }] }],
   })) } }]
   if (names.includes('group_decision_submit')) {
     const basisUnitRefs = input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
@@ -314,7 +314,7 @@ export function topicTaskCalls(request, { title = '原消息交办', objective }
     return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: {
       basisMessageIds: [...new Set(input.messages.map(message => message.messageId))], basisUnitRefs,
       actions: [{ kind: 'new-task', title, objective: text, acceptanceCriteria: ['完成原消息要求并核验证据'], topicRefs: [{ topicId: input.topicId, revision: input.revision }], basisUnitRefs,
-        dispatchAssessment: { businessObject: title, agentDeliverable: text, externalFollowup: [], sourceUnitRefs: basisUnitRefs, workflowRefs: [], workflowReason: '当前没有专用流程' } }], reply: '收到，已交办任务。', ...(replyTarget ? { replyToMessageId: replyTarget.messageId } : {}), replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
+        dispatchAssessment: { businessObject: title, agentDeliverable: text, externalFollowup: [], sourceUnitRefs: basisUnitRefs } }], reply: '收到，已交办任务。', ...(replyTarget ? { replyToMessageId: replyTarget.messageId } : {}), replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
     } } }]
   }
 }

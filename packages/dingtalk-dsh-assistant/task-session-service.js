@@ -25,7 +25,8 @@ import { createTaskSessionObservability, createTaskObservationQueue } from './ta
 import { activeFixedUnits, fixedTopicIds, fixedUnitRequestId, platformScheduleSessionId, platformScheduleOutboundId } from './fixed-topics.js'
 import { openTaskTopicCoordinator } from './task-topic-coordinator.js'
 import { resolveTaskArtifactScope } from './task-artifact-scope.js'
-import { resolveTopicMessages, topicSourceEntries, stableId, replyTopicForMessage, canonicalReplyTopic, topicDecisionCoversEntry } from './topic-model.js'
+import { buildReplyReviewCandidates } from './decision.js'
+import { resolveTopicMessages, topicSourceEntries, stableId, fingerprint, replyTopicForMessage, canonicalReplyTopic, topicDecisionCoversEntry } from './topic-model.js'
 import { createTopicFactHandler } from './topic-facts.js'
 import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from './task-message-projections.js'
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, taskFilePath, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
@@ -148,7 +149,27 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   function topicTaskView(task) { return { ...task, state: task.status === 'completed' ? 'completed' : task.control === 'cancelled' ? 'cancelled' : task.control === 'paused' || task.drained ? 'waiting' : 'running', inputVersion: task.requirementRevision, runSequence: task.runSequence ?? 1, topicRefs: task.topicRefs ?? [], appliedOperations: task.appliedOperations ?? [], acceptanceCriteria: task.requirements ?? [], taskPromptRefs: [] } }
   const command = async (kind, args, id) => {
     if (kind === 'execution.continue' || kind === 'execution.retry-provider') await refreshExecutionDocument(args.executionId ?? args.binding.executionId)
-    const receipt = await store.command({ id: id ?? `${kind}:${randomUUID()}`, kind, args: clean(args) })
+    let clarification = kind === 'notification.prepare' && args.kind === 'routing-clarification' ? args.payload : undefined
+    if (kind === 'notification.start') {
+      const notification = notificationCache.get(args.notificationId) ?? await query('notification.get', { notificationId: args.notificationId })
+      if (notification?.kind === 'routing-clarification') clarification = notification.payload
+    }
+    const commit = () => store.command({ id: id ?? `${kind}:${randomUUID()}`, kind, args: clean(args) })
+    // 发送许可与待判版本在同一群锁内线性化；缓存/出箱投影必须留在锁外。
+    let receipt
+    if (clarification) {
+      const p = clarification, fact = p.fact
+      receipt = await residentStore.withRoutingHold({ groupId: p.conversationId, messageId: p.sourceMessageId,
+        messageVersion: p.sourceVersion, epoch: residentStore.getGroup(p.conversationId)?.messages.find(message => message.messageId === p.sourceMessageId)?.routingHold?.epoch, commit: () => {
+          assertRoutingClarification(p, args.notificationId)
+          if (kind === 'notification.start') args = { ...args, routingHold: { messageVersion: fact.messageVersion, epoch: fact.epoch, reviewFingerprint: fact.reviewFingerprint } }
+          return commit()
+        } }).catch(error => {
+          if (kind === 'notification.start' && ['topic_routing_hold_stale', 'routing_clarification_stale'].includes(error.code ?? error.message))
+            throw Object.assign(error, { code: 'DYNAMIC_NOTIFICATION_SOURCE_PENDING' })
+          throw error
+        })
+    } else receipt = await commit()
     observerGroupPage?.sourceChanged(receipt.result?.source ?? args.source)
     // 幂等收据保存的是当时快照；通知当前态须独立回读，不能用旧 prepared 覆盖已送达缓存。
     if (receipt.replayed && receipt.result?.notification)
@@ -812,6 +833,74 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       || hash(outbound.artifactFiles ?? []) !== hash(frozen.artifactFiles))) fail('group_reply_frozen_identity_conflict')
     return { outbound, notification, frozen: outbound ?? frozen }
   }
+  function assertRoutingClarification(payload, outboundId) {
+    const group = residentStore.getGroup(payload.conversationId)
+    const message = group?.messages.find(item => item.messageId === payload.sourceMessageId)
+    const hold = message?.routingHold, draft = hold?.clarification, fact = payload.fact
+    if (!message || message.routingStatus !== 'needs-context' || message.messageVersion !== payload.sourceVersion
+      || hold.messageVersion !== fact.messageVersion || !draft || draft.epoch !== fact.epoch
+      || message.senderOpenDingTalkId !== payload.actorId || ['web', 'internal'].includes(message.sourceKind)
+      || message.messageAiSendFlag === 'DWS' || isOwnNotification({ ...message, groupId: group.groupId })
+      || draft.question !== fact.question || draft.assignmentQuote !== fact.assignmentQuote || draft.reviewFingerprint !== fact.reviewFingerprint
+      || fact.agentDirected !== true || draft.replyReview?.kind !== 'substantive' || draft.replyReview.replaceOutboundIds?.length)
+      fail('routing_clarification_stale')
+    const quoteAt = message.text.indexOf(draft.assignmentQuote)
+    if (quoteAt < 0 || message.text.indexOf(draft.assignmentQuote, quoteAt + 1) >= 0) fail('routing_clarification_stale')
+    const reviewMessages = (draft.reviewMessageIds ?? []).map(id => group.messages.find(item => item.messageId === id)).filter(Boolean)
+    if (!reviewMessages.length || reviewMessages.length !== draft.reviewMessageIds.length
+      || draft.reviewMessageVersions?.length !== reviewMessages.length
+      || reviewMessages.some(message => !draft.reviewMessageVersions.some(ref => ref.messageId === message.messageId && ref.messageVersion === message.messageVersion)))
+      fail('routing_clarification_stale')
+    const candidates = buildReplyReviewCandidates({ group: { ...group, outbox: group.outbox.filter(item => item.outboundId !== outboundId) },
+      tasks: residentStore.listTasks().filter(task => task.groupId === group.groupId && !task.archivedAt), currentMessages: reviewMessages })
+    if (fingerprint(candidates) !== draft.reviewFingerprint) fail('routing_clarification_stale')
+    return message
+  }
+  async function prepareRoutingClarifications(groupId) {
+    for (const message of residentStore.getGroup(groupId)?.messages ?? []) {
+      const hold = message.routingHold, draft = hold?.clarification
+      if (closed || message.routingStatus !== 'needs-context' || !draft) continue
+      const outboundId = stableId('routing-clarification', JSON.stringify([groupId, message.messageId, message.messageVersion, draft.epoch]))
+      // 已准备、已发送或未知效果只恢复原账，不能换正文或创建第二个发送身份。
+      if (notificationCache.has(outboundId)) continue
+      if (!message.senderOpenDingTalkId || ['web', 'internal'].includes(message.sourceKind) || message.messageAiSendFlag === 'DWS'
+        || isOwnNotification({ ...message, groupId })) continue
+      const names = legacy.getAgentConfig().agentNames ?? []
+      const namedRecipient = names.filter(name => typeof name === 'string' && name.trim()).some(name =>
+        new RegExp(`^\\s*@?${RegExp.escape(name.trim())}(?:[\\s，,：:]+)`, 'u').test(message.text))
+      const directed = namedRecipient || /^\s*cc\s*:/iu.test(message.text) || message.mentionedAgent === true
+        || message.mentionedAgent === undefined && readMentioned && await readMentioned(groupId, message)
+      if (!directed) continue
+      const fact = { messageVersion: message.messageVersion, epoch: draft.epoch, question: draft.question,
+        assignmentQuote: draft.assignmentQuote, reviewFingerprint: draft.reviewFingerprint, agentDirected: true }
+      const sourceId = `im:${hash([groupId, message.messageId, message.messageVersion])}`
+      const source = await query('source.get', { sourceId })
+      if (!source || source.actorId !== message.senderOpenDingTalkId || source.channel !== 'im') continue
+      const sourceRef = { messageId: message.messageId, messageVersion: message.messageVersion, actorId: message.senderOpenDingTalkId }
+      const payload = { conversationId: groupId, sourceId, sourceVersion: message.messageVersion, sourceMessageId: message.messageId,
+        actorId: message.senderOpenDingTalkId, replyToMessageId: message.messageId, replyToSenderOpenDingTalkId: message.senderOpenDingTalkId,
+        atOpenDingTalkIds: [message.senderOpenDingTalkId], topicRefs: [], taskIds: [], sourceRef, replyKind: 'substantive', fact }
+      try {
+        const previous = residentStore.getGroup(groupId).outbox.find(item => item.outboundId === outboundId)
+        const reply = previous ?? prepareGroupNotification({ groupId, text: draft.question, sourceText: message.text,
+          replyToMessageId: message.messageId, replyToSenderOpenDingTalkId: message.senderOpenDingTalkId,
+          atOpenDingTalkIds: payload.atOpenDingTalkIds, includeSignature: false,
+          internalIds: [groupId, message.messageId, sourceId, message.senderOpenDingTalkId, outboundId] })
+        payload.text = reply.text
+        assertRoutingClarification(payload, outboundId)
+        const saved = await residentStore.appendOutbox({ ...payload, groupId, outboundId, sourceMessageId: `task-notification:${outboundId}`,
+          matterSourceMessageIds: [message.messageId], matterUnitRefs: [], text: reply.text,
+          preflight: () => { assertRoutingClarification(payload, outboundId) } })
+        if (saved?.status) continue
+        await command('notification.prepare', { notificationId: outboundId, taskId: null, requirementRevision: 1,
+          kind: 'routing-clarification', payload }, `prepare-notification:${outboundId}`)
+        failures.delete(outboundId)
+      } catch (error) {
+        // 失败保留可见诊断和原待判；不回退成已处理，也不机械重问。
+        failures.set(outboundId, { id: outboundId, code: error.code ?? error.message })
+      }
+    }
+  }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction, taskFacts: topicFacts,
     // 独立协调已移除；保留普通 Topic 路由和事实回复。
     onStage: recordMessageStage, readMentioned,
@@ -843,6 +932,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         if (messageIds.includes(source.messageId) && Array.isArray(message?.activeUnitRefs) && !sameProcessingRefs(source, message.activeUnitRefs)) await command('source.processingStarted', { sourceId: source.sourceId,
           messageVersion: source.version, activeUnitRefs: message.activeUnitRefs })
       }
+      await prepareRoutingClarifications(groupId)
     },
     quotedReminderContext: async () => null,
     // 在接纳业务决定前拒绝泄漏正文，让原模型修改后重提，不能先创建任务再卡在外发。
@@ -1436,6 +1526,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       messages: [{ messageId: current.payload.sourceRef?.messageId ?? current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined
   async function notificationDeliveryGate(notification) {
     if (notification.kind === 'coordination' || notification.state === 'superseded') return false
+    if (notification.kind === 'routing-clarification' && ['prepared', 'failed'].includes(notification.state)) {
+      try { assertRoutingClarification(notification.payload, notification.id) }
+      catch (error) {
+        failures.set(notification.id, { id: notification.id, code: error.code ?? error.message })
+        return false
+      }
+    }
     if (notification.kind === 'fixed-topic-reply' && ['prepared', 'failed'].includes(notification.state)) {
       const parent = notification.payload.artifact ? await query('notification.get', { notificationId: notification.payload.deliveryId }) : notification
       const p = parent?.payload
@@ -1607,6 +1704,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       for (const key of failures.keys()) if (key.startsWith('topic-fact-projection:')) failures.delete(key)
       for (const failure of factFailures) failures.set(`topic-fact-projection:${failure.id}`, failure)
       await topicCoordinator.recover()
+      for (const group of residentStore.listGroups()) await prepareRoutingClarifications(group.groupId)
       for (const source of await query('source.list')) {
         await projectSource(source)
         const current = await query('source.get', { sourceId: source.sourceId })
@@ -1930,6 +2028,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         query('source.list', { groupId }), query('notification.list', { groupId }),
       ])
       return messageProcessingSources(retiredSourceOwnership(sources, residentStore.getGroup(groupId)?.sourceDispatchOwnership, groupId), notifications, groupId)
+    },
+    async updateMessageRoutingHold(args) {
+      if (closed || !residentStore.getGroup(args.groupId)) fail('MESSAGE_RETRY_UNAVAILABLE')
+      const message = await residentStore.updateRoutingHold(args)
+      void kickGroup(args.groupId).catch(error => ctx.logger?.warn?.(`routing hold recovery: ${error.code ?? error.message}`))
+      return { groupId: args.groupId, messageId: args.messageId, status: args.resume ? 'resumed' : 'scope-updated', epoch: message.routingEpoch }
     },
     async retryMessageProcessing(args) {
       const { groupId, messageId, phase, requestId } = args

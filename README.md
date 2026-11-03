@@ -88,13 +88,17 @@ DSH 模型故障冷却期间补充需求后，到期复核仍会沿原执行身�
 
 来源结算按消息 ID、版本查询话题活跃引用，复用修订索引，不为每条历史来源展开全部话题正文；归属账在复制前按来源筛选。完整上下文读取仍校验原消息事实，事项变更、移除与退役仍重新核对，不跳过已完成来源。
 
+待判（`needs-context`）保留原消息及版本化原因，既不标为忽略，也不结清为已路由；在明确恢复前不会自动循环重试。默认无范围声明时作为群级屏障，阻止相关待处理来源被决策结清；经本地鉴权并明确确认完整范围后，可将屏障收窄到指定有效Topic，范围外事项可独立推进。恢复请求绑定消息版本与epoch并在串行更新中校验；旧版本/epoch请求会被拒绝。默认恢复只将原消息重新置为待路由，不自动认定归属、完成业务或发送通知；只有路由提交成功后来源才标记为已路由。
+
+仅当原消息明确指向Agent交办、含唯一可核验的交办原文，且通知候选已完成 substantive 审阅（不撤回既有通知）时，才可能发出`routing-clarification`澄清；该通知不创建Topic或Task。普通讨论不主动追问，内部判定`reason`不作为通知正文。通知身份绑定群、来源消息/版本及持久澄清epoch；仅收窄hold范围不会更换通知身份或重复提问。出箱准备及获取发送许可前都重新核验来源版本、待判状态、epoch和候选审阅指纹；过期请求拒绝发送。`starting`或`unknown`只读回读原通知账，不新建身份或重发。澄清通知及其未知结果都不表示来源已结清；消息继续保持待判，只有进入许可的恢复路径并成功提交路由后，才标记为已路由。
+
 Topic 默认上下文使用本次事实或用户原消息、话题摘要、相关近期对话与新补充、相关任务状态摘要和已发/待发回复；任务与事实查询在数据库中限制字段及行数，完整目标、执行证据和历史按需读取，不额外调用总结模型。已归档任务与已发回复仍可提供有界状态摘要。尚有未处理或未投影事实时不能取消订阅；单条摘要/发件箱投影失败保留待恢复记录和告警，不阻断其他事实恢复。
 
 Topic按共同业务事项和目标聚合。同次交办、共享上下文且适合整体交付的排序、筛选等多个需求项可保留在同一Topic，不因各项可独立验收就拆开；同一页面也可能有不同业务目标和独立交付约定，仍可分别建Topic。Unit是来源引用，不是功能点或Task数量规则。TopicDecision优先复用适配的原任务，追加本轮目标、验收或截图交付要求；查无适配任务再新建，确有独立执行交付边界才拆Task，内部并行由同一Owner安排执行会话。沿用有界摘要、当前增量和按需读取，不新增协调层或模型轮次，也不自动归并既有Topic/Task。
 
-Route在同一次判断中核对职责与事项，命中旧Topic也不能跳过职责判断。职责外协作直接进入固定“职责外话题”，由既有处理器静默结清；明确向助手求助且真实@元数据符合时才回复职责边界，不调用普通业务TopicDecision。短句结合引用、当前批次及有界前序对话判断，既往职责外结论不永久继承；新的职责内技术事项正常路由。职责内业务即使明确交给同事处理，仍留在业务Topic再判断是否需要助手介入。候选目录只提供摘要，详情按需读取，不默认遍历完整话题历史。
+Route在同一次判断中核对职责与事项，命中旧Topic也不能跳过职责判断。职责外协作直接进入固定“职责外话题”，由既有处理器静默结清；明确向助手求助且真实@元数据符合时才回复职责边界，不调用普通业务TopicDecision。短句结合引用、当前批次及有界前序对话判断，既往职责外结论不永久继承；新的职责内技术事项正常路由。职责内业务即使明确交给同事处理，仍留在业务Topic再判断是否需要助手介入。候选目录只提供摘要，详情按需读取，不默认遍历完整话题历史。路由首屏优先提供原生引用及已关联任务命中的Topic，再补充最多5个词面查询词组召回的历史Topic；候选与目录共用字符预算，历史候选单独标出命中词及标题/摘要字段，按命中词数排序并保留目录顺序分页。词面命中只用于补充候选，不证明事项相同或授权合并；最终归属仍由Route结合职责与上下文判断。显式`queries`搜索接受1至5个非空词组（每项最多32字符，不能与`query`并用），去重后对标题和摘要做不区分大小写的子串匹配，按命中词组数量排序、原目录顺序打平并分页；返回的匹配字段仅为检索依据。
 
-Route 仅保留事项归属、来源及授权边界提示，Decision 承担任务动作与群回复协议；两者保留话题、任务、消息、材料和技能查询能力。普通路由不展示标题/摘要迁移提交工具；旧流程目录关闭时不展示其读取工具。业务提交 schema 与 Host 校验不变。
+Route 仅保留事项归属、来源及授权边界提示，Decision 承担任务动作与群回复协议；两者保留话题、任务、消息、材料和技能查询能力。普通路由不展示标题/摘要迁移提交工具；旧流程目录关闭时不展示其读取工具。当前 Task 路径使用不再要求退役字段`workflowRefs`/`workflowReason`的新决策 schema；启用旧流程提示的兼容入口仍保留旧 schema 与流程引用校验。Decision request identity 包含所用提交 schema 的指纹；已接纳账按原身份幂等恢复，不按新 schema 重新解释或重放。Route receipt 保留选定目标、选择理由及已比较候选的 Topic ID/版本/理由供审计；这些记录便于追溯决策依据，不证明语义归属正确。
 
 Topic 的同一轮 Decision 在持久接纳前收到同话题新来源时，保留实际 Agent 会话并追加最新固定版本输入；旧版本和仍在 Inbox 排队、尚未消费的新版本不能提交。新版本重新核对来源、任务版本及回复审阅。接纳后该轮会话结束，后续新来源创建新会话；已接纳操作仍按原 operationId 恢复，不因新消息回滚或重放。
 
@@ -354,6 +358,21 @@ node --test test/dynamic-task-store.test.js test/dynamic-execution-session-nativ
 ```
 
 默认运行与修改直接相关的测试。需要全量回归时运行 `pnpm test`；它限定 `test/*.test.js`，避免扫描 `docs/tmp` 中已有隔离业务仓库。保留已有 `.test-runs/` 与 `docs/tmp/` 数据。
+
+Topic 路由评估 runner 位于 `docs/acceptance/topic-routing-quality/scripts/run.mjs`。以下预检不发起付费模型调用；它校验配置、profile 依赖和所选 split 的 fixture，不验证凭据、网络或 provider 可用性：
+
+```powershell
+node docs/acceptance/topic-routing-quality/scripts/run.mjs --check --profile test/fixtures/native-profile/package.json --config docs/acceptance/topic-routing-quality/fixtures/check-config.json --budget-usd 1 --max-call-usd 0.01 --split holdout
+```
+
+离线合同运行使用脚本化模型和隔离 native Host，不调用真实 provider；分别执行 development 与 holdout：
+
+```powershell
+node docs/acceptance/topic-routing-quality/scripts/run.mjs --offline-contract --profile test/fixtures/native-profile/package.json --config docs/acceptance/topic-routing-quality/fixtures/check-config.json --budget-usd 1 --max-call-usd 0.01 --split development
+node docs/acceptance/topic-routing-quality/scripts/run.mjs --offline-contract --profile test/fixtures/native-profile/package.json --config docs/acceptance/topic-routing-quality/fixtures/check-config.json --budget-usd 1 --max-call-usd 0.01 --split holdout
+```
+
+当前评估集共 120 条（development 104、holdout 16）。`family`、`constructionFamily` 与输入摘要的跨 split 隔离由结构化校验通过；有限人工抽审暂未发现可确认反例，但独立人工语义审定及 `datasetReview` 仍待完成。round-6 离线合同运行覆盖 development 104/104、holdout 16/16，未报告执行失败；它使用脚本化模型（`streams=0`、`modelQuality=not-measured`），不代表真实语义准确率或候选召回通过。不要省略显式预算参数；真实 provider/live 运行另需明确付费授权与 provider 独立硬限额，本任务未执行该路径。
 
 测试覆盖真实原生 Session/preset/持久化、事务故障注入、独立进程重启、取消与动态调度，但脚本化模型、隔离平台和测试进程不能代替现场 provider、OS 沙箱、生产服务或钉钉交付验收。测试接口只在显式 `testApiEnabled` 时启用，resident 不应直接暴露公网。
 

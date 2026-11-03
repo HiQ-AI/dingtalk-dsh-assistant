@@ -174,6 +174,7 @@ export async function apply(ctx, config = {}) {
   runtime.reconcileWebTaskTopics = tasks.reconcileWebTaskTopics
   runtime.respondTaskPrivateHumanReply = tasks.respondPrivateHumanReply
   runtime.retryDecisionFailedMessage = tasks.retryMessageProcessing
+  runtime.updateMessageRoutingHold = tasks.updateMessageRoutingHold
   runtime.retryNotification = tasks.retryNotification
   runtime.isTaskSessionMode = () => true
   const recoverTasks = () => tasks.recover().catch(error => ctx.logger.warn(error.message))

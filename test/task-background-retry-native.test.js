@@ -131,7 +131,7 @@ test('精确收件恢复沿原生会话处理：外部启动阻塞未修再次�
 test('explicit background message retry admits original facts through topics once without opening automatic history ingress', { ...({ timeout: 20000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'task-background-retry-'))
   const h = await nativeTaskHost(root, async request => {
-    if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) { const input = latestInput(request); return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'explicit-history', title: '原图位置调整' }] })) } }] }
+    if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) { const input = latestInput(request); return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'explicit-history', title: '原图位置调整', reason: '历史消息明确要求调整原图位置' }] })) } }] }
     return topicTaskCalls(request) ?? [{ name: 'task_session_submit', args: { decision: { action: 'wait', summary: '等待核对原图位置', evidence: [], limitations: [] } } }] }, { config: { ingressEpoch: '2026-10-14T02:00:00.000Z' } })
     await t.beginBusiness()
 

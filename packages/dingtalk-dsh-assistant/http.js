@@ -182,6 +182,23 @@ export async function handleRequest(request, response, store, { testApiEnabled =
   const url = new URL(request.url ?? '/', 'http://localhost')
   // 浏览器预检不执行业务操作，须先于旧写入口清退规则响应。
   if (request.method === 'OPTIONS') return send(response, 204, null)
+  const routingHold = request.method === 'POST' && /^\/config\/groups\/([^/]+)\/messages\/([^/]+)\/routing-hold$/u.exec(url.pathname)
+  if (routingHold) {
+    if (!localConfigurationRequest(request)) return send(response, 403, { error: 'TASK_LOCAL_IDENTITY_REQUIRED' })
+    if (!store.updateMessageRoutingHold) return send(response, 503, { error: 'routing_hold_unavailable' })
+    try {
+      const identity = { messageVersion: z.number().int().positive(), epoch: z.number().int().nonnegative() }
+      const schema = z.union([
+        z.strictObject({ ...identity, resume: z.literal(true) }),
+        z.strictObject({ ...identity, scope: z.array(z.string().trim().min(1).max(200)).min(1).max(100).refine(values => new Set(values).size === values.length), confirmClosedScope: z.literal(true) }),
+      ])
+      const parsed = schema.safeParse(await readJson(request))
+      if (!parsed.success) return send(response, 400, { error: 'routing_hold_request_invalid' })
+      const { confirmClosedScope, ...input } = parsed.data
+      const result = await store.updateMessageRoutingHold({ groupId: decodeURIComponent(routingHold[1]), messageId: decodeURIComponent(routingHold[2]), ...input })
+      return send(response, 200, result)
+    } catch (error) { return send(response, error.message === 'topic_routing_hold_stale' ? 409 : 400, { error: error.message }) }
+  }
   // Only current task sessions may use this endpoint. Legacy archive stays retired.
   if (request.method === 'POST' && /^\/tasks\/[^/]+\/archive$/u.test(url.pathname) && store.isTaskSessionMode?.()) {
     try {

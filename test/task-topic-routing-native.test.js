@@ -160,7 +160,7 @@ testRunner('native request-bound review and Topic reads accept empty args while 
         assert.equal(missing?.status, 'invalid-arguments')
         assert.deepEqual(missing.nextCall, { name: 'group_topic_list', arguments: { offset: 0, limit: 50 } })
         return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId,
-          messageVersion: item.messageVersion, topics: [{ newTopicKey: 'bound-read', title: '只读承接合同核验' }] })) })]
+          messageVersion: item.messageVersion, topics: [{ newTopicKey: 'bound-read', title: '只读承接合同核验', reason: '独立核验请求绑定读取合同' }] })) })]
       }
       if (names.includes('group_decision_submit')) {
         assert.deepEqual(request.tools.find(tool => tool.name === 'group_reply_review_get').parameters.required, [])
@@ -195,7 +195,7 @@ testRunner('native revised Topic supplies current linked Task reads without resc
     const h = await extraHost(t, 'linked-task-reads-', async request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
       if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId,
-        routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ topicId }] })) })]
+        routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ topicId, reason: '原事项的后续讨论' }] })) })]
       if (names.includes('group_decision_submit')) {
         assert.equal(input.linkedTasks.total, 1)
         assert.equal(input.linkedTasks.reads[0].taskId, taskId)
@@ -240,7 +240,7 @@ testRunner('native task context reports invalid arguments and reads explicit arc
   const h = await extraHost(t, 'archived-context-contract-', async (request, host) => {
     const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
     if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId,
-      routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'archive-read', title: '归档身份核验' }] })) })]
+      routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'archive-read', title: '归档身份核验', reason: '独立核验归档任务身份', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '身份核验独立于已有事项' })) }] })) })]
     if (names.includes('group_decision_submit')) {
       if (!requestedInvalid) { requestedInvalid = true; return invalid.map(args => call('group_task_context_get', args)) }
       if (!requestedArchive) {
@@ -292,13 +292,14 @@ testRunner('native batch followup reopens each original completed task and sessi
     const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
     if (input.trigger === 'task-facts') return topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
-      assert.ok(JSON.stringify(request).includes('批量事项即使由新协调 Topic 承接'))
+      assert.ok(JSON.stringify(request).includes('批量跟进可查询group_task_list及group_task_context_get核对目标'))
       if (!values.some(value => Array.isArray(value.tasks))) return [call('group_task_list', { limit: 100 })]
       return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
-        messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'batch-review', title: '原交付审查续办' }],
+        messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'batch-review', title: '原交付审查续办', reason: '集中核验原交付审查事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '批量审查涉及多个原任务，不只归属单个已有事项' })) }],
       })) })]
     }
     if (names.includes('group_decision_submit')) {
+      assert.ok(JSON.stringify(request).includes('批量事项即使由新协调 Topic 承接'))
       const details = values.find(value => Array.isArray(value.tasks))
       if (!details) {
         const ids = (await host.query('task.list')).filter(task => task.title.startsWith('dataset ')).map(task => task.taskId)
@@ -368,7 +369,7 @@ for (const quoted of [true, false]) testRunner('普通回复显式多收件人�
       const topic = h.residentStore.listTopics('native-group')[0]
       return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
         messageId: item.messageId, messageVersion: item.messageVersion,
-        topics: [topic ? { topicId: topic.topicId } : { newTopicKey: 'same', title: '资料核对' }],
+        topics: [topic ? { topicId: topic.topicId, reason: '同一资料核对的后续回复' } : { newTopicKey: 'same', title: '资料核对', reason: '独立的资料核对事项' }],
       })) })]
     }
     if (names.includes('group_decision_submit')) {
@@ -463,15 +464,15 @@ testRunner('native task service preserves Topic routing, task association, ignor
   await t.beginBusiness()
   h = await t.step(async () => nativeTaskHost(root, async (request, host) => {
     const names = request.tools.map(tool => tool.name)
-    assert.ok(JSON.stringify(request.messages.filter(message => message.role === 'system')).includes(groupReplyScopeInstructions),
+    if (!names.includes('group_topic_route_submit')) assert.ok(JSON.stringify(request.messages.filter(message => message.role === 'system')).includes(groupReplyScopeInstructions),
       '话题承接及任务结果的原生模型请求都必须携带多事项与部分处理的回复范围规则')
     if (names.includes('group_topic_route_submit')) {
       const input = envelope(request, '[GROUP_TOPIC_ROUTE]')
       const existing = residentStore.listTopics('native-group').find(topic => topic.title === '原生文件检查')
       return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
         messageId: item.messageId, messageVersion: item.messageVersion,
-        topics: item.messageId === 'noise' ? [] : item.messageId === 'discussion' ? [{ newTopicKey: 'discussion', title: '部署时间讨论' }]
-          : existing ? [{ topicId: existing.topicId }] : [{ newTopicKey: 'native-check', title: '原生文件检查' }],
+        topics: item.messageId === 'noise' ? [] : item.messageId === 'discussion' ? [{ newTopicKey: 'discussion', title: '部署时间讨论', reason: '部署时间属于独立讨论', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '部署时间讨论不同于文件检查' })) }]
+          : existing ? [{ topicId: existing.topicId, reason: '原文件检查的补充' }] : [{ newTopicKey: 'native-check', title: '原生文件检查', reason: '独立的文件检查事项' }],
         ...(item.messageId === 'noise' ? { reason: '同事闲聊，没有交办或持续事项' } : {}),
       })) })]
     }
@@ -638,7 +639,7 @@ testRunner('native Topic handoff keeps the explicit requester as task and comple
       const input = envelope(request, '[GROUP_TOPIC_ROUTE]')
       const existing = host.residentStore.listTopics('native-group')[0]
       return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
-        topics: [existing ? { topicId: existing.topicId } : { newTopicKey: 'handoff', title: '文件检查交接' }] })) })]
+        topics: [existing ? { topicId: existing.topicId, reason: '原文件检查的交接' } : { newTopicKey: 'handoff', title: '文件检查交接', reason: '独立的文件检查交接事项' }] })) })]
     }
     if (names.includes('group_decision_submit')) {
       const input = envelope(request, '[GROUP_TOPIC_DECISION]'), current = input.messages.at(-1)
@@ -1057,14 +1058,15 @@ testRunner('business notices 423–424 and named owners remain in the original T
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
     const prompt = JSON.stringify(request)
     assert.ok(prompt.includes('话题归属与助手动作分开判断'))
-    assert.ok(prompt.includes('不唤醒已有任务'))
     assert.ok(prompt.includes('不能自动作为本助手任务完成证据'))
     if (names.includes('group_topic_route_submit')) {
+      assert.ok(prompt.includes('不创建或唤醒任务'))
       assert.ok(prompt.includes('不能把“未交给本助手”当成“职责外”'))
       return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
-        units: [{ unitKey: 'lci', summary: 'LCI 单位修复的讨论和处理记录', sourceRefs: [{ wholeMessage: true }], topics: [topicId ? { topicId } : { newTopicKey: 'lci', title: 'LCI 单位修复' }] }] })) })]
+        units: [{ unitKey: 'lci', summary: 'LCI 单位修复的讨论和处理记录', sourceRefs: [{ wholeMessage: true }], topics: [topicId ? { topicId, reason: '原单位修复事项的讨论' } : { newTopicKey: 'lci', title: 'LCI 单位修复', reason: '独立的单位修复事项' }] }] })) })]
     }
     assert.ok(names.includes('group_decision_submit'))
+    assert.ok(prompt.includes('不唤醒已有任务'))
     return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
       decision: { basisMessageIds: [...new Set(input.messages.map(item => item.messageId))], actions: [], reason: '同一业务事项由同事负责，保留完整上下文，不承接、不追问、不回复',
         topicUpdate: { summary: [input.summary, ...input.messages.map(item => item.text)].filter(Boolean).join('；') } } } }]
@@ -1122,7 +1124,7 @@ testRunner('scripted native aggregation keeps list requirements, screenshot deli
         }
         return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
           messageId: item.messageId, messageVersion: item.messageVersion, ignoredRefs: [],
-          units: [{ unitKey: 'list-work', summary: '资料列表整体优化', sourceRefs: [{ quote: item.text }], topics: [topicId ? { topicId } : { newTopicKey: 'list-work', title: '资料列表优化' }] }],
+          units: [{ unitKey: 'list-work', summary: '资料列表整体优化', sourceRefs: [{ quote: item.text }], topics: [topicId ? { topicId, reason: '原列表优化的验收和交付要求' } : { newTopicKey: 'list-work', title: '资料列表优化', reason: '独立的列表优化事项' }] }],
         })) })]
       }
       if (names.includes('group_decision_submit')) {
@@ -1189,7 +1191,7 @@ testRunner('scripted native routing checks scope before reusing an old Topic and
       return [call('group_topic_route_submit', { requestId: input.requestId, routes: [{ messageId: source.messageId, messageVersion: source.messageVersion,
         units: [{ unitKey: 'expense', summary: '同事间票据整理', sourceRefs: [{ quote: mixed ? '可以了。' : source.text }],
           topics: [], fixedTopic: 'out-of-scope', reason: '引用和前序对话表明是报销协作，旧话题不能覆盖技术职责边界' },
-        ...(mixed ? [{ unitKey: 'technical', summary: '资料列表保存报错', sourceRefs: [{ quote: technical }], topics: [{ newTopicKey: 'save-error', title: '资料列表保存故障' }] }] : [])] }] })]
+        ...(mixed ? [{ unitKey: 'technical', summary: '资料列表保存报错', sourceRefs: [{ quote: technical }], topics: [{ newTopicKey: 'save-error', title: '资料列表保存故障', reason: '资料保存故障属于独立技术事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '技术故障不同于已有事项' })) }] }] : [])] }] })]
     }
     if (names.includes('group_decision_submit')) {
       decisionTurns++
@@ -1233,7 +1235,7 @@ testRunner('scripted native routing permits distinct delivery goals on the same 
         assert.ok(JSON.stringify(request.messages).includes('确有不同业务目标或独立交付约定时可分Topic'))
         return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
           replyTopic: { newTopicKey: 'work-0' }, ignoredRefs: [], units: parts.map((quote, index) => ({ unitKey: 'work-' + index, summary: ['检索体验优化', '权限风险审计'][index],
-            sourceRefs: [{ quote }], topics: [{ newTopicKey: 'work-' + index, title: ['检索体验优化', '权限风险审计'][index] }] })) })) })]
+            sourceRefs: [{ quote }], topics: [{ newTopicKey: 'work-' + index, title: ['检索体验优化', '权限风险审计'][index], reason: '分别处理不同业务事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '当前事项不同于已有事项' })) }] })) })) })]
       }
       return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
         decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reason: '保留两个独立交付约定，当前未要求助手执行' } })]
@@ -1254,7 +1256,7 @@ testRunner('native Topic context accepts a requirement that only mentions notifi
   const h = await extraHost(t, 'topic-participation-', async request => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
     if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
-      messageId: item.messageId, messageVersion: item.messageVersion, topics: [topicId ? { topicId } : { newTopicKey: 'list', title: '列表状态展示' }],
+      messageId: item.messageId, messageVersion: item.messageVersion, topics: [topicId ? { topicId, reason: '原列表事项的展示要求' } : { newTopicKey: 'list', title: '列表状态展示', reason: '独立的列表状态展示事项' }],
     })) })]
     if (names.includes('group_decision_submit')) {
       if (input.trigger === 'task-facts') return topicTaskCalls(request)
@@ -1298,7 +1300,7 @@ testRunner('native proposal prompt preserves original authorization and asks wit
   let checked = false
   const h = await extraHost(t, 'task-topic-proposal-', async request => {
     const names = request.tools.map(tool => tool.name), input = latestInput(request)
-    if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'proposal', title: '描述框位置调整' }] })) })]
+    if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'proposal', title: '描述框位置调整', reason: '独立处理描述框位置调整' }] })) })]
     assert.ok(names.includes('group_decision_submit'))
     const prompt = JSON.stringify(request)
     for (const rule of ['结合需求原文、引用、已有任务及前后分工判断', '不能把最后一个 @ 当作事项负责人', '不因当前只 @ 同事或省略助手称呼而重复索要确认', '才选择 task-proposal', '这个事项是否需要我处理？', '暂不创建任务', '不承诺', '没你的事', '不是找你', 'topicUpdate.summary 记录承接或静默的判断及分工依据', '测试助手', '不追加未经授权的业务验收']) assert.ok(prompt.includes(rule), rule)
@@ -1368,8 +1370,8 @@ testRunner('协调暂停时混合消息拒绝协调来源，普通话题Host重�
       return [call('group_topic_route_submit', { requestId: input.requestId,
       routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, ignoredRefs: [], units: [
         { unitKey: 'reminder', summary: '查询提醒', sourceRefs: [{ quote: '测试助手，查询提醒；' }],
-          ...(rejectedCandidate ? { dispatchOwner: 'coordination', topics: [], reason: '暂停功能候选必须拒绝' } : { topics: [{ newTopicKey: 'file', title: '文件核查' }] }) },
-        { unitKey: 'file', summary: '核查文件', sourceRefs: [{ quote: '测试助手，核查文件。' }], topics: [{ newTopicKey: 'file', title: '文件核查' }] },
+          ...(rejectedCandidate ? { dispatchOwner: 'coordination', topics: [], reason: '暂停功能候选必须拒绝' } : { topics: [{ newTopicKey: 'file', title: '文件核查', reason: '两段消息共同指向文件核查' }] }) },
+        { unitKey: 'file', summary: '核查文件', sourceRefs: [{ quote: '测试助手，核查文件。' }], topics: [{ newTopicKey: 'file', title: '文件核查', reason: '两段消息共同指向文件核查' }] },
       ] })) })]
     }
     assert.ok(!names.includes('coordination_submit'))

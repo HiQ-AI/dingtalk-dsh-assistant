@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 
+export const routingHoldSchema = z.object({ messageVersion: z.number().int().positive(), epoch: z.number().int().nonnegative(), reason: z.string().min(1), createdAt: z.string().min(1), scope: z.array(z.string().min(1)).min(1).optional(), clarification: z.object({ epoch: z.number().int().nonnegative(), question: z.string().trim().min(1).max(2000), assignmentQuote: z.string().min(1), replyReview: z.object({ kind: z.literal('substantive'), reviewedOutboundIds: z.array(z.string()), sameMatterOutboundIds: z.array(z.string()), replaceOutboundIds: z.array(z.string()) }).strict(), reviewFingerprint: z.string().min(1), reviewMessageIds: z.array(z.string().min(1)).min(1), reviewMessageVersions: z.array(z.object({ messageId: z.string().min(1), messageVersion: z.number().int().positive() }).strict()).min(1) }).strict().optional() }).strict()
+export const routingBlocksTopics = (message, topicIds = []) => message.routingStatus !== 'routed'
+  && (message.routingStatus !== 'needs-context' || !message.routingHold?.scope?.length || !topicIds.length
+    || topicIds.some(topicId => message.routingHold.scope.includes(topicId)))
 export const topicRefSchema = z.object({ topicId: z.string().min(1), revision: z.number().int().positive() }).strict()
 export const unitRefSchema = z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()
 export const sourceRangeSchema = z.object({ start: z.number().int().nonnegative(), end: z.number().int().positive(), quote: z.string().min(1) }).strict()

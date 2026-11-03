@@ -1,0 +1,11 @@
+{
+  "provider": "example-provider",
+  "model": "example-model",
+  "credentialsHome": "unused-during-check",
+  "providerConfig": {
+    "apiKeyEnv": "EXAMPLE_PROVIDER_KEY",
+    "api": "openai-completions",
+    "baseURL": "https://example.invalid",
+    "models": [{ "id": "example-model" }]
+  }
+}

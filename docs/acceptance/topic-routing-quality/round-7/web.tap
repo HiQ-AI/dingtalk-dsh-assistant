@@ -1,0 +1,37 @@
+TAP version 13
+# Subtest: Web maintenance preserves an unsubmitted Topic input
+ok 1 - Web maintenance preserves an unsubmitted Topic input
+  ---
+  duration_ms: 1732.8359
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":620,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1072,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":39,"aborted":false}
+# Subtest: Web maintenance preserves an unsubmitted Topic input across source enrichment
+ok 2 - Web maintenance preserves an unsubmitted Topic input across source enrichment
+  ---
+  duration_ms: 2435.1341
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":165,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2073,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":196,"aborted":false}
+# Subtest: web acceptance reuses existing topic and captures exact enriched source version with real image execution material
+ok 3 - web acceptance reuses existing topic and captures exact enriched source version with real image execution material
+  ---
+  duration_ms: 8013.7471
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":5,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":7827,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":181,"aborted":false}
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 12826.5127

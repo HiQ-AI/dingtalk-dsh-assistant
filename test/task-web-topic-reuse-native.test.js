@@ -18,13 +18,15 @@ t.onCancel(() => finish.resolve())
 t.onCancel(() => release.resolve())
 
  let topicId,rounds=0
+ const staleRequests=new Set()
  const h=await nativeTaskHost(root,async request=>{
   assert.ok(++rounds<30)
   const input=latestInput(request),names=request.tools.map(tool=>tool.name)
   if(input.requestId?.startsWith('coord-summary-')||input.trigger==='task-facts')return topicTaskCalls(request)
   if(names.includes('group_topic_route_submit'))return [call('group_topic_route_submit',{requestId:input.requestId,
-   routes:input.messages.map(item=>({messageId:item.messageId,messageVersion:item.messageVersion,topics:[{topicId}]}))})]
+   routes:input.messages.map(item=>({messageId:item.messageId,messageVersion:item.messageVersion,topics:[{topicId,reason:'原话题的待处理输入'}]}))})]
   if(names.includes('group_decision_submit')){
+   if(staleRequests.has(`${input.requestId}:${input.revision}`))return []
    if(input.revision===2){entered.resolve(input);await release.promise}
    else if(!replaceVersion||input.messages.some(item=>item.messageId==='pending-topic-source'&&item.messageVersion===2)){
     currentEntered.resolve(input);await finish.promise
@@ -33,6 +35,12 @@ t.onCancel(() => release.resolve())
     decision:{actions:[],basisMessageIds:input.messages.map(item=>item.messageId),reason:'已核对当前版本的验收要求，无需新增任务',topicUpdate:{summary:'当前验收要求已记录'}}})]
   }
   return [call('task_session_submit',{decision:{action:'wait',summary:'等待验收材料',evidence:[],limitations:[]}})]
+ })
+ h.ctx.on('tools/result',(exec,result)=>{
+  if(exec.name==='group_decision_submit'&&result.value?.status==='topic-stale'){
+   const args=exec.args??exec.arguments
+   staleRequests.add(`${args.requestId}:${args.revision}`)
+  }
  })
  await t.beginBusiness()
 
@@ -161,10 +169,12 @@ test('web acceptance reuses existing topic and captures exact enriched source ve
   const root = await mkdtemp(join(tmpdir(), 'web-topic-reuse-')), image = Buffer.from('actual-image-bytes')
   const resource = { type: 'mediaId', resourceId: 'real-image-id', download: { ready: true } }
   let originalTopic, taskRead = false, delegated = false
+  const staleRequests = new Set()
   await t.beginBusiness()
   const h = await t.step(async () => nativeTaskHost(root, async (request, host) => {
     const names = request.tools.map(tool => tool.name), input = latestInput(request)
-    if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [originalTopic ? { topicId: originalTopic } : { newTopicKey: 'layout', title: '描述框位置' }] })) })]
+    if (names.includes('group_decision_submit') && staleRequests.has(`${input.requestId}:${input.revision}`)) return []
+    if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [originalTopic ? { topicId: originalTopic, reason: '原位置调整事项的补充' } : { newTopicKey: 'layout', title: '描述框位置', reason: '独立的位置调整事项' }] })) })]
     if (names.includes('group_decision_submit') && originalTopic) return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reason: '仅补充原图，等待明确交办' } })]
     if (names.includes('group_decision_submit')) return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [{ kind: 'task-proposal', title: '描述框位置', objective: '右侧顶部对齐', topicRefs: [{ topicId: input.topicId, revision: input.revision }] }], reply: '这个事项是否需要我处理？', replyToMessageId: input.messages.at(-1).messageId, replyReview: { kind: 'confirmation', reviewedOutboundIds: host.sent.map(item => item.id), sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
     if (names.includes('task_delegate')) {
@@ -181,6 +191,12 @@ test('web acceptance reuses existing topic and captures exact enriched source ve
     assert.ok((await readFile(original.resources[0].path)).equals(image))
     return [call('execution_submit', { output: { status: 'completed', summary: '核对真实原图', evidence: ['原图字节已读取'], limitations: [], artifacts: [] } })]
   }, { serviceFactory: options => openTaskSessionService({ ...options, readResource: async () => taskRead ? ({ image: { data: image, mediaType: 'image/png' } }) : ({ text: 'resource metadata only', complete: true }) }) }))
+  h.ctx.on('tools/result', (exec, result) => {
+    if (exec.name === 'group_decision_submit' && result.value?.status === 'topic-stale') {
+      const args = exec.args ?? exec.arguments
+      staleRequests.add(`${args.requestId}:${args.revision}`)
+    }
+  })
   t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }) })
   const message = { groupId: 'native-group', messageId: 'original-layout', senderOpenDingTalkId: 'native-user', senderName: '真实用户', occurredAt: '2026-10-13T10:00:00Z', text: '描述框放在文字右侧顶部对齐', resourceRefs: [resource] }
   await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())

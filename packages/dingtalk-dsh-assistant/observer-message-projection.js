@@ -71,7 +71,10 @@ export function messageProcessingProjection(message, topics, source, requests, s
     if (source) return null
     return records.length ? decisionTimes.every(Number.isFinite) ? new Date(Math.max(...decisionTimes)).toISOString() : null : message.agentDeliveryAt ?? null
   }
-  if (manuallySettled(message)) {
+  if (message.routingStatus === 'needs-context') {
+    state = 'needs_clarification'; basis = 'routing-hold'; conclusion = message.routingHold?.reason ?? null
+  }
+  else if (manuallySettled(message)) {
     state = 'processed'; basis = 'manual-fixed-topic-correction'; completedAt = message.agentDeliveryAt
     conclusion = message.units.find(unit => unit.unitId === message.activeUnitRefs[0].unitId && unit.unitRevision === message.activeUnitRefs[0].unitRevision).manualCorrection.reason
   }
@@ -87,23 +90,20 @@ export function messageProcessingProjection(message, topics, source, requests, s
       conclusion = source.coordinationRetirement.reason
     }
   } else if (source && source.routed !== true || related.length || reasons.length) state = 'processing'
-  if (state === 'needs_clarification' && sourceDone) {
-    basis = 'source-semantic'
-    completedAt = semanticCompletionTime()
-  }
   if(stateOnly)return {processingState:state}
   conclusion = [...new Set([conclusion, ...(topicPending ? [] : records.map(record => record?.decision?.reason ?? record?.decision?.reply)),
     ...(['processed', 'needs_clarification'].includes(state) ? reasons : [])]
     .filter(text => typeof text === 'string' && text.trim()))].join('；') || null
   const processingFailureCode = issues.find(item => item.status === 'failed')?.cause ?? null
-  if (!details) return { processingState: state, processingConclusion: conclusion, processingFailureCode,
+  const routingHold = state === 'needs_clarification' && message.routingHold ? { messageVersion: message.messageVersion, epoch: message.routingHold.epoch, ...(message.routingHold.scope ? { scope: message.routingHold.scope } : {}) } : null
+  if (!details) return { processingState: state, processingConclusion: conclusion, processingFailureCode, routingHold,
     processingSentAt: message.occurredAt ?? null, processingCompletedAt: completedAt,
     processingRecovery: recovery[0] ?? null, processingRetrying: issues.some(item => item.status === 'retrying') }
   const notices = source?.notifications ?? []
   const noticeTimes = notices.map(notice => notice.deliveredAt)
   const deliveredAt = notices.length && notices.every(notice => notice.versionMatched === true && notice.state === 'delivered') && noticeTimes.every(time => Number.isFinite(instant(time)))
     ? new Date(Math.max(...noticeTimes.map(instant))).toISOString() : null
-  return { processingState: state, processingBasis: basis, processingConclusion: conclusion, processingFailureCode,
+  return { processingState: state, processingBasis: basis, processingConclusion: conclusion, processingFailureCode, routingHold,
     processingSentAt: message.occurredAt ?? null, processingCompletedAt: completedAt,
     processingFacts: {
       sourceId: source?.sourceId ?? null, messageVersion: message.messageVersion ?? null,

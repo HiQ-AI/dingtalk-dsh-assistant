@@ -363,6 +363,37 @@ window.__ModuleLoader__.load({
           : '先解除网络、鉴权或其他阻塞；仅恢复原请求，不重做已完成效果。'),
         feedback ? React.createElement('div', { role: 'status', style: { marginTop: 3 } }, feedback) : null)
     }
+    function RoutingHoldControls({ groupId, message, onChanged }) {
+      const [busy, setBusy] = useState(false)
+      const [scope, setScope] = useState('')
+      const [confirmed, setConfirmed] = useState(false)
+      const [feedback, setFeedback] = useState('')
+      const submit = async (narrow) => {
+        if (busy) return
+        const ids = scope.split(/[\s,，]+/u).filter(Boolean)
+        if (narrow && (!confirmed || !ids.length)) { setFeedback('请填写完整话题 ID 并确认范围封闭。'); return }
+        setBusy(true); setFeedback('')
+        try {
+          const hold = message.routingHold
+          await post(`/config/groups/${encodeURIComponent(groupId)}/messages/${encodeURIComponent(message.messageId)}/routing-hold`, {
+            messageVersion: hold.messageVersion, epoch: hold.epoch,
+            ...(narrow ? { scope: ids, confirmClosedScope: true } : { resume: true }),
+          })
+          setFeedback(narrow ? '已声明范围；待判尚未完成。' : '已请求重新判断；不代表处理完成。')
+        } catch (cause) {
+          setFeedback(`操作未完成：${cause instanceof Error ? cause.message : String(cause)}。请刷新后核对。`)
+        } finally { await onChanged(); setBusy(false) }
+      }
+      return React.createElement('div', { style: { marginTop: 6, fontSize: 11 } },
+        React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy, onClick: () => submit(false) }, '重新判断'),
+        React.createElement('details', { style: { marginTop: 5 } },
+          React.createElement('summary', null, '声明完整影响范围'),
+          React.createElement('p', null, '仅在能确认列出全部受影响话题时填写；遗漏会放行其他话题。每行或用逗号分隔话题 ID。'),
+          React.createElement('textarea', { 'aria-label': '全部受影响话题 ID', value: scope, onChange: event => { setScope(event.target.value); setConfirmed(false) }, rows: 3, style: { width: '100%' } }),
+          React.createElement('label', null, React.createElement('input', { type: 'checkbox', checked: confirmed, onChange: event => setConfirmed(event.target.checked) }), '我确认这是全部受影响话题，其他话题不受影响'),
+          React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', disabled: busy || !confirmed, onClick: () => submit(true) }, '确认范围')),
+        feedback ? React.createElement('div', { role: 'status' }, feedback) : null)
+    }
     const messageFailureHint = (code) => code === 'DYNAMIC_TASK_NOT_ACTIVE'
       ? '关联任务已暂停或取消，补充尚未应用；恢复原任务后按当前版本重新判断。'
       : code === 'DYNAMIC_OPERATION_UNRESOLVED' ? '原操作效果未知，需先核实；不得重放该操作。'
@@ -1871,8 +1902,8 @@ const previousAuthorization=pageSnapshots.current.authorizations
           React.createElement('td', { title: message.text, style: tableBodyCell }, clampTableContent(message.text || '（空消息）'),
             React.createElement('div', { 'aria-label': '处理结论与历时', style: { display: 'flex', gap: 12, minWidth: 0, marginTop: 4, height: 20, lineHeight: '20px', fontSize: 12, color: colors.muted } },
               React.createElement('span', { title: conclusion, tabIndex: 0, 'aria-label': conclusion, style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, conclusion),
-              React.createElement('span', { title: '消息发生至本轮语义决策结束，不是业务执行耗时', style: { flex: '0 0 auto', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, ['processed', 'needs_clarification'].includes(workflowState) ? messageProcessingElapsed(message) : '—'))),
-          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, recovery && workflowState !== 'processed' ? React.createElement(MessageRecovery, { key: recovery.requestId, path: `/config/groups/${encodeURIComponent(selectedGroup.groupId)}/messages/${encodeURIComponent(message.messageId)}/retry`, body: recoveryBody, token: recovery.token, onChanged: refresh }) : workflowState === 'failed' ? React.createElement('div', { style: { marginTop: 6, fontSize: 11, color: colors.muted } }, messageFailureHint(message.processingFailureCode)) : null, messageFacts))
+              React.createElement('span', { title: '消息发生至本轮语义决策结束，不是业务执行耗时', style: { flex: '0 0 auto', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, workflowState === 'processed' ? messageProcessingElapsed(message) : '—'))),
+          React.createElement('td', { style: { ...tableBodyCell, width: 240 } }, singleLineTableContent(React.createElement('code', { title: message.messageId, style: { fontSize: 14, color: colors.muted, whiteSpace: 'nowrap' } }, `#${message.sequence ?? '—'} · ${short(message.messageId)}`)), message.runId ? React.createElement(Button, { variant: 'outline', size: 'sm', type: 'button', onClick: () => setSelectedMessageRunId(message.runId), style: { marginTop: 5 } }, '处理过程') : null, message.routingHold && workflowState === 'needs_clarification' ? React.createElement(RoutingHoldControls, { key: `${message.messageId}:${message.routingHold.epoch}`, groupId: selectedGroup.groupId, message, onChanged: refresh }) : recovery && workflowState !== 'processed' ? React.createElement(MessageRecovery, { key: recovery.requestId, path: `/config/groups/${encodeURIComponent(selectedGroup.groupId)}/messages/${encodeURIComponent(message.messageId)}/retry`, body: recoveryBody, token: recovery.token, onChanged: refresh }) : workflowState === 'failed' ? React.createElement('div', { style: { marginTop: 6, fontSize: 11, color: colors.muted } }, messageFailureHint(message.processingFailureCode)) : null, messageFacts))
       })
       const outboxCollection=data?.groupCollections?.outbox
       const selectedOutbox=outboxCollection&&outboxCollection.groupId===selectedGroup?.groupId&&outboxCollection.filter===outboxStatusFilter?outboxCollection.items:[]
