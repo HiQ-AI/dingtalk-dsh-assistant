@@ -297,19 +297,46 @@ export function createExecutionSessions({ ctx, isCurrent, isRecoveryCurrent, rep
 
   function halt(entry, code) { entry.haltCode ??= code }
 
+  // Project only the original, owned registry job. A job_output read or producer
+  // event is not a new launch and must never substitute its call/binding.
+  const terminalJob = status => ['completed', 'failed', 'killed'].includes(status)
+  function settleBackgroundJob(entry, background) {
+    return background.settlement ??= (async () => {
+      const { call, result, jobs, startedAt } = background
+      try {
+        call.jobReceipt = await collectNativeJob({ result, jobs, sessionId: entry.binding.sessionId, toolName: call.toolName,
+          command: call.arguments.command, startedAt, signal: new AbortController().signal, cancelled: entry.cancelled || closed,
+          record: job => entry.onNativeExecution({ ...call, phase: 'job', job }) })
+        await entry.onNativeExecution({ ...call, phase: 'settled', cancelled: entry.cancelled || closed,
+          postExecutionDecision: 'accept', result })
+      } finally { background.unsubscribe?.() }
+    })()
+  }
+  function watchBackgroundJob(entry, background) {
+    const { call, jobs } = background, jobId = call.jobReceipt.jobId
+    background.unsubscribe = jobs.events?.subscribe({ owner: entry.binding.sessionId }, event => {
+      // Registry teardown may force-fail a record without proving producer drain.
+      if (event.type !== 'settled' || event.cause === 'teardown' || event.job.id !== jobId
+        || event.job.owner !== entry.binding.sessionId || !terminalJob(event.job.status)) return
+      void settleBackgroundJob(entry, background).catch(error => { entry.processDrainError ??= error })
+    })
+    // A short job can finish between the launch acknowledgement and subscription.
+    if (terminalJob(jobs.get(jobId, entry.binding.sessionId).status)) {
+      void settleBackgroundJob(entry, background).catch(error => { entry.processDrainError ??= error })
+    }
+  }
+
   async function drain(entry) {
     return entry.draining ??= (async () => {
       try {
         if (entry.handle) {
           await entry.handle.agent.whenIdle()
           // Background processes remain usable across tools, but never outlive their executor.
-          const outcomes = await Promise.allSettled((entry.backgroundJobs ?? []).map(async ({ call, result, jobs, startedAt }) => {
+          const outcomes = await Promise.allSettled((entry.backgroundJobs ?? []).map(async background => {
+            const { call, jobs } = background
             const job = jobs.get(call.jobReceipt.jobId, entry.binding.sessionId)
             if (['running', 'stopping'].includes(job.status)) jobs.kill(call.jobReceipt.jobId, entry.binding.sessionId, 'task execution ended')
-            call.jobReceipt = await collectNativeJob({ result, jobs, sessionId: entry.binding.sessionId, toolName: call.toolName,
-              command: call.arguments.command, startedAt, signal: new AbortController().signal, cancelled: entry.cancelled || closed,
-              record: job => entry.onNativeExecution({ ...call, phase: 'job', job }) })
-            await entry.onNativeExecution({ ...call, phase: 'settled', cancelled: entry.cancelled || closed, postExecutionDecision: 'accept', result })
+            await settleBackgroundJob(entry, background)
           }))
           await entry.backgroundProcesses?.close()
           const failed = outcomes.find(outcome => outcome.status === 'rejected')
@@ -428,7 +455,15 @@ export function createExecutionSessions({ ctx, isCurrent, isRecoveryCurrent, rep
               sessionId: entry.binding.sessionId, toolName: exec.name, command: exec.arguments.command, startedAt, signal: exec.signal,
               record: job => entry.onNativeExecution({ ...call, phase: 'job', job }), background })
             if (background && call.jobReceipt && ['running', 'stopping'].includes(call.jobReceipt.status)) {
-              (entry.backgroundJobs ??= []).push({ call, result, jobs, startedAt })
+              const launched = { call, result, jobs, startedAt }
+              ;(entry.backgroundJobs ??= []).push(launched)
+              watchBackgroundJob(entry, launched)
+            }
+            if (exec.name === 'job_output' && readonlyTools.get(exec.name) === toolDefinition) {
+              const original = entry.backgroundJobs?.find(item => item.call.jobReceipt.jobId === exec.arguments.job_id)
+              if (original && terminalJob(original.jobs.get(exec.arguments.job_id, entry.binding.sessionId).status)) {
+                await settleBackgroundJob(entry, original)
+              }
             }
             // Native file reads may contain serialized historical job receipts.
             // Their data is not a new process launch. The structured native job
