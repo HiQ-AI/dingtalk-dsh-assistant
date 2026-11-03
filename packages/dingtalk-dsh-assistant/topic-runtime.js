@@ -13,7 +13,7 @@ import { TaskRevisionError } from './task-input-revision.js'
 import { visiblePromptRefs, visibleSectionLength, visibleCoordinatorText, visibleToolOutputs, promptContent, compactSectionValue, buildMaterialManifest } from './coordination-context.js'
 import { taskProgressSnapshot } from './task-progress.js'
 import { assertCurrentTaskPrompts, isDiagnosticCheckpoint } from './task-result.js'
-import { compactReplyReviewCandidates, blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, legacyGroupDecisionSubmissionSchema, legacyGroupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS, collectDecisionIssues } from './decision.js'
+import { compactReplyReviewCandidates, blockTaskDecisionForUnavailableMedia, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema, legacyGroupDecisionSubmissionSchema, legacyGroupDecisionSubmissionJsonSchema, topicRouteSubmissionSchema, topicRouteSubmissionJsonSchema, replyReviewJsonSchema, TOPIC_TITLE_MAX_CHARS, collectDecisionIssues, isSilentTaskFactFeedback } from './decision.js'
 
 const textMessage = (text, images = []) => Object.freeze({ id: randomUUID(), role: 'user', source: { kind: 'coordinator' }, content: [{ type: 'text', text }, ...images.map((attachment) => ({ type: 'image', attachment }))] })
 const DECISION_SECTIONS = ['messages', 'summary', 'removedUnitRefs', 'rejectedDecisions', 'ownership', 'quotedMessages', 'sourceMessages', 'promptIndex']
@@ -1159,7 +1159,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         const owner = replyTopicForMessage(store.getGroup(groupId), message)
         return owner && owner !== args.topicId
       })
-      if (decision.actions.length && !decision.reply?.trim() && !foreignReply) return { status: 'reply-required' }
+      if (decision.actions.length && !decision.reply?.trim() && !foreignReply && !decision.actions.every(isSilentTaskFactFeedback)) return { status: 'reply-required' }
       if (decision.reply?.trim()) {
         if (foreignReply) {
           decisions.delete(args.requestId)

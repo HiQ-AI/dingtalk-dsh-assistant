@@ -492,11 +492,13 @@ testRunner('native task service preserves Topic routing, task association, ignor
       const task = residentStore.listTasks().find(value => value.groupId === 'native-group')
       const refs = [{ topicId: input.topicId, revision: input.revision }]
       const action = task ? { kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
-        context: current.text, progressImpact: 'preserve', topicRefs: refs }
+        context: current.text, progressImpact: 'preserve', ...(current.messageId === 'fact-feedback' ? { factFeedback: true, authorizationChange: 'none' } : {}), topicRefs: refs }
         : { kind: 'new-task', title: '原生文件检查', objective: '检查指定文件并等待补充', acceptanceCriteria: ['保留原始交办及后续补充'], topicRefs: refs }
       return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: [current.messageId], actions: [action], reply: task ? '已收到补充。' : '已承接文件检查。', replyToMessageId: current.messageId,
-          replyReview: { kind: 'confirmation', reviewedOutboundIds: candidateIds, sameMatterOutboundIds: candidateIds, replaceOutboundIds: candidateIds } } })]
+        decision: { basisMessageIds: [current.messageId], actions: [action], ...(current.messageId === 'fact-feedback'
+          ? { reason: '同事报告影响原核验，只交原Owner核对，不重复向群回复' }
+          : { reply: task ? '已收到补充。' : '已承接文件检查。', replyToMessageId: current.messageId,
+            replyReview: { kind: 'confirmation', reviewedOutboundIds: candidateIds, sameMatterOutboundIds: candidateIds, replaceOutboundIds: candidateIds } }) } })]
     }
     const input = latestInput(request)
     assert.ok(names.includes('task_session_submit'), 'Task work must use a real native task session')
@@ -554,6 +556,21 @@ testRunner('native task service preserves Topic routing, task association, ignor
   assert.equal(residentStore.getTopic('native-group', topicId).revision, 2)
   assert.match(revised.request, /只检查文件名称/)
   assert.ok(ownerInputs.length >= 2, 'Supplement must wake the real task owner session')
+  const firstOwnerSnapshot = JSON.stringify(ownerInputs[0]), ownerTurnsBeforeFact = ownerInputs.length
+  const outboxBeforeFact = residentStore.getGroup('native-group').outbox.length
+  const fact = message('fact-feedback', '@成员甲 刚收到报告，原文件命名依据可能已过期；还未核实，请先保留原件。')
+  await t.step(async () => h.service.ingest(fact))
+  await t.step(async () => h.service.whenIdle())
+  const afterFact = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
+  assert.equal(afterFact.contextRevision, revised.contextRevision + 1, '无点名且无群回复的事实回流真实唤醒原Owner')
+  assert.equal(afterFact.requirementRevision, revised.requirementRevision)
+  assert.equal(afterFact.controlRevision, revised.controlRevision)
+  assert.equal(afterFact.sessionId, revised.sessionId)
+  assert.equal(afterFact.runSequence, revised.runSequence)
+  assert.match(afterFact.request, /还未核实/)
+  assert.ok(ownerInputs.length > ownerTurnsBeforeFact)
+  assert.equal(JSON.stringify(ownerInputs[0]), firstOwnerSnapshot, '已进入Owner的旧输入快照不可原位改写')
+  assert.equal(residentStore.getGroup('native-group').outbox.length, outboxBeforeFact, '内部事实回流不另发群确认')
   await t.step(async () => h.service.ingest(message('noise', '哈哈，今天午饭不错。')))
   await t.step(async () => h.service.ingest(message('discussion', '我们讨论明天几点部署，暂时没有交办助手。')))
   await t.step(async () => h.service.whenIdle())
@@ -563,6 +580,7 @@ testRunner('native task service preserves Topic routing, task association, ignor
   const stagesBeforeReplay = (await t.step(async () => h.query('source.list'))).map(source => ({ sourceId: source.sourceId, stages: source.stages }))
   await t.step(async () => h.service.ingest(first))
   await t.step(async () => h.service.ingest(second))
+  await t.step(async () => h.service.ingest(fact))
   await t.step(async () => h.service.recover())
   await t.step(async () => h.service.whenIdle())
   assert.equal((await t.step(async () => h.query('task.list'))).length, before.tasks)

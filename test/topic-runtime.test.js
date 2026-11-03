@@ -909,7 +909,7 @@ test('关联Task内联后发生版本变化，旧快照不能放行Task动作', 
   await h.store.updateTask(task.taskId, current => ({ ...current, inputVersion: current.inputVersion + 1 }))
   const result = await h.call('group_decision_submit', submission(next, { reply: '收到本次补充', reason: undefined,
     actions: [{ kind: 'task-context', taskId: task.taskId,
-    inputVersion: inline.inputVersion, runSequence: inline.runSequence, context: '需要保留的新要求', progressImpact: 'preserve',
+    inputVersion: inline.inputVersion, runSequence: inline.runSequence, context: '需要保留的新事实', progressImpact: 'preserve', authorizationChange: 'none', factFeedback: true,
     topicRefs: [{ topicId: next.topicId, revision: next.revision }] }] }))
   assert.equal(result.status, 'task-stale', JSON.stringify(result))
   assert.equal(h.applications.length, 0)
@@ -2066,13 +2066,19 @@ test('共享消息由主 Topic 统一回复，其他 Topic 不重复确认或实
   assert.equal(a.effectOwnerTopicIds.shared, b.topicId)
   assert.deepEqual(a.ownedDeltaMessageIds, [])
   assert.deepEqual(b.ownedDeltaMessageIds, ['shared'])
+  const { task: linkedTask } = await h.store.createTask({ groupId: 'g', topicRefs: [{ topicId: a.topicId, revision: a.revision }], title: '原核验', objective: '原核验', acceptanceCriteria: ['证据'] })
+  const fact = { kind: 'task-context', taskId: linkedTask.taskId, inputVersion: linkedTask.inputVersion, runSequence: linkedTask.runSequence,
+    context: '仅声明事实不应绕过归属', progressImpact: 'preserve', authorizationChange: 'none', factFeedback: true, topicRefs: linkedTask.topicRefs }
+  await assertDecisionIssue(h.call('group_decision_submit', submission(a, { actions: [fact] })), /topic_effect_owner_required/)
   const action = (request) => ({ kind: 'new-task', title: '核验', objective: '核验', acceptanceCriteria: ['证据'], topicRefs: [{ topicId: request.topicId, revision: 1 }] })
   await assertDecisionIssue(h.call('group_decision_submit', submission(a, { actions: [action(a)], reply: '收到' })), /topic_effect_owner_required/)
   await assertDecisionIssue(h.call('group_decision_submit', submission(a, { reply: '收到', replyReview: { kind: 'confirmation' } })), /topic_effect_owner_required/)
   assert.equal((await h.call('group_decision_submit', submission(a, { reply: 'A 的独立分析结果', replyReview: { kind: 'substantive' } }))).status, 'reply-owned-by-other-topic')
   assert.equal((await h.call('group_decision_submit', submission(b, { actions: [action(b)], reply: '收到', replyReview: { kind: 'confirmation' } }))).status, 'accepted')
   await h.coordinator.drain('g')
-  assert.equal(h.store.listTasks().length, 1)
+  assert.equal(h.store.listTasks().length, 2, '原核验保留且仅主Topic新增一个任务')
+  assert.equal(h.store.getTask(linkedTask.taskId).inputVersion, linkedTask.inputVersion)
+  assert.equal(h.applications.length, 1, '非effectOwner的静默声明没有产生操作')
 })
 
 test('非空回复必须声明 kind，不能用省略审阅绕过共享确认门禁', async (t) => {
@@ -2097,6 +2103,76 @@ test('改归属后空 Topic 可以用 removedMessageIds 静默完成，但不能
   await complete(h, removed)
   assert.equal(h.store.getTopic('g', original.topicId).processedRevision, 2)
   assert.equal(h.store.listTasks().length, 0)
+})
+
+test('同事报告影响原任务路线或时间时可静默回流，保留授权且恢复不重放', async t => {
+  for (const [name, text, context] of [
+    ['route-fact', '@成员甲 这批数据超过工单入口上限，以前用现有同步服务处理。',
+      '成员乙报告工单入口可能不适用，提到既有服务；尚未独立核验。请核对该报告对原同步路线的影响，不将其当新入口授权或直接写入依据。'],
+    ['handoff-fact', '@成员甲 那等成员乙明天回来处理这批同步吧。',
+      '成员丙提出明天由成员乙处理同一同步；这是待核对的责任/时间线索。请结合原合同判断当前工作是否仍必要，不据此自动取消、转派、改期或重放。'],
+  ]) await t.test(name, async t => {
+    let cancellations = 0
+    const h = await setup(t, { cancelTask: () => { cancellations++ } })
+    const { task, request: original } = await taskFixture(h, { text: '@助理 请按已确认范围完成数据同步，保留生产写入控制。' })
+    await h.store.updateTask(task.taskId, value => ({ ...value, state: 'running' }))
+    const before = structuredClone(h.store.getTask(task.taskId))
+    await ingest(h, name, { text, senderOpenDingTalkId: 'reporter', senderName: name === 'route-fact' ? '成员乙' : '成员丙' })
+    const current = (await route(h, { [name]: original.topicId })).pendingDecisions[0]
+    const input = h.envelope('[GROUP_TOPIC_DECISION]')
+    assert.equal(input.linkedTasks.snapshots[0].taskId, task.taskId)
+    assert.equal(input.messages[0].text, text, '保留没有点名助手的完整作者原文')
+    assert.equal(input.messages[0].senderOpenDingTalkId, 'reporter')
+    const args = submission(current, { reason: '新报告影响在途判断，仅交原Owner核实，不向群重复回复',
+      actions: [{ kind: 'task-context', taskId: task.taskId, inputVersion: before.inputVersion, runSequence: before.runSequence,
+        context, progressImpact: 'preserve', authorizationChange: 'none', factFeedback: true, topicRefs: [{ topicId: current.topicId, revision: current.revision }] }],
+      topicUpdate: { summary: context } })
+    assert.equal((await h.call('group_decision_submit', args)).status, 'accepted')
+    await h.coordinator.drain('g')
+    const after = h.store.getTask(task.taskId)
+    assert.equal(after.inputVersion, before.inputVersion + 1)
+    assert.equal(after.objective, before.objective)
+    assert.deepEqual(after.acceptanceCriteria, before.acceptanceCriteria)
+    assert.equal(after.state, 'running')
+    assert.equal(after.runSequence, before.runSequence)
+    assert.equal(h.store.listTasks().length, 1)
+    assert.equal(h.applications.length, 1)
+    assert.equal(cancellations, 0)
+    assert.equal(h.store.getGroup('g').outbox.length, 0)
+    const recorded = h.store.getTopic('g', current.topicId).decisions.at(-1).decision
+    assert.deepEqual(recorded.basisMessageIds, [name])
+    assert.equal(recorded.actions[0].context, context)
+    assert.equal(recorded.actions[0].authorizationChange, 'none')
+    await h.coordinator.recover(); await h.coordinator.drain('g')
+    assert.equal(h.applications.length, 1, '恢复不重放已接纳事实回流')
+    assert.equal(h.store.getTask(task.taskId).inputVersion, after.inputVersion)
+    assert.equal(h.store.getGroup('g').outbox.length, 0)
+  })
+})
+
+test('静默事实声明不能放行变更合同、混合动作或无效来源，正常回复仍可用', async t => {
+  const h = await setup(t), { task, request: original } = await taskFixture(h)
+  await h.store.updateTask(task.taskId, value => ({ ...value, state: 'running' }))
+  await ingest(h, 'fact-boundary', { text: '成员甲报告原入口可能不适合这次任务，尚待核对。' })
+  const current = (await route(h, { 'fact-boundary': original.topicId })).pendingDecisions[0]
+  const action = { kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
+    context: '入口适用性为待核对报告，不授予替代操作权限', progressImpact: 'preserve', authorizationChange: 'none', factFeedback: true,
+    topicRefs: [{ topicId: current.topicId, revision: current.revision }] }
+  const withoutDeclaration = { ...action }; delete withoutDeclaration.factFeedback
+  assert.equal((await h.call('group_decision_submit', submission(current, { actions: [withoutDeclaration] }))).status, 'reply-required')
+  for (const patch of [{ factFeedback: false }, { progressImpact: 'replan' }, { authorizationChange: 'changed' }, { title: '改题' },
+    { objective: '改变目标' }, { acceptanceCriteria: ['新增验收'] }, { stageTasks: ['新增阶段'] }]) {
+    assert.equal((await h.call('group_decision_submit', submission(current, { actions: [{ ...action, ...patch }] }))).status, 'invalid-arguments')
+  }
+  const mixed = { kind: 'new-task', title: '另一交付', objective: '另一交付', acceptanceCriteria: ['证据'], topicRefs: action.topicRefs }
+  assert.equal((await h.call('group_decision_submit', submission(current, { actions: [action, mixed] }))).status, 'reply-required')
+  await assert.rejects(h.call('group_decision_submit', submission(current, { basisMessageIds: ['missing-source'], actions: [action] })), /topic_decision_basis_invalid/)
+  assert.equal(h.applications.length, 0)
+  assert.equal(h.store.getTask(task.taskId).inputVersion, task.inputVersion)
+  assert.equal((await h.call('group_decision_submit', submission(current, { actions: [action], reply: '已记录入口线索，交原统筹核对。' }))).status, 'accepted')
+  await h.coordinator.drain('g')
+  assert.equal(h.applications.length, 1)
+  assert.equal(h.store.getGroup('g').outbox.length, 1)
 })
 
 test('已有任务中的他人分工静默保留，后续助手补充不受同步提及阻挡', async t => {

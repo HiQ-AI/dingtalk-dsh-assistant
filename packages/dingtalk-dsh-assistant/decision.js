@@ -24,8 +24,16 @@ const dispatchAssessmentSchema = z.strictObject({
 })
 const legacyDispatchAssessmentSchema = dispatchAssessmentSchema.extend({ workflowRefs: z.array(z.strictObject({ id: z.string().min(1), revision: z.number().int().positive() })), workflowReason: z.string().trim().min(1) })
 const newTask = z.strictObject({ kind: z.literal('new-task').describe('查无适配任务的新交付；同一事项的多个功能和验收项可属于一个Task，不逐功能点创建。已有任务新增要求、截图交付或后续核查按状态使用 task-context/task-reopen；确有独立执行交付边界才拆任务，批量跟进分别操作原任务。'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: acceptanceCriteriaSchema, stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
-const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...taskContextImpactFields, ...runPlan, ...taskSources })
-  .superRefine((value, ctx) => { const message = taskContextSemanticsProblem(value); if (message) ctx.addIssue({ code: 'custom', path: ['progressImpact'], message }) })
+export function isSilentTaskFactFeedback(action) {
+  return action?.kind === 'task-context' && action.factFeedback === true && action.progressImpact === 'preserve'
+    && action.authorizationChange === 'none' && ['title', 'objective', 'acceptanceCriteria', 'stageTasks', 'impactEvidence'].every(key => action[key] === undefined)
+}
+const taskContext = z.strictObject({ kind: z.literal('task-context').describe('向未完成原任务回流新增要求或影响路线、责任、时间、执行依据的事实；可无群回复，不以再次点名为前提。保留来源和报告未核验限制，回流本身不扩大授权、不默认取消或转派，显式填写progressImpact。'), factFeedback: z.literal(true).optional().describe('声明仅向原Owner交付事实，不新增要求或变更合同。仅preserve、authorizationChange=none且不改标题/目标/验收/阶段/证据时可无群回复；并非事实已经核验或执行权限。'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...taskContextImpactFields, ...runPlan, ...taskSources })
+  .superRefine((value, ctx) => {
+    const message = taskContextSemanticsProblem(value)
+    if (message) ctx.addIssue({ code: 'custom', path: ['progressImpact'], message })
+    if (value.factFeedback === true && !isSilentTaskFactFeedback(value)) ctx.addIssue({ code: 'custom', path: ['factFeedback'], message: 'TASK_FACT_FEEDBACK_CONTRACT_CHANGED' })
+  })
 const taskReopen = z.strictObject({ kind: z.literal('task-reopen').describe('向已完成的原任务追加核查、修订或重新提测要求；复用原 Task 和会话，不重做已完成步骤。批量跟进在 actions 中为每个原任务分别提交。'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
 const taskCancel = z.strictObject({ kind: z.literal('task-cancel'), taskId: z.string().min(1), ...taskVersion, reason: z.string().min(1), ...taskSources })
 const taskAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen, taskCancel])
@@ -40,7 +48,7 @@ const replyReviewSchema = z.strictObject({
 const makeDecisionSchema = actionSchema => {
   const replyDecisionSchema = z.strictObject({
   ...decisionBasis, actions: z.array(actionSchema),
-  reply: z.string().describe('群回复或任务确认；actions 为空时必须非空，提交任务动作时 Host 也要求非空确认。此分支不得填写 reason。'),
+  reply: z.string().describe('群回复或任务确认；actions 为空时必须非空，此分支不得填写 reason。任务动作通常要求非空确认；来源明确由其他 Topic 统一回复，或全部动作为 factFeedback:true、preserve、authorizationChange:none 且无合同变更的纯事实 task-context 时，可改用 reason 分支静默回流。'),
   ...groupNotificationFields,
   replyReview: replyReviewSchema.optional().describe('有非空reply时Host要求提交本审阅，包括kind；即使候选为空也须声明kind及三个空ID列表。optional保留补答协议，并不表示可省略回复审阅；先阅读当前候选再填真实ID。'),
 }).superRefine((decision, ctx) => {
@@ -48,7 +56,7 @@ const makeDecisionSchema = actionSchema => {
 })
   return z.union([
     replyDecisionSchema,
-    z.strictObject({ ...decisionBasis, actions: z.array(actionSchema), reason: z.string().min(1).describe('不回复原因；只有来源明确由其他 Topic 统一回复时才可同时提交任务动作。不得同时填写 reply 或 replyReview。') }),
+    z.strictObject({ ...decisionBasis, actions: z.array(actionSchema), reason: z.string().min(1).describe('不回复原因；actions 可为空。带任务动作时只限来源明确由其他 Topic 统一回复，或全部动作为 factFeedback:true、preserve、authorizationChange:none 且无标题/目标/验收/阶段/证据变更的纯事实 task-context；其他或混合动作仍须群回复。不得同时填写 reply 或 replyReview。') }),
   ])
 }
 export const groupDecisionSchema = makeDecisionSchema(taskAction)

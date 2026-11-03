@@ -116,7 +116,7 @@ test('native execution consumes serial tool results and wakes the coordinator on
 }), { timeout: nativeLifecycleTimeout(30000) })
 for (const background of [false, true]) test(`native shell retains its original process, reads output to terminal and persists the owned job receipt: background=${background}`, nativeLifecycle(30000, async (t) => {
  let step = 0, backgroundCollected = false
- const h = await fixture(t, async request => {
+ const h = await fixture(t, async (request, host) => {
   const input = latestInput(request), owner = request.tools.some(tool => tool.name === 'task_delegate')
   if (owner) return !input.executions.length && !input.task.lastDecision ? [call('task_delegate', { key: 'long', objective: 'long' }), decide('wait','waiting')]
    : [decide(input.executions.every(e => e.status === 'succeeded') ? 'complete' : 'wait','verified')]
@@ -128,6 +128,13 @@ for (const background of [false, true]) test(`native shell retains its original 
    return [call('job_output', { job_id: receipt.jobId, wait: true, timeout_ms: 10000 })]
   }
   assert.match(JSON.stringify(request), /after/)
+  const operations = (await host.query('operation.list')).filter(op => op.definition.toolName === nativeShell)
+  const execution = (await host.query('execution.list')).find(item => item.executionId === operations[0].executionId)
+  assert.equal(execution.status, 'running', 'terminal projection must not depend on execution_submit')
+  assert.equal(execution.drained, false)
+  assert.equal(operations.length, 1)
+  assert.equal(operations[0].state, 'succeeded')
+  assert.equal(operations[0].job.status, 'completed')
   return [call('execution_submit',{output:{status:'completed',summary:'done',evidence:['actual terminal output'],limitations:[],artifacts:['result.txt']}})]
  }, { verifyTeam: true })
  await t.beginBusiness()
@@ -142,6 +149,58 @@ for (const background of [false, true]) test(`native shell retains its original 
  assert.match(operations[0].job.chunks.map(c=>c.text).join(''),/before[\s\S]*after/)
  assert.equal((await t.step(async () => readFile(join(h.root,'tasks',created.taskId,'result.txt'),'utf8'))).trim(),'after')
  assert.equal(step,background ? 3 : 2)
+}), { timeout: nativeLifecycleTimeout(30000) })
+
+for (const killed of [false, true]) test(`native background producer projects its terminal receipt before any job read or execution submission: killed=${killed}`, nativeLifecycle(30000, async t => {
+ let step = 0, jobId
+ const h = await fixture(t, async (request, host) => {
+  const input = latestInput(request)
+  if (!request.tools.some(tool => ['task_delegate', 'execution_submit'].includes(tool.name))) return topicTaskCalls(request)
+  if (request.tools.some(tool => tool.name === 'task_delegate')) return !input.executions.length && !input.task.lastDecision
+   ? [call('task_delegate', { key: 'terminal-event', objective: 'Observe one original background producer' }), decide('wait', 'producer active')]
+   : [decide('wait', 'terminal process evidence is not business acceptance')]
+  if (step++ === 0) return [call(nativeShell, { command: nativeShell === 'pwsh'
+   ? `Add-Content once.txt once; Start-Sleep -Milliseconds ${killed ? 5000 : 400}; Write-Output terminal`
+   : `printf 'once\\n' >> once.txt; sleep ${killed ? 5 : 0.4}; printf terminal`,
+   run_in_background: true, timeoutMs: 80, description: 'Own and observe one terminal producer' })]
+  if (step === 3) return [call('job_output', { job_id: jobId, wait: true, timeout_ms: 1000 })]
+  if (step === 4) return [call('execution_submit', { output: { status: 'completed', summary: 'Original process observed; business conclusion remains separate', evidence: ['once.txt'], limitations: ['Process terminal state only'], artifacts: ['once.txt'] } })]
+  if (killed) {
+   const original = (await host.query('operation.list')).find(op => op.definition.toolName === nativeShell)
+   await waitUntil(async () => {
+    try { return (await readFile(join(host.root, 'tasks', original.taskId, 'once.txt'), 'utf8')).trim() === 'once' }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error }
+   }, 'original producer reached its one recorded effect before explicit stop')
+   // Owner-filtered subscriptions also see unowned jobs. Its completion must
+   // not settle this execution's still-running, differently identified job.
+   const jobs = host.ctx.get('jobs')
+   const unrelated = jobs.start({ kind: nativeShell, label: 'unrelated fixture producer', run: () => ({ cancel() {}, done: Promise.resolve({ status: 'completed', detail: 'exit code: 0' }) }) })
+   await jobs.wait(unrelated, 1000)
+   assert.equal((await host.query('operation.get', { operationId: original.operationId })).state, 'starting')
+   host.ctx.get('jobs').kill(original.job.jobId, original.job.owner, 'fixture explicit producer stop')
+  }
+  await waitUntil(async () => (await host.query('operation.list')).some(op => op.definition.toolName === nativeShell && op.state === (killed ? 'failed' : 'succeeded')),
+   'original producer receipt reaches Host while execution remains active')
+  const operations = (await host.query('operation.list')).filter(op => op.definition.toolName === nativeShell)
+  const execution = (await host.query('execution.list')).find(item => item.executionId === operations[0].executionId)
+  assert.equal(operations.length, 1)
+  assert.equal(execution.status, 'running')
+  assert.equal(execution.drained, false)
+  assert.equal(operations[0].job.status, killed ? 'killed' : 'completed')
+  assert.equal(operations[0].dispatchBinding.inputVersion, execution.inputVersion)
+  assert.equal(operations[0].dispatchBinding.leaseEpoch, execution.leaseEpoch)
+  assert.equal(operations[0].job.owner, execution.sessionId)
+  jobId = operations[0].job.jobId
+  return [call('job_output', { job_id: jobId, wait: true, timeout_ms: 1000 })]
+ })
+ await t.beginBusiness()
+ const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'producer-terminal-event-' + killed, objective: 'Observe original terminal receipt without replay' }))
+ await t.step(async () => h.service.whenIdle())
+ const operations = (await t.step(async () => h.query('operation.list', { taskId: created.taskId }))).filter(op => op.definition.toolName === nativeShell)
+ assert.equal(operations.length, 1)
+ assert.equal(operations[0].state, killed ? 'failed' : 'succeeded', JSON.stringify({ step, job: operations[0].job, result: operations[0].result }))
+ assert.equal(step, 4, JSON.stringify((await h.query('execution.list')).map(item => item.result)))
+ assert.equal((await t.step(async () => readFile(join(h.root, 'tasks', created.taskId, 'once.txt'), 'utf8'))).trim(), 'once')
 }), { timeout: nativeLifecycleTimeout(30000) })
 
 test('native missing-job read stays a real error without creating unknown effects or blocking later work', async t => {

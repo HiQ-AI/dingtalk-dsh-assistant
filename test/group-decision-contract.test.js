@@ -80,3 +80,29 @@ test('DSH 不支持的长度关系仍由 Zod 严格执行并指明空回复问�
   assert.deepEqual(result.error.issues[0].path, ['reply'])
   assert.match(result.error.issues[0].message, /actions 为空时 reply 必须非空/u)
 })
+
+test('原生JSON schema的reply和reason指引同时允许受限纯事实静默回流', () => {
+  const descriptions = { reply: [], reason: [] }
+  function collect(schema) {
+    if (!schema || typeof schema !== 'object') return
+    // 只检查真实Decision分支，不将cancel.reason等动作字段混入。
+    if (schema.properties?.actions) for (const field of ['reply', 'reason']) {
+      if (schema.properties[field]) descriptions[field].push(schema.properties[field].description)
+    }
+    for (const child of Object.values(schema)) {
+      if (Array.isArray(child)) child.forEach(collect)
+      else if (child && typeof child === 'object') collect(child)
+    }
+  }
+  collect(groupDecisionSubmissionJsonSchema)
+  for (const [field, values] of Object.entries(descriptions)) {
+    assert.ok(values.length > 0, '原生工具应实际携带' + field + '分支说明')
+    for (const description of values) for (const term of ['factFeedback:true', 'preserve', 'authorizationChange:none', '其他 Topic', 'task-context']) {
+      assert.ok(description.includes(term), field + '指引遗漏事实回流条件：' + term)
+    }
+  }
+  const action = { ...actions.find(item => item.kind === 'task-context'), factFeedback: true, authorizationChange: 'none' }
+  const silent = submit({ ...basis, actions: [action], reason: '只向原Owner交付待核对事实，不重复群回复' })
+  assert.deepEqual(validateJsonSchemaValue(groupDecisionSubmissionJsonSchema, silent), [])
+  assert.deepEqual(groupDecisionSubmissionSchema.parse(silent), silent)
+})
