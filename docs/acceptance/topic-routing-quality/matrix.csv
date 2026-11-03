@@ -1,26 +1,28 @@
-case_id,case,round_1,round_2,round_3,round_4,round_5,round_6,round_7,evidence
-recall-baseline,多词召回实现前基线,FAIL,未执行,未执行,未执行,未单列,未单列,未执行,"node --test test/topic-recall-search.test.js；实现前2/2失败，详见round-1.md"
-recall-increment,多词召回及首包候选增量,PASS,未执行,PASS*,未执行,未单列,未单列,未执行,"round-1 3/3；round-3性能及预算用例4/4，均非最终源码绑定，详见对应报告"
-runtime-legacy-regression,topic-runtime旧合同并行回归,FAIL,未执行,PASS*,PASS*,未单列,未单列,未执行,"round-1 173/181、8失败；修复fixture后187/187，round-4更新集合201/201，执行时源码均未hash绑定"
-eval-score-tests,评估评分与数据集合同,PASS,未执行,未执行,未执行,未单列,未单列,未执行,"round-1 4/4；未运行真实模型，详见round-1.md"
-eval-native-host,原生Host路由决策终态采集,PASS,未执行,未执行,未执行,未单列,PASS*,未执行,"round-6 offline-contract development 104/104、holdout 16/16，failures=0；脚本化模型，streams=0、modelQuality=not-measured；原evaluation JSON已清理，最终证据见round-7/final-validation.json#evaluation"
-profile-preflight,alpha2与rc2隔离安装模块预检,PASS,未执行,未执行,未执行,未单列,PASS*,未执行,"round-6 evaluation binding check：holdout 16条fixture issues=[]、解析所需隔离profile依赖；不证明凭据、网络或provider可用；原binding附件已清理，最终证据见round-7/final-validation.json#evaluation"
-topic-store-summary-legacy,固定版本不暴露后来摘要既有历史合同,未执行,FAIL,未执行,未执行,FAIL,未单列,未执行,"round-2当前树与精确c80基线均失败；round-3/4未复测，round-5 core batch仍有同一固定摘要失败；round-5 core TAP已清理，最终证据见round-7/final-validation.json#core，round-2.md保留历史结论"
-route-audit-reason-replay,路由审计理由变更重放,未执行,未执行,PASS*,PASS*,未单列,未单列,未执行,"round-3理由重放1/1；round-4引用晚到|理由变更组合2/2，均未hash绑定"
-topic-routing-hold-observer,待判看板和本地HTTP mock,未执行,未执行,PASS*,未执行,未单列,未单列,未执行,"round-3 41/41；非最终源码绑定"
-topic-routing-hold-browser,待判UI隔离浏览器验证,未执行,未执行,PASS*,未执行,未单列,未单列,未执行,"round-3隔离浏览器脚本1/1；HTTP mock，不证明真实服务恢复"
-topic-routing-hold-native,待判native恢复合同,未执行,未执行,PASS*,PASS*,未单列,PASS*,未执行,"round-3 native脚本1/1；round-4 scope=A旧B草稿独立推进为内存harness人工核对；round-6 context-02 1/1、epoch 0→1且无关hold保留，hold native用例1/1通过；round-6附件已清理，最终证据见round-7/final-validation.json#evaluation及#round6Native"
-clarification-native-first-attempt,澄清与通知原生组合首次尝试,未执行,未执行,FAIL,未执行,未单列,未单列,未执行,"round-3 65项64过1超时，修复后结果另列，不覆盖本次失败"
-clarification-native-followup,fixture修复后澄清/通知组合,未执行,未执行,PASS*,未执行,未单列,PASS*,未执行,"round-3组合43/43，其中clarification 12/12；未hash绑定；round-6 clarification native用例12/12通过；原web TAP已清理，最终证据见round-7/final-validation.json#round6Native；不等同完整原生回归全绿"
-clarification-hold-retry-native,澄清、hold与通知retry原生合同,未执行,未执行,PASS*,未执行,未单列,未执行,未执行,"round-3 native profile合跑14/14、0 skip；与43项有重叠，不累加；round-6未运行retry组合文件，notification-pending-source选定子集3/3不等同本组合通过；原notification TAP已清理，最终细节见round-7/final-validation.json#round6Native"
-route-budget-recovery,超长转义消息首包预算,未执行,未执行,未执行,FAIL→PASS*,未单列,未单列,未执行,"round-4记录修复前79279/40000；修后39999 chars、text19665、more=true、无错误，D内存harness人工核对"
-late-reference-recovery,引用元数据晚到共同恢复,未执行,未执行,未执行,FAIL→PASS*,未单列,未单列,未执行,"round-4 original/answer v2配对并拒绝partial route；D内存harness人工核对"
-ghost-route-cleanup,元数据错误后幽灵route清理,未执行,未执行,未执行,FAIL→PASS*,未单列,未单列,未执行,"更正：round-3未执行/未记录；该失败首次于round-4发现，修复回接见round-4.md；超长quote续读仍待验证"
-scope-outside-topic-progress,缩窄hold后范围外Topic独立推进,未执行,未执行,未执行,PASS*,未单列,未单列,未执行,"round-4内存store/coordinator：B completed，A未处理且hold仍needs-context"
-core-focused-contracts,路由决策及协调会话定向合同,未执行,未执行,PASS*,PASS*,FAIL,未执行,未执行,"round-3 187/187；round-4 201/201及store相关筛选2/2，执行源码未hash绑定；round-5核心冻结批次454项：450 pass、1 known fail、3 skip；原round-5 TAP已清理，round-6未重复该core定向批次，最终证据见round-7/final-validation.json#core"
-route-budget-json-tests,路由首包JSON预算与大澄清候选,未执行,未执行,未执行,PASS*,未单列,未单列,未执行,"round-4 node --test --test-name-pattern='路由首包按 JSON|大澄清候选' test/topic-runtime.test.js；2/2"
-coordination-native-role-guard,原生协调角色guard,未执行,未执行,未执行,PASS*,未单列,未执行,未执行,"round-4 node --test test/coordination-native-lifecycle.test.js；6/6，不含AgentLoop候选分页；round-6/7补验命令未包含此文件"
-task-topic-routing-native,request-bound review与Topic reads原生用例,未执行,未执行,未执行,FAIL,未单列,未执行,未执行,"round-4隔离profile 0/1、30秒business超时；round-6通过skip pattern排除native request-bound review等后续用例，round-7的7项变体通过但不包含该用例；round-6附件已清理，最终命令/原结果见round-7/final-validation.json#round6Native；本项留待后续定向复验"
-long-quote-continuation,长引用冻结与续读,未执行,未执行,未执行,待复验,未单列,未单列,未执行,"A实现与D独立审查待完成；round-4未证明合法45k quote可续读"
-final-regression,整合后的定向回归与测试映射检查,待执行,待执行,待执行,待执行,FAIL/部分,FAIL,FAIL/部分,"round-5 core batch 454项为450 pass/1 known fail/3 skip；native TAP 105条（101 ok、4 not ok）且ETIMEDOUT无完整摘要。round-6 native binding drift=[]：48项38 pass/10 fail/0 skip/cancel。round-7对round-6十个失败变体定向复验10/10通过（topic.tap 7/7、web.tap 3/3），207个文件前后相等且与当前一致；overall仍保留round-5固定摘要1 FAIL及未验边界，round-7失败历史不覆盖，见round-7/final-validation.json#round7Native、round-7/topic.tap、round-7/web.tap。原round-5通知skip 3/3已在round-6 notification-native通过；coordination-native-lifecycle guard文件的round-6/7未执行。"
-semantic-quality,真实模型语义准确率与候选召回,未执行,未执行,未执行,未执行,未执行,未测量,未测量,"round-6脚本化模型离线合同未测真实语义；streams=0、modelQuality=not-measured、datasetReview=pending"
+case_id,case,round_1,round_2,round_3,round_4,round_5,round_6,round_7,round_8,evidence
+recall-baseline,多词召回实现前基线,FAIL,未执行,未执行,未执行,未单列,未单列,未执行,未执行,node --test test/topic-recall-search.test.js；实现前2/2失败，详见round-1.md
+recall-increment,多词召回及首包候选增量,PASS,未执行,PASS*,未执行,未单列,未单列,未执行,PASS,round-1 3/3；round-3性能及预算用例4/4，均非最终源码绑定，详见对应报告；round-8 已安装包同断言召回4/4，见round-8.md及round-8/validation.json
+runtime-legacy-regression,topic-runtime旧合同并行回归,FAIL,未执行,PASS*,PASS*,未单列,未单列,未执行,未执行,round-1 173/181、8失败；修复fixture后187/187，round-4更新集合201/201，执行时源码均未hash绑定
+eval-score-tests,评估评分与数据集合同,PASS,未执行,未执行,未执行,未单列,未单列,未执行,未执行,round-1 4/4；未运行真实模型，详见round-1.md
+eval-native-host,原生Host路由决策终态采集,PASS,未执行,未执行,未执行,未单列,PASS*,未执行,未执行,round-6 offline-contract development 104/104、holdout 16/16，failures=0；脚本化模型，streams=0、modelQuality=not-measured；原evaluation JSON已清理，最终证据见round-7/final-validation.json#evaluation
+profile-preflight,alpha2与rc2隔离安装模块预检,PASS,未执行,未执行,未执行,未单列,PASS*,未执行,未执行,round-6 evaluation binding check：holdout 16条fixture issues=[]、解析所需隔离profile依赖；不证明凭据、网络或provider可用；原binding附件已清理，最终证据见round-7/final-validation.json#evaluation
+topic-store-summary-legacy,固定版本不暴露后来摘要既有历史合同,未执行,FAIL,未执行,未执行,FAIL,未单列,未执行,未执行,round-2当前树与精确c80基线均失败；round-3/4未复测，round-5 core batch仍有同一固定摘要失败；round-5 core TAP已清理，最终证据见round-7/final-validation.json#core，round-2.md保留历史结论
+route-audit-reason-replay,路由审计理由变更重放,未执行,未执行,PASS*,PASS*,未单列,未单列,未执行,未执行,round-3理由重放1/1；round-4引用晚到|理由变更组合2/2，均未hash绑定
+topic-routing-hold-observer,待判看板和本地HTTP mock,未执行,未执行,PASS*,未执行,未单列,未单列,未执行,PASS,round-3 41/41；非最终源码绑定；round-8 已安装包投影/分页/HTTP合同3/3，真实resident非法Origin/空请求403/400，未执行业务恢复
+topic-routing-hold-browser,待判UI隔离浏览器验证,未执行,未执行,PASS*,未执行,未单列,未单列,未执行,未执行,round-3隔离浏览器脚本1/1；HTTP mock，不证明真实服务恢复
+topic-routing-hold-native,待判native恢复合同,未执行,未执行,PASS*,PASS*,未单列,PASS*,未执行,未执行,round-3 native脚本1/1；round-4 scope=A旧B草稿独立推进为内存harness人工核对；round-6 context-02 1/1、epoch 0→1且无关hold保留，hold native用例1/1通过；round-6附件已清理，最终证据见round-7/final-validation.json#evaluation及#round6Native
+clarification-native-first-attempt,澄清与通知原生组合首次尝试,未执行,未执行,FAIL,未执行,未单列,未单列,未执行,未执行,round-3 65项64过1超时，修复后结果另列，不覆盖本次失败
+clarification-native-followup,fixture修复后澄清/通知组合,未执行,未执行,PASS*,未执行,未单列,PASS*,未执行,未执行,round-3组合43/43，其中clarification 12/12；未hash绑定；round-6 clarification native用例12/12通过；原web TAP已清理，最终证据见round-7/final-validation.json#round6Native；不等同完整原生回归全绿
+clarification-hold-retry-native,澄清、hold与通知retry原生合同,未执行,未执行,PASS*,未执行,未单列,未执行,未执行,未执行,round-3 native profile合跑14/14、0 skip；与43项有重叠，不累加；round-6未运行retry组合文件，notification-pending-source选定子集3/3不等同本组合通过；原notification TAP已清理，最终细节见round-7/final-validation.json#round6Native
+route-budget-recovery,超长转义消息首包预算,未执行,未执行,未执行,FAIL→PASS*,未单列,未单列,未执行,未执行,round-4记录修复前79279/40000；修后39999 chars、text19665、more=true、无错误，D内存harness人工核对
+late-reference-recovery,引用元数据晚到共同恢复,未执行,未执行,未执行,FAIL→PASS*,未单列,未单列,未执行,未执行,round-4 original/answer v2配对并拒绝partial route；D内存harness人工核对
+ghost-route-cleanup,元数据错误后幽灵route清理,未执行,未执行,未执行,FAIL→PASS*,未单列,未单列,未执行,未执行,更正：round-3未执行/未记录；该失败首次于round-4发现，修复回接见round-4.md；超长quote续读仍待验证
+scope-outside-topic-progress,缩窄hold后范围外Topic独立推进,未执行,未执行,未执行,PASS*,未单列,未单列,未执行,未执行,round-4内存store/coordinator：B completed，A未处理且hold仍needs-context
+core-focused-contracts,路由决策及协调会话定向合同,未执行,未执行,PASS*,PASS*,FAIL,未执行,未执行,未执行,round-3 187/187；round-4 201/201及store相关筛选2/2，执行源码未hash绑定；round-5核心冻结批次454项：450 pass、1 known fail、3 skip；原round-5 TAP已清理，round-6未重复该core定向批次，最终证据见round-7/final-validation.json#core
+route-budget-json-tests,路由首包JSON预算与大澄清候选,未执行,未执行,未执行,PASS*,未单列,未单列,未执行,未执行,round-4 node --test --test-name-pattern='路由首包按 JSON|大澄清候选' test/topic-runtime.test.js；2/2
+coordination-native-role-guard,原生协调角色guard,未执行,未执行,未执行,PASS*,未单列,未执行,未执行,未执行,round-4 node --test test/coordination-native-lifecycle.test.js；6/6，不含AgentLoop候选分页；round-6/7补验命令未包含此文件
+task-topic-routing-native,request-bound review与Topic reads原生用例,未执行,未执行,未执行,FAIL,未单列,未执行,未执行,未执行,round-4隔离profile 0/1、30秒business超时；round-6通过skip pattern排除native request-bound review等后续用例，round-7的7项变体通过但不包含该用例；round-6附件已清理，最终命令/原结果见round-7/final-validation.json#round6Native；本项留待后续定向复验
+long-quote-continuation,长引用冻结与续读,未执行,未执行,未执行,待复验,未单列,未单列,未执行,未执行,A实现与D独立审查待完成；round-4未证明合法45k quote可续读
+final-regression,整合后的定向回归与测试映射检查,待执行,待执行,待执行,待执行,FAIL/部分,FAIL,FAIL/部分,未重跑/既有FAIL保留,round-5 core batch 454项为450 pass/1 known fail/3 skip；native TAP 105条（101 ok、4 not ok）且ETIMEDOUT无完整摘要。round-6 native binding drift=[]：48项38 pass/10 fail/0 skip/cancel。round-7对round-6十个失败变体定向复验10/10通过（topic.tap 7/7、web.tap 3/3），207个文件前后相等且与当前一致；overall仍保留round-5固定摘要1 FAIL及未验边界，round-7失败历史不覆盖，见round-7/final-validation.json#round7Native、round-7/topic.tap、round-7/web.tap。原round-5通知skip 3/3已在round-6 notification-native通过；coordination-native-lifecycle guard文件的round-6/7未执行。
+semantic-quality,真实模型语义准确率与候选召回,未执行,未执行,未执行,未执行,未执行,未测量,未测量,未测量,round-6脚本化模型离线合同未测真实语义；streams=0、modelQuality=not-measured、datasetReview=pending
+release-smoke-deploy,本地部署前实际产物冒烟,未执行,未执行,未执行,未执行,未执行,未执行,未执行,PASS/定向复验,round-8 Bash tar环境首跑9/14，原生tar完整复验13/14，剩余任务链沿RELEASE_PACKAGE_DIRECTORY使用本轮实际包复验1/1；原30秒阈值与断言保持，不冒充一次完整14/14；见round-8.md
+local-merged-deployment,已合并双包本机切换与独立回读,未执行,未执行,未执行,未执行,未执行,未执行,未执行,PASS,round-8 merged 4ae15476dd33128232ce3b647ef052a6bb351c3d，原生SIGINT排空、已安装双包SHA核对、PID29252→34072、双端口/健康/DWS/原初始化身份/自启通过；未发真实测试消息；见round-8/validation.json

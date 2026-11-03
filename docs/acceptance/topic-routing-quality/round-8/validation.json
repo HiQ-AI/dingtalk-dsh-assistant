@@ -1,0 +1,271 @@
+{
+  "sourceCommit": "4ae15476dd33128232ce3b647ef052a6bb351c3d",
+  "pr": {
+    "number": 337,
+    "state": "MERGED",
+    "mergedAt": "2026-11-03T11:28:45Z"
+  },
+  "packages": {
+    "assistant": {
+      "verifiedFiles": 95,
+      "sha256": "1f7332296cf9d15bfb876a9f7bf96cae42353cb1fad892cb6b9a04b71cf901a0"
+    },
+    "observer": {
+      "verifiedFiles": 4,
+      "sha256": "953582d79c7247293329fed77a0771ab7f8f3a4bab39aa99666bd5e6a0f5273f"
+    }
+  },
+  "preDeployment": {
+    "sourceCommit": "4ae15476dd33128232ce3b647ef052a6bb351c3d",
+    "sourceUnchanged": true,
+    "runs": [
+      {
+        "taskId": "bvmun361b",
+        "label": "Bash 继承 GNU tar 的首次冒烟",
+        "outputSha256": "3dd5410378b83442d525d87a2ee2d2970a99e73f703f89b6c3f9ac1f372a7f34",
+        "tests": 14,
+        "pass": 9,
+        "fail": 5,
+        "skipped": 0,
+        "cancelled": 0,
+        "exitCode": 1
+      },
+      {
+        "taskId": "bhcu2isqs",
+        "label": "PowerShell 原生 tar 完整复验",
+        "outputSha256": "71e9d0e6addd380b0d3b9af04593e481c7847c5415faeb5a0397b84397a539d1",
+        "tests": 14,
+        "pass": 13,
+        "fail": 1,
+        "skipped": 0,
+        "cancelled": 0,
+        "exitCode": 1
+      },
+      {
+        "taskId": "beld9fn29",
+        "label": "实际部署包失败项定向复验",
+        "outputSha256": "3008458b19c4611edf9fa4d8a77c86db9c828a3c09aa5536a683a615167b5fcd",
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "skipped": 0,
+        "cancelled": 0,
+        "exitCode": 0
+      }
+    ],
+    "interpretation": "首跑 9/14（tar环境错误及超时）；原生tar完整复验13/14；沿既有RELEASE_PACKAGE_DIRECTORY使用本次实际包对剩余失败项复验1/1。原30秒阈值和全部断言保留。非一次性14/14全绿。",
+    "preflight": {
+      "writes": 0,
+      "packageSha256": "1f7332296cf9d15bfb876a9f7bf96cae42353cb1fad892cb6b9a04b71cf901a0",
+      "pid": 29252,
+      "signals": 0,
+      "ledger": {
+        "scope": "current-control",
+        "quiescent": true,
+        "candidateOnly": true,
+        "drained": true,
+        "pending": {
+          "tasks": 0,
+          "executions": 0,
+          "groups": 0
+        },
+        "ownerReleased": false,
+        "ownerProcessExited": false,
+        "staleOwner": false,
+        "unknownOperations": 3,
+        "unknownNotifications": 0
+      },
+      "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+      "checkOnly": true,
+      "console": {
+        "targetPid": 29252,
+        "checkOnly": true,
+        "signals": 0,
+        "consolePids": [
+          41156,
+          29252,
+          41448
+        ]
+      }
+    }
+  },
+  "beforeIdentity": {
+    "observedAt": "2026-11-03T11:37:04.179Z",
+    "sourceCommit": "4ae15476dd33128232ce3b647ef052a6bb351c3d",
+    "databaseBirthtimeMs": 1791955114433.8152,
+    "initializationIdentitySha256": "942b94eebdce1ff50a4ea6438be34ec7633e2530e2aa42957191b84f45aadffb",
+    "markerSha256": "3eece5a8b4ac7dca755a7067148024172a16c81c9a2d4c31c9c44012d9d61364",
+    "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55"
+  },
+  "nativeCutover": {
+    "control": {
+      "package": {
+        "verifiedFiles": 95,
+        "sha256": "1f7332296cf9d15bfb876a9f7bf96cae42353cb1fad892cb6b9a04b71cf901a0"
+      },
+      "executablePath": "D:\\soft\\node-v24.19.0\\node.exe",
+      "observerManifestSha256": "93352d237e892f863ff9ea95a2ebc8ec8eeb9d6ec8ea10dfd397cba5f3085141",
+      "taskEnabled": true,
+      "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+      "commandLineSha256": "d0c35b1788ee259b72b9e5eab027400a3c8f5c111944e64d88be9cc6ef4afac8",
+      "pid": 29252,
+      "creationDate": "2026-11-02T22:23:16.760333+08:00",
+      "backupCreated": false,
+      "packageSha256": "1f7332296cf9d15bfb876a9f7bf96cae42353cb1fad892cb6b9a04b71cf901a0",
+      "name": "node.exe"
+    },
+    "signal": {
+      "drainVerified": false,
+      "targetPid": 29252,
+      "signalSent": "CTRL_C_EVENT",
+      "consolePids": [
+        39536,
+        29252,
+        41448
+      ]
+    },
+    "quiescent": {
+      "pid": 29252,
+      "runtimePortClosed": true,
+      "observedAt": "2026-11-03T11:41:50.8656956Z",
+      "ledger": {
+        "scope": "current-control",
+        "quiescent": true,
+        "candidateOnly": false,
+        "drained": true,
+        "pending": {
+          "tasks": 0,
+          "executions": 0,
+          "groups": 0
+        },
+        "ownerReleased": false,
+        "ownerProcessExited": true,
+        "staleOwner": true,
+        "unknownOperations": 3,
+        "unknownNotifications": 0
+      },
+      "shutdown": "SIGINT",
+      "creationDate": "2026-11-02T22:23:16.760333+08:00",
+      "remainingDescendants": 0
+    },
+    "capturedDescendantCount": 8
+  },
+  "startup": {
+    "newPid": 34072,
+    "creationDate": "2026-11-03T19:42:27.570308+08:00",
+    "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+    "packageSha256": "1f7332296cf9d15bfb876a9f7bf96cae42353cb1fad892cb6b9a04b71cf901a0",
+    "installedVersion": "2.3.0",
+    "taskEnabled": true,
+    "backupCreated": false
+  },
+  "observerReadiness": {
+    "taskTotal": 15,
+    "pendingTotal": 0,
+    "ready": true
+  },
+  "independentReadback": {
+    "observedAt": "2026-11-03T11:47:24.581Z",
+    "sourceCommit": "4ae15476dd33128232ce3b647ef052a6bb351c3d",
+    "identityPreserved": true,
+    "persistence": {
+      "databaseBirthtimeMs": 1791955114433.8152,
+      "initializationIdentitySha256": "942b94eebdce1ff50a4ea6438be34ec7633e2530e2aa42957191b84f45aadffb",
+      "markerSha256": "3eece5a8b4ac7dca755a7067148024172a16c81c9a2d4c31c9c44012d9d61364",
+      "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55"
+    },
+    "liveRoutingHold": [
+      {
+        "name": "invalid-origin",
+        "status": 403,
+        "error": "TASK_LOCAL_IDENTITY_REQUIRED"
+      },
+      {
+        "name": "invalid-body",
+        "status": 400,
+        "error": "routing_hold_request_invalid"
+      }
+    ],
+    "businessMutationRequests": 0,
+    "health": {
+      "status": "ok",
+      "inboundConfigured": true,
+      "inboundProcessing": true,
+      "outboundAuthorized": true,
+      "modelMode": "real",
+      "recoveryIssueCount": 0,
+      "dwsBridgeHealthy": true
+    },
+    "packages": {
+      "assistant": {
+        "name": "@zzusp/dingtalk-dsh-assistant",
+        "version": "2.3.0",
+        "dependency": "file:D:/dsh_home/packages/by-sha256/1f7332296cf9d15bfb876a9f7bf96cae42353cb1fad892cb6b9a04b71cf901a0/package.tgz",
+        "installedRealpath": "D:\\dsh_home\\profiles\\web\\node_modules\\@zzusp\\dingtalk-dsh-assistant"
+      },
+      "observer": {
+        "name": "@zzusp/dingtalk-dsh-observer",
+        "version": "2.3.0",
+        "dependency": "file:D:/dsh_home/packages/by-sha256/953582d79c7247293329fed77a0771ab7f8f3a4bab39aa99666bd5e6a0f5273f/package.tgz",
+        "installedRealpath": "D:\\dsh_home\\profiles\\web\\node_modules\\@zzusp\\dingtalk-dsh-observer"
+      }
+    }
+  },
+  "currentControl": {
+    "ownerPid": 34072,
+    "scope": "current-control",
+    "quiescent": true,
+    "candidateOnly": true,
+    "drained": true,
+    "pending": {
+      "tasks": 0,
+      "executions": 0,
+      "groups": 0
+    },
+    "ownerReleased": false,
+    "ownerProcessExited": false,
+    "staleOwner": false,
+    "unknownOperations": 3,
+    "unknownNotifications": 0
+  },
+  "independentProcessReadback": {
+    "oldPid": 29252,
+    "oldProcessExists": false,
+    "newPid": 34072,
+    "creationDate": "2026-11-03T19:42:27.570308+08:00",
+    "ports": {
+      "3080": 34072,
+      "18998": 34072
+    },
+    "autostartEnabled": true,
+    "evidence": "独立 PowerShell Get-NetTCPConnection/Get-CimInstance/Get-Process/Get-ScheduledTask 回读"
+  },
+  "installedFunctionalTests": {
+    "tests": 7,
+    "pass": 7,
+    "fail": 0,
+    "skipped": 0,
+    "cancelled": 0,
+    "exitCode": 0,
+    "binding": [
+      {
+        "test": "test/topic-recall-search.test.js",
+        "originalSha256": "3409db74c124e4a6e4551f17afa6627e4e543ee7b23b67c84c29f5f06ba9e4ff",
+        "change": "仅将运行时模块 import 指向已安装包；断言与输入不变"
+      },
+      {
+        "test": "test/topic-routing-hold-observer.test.js",
+        "originalSha256": "fbfa369aa59a991d0afc0434dc8d6a368d6bd6bf1dc04411ab39843bd24c849a",
+        "change": "仅将运行时模块 import 指向已安装包；断言与输入不变"
+      }
+    ],
+    "outputSha256": "600ab7d09a7a02beac7c369248eab1d129f6419ae806c8147e71f79033c834a2"
+  },
+  "boundaries": [
+    "未向真实钉钉发送测试消息",
+    "未运行付费模型评估或手动CI",
+    "保持既有3项unknown operation，不主动重放",
+    "未重跑历史全量回归，固定摘要基线FAIL仍保留",
+    "未验证真实模型语义质量及真实role内大候选/metadata分页E2E"
+  ]
+}

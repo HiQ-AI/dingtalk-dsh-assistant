@@ -4,12 +4,12 @@
 
 实施已确认的四项增量：语义评估闭环、历史 Topic 候选召回、持久化待判与恢复、当前决策合同去退役流程化。保留两级分诊与 Task Owner，不新增专家 Agent、向量库或固定类别平台，不按标题自动合并，不扩大用户授权。
 
-用户于 2026-11-03 授权使用 cc-pool skill 启动 5 个 Claude 成员实施。主控 `dingtalk-dsh-assistant-db` 负责统筹、单写本文件、整合、独立核验和 PR；成员可直接沟通。交付到本地验证和 OPEN PR，不合并、不部署、不外发钉钉、不读取正式实例数据、不运行付费模型或 CI。真实模型质量门槛与预算另行确认，离线/脚本模型通过不宣称语义准确率达标。
+用户于 2026-11-03 授权使用 cc-pool skill 启动 5 个 Claude 成员实施。主控 `dingtalk-dsh-assistant-db` 负责统筹、单写本文件、整合、独立核验和 PR；成员可直接沟通。初始交付到本地验证和 OPEN PR；用户随后于同日明确要求“合并部署本地吧”，授权合并 #337 并更新既有本机实例，允许必要的只读部署核验。仍不外发测试钉钉消息、不运行付费模型、手动 CI 或正式 npm 发布。真实模型质量门槛与预算另行确认，离线/脚本模型通过不宣称语义准确率达标。
 
 ## 工作区与当前合同
 
 - 唯一实施目录：`D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality`。
-- 分支：`worktree-topic-routing-quality`；最新远端起点：`c80d42bf747cb950aa03ab7906194123bfc5683a`。
+- 实施分支：`worktree-topic-routing-quality`；实施起点：`c80d42bf747cb950aa03ab7906194123bfc5683a`。#337 已合并；部署源码冻结于 `4ae15476dd33128232ce3b647ef052a6bb351c3d`。后续仅证据分支 `worktree-topic-routing-local-deploy`，不再推送已合并 PR 分支。
 - 主仓在 `main`，其已有 AGENTS.md 修改及所有未跟踪文件不动。前次分析起点 c6722651 已过时，先复核最新源码。
 - 所有成员沿用已核实的 bypassPermissions；不修改权限配置。Windows PowerShell 7；依赖 `pnpm install --frozen-lockfile`，不链接主检出 node_modules。正式环境文件不复制。
 - 消息版本、来源完整覆盖、唯一效果归属、授权、CAS、恢复幂等必须保持；保留新主干的会话复用、执行路由监管和性能改进。
@@ -37,6 +37,14 @@
 
 ## 当前检查点与下一步
 
+2026-11-03 用户追加的“合并部署本地”已完成。#337 已独立回读 MERGED，mergedAt=2026-11-03T11:28:45Z，部署源码为合并提交 `4ae15476dd33128232ce3b647ef052a6bb351c3d`。原生双包切换完成：旧 PID 29252 与子进程均已退出，新 PID 34072 同时持有 3080/18998；两包仍为 2.3.0，以不可变包 SHA256 绑定本轮源码，未发布 npm/tag。主仓及既有改动未动。
+
+独立验收：健康 ok、DWS bridge healthy、收信处理/出站许可正常、recoveryIssueCount=0、自启保持启用；原数据库 birthtime、初始化身份摘要、标记和 profile 原字节摘要均不变。新进程已取得控制账，tasks/executions/groups 均排空；既有 unknownOperations=3、unknownNotifications=0，不主动重放。已安装包召回与待判合同 7/7（全部原断言，仅 import 改指安装包），真实 HTTP 对非法 Origin/空请求分别 403/400，未修改业务消息。部署前冒烟保留 9/14、原生 tar 13/14 的失败历史；剩余任务链沿现成实际产物模式原 30 秒阈值复验 1/1，未改源码或降低标准。完整证据及边界见 `round-8.md`、`round-8/validation.json` 和 `round-8/installed-functional-tests.log`。
+
+当前无待执行的合并/部署步骤。未运行付费模型、手动 CI、真实钉钉测试发信或全量回归；固定摘要基线 FAIL、独立人工金标和真实模型质量、真实角色内大候选/metadata 分页 E2E 仍为未解决/未验边界。五个成员会话保持，不额外启动或关闭。本轮后续分支仅承载部署证据，不再推送已合并 PR 分支；Git 交付与原 PR 部署回查的最终结果以交付回复为准。
+
+## 合并前实施交付记录
+
 2026-11-03 授权内交付完成（本地定向验证 + OPEN PR，未合并/部署）：A/D核心实现与交叉审查已冻结。大引用完整冻结元数据续读、JSON转义预算、晚到引用共同恢复及准备失败清理均经定向断言/独立回接；真实role中大候选/元数据分页E2E仍未验。Lead最终核心10文件454项：450pass、1既有摘要FAIL、3原生环境skip；215源码/测试/锁文件前后hash无漂移，最终证据round-7/final-validation.json的core记录（原中间附件已按规则清理）。不把exit1称全绿。
 
 第5轮四失败已定向修复：batch原30秒1/1，话题历史恢复原循环guard后原15秒3/3。第6轮新发现10失败（7 topic、3 web，含两cleanup超时），经B按真实拒绝调整测试模型与阶段提示断言，第7轮去诊断版原阈值10/10、0skip/cancel；web cleanup三项均正常。207文件前后SHA相同且Lead独立核对当前一致，最终两TAP及汇总hash见round-7/（前后重复绑定已合并到final-validation.json）；D对照三文件独立审查未发现可证实的原业务/界限断言削弱，3个Git blob与当前一致。产品核心未改，215核心绑定仍一致；不把脚本模型通过解释为真实模型反复旧提交不会饥饿。原skip通知3/3在第6轮补通过，已绿未变部分不重复。原生资源已由B交Lead，B无在途命令，测试文件冻结。
@@ -54,5 +62,5 @@ E README与矩阵已完成并冻结，最终写入权收回Lead；稳定合同�
 ## 证据入口
 
 - 前置快照：`docs/spec/topic-routing-quality-closure.md`，已保存并独立核实。
-- 回归：本目录 `matrix.csv`、`round-N.md`，保留各轮报告，最终只保留必要证据。
-- PR：[337，OPEN](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/337)；代码/本地定向验证已交付，未合并/部署，真实模型未测。
+- 回归：本目录 `matrix.csv`、`round-N.md`，保留各轮报告；实现最终证据在 `round-7/`，最新部署验收在 `round-8.md` 和 `round-8/`。
+- PR：[337，MERGED](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/337)；实施历史见本文件合并前记录，当前合并/部署事实以当前检查点和新增部署轮为准；真实模型未测。
