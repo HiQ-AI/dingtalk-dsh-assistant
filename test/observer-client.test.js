@@ -5,6 +5,24 @@ import { describeMessageTraceItem } from '../packages/dingtalk-dsh-assistant/wor
 import { runInNewContext } from 'node:vm'
 import { taskNotificationOutbound } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 
+test('card cumulative duration is compact, terminal-stable and unknown on incomplete or future evidence', async () => {
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const code=source.slice(source.indexOf('    const taskCardElapsed ='),source.indexOf('    function ExecutionSessionDuration('))
+ const elapsed=runInNewContext(`${code};taskCardElapsed`), now=Date.parse('2026-11-03T12:00:00Z')
+ const closed=minutes=>({complete:true,closedMs:minutes*60000,activeSince:null})
+ assert.equal(elapsed(closed(0),now).value,'<1m')
+ assert.equal(elapsed(closed(35),now).value,'35m')
+ assert.equal(elapsed(closed(243),now).value,'4h 3m')
+ assert.equal(elapsed(closed(1560),now).value,'1d 2h')
+ assert.equal(elapsed(closed(60),now).value,'1h')
+ assert.equal(elapsed(closed(243),now+86400000).value,'4h 3m')
+ const active={complete:true,closedMs:3600000,activeSince:new Date(now-3*60000).toISOString()}
+ assert.equal(elapsed(active,now).value,'1h 3m')
+ assert.equal(elapsed(active,now+60000).value,'1h 4m')
+ for(const invalid of [null,{}, {complete:false}, {complete:true,closedMs:-1,activeSince:null}, {complete:true,closedMs:0}, {...active,activeSince:new Date(now+1).toISOString()}])assert.equal(elapsed(invalid,now).value,'—')
+ assert.match(elapsed(active,now).description,/含排队、等待和暂停.*不含结束至重开.*不累加并行执行/)
+})
+
 test('inbox failure copy distinguishes inactive task context from unknown side effects', async () => {
  const source = await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js', import.meta.url), 'utf8')
  const code = source.slice(source.indexOf('    const messageFailureHint ='), source.indexOf('    const traceReason ='))

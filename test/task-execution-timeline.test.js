@@ -6,12 +6,44 @@ import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
-import { readTaskLifecycle, projectTaskLifecycle, projectTaskTimeline } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
+import { readTaskLifecycle, projectTaskLifecycle, projectTaskTimeline, projectTaskElapsed } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 
 const start = Date.parse('2026-10-16T10:00:00Z'), iso = minute => new Date(start + minute * 60000).toISOString()
+test('card elapsed sums open lifecycle intervals, counts waiting/paused time and freezes true terminal timestamps', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(iso(1000)) })
+  const task = { taskId: 't', createdAt: iso(0), updatedAt: iso(999), status: 'active', control: 'paused', runSequence: 2, requirementRevision: 2 }
+  const history = [{ sequence: 2, at: iso(60), completedAt: iso(10) }]
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task, history)), { complete: true, closedMs: 600000, activeSince: iso(60) })
+  const ended = { ...task, status: 'completed', completion: { at: iso(75), requirementRevision: 2 } }
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(ended, history), ended), { complete: true, closedMs: 1500000, activeSince: null })
+  const cancelled = { ...task, control: 'cancelled', cancelledAt: iso(80) }
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(cancelled, history), cancelled), { complete: true, closedMs: 1800000, activeSince: null })
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle({ ...ended, updatedAt: iso(9999) }, history), ended), projectTaskElapsed(projectTaskLifecycle(ended, history), ended))
+})
+
+test('card elapsed rejects stale current completion revisions and future terminal time', () => {
+  const task = { taskId: 't', createdAt: iso(0), status: 'completed', runSequence: 1, requirementRevision: 2,
+    completion: { at: iso(10), requirementRevision: 1 } }
+  const unknown = { complete: false, closedMs: null, activeSince: null }
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task), task, Date.parse(iso(20))), unknown)
+  task.completion.requirementRevision = 2
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task), task, Date.parse(iso(20))), { complete: true, closedMs: 600000, activeSince: null })
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task), task, Date.parse(iso(5))), unknown)
+})
+
+test('card elapsed does not turn incomplete, overlapping or missing terminal evidence into zero or an estimate', () => {
+  const unknown = { complete: false, closedMs: null, activeSince: null }
+  const task = { createdAt: iso(0), status: 'completed', runSequence: 2, updatedAt: iso(100) }
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task)), unknown)
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle({ ...task, runSequence: 1 })), unknown)
+  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle({ ...task, status: 'failed', runSequence: 1 })), unknown)
+  assert.deepEqual(projectTaskElapsed({ complete: true, active: false, status: 'completed', endedAt: iso(30), segments: [
+    { startedAt: iso(0), endedAt: iso(20), active: false }, { startedAt: iso(10), endedAt: iso(30), active: false },
+  ] }, { requirementRevision: 1, completion: { at: iso(30), requirementRevision: 1 } }, Date.parse(iso(50))), unknown)
+})
 async function fixture(t) {
   t.mock.timers.enable({ apis: ['Date'], now: start })
   const root = await mkdtemp(join(tmpdir(), 'task-lifecycle-'))
