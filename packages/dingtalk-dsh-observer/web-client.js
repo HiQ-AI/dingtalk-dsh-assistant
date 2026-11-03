@@ -854,6 +854,19 @@ window.__ModuleLoader__.load({
         compact && nativeSession && (!session?.sessionId || session.sessionBound === false) ? React.createElement('p', { className: 'detail-muted' }, session?.sessionId ? '会话尚未绑定，暂不可打开。' : '会话尚未建立。') : null,
         primaryAction ? null : entry, failure)
     }
+    const taskCardElapsed = (timing, now) => {
+      const explanation = '累计任务处理历时，含排队、等待和暂停；不含结束至重开的间隔，不累加并行执行。d为天，h为小时，m为分钟。'
+      const start = typeof timing?.activeSince === 'string' ? Date.parse(timing.activeSince) : NaN
+      const active = Number.isFinite(start)
+      const elapsed = timing?.closedMs + (active ? now - start : 0)
+      if (timing?.complete !== true || !Number.isSafeInteger(timing.closedMs) || timing.closedMs < 0
+        || timing.activeSince !== null && !active || active && (!Number.isFinite(now) || now < start)
+        || !Number.isSafeInteger(elapsed) || elapsed < 0) return { value: '—', description: `累计历时未知：缺少可靠的完整起止证据或时间异常。${explanation}` }
+      const minutes = Math.floor(elapsed / 60000), hours = Math.floor(minutes / 60), days = Math.floor(hours / 24)
+      const value = days ? `${days}d${hours % 24 ? ` ${hours % 24}h` : ''}`
+        : hours ? `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ''}` : minutes ? `${minutes}m` : '<1m'
+      return { value, description: `累计历时 ${value}${active ? '（进行中）' : '（已结束）'}。${explanation}` }
+    }
     function ExecutionSessionDuration({ timing }) {
       const [clock, setClock] = useState(Date.now)
       const start = timing?.startedAt ? Date.parse(timing.startedAt) : NaN
@@ -1716,6 +1729,14 @@ window.__ModuleLoader__.load({
       const [hoveredTaskId, setHoveredTaskId] = useState('')
       const [taskPages, setTaskPages] = useState({})
       const [selectedTaskId, setSelectedTaskId] = useState('')
+      const [cardClock, setCardClock] = useState(Date.now)
+      const liveCardClock = activePage === 'tasks' && !selectedTaskId && (data?.tasks || []).some(task => task.elapsedTiming?.complete === true && typeof task.elapsedTiming.activeSince === 'string')
+      useEffect(() => {
+        if (!liveCardClock) return
+        setCardClock(Date.now())
+        const timer = window.setInterval(() => setCardClock(Date.now()), 1000)
+        return () => window.clearInterval(timer)
+      }, [liveCardClock])
       const [taskDetail, setTaskDetail] = useState()
       const [detailError, setDetailError] = useState('')
       const [detailRetry, setDetailRetry] = useState(0)
@@ -1947,6 +1968,7 @@ const previousAuthorization=pageSnapshots.current.authorizations
         const completedSessions = historical ? 0 : task.completedExecutionCount ?? sessions.filter(item => ['succeeded', 'completed'].includes(item.status)).length
         const sessionCount = historical ? 0 : task.executionCount ?? sessions.length
         const displayObjective = String(task.objective || '').startsWith('[TASK_SOURCE_EVIDENCE]') ? (task.title || task.objective) : task.objective
+        const elapsed = taskCardElapsed(task.elapsedTiming, cardClock)
         return React.createElement('article', { key: task.taskId, onClick: event => { if (!event.target.closest('button, summary, details')) openTask(task) }, onMouseEnter: () => setHoveredTaskId(task.taskId), onMouseLeave: () => setHoveredTaskId(''), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.cardSurface, boxShadow: hovered ? '0 8px 20px rgba(15,23,42,.08), 0 2px 6px rgba(15,23,42,.05)' : 'var(--dsw-shadow-card, 0 1px 2px rgba(0,0,0,.08))', padding: '11px 13px', color: 'inherit', display: 'grid', gap: 6, opacity: queued ? 0.72 : 1, transition: 'box-shadow 180ms ease' } },
           React.createElement('button', { type: 'button', onClick: () => openTask(task), style: { width: '100%', minWidth: 0, boxSizing: 'border-box', border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', textAlign: 'left', display: 'grid', gap: 6, fontFamily: 'inherit' } },
             React.createElement('strong', { title: task.title || task.objective, style: { fontSize: 13, lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, taskDisplayTitle(task))),
@@ -1969,8 +1991,8 @@ const previousAuthorization=pageSnapshots.current.authorizations
               React.createElement('svg', { className: 'observer-card-session-chevron', width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, 'aria-hidden': true }, React.createElement('path', { d: 'm4 6 4 4 4-4' }))),
             expandedTaskId === task.taskId ? React.createElement(CardExecutionPage, {task,updatedAt,navigate,navigatingSessionId}) : null) : null,
           task.waitingReason ? React.createElement('div', { style: { fontSize: 11, lineHeight: 1.5, color: colors.warning, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } }, task.waitingReason) : null,
-          React.createElement('div', { style: { minWidth: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted } },
-            React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间' }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), fmt(task.updatedAt), React.createElement('span', { style: { marginLeft: 'auto' } }, !task.legacyReadonly && !task.archivedAt && ['completed', 'cancelled', 'succeeded', 'failed'].includes(task.state) ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', title: '归档任务（仅限已完成或已取消且执行已结束的任务）', 'aria-label': `归档任务：${task.title || task.taskId}`, 'aria-busy': archivingIds.includes(task.taskId), disabled: archivingIds.includes(task.taskId), onClick: event => { event.stopPropagation(); archiveTask(task) }, style: { minWidth: 58, fontSize: 10.5, cursor: archivingIds.includes(task.taskId) ? 'wait' : 'pointer' } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, 'aria-hidden': true, style: { verticalAlign: -2, marginRight: 4 } }, React.createElement('path', { d: 'M3 3h18v5H3zM5 8v13h14V8M9 12h6' })), '归档') : React.createElement('span', { style: { color: colors.muted, fontSize: 10.5 } }, task.legacyReadonly ? '历史只读' : task.archivedAt ? '已归档' : ''))))
+          React.createElement('div', { className: 'observer-task-footer', style: { minWidth: 0, paddingTop: 6, borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: colors.muted, whiteSpace: 'nowrap' } },
+            React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-label': '最后活动时间', style: { flexShrink: 0 } }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }), React.createElement('path', { d: 'M12 7v5l3 2' })), React.createElement('span', { className: 'observer-task-activity', style: { flexShrink: 0 } }, fmt(task.updatedAt)), React.createElement('span', { className: 'observer-task-elapsed', title: elapsed.description, 'aria-label': elapsed.description, style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } }, `· ${elapsed.value}`), React.createElement('span', { style: { marginLeft: 'auto', flexShrink: 0 } }, !task.legacyReadonly && !task.archivedAt && ['completed', 'cancelled', 'succeeded', 'failed'].includes(task.state) ? React.createElement(Button, { type: 'button', variant: 'outline', size: 'sm', title: '归档任务（仅限已完成或已取消且执行已结束的任务）', 'aria-label': `归档任务：${task.title || task.taskId}`, 'aria-busy': archivingIds.includes(task.taskId), disabled: archivingIds.includes(task.taskId), onClick: event => { event.stopPropagation(); archiveTask(task) }, style: { minWidth: 58, fontSize: 10.5, cursor: archivingIds.includes(task.taskId) ? 'wait' : 'pointer' } }, React.createElement('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, 'aria-hidden': true, style: { verticalAlign: -2, marginRight: 4 } }, React.createElement('path', { d: 'M3 3h18v5H3zM5 8v13h14V8M9 12h6' })), '归档') : React.createElement('span', { style: { color: colors.muted, fontSize: 10.5 } }, task.legacyReadonly ? '历史只读' : task.archivedAt ? '已归档' : ''))))
       }
       const alertCategories = [
         { id: 'all', label: '全部类型' },

@@ -25,15 +25,28 @@ export function latestExecutionRoundTiming(execution) {
 
 // The current service uses this stable completion receipt ID. Reopen wakes and
 // immutable receipts supply lifecycle facts; never infer them from summaries.
+export function taskLifecycleReceiptIds(task, wakes) {
+  return [...new Set(wakes.filter(item => item.taskId === task.taskId && item.kind === 'task.reopen').flatMap(wake => {
+    const revision = wake.payload?.requirementRevision, id = wake.wakeId || wake.id
+    return positive(revision) && revision >= 2 && typeof id === 'string' && id.startsWith('wake:')
+      ? [id.slice(5), `complete:${task.taskId}:${revision - 1}`] : []
+  }))]
+}
+
 export async function readTaskLifecycle(task, wakes, getReceipt) {
+  const receipts = new Map(await Promise.all(taskLifecycleReceiptIds(task, wakes).map(async id => [id, await getReceipt(id)])))
+  return projectTaskLifecycleReceipts(task, wakes, id => receipts.get(id))
+}
+
+export function projectTaskLifecycleReceipts(task, wakes, getReceipt) {
   const history = []
   for (const wake of wakes.filter(item => item.taskId === task.taskId && item.kind === 'task.reopen')) {
     const revision = wake.payload?.requirementRevision, id = wake.wakeId || wake.id
     if (!positive(revision) || revision < 2 || typeof id !== 'string' || !id.startsWith('wake:')) {
       history.push({ invalid: true }); continue
     }
-    const opened = (await getReceipt(id.slice(5)))?.result?.task
-    const previous = (await getReceipt(`complete:${task.taskId}:${revision - 1}`))?.result?.task
+    const opened = (getReceipt(id.slice(5)))?.result?.task
+    const previous = (getReceipt(`complete:${task.taskId}:${revision - 1}`))?.result?.task
     const validOpen = opened?.taskId === task.taskId && opened.requirementRevision === revision
       && opened.controlRevision === wake.payload.controlRevision && opened.status === 'active' && opened.completion === null
       && positive(opened.runSequence) && opened.runSequence > 1 && revision <= task.requirementRevision
@@ -86,6 +99,29 @@ export function projectTaskLifecycle(task, history = []) {
   }
   return { startedAt, endedAt, active: !terminal, status: task.status, complete, segments, events }
 }
+// Compact card projection: sum wall-clock open periods, never execution rows.
+export function projectTaskElapsed(lifecycle, task, now = Date.now()) {
+  const unknown = { complete: false, closedMs: null, activeSince: null }
+  if (!lifecycle?.complete || !['active', 'completed', 'cancelled'].includes(lifecycle.status) || !lifecycle.segments?.length) return unknown
+  if (!Number.isFinite(now) || lifecycle.status === 'completed' && (!positive(task?.requirementRevision)
+    || task.completion?.requirementRevision !== task.requirementRevision || task.completion?.at !== lifecycle.endedAt)) return unknown
+  let closedMs = 0, previousEnd = null, activeSince = null
+  for (const [index, segment] of lifecycle.segments.entries()) {
+    const start = timestamp(segment.startedAt), end = timestamp(segment.endedAt)
+    if (!start || Date.parse(start) > now || previousEnd !== null && Date.parse(start) < previousEnd) return unknown
+    if (segment.active === true) {
+      if (!lifecycle.active || index !== lifecycle.segments.length - 1 || segment.endedAt !== null) return unknown
+      activeSince = start
+    } else {
+      if (!end || Date.parse(end) > now || Date.parse(end) < Date.parse(start)) return unknown
+      closedMs += Date.parse(end) - Date.parse(start)
+      previousEnd = Date.parse(end)
+    }
+  }
+  if (!Number.isSafeInteger(closedMs) || closedMs < 0 || lifecycle.active !== (activeSince !== null)) return unknown
+  return { complete: true, closedMs, activeSince }
+}
+
 // Read-only projection. Wakes are durable business milestones, never tool-log activity
 // or a source for inferred start/end times. No final result is interpreted as history.
 export function projectTaskTimeline(task, executions, wakes, lifecycle) {

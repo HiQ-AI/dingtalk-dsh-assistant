@@ -17,6 +17,37 @@ function fixture(t,{archives=false}={}) {
  installObserverPagination(db,{migrate:true})
  return {db,put,page:q=>observerPage(db,q,'test')}
 }
+
+test('task cards batch only selected-page reopen receipts and never project private results or execution time', t => {
+ t.mock.timers.enable({apis:['Date'],now:Date.UTC(2026,10,3,2)})
+ const {db,put,page}=fixture(t,{archives:true})
+ db.exec('CREATE TABLE dynamic_receipts(id TEXT PRIMARY KEY,body TEXT)')
+ const iso=n=>new Date(Date.UTC(2026,10,3,0,n)).toISOString()
+ const task={taskId:'t',title:'reopened',status:'completed',control:'active',drained:true,runSequence:2,requirementRevision:2,createdAt:iso(0),updatedAt:iso(99),completion:{at:iso(50),requirementRevision:2},groupId:'g'}
+ put('tasks','t',task)
+ put('tasks','off-page',{...task,taskId:'off-page',updatedAt:iso(1)})
+ for(const executionId of ['parallel-a','parallel-b'])put('executions',executionId,{executionId,taskId:'t',status:'succeeded',drained:true,runTiming:{elapsedMs:10*3600000}})
+ put('wakes','wake:reopen-t',{taskId:'t',kind:'task.reopen',wakeId:'wake:reopen-t',createdAt:iso(40),payload:{requirementRevision:2,controlRevision:1}})
+ put('receipts','reopen-t',{result:{task:{taskId:'t',status:'active',controlRevision:1,requirementRevision:2,runSequence:2,completion:null}}})
+ put('receipts','complete:t:1',{result:{task:{taskId:'t',status:'completed',requirementRevision:1,runSequence:1,completion:{at:iso(10),requirementRevision:1,result:{summary:'PRIVATE_COMPLETION'}}}}})
+ // A large off-page payload must never be fetched or JSON-decoded by card timing.
+ for(let n=0;n<100;n++)put('receipts',`unused-${n}`,{privateBody:'PRIVATE_OFF_PAGE'.repeat(100)})
+ const queries=[],proxy=new Proxy(db,{get(target,key){if(key==='prepare')return sql=>{queries.push(sql);return target.prepare(sql)};const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value}})
+ const result=observerPage(proxy,{collection:'tasks',offset:0,limit:1},'test')
+ assert.equal(result.items[0].taskId,'t')
+ assert.equal(result.items[0].executionCount,2)
+ assert.deepEqual(result.items[0].elapsedTiming,{complete:true,closedMs:20*60000,activeSince:null})
+ assert.equal(JSON.stringify(result.items[0].elapsedTiming).includes('PRIVATE'),false)
+ assert.equal(queries.filter(sql=>sql.includes('FROM dynamic_wakes')).length,1)
+ assert.equal(queries.filter(sql=>sql.includes('FROM dynamic_receipts r')).length,1)
+ assert.ok(queries.find(sql=>sql.includes('FROM dynamic_receipts r')).includes('WHERE r.id IN'))
+ db.prepare('DELETE FROM dynamic_receipts WHERE id=?').run('complete:t:1')
+ assert.deepEqual(page({collection:'tasks',limit:1}).items[0].elapsedTiming,{complete:false,closedMs:null,activeSince:null})
+ // Archived lifecycle receipts remain readable through their immutable stubs.
+ put('receipts','complete:t:1',{archivedTaskId:'t'})
+ db.prepare('INSERT INTO dynamic_archived_receipts VALUES(?,?,?)').run('complete:t:1',1,JSON.stringify({result:{task:{taskId:'t',status:'completed',requirementRevision:1,runSequence:1,completion:{at:iso(10),requirementRevision:1}}}}))
+ assert.equal(page({collection:'tasks',limit:1}).items[0].elapsedTiming.closedMs,20*60000)
+})
 test('task page joins only selected topic names once per group/id without reading topic history', async t => {
  const {put,page}=fixture(t)
  const refs=[{topicId:'shared',revision:2},{groupId:'other',topicId:'shared',revision:4},{topicId:'missing',revision:1}]

@@ -1,5 +1,29 @@
 // Observer-only indexes. Historical payloads are fetched only after selecting a page.
 // Existing installations must opt into the offline index migration; GET never runs DDL.
+import { projectTaskLifecycle, projectTaskLifecycleReceipts, projectTaskElapsed, taskLifecycleReceiptIds } from './task-execution-timeline.js'
+
+function pageTaskElapsed(db, tasks) {
+ const reopened = tasks.filter(task => task.runSequence > 1)
+ let wakes = [], receipts = new Map()
+ if (reopened.length) {
+  const ids = JSON.stringify(reopened.map(task => task.taskId))
+  // One selected-page query, no execution/session logs or historical results.
+  const wakeFields = "json_object('id',id,'wakeId',json_extract(body,'$.wakeId'),'taskId',json_extract(body,'$.taskId'),'kind',json_extract(body,'$.kind'),'createdAt',json_extract(body,'$.createdAt'),'payload',json_object('requirementRevision',json_extract(body,'$.payload.requirementRevision'),'controlRevision',json_extract(body,'$.payload.controlRevision'))) AS body"
+  const where = "WHERE json_extract(body,'$.kind')='task.reopen' AND json_extract(body,'$.taskId') IN (SELECT value FROM json_each(?))"
+  const tables = ['dynamic_wakes', ...(tableExists(db, 'dynamic_archived_wakes') ? ['dynamic_archived_wakes'] : [])]
+  wakes = db.prepare(tables.map(table => `SELECT ${wakeFields} FROM ${table} ${where}`).join(' UNION ALL ')).all(...tables.map(() => ids)).map(row => JSON.parse(row.body))
+  const receiptIds = [...new Set(reopened.flatMap(task => taskLifecycleReceiptIds(task, wakes)))]
+  if (receiptIds.length && tableExists(db, 'dynamic_receipts')) {
+   const archived = tableExists(db, 'dynamic_archived_receipts'), body = archived ? 'coalesce(a.body,r.body)' : 'r.body'
+   const fields = ['taskId', 'status', 'requirementRevision', 'controlRevision', 'runSequence']
+    .map(key => `'${key}',json_extract(${body},'$.result.task.${key}')`).join(',')
+   const rows = db.prepare(`SELECT r.id,json_object('result',json_object('task',json_object(${fields},'completion',CASE json_type(${body},'$.result.task.completion') WHEN 'null' THEN NULL WHEN 'object' THEN json_object('at',json_extract(${body},'$.result.task.completion.at'),'requirementRevision',json_extract(${body},'$.result.task.completion.requirementRevision')) ELSE json_object('invalid',1) END))) AS body FROM dynamic_receipts r ${archived ? 'LEFT JOIN dynamic_archived_receipts a ON a.id=r.id' : ''} WHERE r.id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(receiptIds))
+   receipts = new Map(rows.map(row => [row.id, JSON.parse(row.body)]))
+  }
+ }
+ return tasks.map(task => ({ ...task, elapsedTiming: projectTaskElapsed(task.runSequence > 1
+  ? projectTaskLifecycleReceipts(task, wakes, id => receipts.get(id)) : projectTaskLifecycle(task), task) }))
+}
 const error = code => Object.assign(new Error(code), { code })
 const taskState = indexed => `CASE
  WHEN json_extract(t.body,'$.status')='completed' THEN 'completed'
@@ -186,7 +210,8 @@ export function observerPage(db, q, instance) {
   ? ",CASE WHEN i.archived=0 THEN (SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id) END AS execution_count,CASE WHEN i.archived=0 THEN (SELECT count(*) FROM observer_execution_index e WHERE e.task_id=i.id AND e.state IN ('succeeded','completed')) END AS completed_count" : ''
  const rows = db.prepare(`${prefix}SELECT ${body} AS body${q.collection === 'tasks' && !q.summary ? ',i.state AS board_state' : ''}${executionCounts} FROM ${pageFrom} ${suffix}`).all(...args,limit,offset)
  if(rows.some(row=>row.body==null))throw error('OBSERVER_PAGE_DATA_MISSING')
- return { items: rows.map(row => ({...JSON.parse(row.body), ...(q.summary && q.collection === 'executions' ? {drained:!!JSON.parse(row.body).drained,recovering:!!JSON.parse(row.body).recovering} : row.board_state ? {state:row.board_state,...(row.execution_count == null ? {} : {executionCount:row.execution_count,completedExecutionCount:row.completed_count})} : {})})), total,offset,limit,revision:currentRevision,nextOffset:offset+rows.length<total?offset+rows.length:null }
+ const items = rows.map(row => ({...JSON.parse(row.body), ...(q.summary && q.collection === 'executions' ? {drained:!!JSON.parse(row.body).drained,recovering:!!JSON.parse(row.body).recovering} : row.board_state ? {state:row.board_state,...(row.execution_count == null ? {} : {executionCount:row.execution_count,completedExecutionCount:row.completed_count})} : {})}))
+ return { items: q.collection === 'tasks' && !q.summary ? pageTaskElapsed(db, items) : items, total,offset,limit,revision:currentRevision,nextOffset:offset+rows.length<total?offset+rows.length:null }
 }
 
 export function observerGroupQuery(db,q) {
