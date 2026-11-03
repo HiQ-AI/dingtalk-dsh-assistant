@@ -37,20 +37,22 @@
 
 ## 当前检查点与下一步
 
-2026-11-03 最终整合检查点（尚无提交/PR）：A/D核心实现与交叉审查已冻结。大引用完整冻结元数据续读、JSON转义预算、晚到引用共同恢复及准备失败清理均经定向断言/独立回接；真实role中大候选/元数据分页E2E仍未验。Lead最终核心10文件454项：450pass、1既有摘要FAIL、3原生环境skip；215源码/测试/锁文件前后hash无漂移，最终证据round-7/final-validation.json的core记录（原中间附件已按规则清理）。不把exit1称全绿。
+2026-11-03 授权内交付完成（本地定向验证 + OPEN PR，未合并/部署）：A/D核心实现与交叉审查已冻结。大引用完整冻结元数据续读、JSON转义预算、晚到引用共同恢复及准备失败清理均经定向断言/独立回接；真实role中大候选/元数据分页E2E仍未验。Lead最终核心10文件454项：450pass、1既有摘要FAIL、3原生环境skip；215源码/测试/锁文件前后hash无漂移，最终证据round-7/final-validation.json的core记录（原中间附件已按规则清理）。不把exit1称全绿。
 
 第5轮四失败已定向修复：batch原30秒1/1，话题历史恢复原循环guard后原15秒3/3。第6轮新发现10失败（7 topic、3 web，含两cleanup超时），经B按真实拒绝调整测试模型与阶段提示断言，第7轮去诊断版原阈值10/10、0skip/cancel；web cleanup三项均正常。207文件前后SHA相同且Lead独立核对当前一致，最终两TAP及汇总hash见round-7/（前后重复绑定已合并到final-validation.json）；D对照三文件独立审查未发现可证实的原业务/界限断言削弱，3个Git blob与当前一致。产品核心未改，215核心绑定仍一致；不把脚本模型通过解释为真实模型反复旧提交不会饥饿。原skip通知3/3在第6轮补通过，已绿未变部分不重复。原生资源已由B交Lead，B无在途命令，测试文件冻结。
 
 C数据现120条，按完整会话及已知构造族隔离为development104/holdout16，八类均覆盖；已证实同生成模板换实体的旧跨split场景集中development，新增有界反证重写由B只读抽审暂未发现其他明确模板泄漏/golden矛盾。人工语义标注与独立家族质量仍pending，不声称绝对无泄漏或模型质量达标。context-02在群级hold下先观察无关m3的Resident消息已routed、source.processingPending=true而未processingCompleted、无已接纳决策，hold/epoch不变，再精确引用恢复并最终结清；新版定向1/1通过。最终104/16同runner串行结果均failures=[]、streams0、cleanup全absent、modelQuality全not-measured；round-6三个evaluation JSON已由C和Lead独立回读，并完整汇入round-7/final-validation.json的evaluation；原中间附件清理，before==after且当前逐源码SHA一致，context观测epoch0→1和无关hold保留。eval单元最新7/7，尚不替代最终runner验证。
 
-E README稳定合同已更新，已补实际评估CLI/分层边界，并生成、逐项审阅与check测试映射（335→341，仅6新增、0既有变化/删除、历史3不变；Lead已独立对照）；不改mixed历史分类。round-1至round-4保留；round-5/6失败报告保留，必要原始事实/测试记录及SHA已汇入round-7/final-validation.json，中间附件经独立核对后清理；round-7报告Lead单写、日志/前后绑定B提供并已独立核实，matrix仍E单写。
+E README与矩阵已完成并冻结，最终写入权收回Lead；稳定合同已更新，已补实际评估CLI/分层边界，并生成、逐项审阅与check测试映射（335→341，仅6新增、0既有变化/删除、历史3不变；Lead已独立对照）；不改mixed历史分类。round-1至round-4保留；round-5/6失败报告保留，必要原始事实/测试记录及SHA已汇入round-7/final-validation.json，中间附件经独立核对后清理；round-7报告Lead单写、日志/前后绑定B提供并已独立核实，matrix仍E单写。
 
 已核实边界：固定摘要在精确c80基线和冻结核心均同FAIL，原断言/冻结v8归档不改。最近fetch后HEAD..origin/main为0，远端仍c80d42bf。主仓已有文件不动。无CI、付费模型、正式数据、钉钉外发、合并或部署；五个成员窗口保留。
 
-下一步唯一主线：E按round-7真实结果更新matrix；Lead核最终diff/目标主线与隐私边界，整理PR正文、收口记录，提交/push并创建OPEN PR；固定摘要基线FAIL与真实模型/生产边界须如实列出，不声称全绿。已验未变部分不重复跑；任何新缺陷按唯一写者修，不以提高超时/删断言收口。
+交付：代码提交 `b09ab5bc9e2151a217df20dfa7df10b1880c21a5`；PR [#337](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/337) `feat(routing): 增加事项召回、待判恢复与分层评估`，`main ← worktree-topic-routing-quality`。Lead独立回读number/body/url/state/base/head/headOid/mergeable及ls-remote，确认OPEN、MERGEABLE、远端头与代码提交一致；随后只回填本目标文档，不改已验证源码。最终文档提交SHA以交付回复为准，不为文档包含自身SHA循环提交。
+
+授权内工作已完成，不自动合并、部署、触发CI、付费评估或钉钉外发。固定摘要基线FAIL仍保留；独立人工金标、真实模型质量及真实角色内大候选/metadata分页E2E为明确未验边界，不冒充本轮通过。五个成员会话保留，均已交接其必要产物、无在途native任务；后续若获预算/环境授权，从上述已验证代码及final-validation.json接续，而不是重做本轮。
 
 ## 证据入口
 
 - 前置快照：`docs/spec/topic-routing-quality-closure.md`，已保存并独立核实。
 - 回归：本目录 `matrix.csv`、`round-N.md`，保留各轮报告，最终只保留必要证据。
-- PR：尚未创建；代码、测试、真实模型、部署分别记录。
+- PR：[337，OPEN](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/337)；代码/本地定向验证已交付，未合并/部署，真实模型未测。
