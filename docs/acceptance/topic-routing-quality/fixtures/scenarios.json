@@ -1,0 +1,6306 @@
+[
+  {
+    "id": "new-01",
+    "family": "new-warehouse-audit",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "warehouse",
+        "responsibility": "仓储运营群，处理库存盘点与库房安全"
+      },
+      "topics": [
+        {
+          "id": "stock-count",
+          "title": "三月库存盘点",
+          "summary": "核对三月账实差异",
+          "groupId": "warehouse"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "count-task",
+          "topicId": "stock-count",
+          "state": "running",
+          "objective": "整理三月盘点差异",
+          "ownerActorId": "group-member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "西库消防通道被纸箱堵住了，请单独记录并跟进清理。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "西库消防通道被纸箱堵住了，请单独记录并跟进清理",
+          "topic": "new"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "category": "new",
+    "constructionFamily": "new-warehouse-audit"
+  },
+  {
+    "id": "new-02",
+    "family": "new-warehouse-audit",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "warehouse",
+        "responsibility": "仓储运营群，处理库存盘点与库房安全"
+      },
+      "topics": [
+        {
+          "id": "stock-count",
+          "title": "三月库存盘点",
+          "summary": "核对三月账实差异",
+          "groupId": "warehouse"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "count-task",
+          "topicId": "stock-count",
+          "state": "running",
+          "objective": "整理三月盘点差异",
+          "ownerActorId": "group-member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请在正在执行的三月盘点任务中补充冷藏区的账实差异。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请在正在执行的三月盘点任务中补充冷藏区的账实差异",
+          "topic": "stock-count"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-context",
+          "taskId": "count-task"
+        }
+      ],
+      "candidateTopicIds": [
+        "stock-count"
+      ]
+    },
+    "category": "new",
+    "constructionFamily": "new-warehouse-audit"
+  },
+  {
+    "id": "existing-01",
+    "family": "existing-refund-evidence",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "support",
+        "responsibility": "客服群，协调退款与工单处理"
+      },
+      "topics": [
+        {
+          "id": "refund-a",
+          "title": "订单A退款失败",
+          "summary": "支付渠道返回重复退款错误，等待流水",
+          "groupId": "support"
+        },
+        {
+          "id": "refund-b",
+          "title": "订单B少退款",
+          "summary": "核对优惠券抵扣金额",
+          "groupId": "support"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "refund-task",
+          "topicId": "refund-a",
+          "state": "running",
+          "objective": "核查订单A退款流水",
+          "ownerActorId": "group-member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请把订单A的支付流水补充到正在执行的核查任务：重复退款是第一次请求超时后又重试。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请把订单A的支付流水补充到正在执行的核查任务：重复退款是第一次请求超时后又重试",
+          "topic": "refund-a"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-context",
+          "taskId": "refund-task"
+        }
+      ],
+      "candidateTopicIds": [
+        "refund-a"
+      ]
+    },
+    "category": "existing",
+    "constructionFamily": "existing-refund-evidence"
+  },
+  {
+    "id": "existing-02",
+    "family": "existing-refund-evidence",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "support",
+        "responsibility": "客服群，协调退款与工单处理"
+      },
+      "topics": [
+        {
+          "id": "refund-a",
+          "title": "订单A退款失败",
+          "summary": "支付渠道返回重复退款错误，等待流水",
+          "groupId": "support"
+        },
+        {
+          "id": "refund-b",
+          "title": "订单B少退款",
+          "summary": "核对优惠券抵扣金额",
+          "groupId": "support"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "refund-task",
+          "topicId": "refund-a",
+          "state": "running",
+          "objective": "核查订单A退款流水",
+          "ownerActorId": "group-member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "订单B的优惠券由平台承担，不应从退款金额里扣除。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "订单B的优惠券由平台承担，不应从退款金额里扣除",
+          "topic": "refund-b"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "refund-b"
+      ]
+    },
+    "category": "existing",
+    "constructionFamily": "existing-refund-evidence"
+  },
+  {
+    "id": "multi-01",
+    "family": "multi-release-observability",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "release",
+        "responsibility": "发布群，协调版本上线和生产监控"
+      },
+      "topics": [
+        {
+          "id": "release-window",
+          "title": "周四发布窗口",
+          "summary": "协调支付服务上线时间",
+          "groupId": "release"
+        },
+        {
+          "id": "alert-noise",
+          "title": "告警误报治理",
+          "summary": "排查夜间磁盘告警误报",
+          "groupId": "release"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "支付服务周四改到二十二点上线；夜间磁盘误报告警先保留静默规则。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "支付服务周四改到二十二点上线",
+          "topic": "release-window"
+        },
+        {
+          "messageId": "m1",
+          "source": "夜间磁盘误报告警先保留静默规则",
+          "topic": "alert-noise"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "release-window",
+        "alert-noise"
+      ]
+    },
+    "category": "multi",
+    "constructionFamily": "multi-release-observability"
+  },
+  {
+    "id": "multi-02",
+    "family": "multi-release-observability",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "release",
+        "responsibility": "发布群，协调版本上线和生产监控"
+      },
+      "topics": [
+        {
+          "id": "release-window",
+          "title": "周四发布窗口",
+          "summary": "协调支付服务上线时间",
+          "groupId": "release"
+        },
+        {
+          "id": "alert-noise",
+          "title": "告警误报治理",
+          "summary": "排查夜间磁盘告警误报",
+          "groupId": "release"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "支付服务周四上线推迟到二十二点，因为清算对账要先结束。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "支付服务周四上线推迟到二十二点，因为清算对账要先结束",
+          "topic": "release-window"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "release-window"
+      ]
+    },
+    "category": "multi",
+    "constructionFamily": "multi-release-observability"
+  },
+  {
+    "id": "quote-01",
+    "family": "quote-training-budget",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "hr",
+        "responsibility": "人力资源群，协调培训与招聘预算"
+      },
+      "topics": [
+        {
+          "id": "training-budget",
+          "title": "新人培训预算",
+          "summary": "核对讲师与场地费用",
+          "groupId": "hr"
+        },
+        {
+          "id": "hiring-budget",
+          "title": "招聘预算",
+          "summary": "核对招聘渠道费用",
+          "groupId": "hr"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "培训预算还卡在一项：场地要不要收费，目前没答复。",
+          "senderId": "group-member"
+        },
+        {
+          "messageId": "m2",
+          "text": "场地免费，培训预算只需保留讲师费。",
+          "replyToMessageId": "m1",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "培训预算还卡在一项：场地要不要收费，目前没答复",
+          "topic": "training-budget"
+        },
+        {
+          "messageId": "m2",
+          "source": "场地免费，培训预算只需保留讲师费",
+          "topic": "training-budget"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "training-budget"
+      ]
+    },
+    "category": "quote",
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "quote-02",
+    "family": "quote-training-budget",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "hr",
+        "responsibility": "人力资源群，协调培训与招聘预算"
+      },
+      "topics": [
+        {
+          "id": "training-budget",
+          "title": "新人培训预算",
+          "summary": "核对讲师与场地费用",
+          "groupId": "hr"
+        },
+        {
+          "id": "hiring-budget",
+          "title": "招聘预算",
+          "summary": "核对招聘渠道费用",
+          "groupId": "hr"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "培训预算还卡在一项：场地要不要收费，目前没答复。",
+          "senderId": "group-member"
+        },
+        {
+          "messageId": "m2",
+          "text": "培训场地确实免费。另外，招聘渠道的广告费本月要追加五千元。",
+          "replyToMessageId": "m1",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "培训预算还卡在一项：场地要不要收费，目前没答复",
+          "topic": "training-budget"
+        },
+        {
+          "messageId": "m2",
+          "source": "培训场地确实免费",
+          "topic": "training-budget"
+        },
+        {
+          "messageId": "m2",
+          "source": "招聘渠道的广告费本月要追加五千元",
+          "topic": "hiring-budget"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "training-budget",
+        "hiring-budget"
+      ]
+    },
+    "category": "quote",
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "auth-01",
+    "family": "auth-legal-contract",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "legal",
+        "responsibility": "法务协作群，讨论合同审核"
+      },
+      "topics": [
+        {
+          "id": "contract-renewal",
+          "title": "供应商合同续签",
+          "summary": "审核自动续期条款",
+          "groupId": "legal"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "供应商合同的自动续期条款风险较高，大家先讨论，暂时不要安排机器人处理。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "供应商合同的自动续期条款风险较高，大家先讨论，暂时不要安排机器人处理",
+          "topic": "contract-renewal"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "contract-renewal"
+      ]
+    },
+    "category": "authorization",
+    "constructionFamily": "auth-legal-contract"
+  },
+  {
+    "id": "auth-02",
+    "family": "auth-legal-contract",
+    "split": "development",
+    "input": {
+      "group": {
+        "id": "legal",
+        "responsibility": "法务协作群，讨论合同审核"
+      },
+      "topics": [
+        {
+          "id": "contract-renewal",
+          "title": "供应商合同续签",
+          "summary": "审核自动续期条款",
+          "groupId": "legal"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请整理供应商合同自动续期条款的风险和修改建议，交法务复核。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请整理供应商合同自动续期条款的风险和修改建议，交法务复核",
+          "topic": "contract-renewal"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "new-task",
+          "title": "整理供应商合同自动续期条款风险",
+          "objective": "整理供应商合同自动续期条款的风险和修改建议，交法务复核"
+        }
+      ],
+      "candidateTopicIds": [
+        "contract-renewal"
+      ]
+    },
+    "category": "authorization",
+    "constructionFamily": "auth-legal-contract"
+  },
+  {
+    "id": "task-01",
+    "family": "task-cancel-export",
+    "split": "holdout",
+    "input": {
+      "group": {
+        "id": "analytics",
+        "responsibility": "数据分析群，处理报表导出需求"
+      },
+      "topics": [
+        {
+          "id": "export-topic",
+          "title": "财务月报导出",
+          "summary": "生成财务月报CSV；先前有人误说停止",
+          "groupId": "analytics"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "export-task",
+          "topicId": "export-topic",
+          "state": "running",
+          "objective": "生成财务月报CSV",
+          "ownerActorId": "group-member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，刚才说停止财务月报导出是误会，任务继续，只追加一条验收：排除测试账户。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，刚才说停止财务月报导出是误会，任务继续，只追加一条验收：排除测试账户",
+          "topic": "export-topic"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-context",
+          "taskId": "export-task"
+        }
+      ],
+      "candidateTopicIds": [
+        "export-topic"
+      ]
+    },
+    "category": "task-continuation-cancellation",
+    "constructionFamily": "task-cancel-export"
+  },
+  {
+    "id": "task-02",
+    "family": "task-cancel-export",
+    "split": "holdout",
+    "input": {
+      "group": {
+        "id": "analytics",
+        "responsibility": "数据分析群，处理报表导出需求"
+      },
+      "topics": [
+        {
+          "id": "export-topic",
+          "title": "财务月报导出",
+          "summary": "生成财务月报CSV",
+          "groupId": "analytics"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "export-task",
+          "topicId": "export-topic",
+          "state": "running",
+          "objective": "生成财务月报CSV",
+          "ownerActorId": "group-member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，财务已经拿到月报，请取消正在执行的财务月报导出任务。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，财务已经拿到月报，请取消正在执行的财务月报导出任务",
+          "topic": "export-topic"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-cancel",
+          "taskId": "export-task"
+        }
+      ],
+      "candidateTopicIds": [
+        "export-topic"
+      ]
+    },
+    "category": "task-continuation-cancellation",
+    "constructionFamily": "task-cancel-export"
+  },
+  {
+    "id": "cross-01",
+    "family": "cross-release-word",
+    "split": "holdout",
+    "input": {
+      "group": {
+        "id": "museum",
+        "responsibility": "展览运营群，负责展品出库及入场"
+      },
+      "topics": [
+        {
+          "id": "exhibit-release",
+          "title": "青铜器放行",
+          "summary": "展品通过安检后运入展厅",
+          "groupId": "museum"
+        },
+        {
+          "id": "software-release",
+          "title": "客户端放行",
+          "summary": "软件灰度发布前的质量审批",
+          "groupId": "engineering"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "这里说的客户端放行与外群软件发布无关：请单独记录展厅访客客户端的无障碍说明，不涉及青铜器安检。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "这里说的客户端放行与外群软件发布无关：请单独记录展厅访客客户端的无障碍说明，不涉及青铜器安检",
+          "topic": "new"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "category": "cross-group-homonym",
+    "constructionFamily": "cross-release-word"
+  },
+  {
+    "id": "cross-02",
+    "family": "cross-release-word",
+    "split": "holdout",
+    "input": {
+      "group": {
+        "id": "engineering",
+        "responsibility": "客户端研发群，负责软件灰度发布"
+      },
+      "topics": [
+        {
+          "id": "exhibit-release",
+          "title": "青铜器放行",
+          "summary": "展品通过安检后运入展厅",
+          "groupId": "museum"
+        },
+        {
+          "id": "software-release",
+          "title": "客户端放行",
+          "summary": "软件灰度发布前的质量审批",
+          "groupId": "engineering"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "客户端灰度回归通过，可以放行发布了。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "客户端灰度回归通过，可以放行发布了",
+          "topic": "software-release"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "software-release"
+      ]
+    },
+    "category": "cross-group-homonym",
+    "constructionFamily": "cross-release-word"
+  },
+  {
+    "id": "context-01",
+    "family": "context-two-invoices",
+    "split": "holdout",
+    "input": {
+      "group": {
+        "id": "finance",
+        "responsibility": "财务群，跟进供应商发票"
+      },
+      "topics": [
+        {
+          "id": "invoice-north",
+          "title": "北方供应商发票",
+          "summary": "等待更正税号",
+          "groupId": "finance"
+        },
+        {
+          "id": "invoice-south",
+          "title": "南方供应商发票",
+          "summary": "等待更正税号",
+          "groupId": "finance"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "税号改好了，但我忘了是哪家供应商的发票。机器人，请帮我判断。",
+          "senderId": "group-member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": [
+        "invoice-north",
+        "invoice-south"
+      ]
+    },
+    "category": "needs-context-recovery",
+    "constructionFamily": "context-two-invoices"
+  },
+  {
+    "id": "context-02",
+    "family": "context-two-invoices",
+    "split": "holdout",
+    "input": {
+      "group": {
+        "id": "finance",
+        "responsibility": "财务群，跟进供应商发票"
+      },
+      "topics": [
+        {
+          "id": "invoice-north",
+          "title": "北方供应商发票",
+          "summary": "等待更正税号",
+          "groupId": "finance"
+        },
+        {
+          "id": "invoice-south",
+          "title": "南方供应商发票",
+          "summary": "等待更正税号",
+          "groupId": "finance"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "税号改好了，但我忘了是哪家供应商的发票。机器人，请帮我判断。",
+          "senderId": "group-member"
+        },
+        {
+          "messageId": "m3",
+          "text": "今天财务值班到六点。",
+          "senderId": "group-member"
+        },
+        {
+          "messageId": "m2",
+          "text": "补充一下，是北方供应商的发票。",
+          "replyToMessageId": "m1",
+          "senderId": "group-member"
+        }
+      ],
+      "initialRoutingHold": {
+        "messageId": "m1",
+        "messageVersion": 1,
+        "epoch": 0,
+        "reason": "供应商不明确"
+      },
+      "events": [
+        {
+          "kind": "ingest",
+          "messageId": "m3",
+          "sourceKind": "dingtalk"
+        },
+        {
+          "kind": "observe-hold",
+          "messageId": "m1",
+          "previousEpoch": 0
+        },
+        {
+          "kind": "ingest",
+          "messageId": "m2",
+          "sourceKind": "dingtalk",
+          "quotedMessageId": "m1"
+        },
+        {
+          "kind": "observe-recovery",
+          "messageId": "m1",
+          "previousEpoch": 0
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "税号改好了，但我忘了是哪家供应商的发票。机器人，请帮我判断",
+          "topic": "invoice-north"
+        },
+        {
+          "messageId": "m2",
+          "source": "补充一下，是北方供应商的发票",
+          "topic": "invoice-north"
+        },
+        {
+          "messageId": "m3",
+          "source": "今天财务值班到六点",
+          "topic": "new"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "invoice-north"
+      ]
+    },
+    "category": "needs-context-recovery",
+    "constructionFamily": "context-two-invoices"
+  },
+  {
+    "id": "new-03",
+    "family": "new-library-leak",
+    "split": "holdout",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "library",
+        "responsibility": "图书馆运营群，管理借阅与馆舍设施"
+      },
+      "topics": [
+        {
+          "id": "loan",
+          "title": "读者借阅逾期",
+          "summary": "协调逾期图书归还，不含读者证件安全",
+          "groupId": "library"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "同一位逾期读者刚反馈借书证疑似被冒用；这不是催还图书，请单独记录证件安全问题。",
+          "senderId": "librarian"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "同一位逾期读者刚反馈借书证疑似被冒用；这不是催还图书，请单独记录证件安全问题",
+          "topic": "new"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "constructionFamily": "new-library-leak"
+  },
+  {
+    "id": "new-04",
+    "family": "new-library-leak",
+    "split": "holdout",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "library",
+        "responsibility": "图书馆运营群，管理借阅与馆舍设施"
+      },
+      "topics": [
+        {
+          "id": "loan",
+          "title": "读者借阅逾期",
+          "summary": "协调归还超期图书",
+          "groupId": "library"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "借阅逾期的读者来电说明下周一归还，请登记在借阅逾期记录里。",
+          "senderId": "librarian"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "借阅逾期的读者来电说明下周一归还，请登记在借阅逾期记录里",
+          "topic": "loan"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "loan"
+      ]
+    },
+    "constructionFamily": "new-library-leak"
+  },
+  {
+    "id": "existing-03",
+    "family": "existing-cold-chain",
+    "split": "holdout",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "shipping",
+        "responsibility": "物流调度群，处理运输异常"
+      },
+      "topics": [
+        {
+          "id": "truck-a",
+          "title": "配送车异常",
+          "summary": "冷链车厢温度探头持续升温",
+          "groupId": "shipping"
+        },
+        {
+          "id": "truck-b",
+          "title": "配送车异常",
+          "summary": "安排换胎",
+          "groupId": "shipping"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "不是备胎那辆，是冷链车的温度探头：校准后仍升温，需要检查制冷机。",
+          "senderId": "dispatcher"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "不是备胎那辆，是冷链车的温度探头：校准后仍升温，需要检查制冷机",
+          "topic": "truck-a"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "truck-a"
+      ]
+    },
+    "constructionFamily": "existing-cold-chain"
+  },
+  {
+    "id": "existing-04",
+    "family": "existing-cold-chain",
+    "split": "holdout",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "shipping",
+        "responsibility": "物流调度群，处理运输异常"
+      },
+      "topics": [
+        {
+          "id": "truck-a",
+          "title": "冷链车温度异常",
+          "summary": "排查车厢制冷波动",
+          "groupId": "shipping"
+        },
+        {
+          "id": "truck-b",
+          "title": "配送车轮胎故障",
+          "summary": "安排换胎",
+          "groupId": "shipping"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "配送车备胎已换好，司机正在返回配送路线。",
+          "senderId": "driver"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "配送车备胎已换好，司机正在返回配送路线",
+          "topic": "truck-b"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "truck-b"
+      ]
+    },
+    "constructionFamily": "existing-cold-chain"
+  },
+  {
+    "id": "multi-03",
+    "family": "multi-campus-facilities",
+    "split": "holdout",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "campus",
+        "responsibility": "校园后勤群，处理食堂和宿舍事务"
+      },
+      "topics": [
+        {
+          "id": "canteen",
+          "title": "食堂排烟维修",
+          "summary": "跟进排烟风机异响",
+          "groupId": "campus"
+        },
+        {
+          "id": "dorm",
+          "title": "宿舍热水故障",
+          "summary": "排查热水泵",
+          "groupId": "campus"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "食堂风机异响需要一份检测记录；另外宿舍热水泵要单独列更换配件清单，两份材料不要合并。",
+          "senderId": "engineer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "食堂风机异响需要一份检测记录",
+          "topic": "canteen"
+        },
+        {
+          "messageId": "m1",
+          "source": "另外宿舍热水泵要单独列更换配件清单，两份材料不要合并",
+          "topic": "dorm"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "canteen",
+        "dorm"
+      ]
+    },
+    "constructionFamily": "multi-campus-facilities"
+  },
+  {
+    "id": "multi-04",
+    "family": "multi-campus-facilities",
+    "split": "holdout",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "campus",
+        "responsibility": "校园后勤群，处理食堂和宿舍事务"
+      },
+      "topics": [
+        {
+          "id": "canteen",
+          "title": "食堂排烟维修",
+          "summary": "跟进排烟风机异响",
+          "groupId": "campus"
+        },
+        {
+          "id": "dorm",
+          "title": "宿舍热水故障",
+          "summary": "排查热水泵",
+          "groupId": "campus"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "食堂排烟风机轴承已到货，师傅明天更换后再复测异响。",
+          "senderId": "engineer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "食堂排烟风机轴承已到货，师傅明天更换后再复测异响",
+          "topic": "canteen"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "canteen"
+      ]
+    },
+    "constructionFamily": "multi-campus-facilities"
+  },
+  {
+    "id": "quote-03",
+    "family": "quote-editorial-correction",
+    "split": "holdout",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "editorial",
+        "responsibility": "编辑群，协调刊物稿件与配图"
+      },
+      "topics": [
+        {
+          "id": "article",
+          "title": "城市绿道稿件",
+          "summary": "核实绿道建设数据",
+          "groupId": "editorial"
+        },
+        {
+          "id": "image",
+          "title": "封面配图",
+          "summary": "确认图片授权",
+          "groupId": "editorial"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "城市绿道稿件里的长度数据还要核实。",
+          "senderId": "editor"
+        },
+        {
+          "messageId": "m2",
+          "text": "不是在说封面，绿道稿件的长度是十二公里，请按这个数更正。",
+          "senderId": "reporter",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "城市绿道稿件里的长度数据还要核实",
+          "topic": "article"
+        },
+        {
+          "messageId": "m2",
+          "source": "不是在说封面，绿道稿件的长度是十二公里，请按这个数更正",
+          "topic": "article"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "article"
+      ]
+    },
+    "constructionFamily": "quote-editorial-correction"
+  },
+  {
+    "id": "quote-04",
+    "family": "quote-editorial-correction",
+    "split": "holdout",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "editorial",
+        "responsibility": "编辑群，协调刊物稿件与配图"
+      },
+      "topics": [
+        {
+          "id": "article",
+          "title": "城市绿道稿件",
+          "summary": "核实绿道建设数据",
+          "groupId": "editorial"
+        },
+        {
+          "id": "image",
+          "title": "封面配图",
+          "summary": "确认图片授权",
+          "groupId": "editorial"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "城市绿道稿件里的长度数据还要核实。",
+          "senderId": "editor"
+        },
+        {
+          "messageId": "m2",
+          "text": "引用这条只是借用位置：我不说绿道，封面照片授权书刚发到邮箱。",
+          "senderId": "reporter",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "城市绿道稿件里的长度数据还要核实",
+          "topic": "article"
+        },
+        {
+          "messageId": "m2",
+          "source": "引用这条只是借用位置：我不说绿道，封面照片授权书刚发到邮箱",
+          "topic": "image"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "article",
+        "image"
+      ]
+    },
+    "constructionFamily": "quote-editorial-correction"
+  },
+  {
+    "id": "auth-03",
+    "family": "auth-security-patch",
+    "split": "holdout",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "security",
+        "responsibility": "安全群，讨论漏洞处置及修复"
+      },
+      "topics": [
+        {
+          "id": "patch",
+          "title": "登录组件漏洞",
+          "summary": "评估依赖升级方案",
+          "groupId": "security"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "有人提议让机器人整理登录组件漏洞的升级方案。",
+          "senderId": "lead"
+        },
+        {
+          "messageId": "m2",
+          "text": "更正：这次交给安全组同事，不交给机器人，也不要修改代码。",
+          "senderId": "lead",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "有人提议让机器人整理登录组件漏洞的升级方案",
+          "topic": "patch"
+        },
+        {
+          "messageId": "m2",
+          "source": "更正：这次交给安全组同事，不交给机器人，也不要修改代码",
+          "topic": "patch"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "patch"
+      ]
+    },
+    "constructionFamily": "auth-security-patch"
+  },
+  {
+    "id": "auth-04",
+    "family": "auth-security-patch",
+    "split": "holdout",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "security",
+        "responsibility": "安全群，讨论漏洞处置及修复"
+      },
+      "topics": [
+        {
+          "id": "patch",
+          "title": "登录组件漏洞",
+          "summary": "评估依赖升级方案",
+          "groupId": "security"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请整理登录组件漏洞的受影响版本和升级方案，提交安全组审核，不要直接部署。",
+          "senderId": "lead"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请整理登录组件漏洞的受影响版本和升级方案，提交安全组审核，不要直接部署",
+          "topic": "patch"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "new-task",
+          "title": "整理登录组件漏洞升级方案",
+          "objective": "整理登录组件漏洞的受影响版本和升级方案，提交安全组审核，不直接部署"
+        }
+      ],
+      "candidateTopicIds": [
+        "patch"
+      ]
+    },
+    "constructionFamily": "auth-security-patch"
+  },
+  {
+    "id": "task-03",
+    "family": "task-invitation-revision",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "events",
+        "responsibility": "活动运营群，统筹嘉宾邀请"
+      },
+      "topics": [
+        {
+          "id": "speaker",
+          "title": "技术沙龙嘉宾邀请",
+          "summary": "联系嘉宾确认议程",
+          "groupId": "events"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "invite",
+          "topicId": "speaker",
+          "state": "running",
+          "objective": "联系技术沙龙嘉宾确认议程",
+          "ownerActorId": "organizer"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "技术沙龙议程调整为下午两点。机器人，已有的嘉宾邀请任务请继续，并按新时间联系嘉宾。",
+          "senderId": "organizer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "技术沙龙议程调整为下午两点。机器人，已有的嘉宾邀请任务请继续，并按新时间联系嘉宾",
+          "topic": "speaker"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-context",
+          "taskId": "invite"
+        }
+      ],
+      "candidateTopicIds": [
+        "speaker"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "task-04",
+    "family": "task-invitation-revision",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "events",
+        "responsibility": "活动运营群，统筹嘉宾邀请"
+      },
+      "topics": [
+        {
+          "id": "speaker",
+          "title": "技术沙龙嘉宾邀请",
+          "summary": "联系嘉宾确认议程",
+          "groupId": "events"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "invite",
+          "topicId": "speaker",
+          "state": "running",
+          "objective": "联系技术沙龙嘉宾确认议程",
+          "ownerActorId": "organizer"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，技术沙龙取消了，请停止正在执行的嘉宾邀请任务。",
+          "senderId": "organizer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，技术沙龙取消了，请停止正在执行的嘉宾邀请任务",
+          "topic": "speaker"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-cancel",
+          "taskId": "invite"
+        }
+      ],
+      "candidateTopicIds": [
+        "speaker"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "cross-03",
+    "family": "cross-acceptance-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "construction",
+        "responsibility": "工程建设群，负责桥梁施工验收"
+      },
+      "topics": [
+        {
+          "id": "bridge-check",
+          "title": "桥梁验收",
+          "summary": "检查桥梁承重及栏杆",
+          "groupId": "construction"
+        },
+        {
+          "id": "model-check",
+          "title": "模型验收",
+          "summary": "检查分类模型准确率",
+          "groupId": "ml"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "桥梁栏杆的焊缝复检合格，承重试验后安排验收。",
+          "senderId": "engineer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "桥梁栏杆的焊缝复检合格，承重试验后安排验收",
+          "topic": "bridge-check"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "bridge-check"
+      ]
+    },
+    "constructionFamily": "cross-acceptance-word"
+  },
+  {
+    "id": "cross-04",
+    "family": "cross-acceptance-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "ml",
+        "responsibility": "算法研发群，负责分类模型验收"
+      },
+      "topics": [
+        {
+          "id": "bridge-check",
+          "title": "桥梁验收",
+          "summary": "检查桥梁承重及栏杆",
+          "groupId": "construction"
+        },
+        {
+          "id": "model-check",
+          "title": "模型验收",
+          "summary": "检查分类模型准确率",
+          "groupId": "ml"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "分类模型准确率达到验收阈值，但还要复核漏报样本。",
+          "senderId": "researcher"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "分类模型准确率达到验收阈值，但还要复核漏报样本",
+          "topic": "model-check"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "model-check"
+      ]
+    },
+    "constructionFamily": "cross-acceptance-word"
+  },
+  {
+    "id": "context-03",
+    "family": "context-purchase-quotes",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "procurement",
+        "responsibility": "采购群，协调办公设备采购"
+      },
+      "topics": [
+        {
+          "id": "laptop",
+          "title": "研发笔记本采购",
+          "summary": "等待供应商报价",
+          "groupId": "procurement"
+        },
+        {
+          "id": "monitor",
+          "title": "设计显示器采购",
+          "summary": "等待供应商报价",
+          "groupId": "procurement"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请判断最新报价对应哪个采购事项。",
+          "senderId": "buyer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": [
+        "laptop",
+        "monitor"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-04",
+    "family": "context-purchase-quotes",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "procurement",
+        "responsibility": "采购群，协调办公设备采购"
+      },
+      "topics": [
+        {
+          "id": "laptop",
+          "title": "研发笔记本采购",
+          "summary": "等待供应商报价",
+          "groupId": "procurement"
+        },
+        {
+          "id": "monitor",
+          "title": "设计显示器采购",
+          "summary": "等待供应商报价",
+          "groupId": "procurement"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请判断最新报价对应哪个采购事项。",
+          "senderId": "buyer"
+        },
+        {
+          "messageId": "m2",
+          "text": "补充：这是设计显示器的报价，每台两千元。",
+          "senderId": "buyer",
+          "replyToMessageId": "m1"
+        }
+      ],
+      "initialRoutingHold": {
+        "messageId": "m1",
+        "messageVersion": 1,
+        "epoch": 0,
+        "reason": "采购事项不明确"
+      },
+      "events": [
+        {
+          "kind": "ingest",
+          "messageId": "m2",
+          "sourceKind": "dingtalk",
+          "quotedMessageId": "m1"
+        },
+        {
+          "kind": "observe-recovery",
+          "messageId": "m1",
+          "previousEpoch": 0
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请判断最新报价对应哪个采购事项",
+          "topic": "monitor"
+        },
+        {
+          "messageId": "m2",
+          "source": "补充：这是设计显示器的报价，每台两千元",
+          "topic": "monitor"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "monitor"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "new-lab-equipment-1",
+    "family": "new-lab-equipment",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "lab",
+        "responsibility": "实验室群，管理样品和实验仪器"
+      },
+      "topics": [
+        {
+          "id": "sample",
+          "title": "血样运输",
+          "summary": "追踪血样冷藏运输",
+          "groupId": "lab"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "离心机运行时有焦味，应立即停机并联系维修。",
+          "senderId": "technician"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "离心机运行时有焦味，应立即停机并联系维修",
+          "topic": "new"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "new-lab-equipment-2",
+    "family": "new-lab-equipment",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "lab",
+        "responsibility": "实验室群，管理样品和实验仪器"
+      },
+      "topics": [
+        {
+          "id": "sample",
+          "title": "血样运输",
+          "summary": "追踪血样冷藏运输",
+          "groupId": "lab"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "血样运输箱的温度记录仪显示全程在规定范围内。",
+          "senderId": "technician"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "血样运输箱的温度记录仪显示全程在规定范围内",
+          "topic": "sample"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "sample"
+      ]
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "new-market-display-1",
+    "family": "new-market-display",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "retail",
+        "responsibility": "门店运营群，管理陈列和收银"
+      },
+      "topics": [
+        {
+          "id": "checkout",
+          "title": "收银小票故障",
+          "summary": "处理小票打印机卡纸",
+          "groupId": "retail"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "橱窗射灯频闪影响陈列，明天营业前需要检修。",
+          "senderId": "manager"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "橱窗射灯频闪影响陈列，明天营业前需要检修",
+          "topic": "new"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "new-market-display-2",
+    "family": "new-market-display",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "retail",
+        "responsibility": "门店运营群，管理陈列和收银"
+      },
+      "topics": [
+        {
+          "id": "checkout",
+          "title": "收银小票故障",
+          "summary": "处理小票打印机卡纸",
+          "groupId": "retail"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "收银台小票打印机清理纸屑后已经恢复。",
+          "senderId": "cashier"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "收银台小票打印机清理纸屑后已经恢复",
+          "topic": "checkout"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "checkout"
+      ]
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "new-two-facility-issues-1",
+    "family": "new-two-facility-issues",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "hotel",
+        "responsibility": "酒店后勤群，处理客房和公共设施"
+      },
+      "topics": [
+        {
+          "id": "lift",
+          "title": "客梯例检",
+          "summary": "安排客梯定期检查",
+          "groupId": "hotel"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "大厅旋转门感应失灵；三楼走廊应急灯不亮。",
+          "senderId": "supervisor"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "大厅旋转门感应失灵",
+          "topic": "new:first"
+        },
+        {
+          "messageId": "m1",
+          "source": "三楼走廊应急灯不亮",
+          "topic": "new:second"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "constructionFamily": "new-two-facility-issues"
+  },
+  {
+    "id": "new-two-facility-issues-2",
+    "family": "new-two-facility-issues",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "hotel",
+        "responsibility": "酒店后勤群，处理客房和公共设施"
+      },
+      "topics": [
+        {
+          "id": "lift",
+          "title": "客梯例检",
+          "summary": "安排客梯定期检查",
+          "groupId": "hotel"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "客梯例检已经约好周二上午，届时请提前张贴停用通知。",
+          "senderId": "supervisor"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "客梯例检已经约好周二上午，届时请提前张贴停用通知",
+          "topic": "lift"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "lift"
+      ]
+    },
+    "constructionFamily": "new-two-facility-issues"
+  },
+  {
+    "id": "existing-harbor-weather-1",
+    "family": "existing-harbor-weather",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "harbor",
+        "responsibility": "港口调度群，协调船舶靠泊和引航"
+      },
+      "topics": [
+        {
+          "id": "berth",
+          "title": "货轮靠泊时间",
+          "summary": "等待泊位腾空",
+          "groupId": "harbor"
+        },
+        {
+          "id": "pilot",
+          "title": "引航员排班",
+          "summary": "安排夜间引航",
+          "groupId": "harbor"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "货轮靠泊时间推迟，原因是泊位前方大雾尚未散去。",
+          "senderId": "dispatcher"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "货轮靠泊时间推迟，原因是泊位前方大雾尚未散去",
+          "topic": "berth"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "berth"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-harbor-weather-2",
+    "family": "existing-harbor-weather",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "harbor",
+        "responsibility": "港口调度群，协调船舶靠泊和引航"
+      },
+      "topics": [
+        {
+          "id": "berth",
+          "title": "货轮靠泊时间",
+          "summary": "等待泊位腾空",
+          "groupId": "harbor"
+        },
+        {
+          "id": "pilot",
+          "title": "引航员排班",
+          "summary": "安排夜间引航",
+          "groupId": "harbor"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "夜间引航员已经确认接班，交接地点仍在东码头。",
+          "senderId": "pilot"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "夜间引航员已经确认接班，交接地点仍在东码头",
+          "topic": "pilot"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "pilot"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-donation-receipt-1",
+    "family": "existing-donation-receipt",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "charity",
+        "responsibility": "公益基金会群，管理捐赠和志愿者"
+      },
+      "topics": [
+        {
+          "id": "receipt",
+          "title": "捐赠收据",
+          "summary": "核对收据抬头",
+          "groupId": "charity"
+        },
+        {
+          "id": "volunteer",
+          "title": "周末志愿者",
+          "summary": "确认签到名单",
+          "groupId": "charity"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "这笔企业捐赠的收据抬头应写基金会登记名称，不是品牌简称。",
+          "senderId": "accountant"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "这笔企业捐赠的收据抬头应写基金会登记名称，不是品牌简称",
+          "topic": "receipt"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "receipt"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-donation-receipt-2",
+    "family": "existing-donation-receipt",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "charity",
+        "responsibility": "公益基金会群，管理捐赠和志愿者"
+      },
+      "topics": [
+        {
+          "id": "receipt",
+          "title": "捐赠收据",
+          "summary": "核对收据抬头",
+          "groupId": "charity"
+        },
+        {
+          "id": "volunteer",
+          "title": "周末志愿者",
+          "summary": "确认签到名单",
+          "groupId": "charity"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "周末志愿者签到名单已经增加两位医护人员。",
+          "senderId": "coordinator"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "周末志愿者签到名单已经增加两位医护人员",
+          "topic": "volunteer"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "volunteer"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-water-tests-1",
+    "family": "existing-water-tests",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "water",
+        "responsibility": "水务群，处理水质检测和管线维修"
+      },
+      "topics": [
+        {
+          "id": "chlorine",
+          "title": "余氯抽检",
+          "summary": "复测出厂水余氯",
+          "groupId": "water"
+        },
+        {
+          "id": "leak",
+          "title": "管线漏水",
+          "summary": "定位主干管漏点",
+          "groupId": "water"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "出厂水余氯复测结果合格，留样已封存。",
+          "senderId": "analyst"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "出厂水余氯复测结果合格，留样已封存",
+          "topic": "chlorine"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "chlorine"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-water-tests-2",
+    "family": "existing-water-tests",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "water",
+        "responsibility": "水务群，处理水质检测和管线维修"
+      },
+      "topics": [
+        {
+          "id": "chlorine",
+          "title": "余氯抽检",
+          "summary": "复测出厂水余氯",
+          "groupId": "water"
+        },
+        {
+          "id": "leak",
+          "title": "管线漏水",
+          "summary": "定位主干管漏点",
+          "groupId": "water"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "主干管漏点定位在桥下阀门附近，抢修队已经到场。",
+          "senderId": "engineer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "主干管漏点定位在桥下阀门附近，抢修队已经到场",
+          "topic": "leak"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "leak"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "multi-theater-premiere-1",
+    "family": "multi-theater-premiere",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "theater",
+        "responsibility": "剧院运营群，统筹演出和观众服务"
+      },
+      "topics": [
+        {
+          "id": "show",
+          "title": "首演排练",
+          "summary": "安排演员彩排时间",
+          "groupId": "theater"
+        },
+        {
+          "id": "access",
+          "title": "无障碍座位",
+          "summary": "预留轮椅席",
+          "groupId": "theater"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "首演彩排改到周五下午；轮椅席仍保留前排四个位置。",
+          "senderId": "producer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "首演彩排改到周五下午",
+          "topic": "show"
+        },
+        {
+          "messageId": "m1",
+          "source": "轮椅席仍保留前排四个位置",
+          "topic": "access"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "show",
+        "access"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-theater-premiere-2",
+    "family": "multi-theater-premiere",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "theater",
+        "responsibility": "剧院运营群，统筹演出和观众服务"
+      },
+      "topics": [
+        {
+          "id": "show",
+          "title": "首演排练",
+          "summary": "安排演员彩排时间",
+          "groupId": "theater"
+        },
+        {
+          "id": "access",
+          "title": "无障碍座位",
+          "summary": "预留轮椅席",
+          "groupId": "theater"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "首演彩排改到周五下午，因为主演上午要参加发布会。",
+          "senderId": "producer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "首演彩排改到周五下午，因为主演上午要参加发布会",
+          "topic": "show"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "show"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-farm-harvest-1",
+    "family": "multi-farm-harvest",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "farm",
+        "responsibility": "农场生产群，安排采摘和灌溉"
+      },
+      "topics": [
+        {
+          "id": "harvest",
+          "title": "番茄采摘",
+          "summary": "确定采收日期",
+          "groupId": "farm"
+        },
+        {
+          "id": "irrigation",
+          "title": "温室滴灌",
+          "summary": "修复滴灌管堵塞",
+          "groupId": "farm"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "番茄明早开始采摘；温室滴灌过滤网已经清洗。",
+          "senderId": "grower"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "番茄明早开始采摘",
+          "topic": "harvest"
+        },
+        {
+          "messageId": "m1",
+          "source": "温室滴灌过滤网已经清洗",
+          "topic": "irrigation"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "harvest",
+        "irrigation"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-farm-harvest-2",
+    "family": "multi-farm-harvest",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "farm",
+        "responsibility": "农场生产群，安排采摘和灌溉"
+      },
+      "topics": [
+        {
+          "id": "harvest",
+          "title": "番茄采摘",
+          "summary": "确定采收日期",
+          "groupId": "farm"
+        },
+        {
+          "id": "irrigation",
+          "title": "温室滴灌",
+          "summary": "修复滴灌管堵塞",
+          "groupId": "farm"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "番茄明早开始采摘，采摘前要先确认果实成熟度。",
+          "senderId": "grower"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "番茄明早开始采摘，采摘前要先确认果实成熟度",
+          "topic": "harvest"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "harvest"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-archive-exhibition-1",
+    "family": "multi-archive-exhibition",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "archive",
+        "responsibility": "档案馆群，管理资料整理与展览"
+      },
+      "topics": [
+        {
+          "id": "digitize",
+          "title": "报刊数字化",
+          "summary": "扫描旧报纸",
+          "groupId": "archive"
+        },
+        {
+          "id": "poster",
+          "title": "馆藏展海报",
+          "summary": "确认海报校样",
+          "groupId": "archive"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "旧报纸扫描仪的玻璃已擦净；馆藏展海报校样需要再调整字号。",
+          "senderId": "archivist"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "旧报纸扫描仪的玻璃已擦净",
+          "topic": "digitize"
+        },
+        {
+          "messageId": "m1",
+          "source": "馆藏展海报校样需要再调整字号",
+          "topic": "poster"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "digitize",
+        "poster"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-archive-exhibition-2",
+    "family": "multi-archive-exhibition",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "archive",
+        "responsibility": "档案馆群，管理资料整理与展览"
+      },
+      "topics": [
+        {
+          "id": "digitize",
+          "title": "报刊数字化",
+          "summary": "扫描旧报纸",
+          "groupId": "archive"
+        },
+        {
+          "id": "poster",
+          "title": "馆藏展海报",
+          "summary": "确认海报校样",
+          "groupId": "archive"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "旧报纸扫描仪的玻璃已擦净，破损页扫描时要垫透明片。",
+          "senderId": "archivist"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "旧报纸扫描仪的玻璃已擦净，破损页扫描时要垫透明片",
+          "topic": "digitize"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "digitize"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "quote-school-bus-1",
+    "family": "quote-school-bus",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "school",
+        "responsibility": "学校行政群，协调校车和午餐"
+      },
+      "topics": [
+        {
+          "id": "bus",
+          "title": "校车路线",
+          "summary": "确认放学接送站点",
+          "groupId": "school"
+        },
+        {
+          "id": "lunch",
+          "title": "午餐菜单",
+          "summary": "确认过敏原标注",
+          "groupId": "school"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "校车路线中的东门站暂定保留。",
+          "senderId": "teacher"
+        },
+        {
+          "messageId": "m2",
+          "text": "东门道路施工，那一站改到图书馆门口。",
+          "senderId": "driver",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "校车路线中的东门站暂定保留",
+          "topic": "bus"
+        },
+        {
+          "messageId": "m2",
+          "source": "东门道路施工，那一站改到图书馆门口",
+          "topic": "bus"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "bus"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "quote-school-bus-2",
+    "family": "quote-school-bus",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "school",
+        "responsibility": "学校行政群，协调校车和午餐"
+      },
+      "topics": [
+        {
+          "id": "bus",
+          "title": "校车路线",
+          "summary": "确认放学接送站点",
+          "groupId": "school"
+        },
+        {
+          "id": "lunch",
+          "title": "午餐菜单",
+          "summary": "确认过敏原标注",
+          "groupId": "school"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "校车路线中的东门站暂定保留。",
+          "senderId": "teacher"
+        },
+        {
+          "messageId": "m2",
+          "text": "收到。另外午餐菜单需标注花生过敏原。",
+          "senderId": "nurse",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "校车路线中的东门站暂定保留",
+          "topic": "bus"
+        },
+        {
+          "messageId": "m2",
+          "source": "午餐菜单需标注花生过敏原",
+          "topic": "lunch"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "bus",
+        "lunch"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "quote-insurance-claim-1",
+    "family": "quote-insurance-claim",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "claims",
+        "responsibility": "理赔群，处理车辆事故和医疗报销"
+      },
+      "topics": [
+        {
+          "id": "car",
+          "title": "车辆事故理赔",
+          "summary": "核实维修报价",
+          "groupId": "claims"
+        },
+        {
+          "id": "medical",
+          "title": "医疗报销",
+          "summary": "核实门诊票据",
+          "groupId": "claims"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "车辆事故维修报价还缺车门喷漆费用。",
+          "senderId": "adjuster"
+        },
+        {
+          "messageId": "m2",
+          "text": "修理厂已经补了车门喷漆费用，报价总额不变。",
+          "senderId": "agent",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "车辆事故维修报价还缺车门喷漆费用",
+          "topic": "car"
+        },
+        {
+          "messageId": "m2",
+          "source": "修理厂已经补了车门喷漆费用，报价总额不变",
+          "topic": "car"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "car"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "quote-insurance-claim-2",
+    "family": "quote-insurance-claim",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "claims",
+        "responsibility": "理赔群，处理车辆事故和医疗报销"
+      },
+      "topics": [
+        {
+          "id": "car",
+          "title": "车辆事故理赔",
+          "summary": "核实维修报价",
+          "groupId": "claims"
+        },
+        {
+          "id": "medical",
+          "title": "医疗报销",
+          "summary": "核实门诊票据",
+          "groupId": "claims"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "车辆事故维修报价还缺车门喷漆费用。",
+          "senderId": "adjuster"
+        },
+        {
+          "messageId": "m2",
+          "text": "收到。门诊票据的原件今天也收到了。",
+          "senderId": "agent",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "车辆事故维修报价还缺车门喷漆费用",
+          "topic": "car"
+        },
+        {
+          "messageId": "m2",
+          "source": "门诊票据的原件今天也收到了",
+          "topic": "medical"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "car",
+        "medical"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "authorization-election-notice-1",
+    "family": "authorization-election-notice",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "association",
+        "responsibility": "协会秘书处群，组织选举和公告"
+      },
+      "topics": [
+        {
+          "id": "vote",
+          "title": "理事会换届选举",
+          "summary": "准备候选人公告",
+          "groupId": "association"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "候选人公告先由秘书处讨论措辞，不要让机器人发布。",
+          "senderId": "secretary"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "候选人公告先由秘书处讨论措辞，不要让机器人发布",
+          "topic": "vote"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "vote"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "authorization-election-notice-2",
+    "family": "authorization-election-notice",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "association",
+        "responsibility": "协会秘书处群，组织选举和公告"
+      },
+      "topics": [
+        {
+          "id": "vote",
+          "title": "理事会换届选举",
+          "summary": "准备候选人公告",
+          "groupId": "association"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请根据理事会换届选举资料起草候选人公告，交秘书处审核，不要对外发布。",
+          "senderId": "secretary"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请根据理事会换届选举资料起草候选人公告，交秘书处审核，不要对外发布",
+          "topic": "vote"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "new-task",
+          "title": "起草候选人公告",
+          "objective": "根据理事会换届选举资料起草候选人公告，交秘书处审核，不对外发布"
+        }
+      ],
+      "candidateTopicIds": [
+        "vote"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "authorization-audit-report-1",
+    "family": "authorization-audit-report",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "audit",
+        "responsibility": "内审群，核对差旅报销"
+      },
+      "topics": [
+        {
+          "id": "travel",
+          "title": "差旅报销抽查",
+          "summary": "检查报销凭证",
+          "groupId": "audit"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "差旅报销抽查发现几张票据不清楚，先请财务同事核实。",
+          "senderId": "auditor"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "差旅报销抽查发现几张票据不清楚，先请财务同事核实",
+          "topic": "travel"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "travel"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "authorization-audit-report-2",
+    "family": "authorization-audit-report",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "audit",
+        "responsibility": "内审群，核对差旅报销"
+      },
+      "topics": [
+        {
+          "id": "travel",
+          "title": "差旅报销抽查",
+          "summary": "检查报销凭证",
+          "groupId": "audit"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请汇总差旅报销抽查中不清晰的票据清单，交审计负责人核对。",
+          "senderId": "auditor"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请汇总差旅报销抽查中不清晰的票据清单，交审计负责人核对",
+          "topic": "travel"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "new-task",
+          "title": "汇总差旅报销问题票据",
+          "objective": "汇总差旅报销抽查中不清晰的票据清单，交审计负责人核对"
+        }
+      ],
+      "candidateTopicIds": [
+        "travel"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "task-museum-labels-1",
+    "family": "task-museum-labels",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "museum-labels",
+        "responsibility": "博物馆策展群，准备展品说明"
+      },
+      "topics": [
+        {
+          "id": "labels",
+          "title": "陶器展说明牌",
+          "summary": "整理展品年代说明",
+          "groupId": "museum-labels"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "label-task",
+          "topicId": "labels",
+          "state": "running",
+          "objective": "整理陶器展说明牌中的展品年代",
+          "ownerActorId": "curator"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，继续陶器展说明牌任务，年代以考古报告修订稿为准。",
+          "senderId": "curator"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，继续陶器展说明牌任务，年代以考古报告修订稿为准",
+          "topic": "labels"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-context",
+          "taskId": "label-task"
+        }
+      ],
+      "candidateTopicIds": [
+        "labels"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "task-museum-labels-2",
+    "family": "task-museum-labels",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "museum-labels",
+        "responsibility": "博物馆策展群，准备展品说明"
+      },
+      "topics": [
+        {
+          "id": "labels",
+          "title": "陶器展说明牌",
+          "summary": "整理展品年代说明",
+          "groupId": "museum-labels"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "label-task",
+          "topicId": "labels",
+          "state": "running",
+          "objective": "整理陶器展说明牌中的展品年代",
+          "ownerActorId": "curator"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，陶器展延期，请取消正在执行的说明牌整理任务。",
+          "senderId": "curator"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，陶器展延期，请取消正在执行的说明牌整理任务",
+          "topic": "labels"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-cancel",
+          "taskId": "label-task"
+        }
+      ],
+      "candidateTopicIds": [
+        "labels"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "task-data-cleanup-1",
+    "family": "task-data-cleanup",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "records",
+        "responsibility": "档案数据群，整理历史目录"
+      },
+      "topics": [
+        {
+          "id": "dedup",
+          "title": "目录去重",
+          "summary": "核对重复馆藏记录",
+          "groupId": "records"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "dedup-task",
+          "topicId": "dedup",
+          "state": "running",
+          "objective": "核对历史目录中重复的馆藏记录",
+          "ownerActorId": "archivist"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，继续目录去重任务，馆藏编号相同但版本不同的记录不要合并。",
+          "senderId": "archivist"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，继续目录去重任务，馆藏编号相同但版本不同的记录不要合并",
+          "topic": "dedup"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-context",
+          "taskId": "dedup-task"
+        }
+      ],
+      "candidateTopicIds": [
+        "dedup"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "task-data-cleanup-2",
+    "family": "task-data-cleanup",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "records",
+        "responsibility": "档案数据群，整理历史目录"
+      },
+      "topics": [
+        {
+          "id": "dedup",
+          "title": "目录去重",
+          "summary": "核对重复馆藏记录",
+          "groupId": "records"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "dedup-task",
+          "topicId": "dedup",
+          "state": "running",
+          "objective": "核对历史目录中重复的馆藏记录",
+          "ownerActorId": "archivist"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，目录去重方案待重新评审，请取消当前的去重任务。",
+          "senderId": "archivist"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，目录去重方案待重新评审，请取消当前的去重任务",
+          "topic": "dedup"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-cancel",
+          "taskId": "dedup-task"
+        }
+      ],
+      "candidateTopicIds": [
+        "dedup"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "cross-seal-word-1",
+    "family": "cross-seal-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "equipment",
+        "responsibility": "设备维修群，维护泵站"
+      },
+      "topics": [
+        {
+          "id": "pump-seal",
+          "title": "水泵密封",
+          "summary": "检查机械密封漏水",
+          "groupId": "equipment"
+        },
+        {
+          "id": "stamp-seal",
+          "title": "合同用印",
+          "summary": "审批合同盖章",
+          "groupId": "legal-desk"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "水泵机械密封更换后不再漏水，明天继续观察。",
+          "senderId": "mechanic"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "水泵机械密封更换后不再漏水，明天继续观察",
+          "topic": "pump-seal"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "pump-seal"
+      ]
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "cross-seal-word-2",
+    "family": "cross-seal-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "equipment",
+        "responsibility": "设备维修群，维护泵站"
+      },
+      "topics": [
+        {
+          "id": "pump-seal",
+          "title": "水泵密封",
+          "summary": "检查机械密封漏水",
+          "groupId": "equipment"
+        },
+        {
+          "id": "stamp-seal",
+          "title": "合同用印",
+          "summary": "审批合同盖章",
+          "groupId": "legal-desk"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请判断合同盖章属于哪个事项；本群只有泵站维修记录。",
+          "senderId": "mechanic"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "cross-review-word-1",
+    "family": "cross-review-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "design",
+        "responsibility": "设计群，评审产品视觉稿"
+      },
+      "topics": [
+        {
+          "id": "visual-review",
+          "title": "视觉稿评审",
+          "summary": "检查产品视觉稿",
+          "groupId": "design"
+        },
+        {
+          "id": "audit-review",
+          "title": "财务复审",
+          "summary": "复审年度审计报告",
+          "groupId": "finance-review"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "产品视觉稿评审时发现按钮对比度不足，设计师会调整。",
+          "senderId": "designer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "产品视觉稿评审时发现按钮对比度不足，设计师会调整",
+          "topic": "visual-review"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "visual-review"
+      ]
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "cross-review-word-2",
+    "family": "cross-review-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "design",
+        "responsibility": "设计群，评审产品视觉稿"
+      },
+      "topics": [
+        {
+          "id": "visual-review",
+          "title": "视觉稿评审",
+          "summary": "检查产品视觉稿",
+          "groupId": "design"
+        },
+        {
+          "id": "audit-review",
+          "title": "财务复审",
+          "summary": "复审年度审计报告",
+          "groupId": "finance-review"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请问年度审计报告复审归哪个事项？这个群只讨论产品视觉。",
+          "senderId": "designer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "context-venue-booking-1",
+    "family": "context-venue-booking",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "meeting",
+        "responsibility": "会议协调群，负责会议室预订"
+      },
+      "topics": [
+        {
+          "id": "east-room",
+          "title": "东楼会议室预订",
+          "summary": "等待场地确认",
+          "groupId": "meeting"
+        },
+        {
+          "id": "west-room",
+          "title": "西楼会议室预订",
+          "summary": "等待场地确认",
+          "groupId": "meeting"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，刚才确认的会议室是哪一间？",
+          "senderId": "host"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": [
+        "east-room",
+        "west-room"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-venue-booking-2",
+    "family": "context-venue-booking",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "meeting",
+        "responsibility": "会议协调群，负责会议室预订"
+      },
+      "topics": [
+        {
+          "id": "east-room",
+          "title": "东楼会议室预订",
+          "summary": "等待场地确认",
+          "groupId": "meeting"
+        },
+        {
+          "id": "west-room",
+          "title": "西楼会议室预订",
+          "summary": "等待场地确认",
+          "groupId": "meeting"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，刚才确认的会议室是哪一间？",
+          "senderId": "host"
+        },
+        {
+          "messageId": "m2",
+          "text": "补充：是东楼会议室的场地确认。",
+          "senderId": "host",
+          "replyToMessageId": "m1"
+        }
+      ],
+      "initialRoutingHold": {
+        "messageId": "m1",
+        "messageVersion": 1,
+        "epoch": 0,
+        "reason": "会议室不明确"
+      },
+      "events": [
+        {
+          "kind": "ingest",
+          "messageId": "m2",
+          "sourceKind": "dingtalk",
+          "quotedMessageId": "m1"
+        },
+        {
+          "kind": "observe-recovery",
+          "messageId": "m1",
+          "previousEpoch": 0
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，刚才确认的会议室是哪一间",
+          "topic": "east-room"
+        },
+        {
+          "messageId": "m2",
+          "source": "补充：是东楼会议室的场地确认",
+          "topic": "east-room"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "east-room"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-medical-supplies-1",
+    "family": "context-medical-supplies",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "clinic",
+        "responsibility": "诊所采购群，协调医疗耗材采购"
+      },
+      "topics": [
+        {
+          "id": "gloves",
+          "title": "医用手套采购",
+          "summary": "供应商确认库存",
+          "groupId": "clinic"
+        },
+        {
+          "id": "masks",
+          "title": "医用口罩采购",
+          "summary": "供应商确认库存",
+          "groupId": "clinic"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，供应商刚确认有库存的是哪一项采购？",
+          "senderId": "buyer"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": [
+        "gloves",
+        "masks"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-medical-supplies-2",
+    "family": "context-medical-supplies",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "clinic",
+        "responsibility": "诊所采购群，协调医疗耗材采购"
+      },
+      "topics": [
+        {
+          "id": "gloves",
+          "title": "医用手套采购",
+          "summary": "供应商确认库存",
+          "groupId": "clinic"
+        },
+        {
+          "id": "masks",
+          "title": "医用口罩采购",
+          "summary": "供应商确认库存",
+          "groupId": "clinic"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，供应商刚确认有库存的是哪一项采购？",
+          "senderId": "buyer"
+        },
+        {
+          "messageId": "m2",
+          "text": "补充一下，确认有库存的是医用手套。",
+          "senderId": "buyer",
+          "replyToMessageId": "m1"
+        }
+      ],
+      "initialRoutingHold": {
+        "messageId": "m1",
+        "messageVersion": 1,
+        "epoch": 0,
+        "reason": "采购对象不明确"
+      },
+      "events": [
+        {
+          "kind": "ingest",
+          "messageId": "m2",
+          "sourceKind": "dingtalk",
+          "quotedMessageId": "m1"
+        },
+        {
+          "kind": "observe-recovery",
+          "messageId": "m1",
+          "previousEpoch": 0
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，供应商刚确认有库存的是哪一项采购",
+          "topic": "gloves"
+        },
+        {
+          "messageId": "m2",
+          "source": "补充一下，确认有库存的是医用手套",
+          "topic": "gloves"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "gloves"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-translation-review-1",
+    "family": "context-translation-review",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "translate",
+        "responsibility": "翻译团队群，协调译稿审校"
+      },
+      "topics": [
+        {
+          "id": "manual",
+          "title": "设备手册翻译",
+          "summary": "等待审校反馈",
+          "groupId": "translate"
+        },
+        {
+          "id": "website",
+          "title": "官网文案翻译",
+          "summary": "等待审校反馈",
+          "groupId": "translate"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，刚收到的审校意见属于哪份译稿？",
+          "senderId": "translator"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": [
+        "manual",
+        "website"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-translation-review-2",
+    "family": "context-translation-review",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "translate",
+        "responsibility": "翻译团队群，协调译稿审校"
+      },
+      "topics": [
+        {
+          "id": "manual",
+          "title": "设备手册翻译",
+          "summary": "等待审校反馈",
+          "groupId": "translate"
+        },
+        {
+          "id": "website",
+          "title": "官网文案翻译",
+          "summary": "等待审校反馈",
+          "groupId": "translate"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，刚收到的审校意见属于哪份译稿？",
+          "senderId": "translator"
+        },
+        {
+          "messageId": "m2",
+          "text": "审校老师说的是设备手册译稿，不是官网文案。",
+          "senderId": "translator",
+          "replyToMessageId": "m1"
+        }
+      ],
+      "initialRoutingHold": {
+        "messageId": "m1",
+        "messageVersion": 1,
+        "epoch": 0,
+        "reason": "译稿对象不明确"
+      },
+      "events": [
+        {
+          "kind": "ingest",
+          "messageId": "m2",
+          "sourceKind": "dingtalk",
+          "quotedMessageId": "m1"
+        },
+        {
+          "kind": "observe-recovery",
+          "messageId": "m1",
+          "previousEpoch": 0
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，刚收到的审校意见属于哪份译稿",
+          "topic": "manual"
+        },
+        {
+          "messageId": "m2",
+          "source": "审校老师说的是设备手册译稿，不是官网文案",
+          "topic": "manual"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "manual"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "new-bee-farm-1",
+    "family": "new-bee-farm",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "apiary",
+        "responsibility": "养蜂场群，处理蜂群和蜂蜜销售"
+      },
+      "topics": [
+        {
+          "id": "bottles",
+          "title": "蜂蜜瓶采购",
+          "summary": "确定玻璃瓶交货时间",
+          "groupId": "apiary"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "蜂箱附近发现胡蜂巢，需要评估对蜂群的威胁。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "蜂箱附近发现胡蜂巢，需要评估对蜂群的威胁",
+          "topic": "new"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "new-bee-farm-2",
+    "family": "new-bee-farm",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "apiary",
+        "responsibility": "养蜂场群，处理蜂群和蜂蜜销售"
+      },
+      "topics": [
+        {
+          "id": "bottles",
+          "title": "蜂蜜瓶采购",
+          "summary": "确定玻璃瓶交货时间",
+          "groupId": "apiary"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "蜂蜜玻璃瓶采购的交货日期确定在周三。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "蜂蜜玻璃瓶采购的交货日期确定在周三",
+          "topic": "bottles"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "bottles"
+      ]
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "new-pharmacy-1",
+    "family": "new-pharmacy",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "pharmacy",
+        "responsibility": "药房群，负责药品储存与盘点"
+      },
+      "topics": [
+        {
+          "id": "expiry",
+          "title": "药品效期盘点",
+          "summary": "检查临期药品",
+          "groupId": "pharmacy"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "冷藏柜温度报警器没声音，请维修人员检查蜂鸣器。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "冷藏柜温度报警器没声音，请维修人员检查蜂鸣器",
+          "topic": "new"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "new-pharmacy-2",
+    "family": "new-pharmacy",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "pharmacy",
+        "responsibility": "药房群，负责药品储存与盘点"
+      },
+      "topics": [
+        {
+          "id": "expiry",
+          "title": "药品效期盘点",
+          "summary": "检查临期药品",
+          "groupId": "pharmacy"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "药品效期盘点发现两盒临期药，已移入隔离区。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "药品效期盘点发现两盒临期药，已移入隔离区",
+          "topic": "expiry"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "expiry"
+      ]
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "new-garden-1",
+    "family": "new-garden",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "garden",
+        "responsibility": "植物园群，维护植物和游客设施"
+      },
+      "topics": [
+        {
+          "id": "orchid",
+          "title": "兰花病害",
+          "summary": "观察叶片斑点",
+          "groupId": "garden"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "游客中心的饮水机滤芯到期，需要安排更换。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "游客中心的饮水机滤芯到期，需要安排更换",
+          "topic": "new"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": []
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "new-garden-2",
+    "family": "new-garden",
+    "split": "development",
+    "category": "new",
+    "input": {
+      "group": {
+        "id": "garden",
+        "responsibility": "植物园群，维护植物和游客设施"
+      },
+      "topics": [
+        {
+          "id": "orchid",
+          "title": "兰花病害",
+          "summary": "观察叶片斑点",
+          "groupId": "garden"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "兰花叶片上的斑点扩大了，园艺师准备取样检测。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "兰花叶片上的斑点扩大了，园艺师准备取样检测",
+          "topic": "orchid"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "orchid"
+      ]
+    },
+    "constructionFamily": "generated-new"
+  },
+  {
+    "id": "existing-ferry-1",
+    "family": "existing-ferry",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "ferry",
+        "responsibility": "轮渡群，协调航班和码头"
+      },
+      "topics": [
+        {
+          "id": "schedule",
+          "title": "轮渡班次",
+          "summary": "调整大风期间航班",
+          "groupId": "ferry"
+        },
+        {
+          "id": "ramp",
+          "title": "码头跳板",
+          "summary": "维修登船跳板",
+          "groupId": "ferry"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "大风期间的轮渡班次暂停，待气象警报解除后恢复。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "大风期间的轮渡班次暂停，待气象警报解除后恢复",
+          "topic": "schedule"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "schedule"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-ferry-2",
+    "family": "existing-ferry",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "ferry",
+        "responsibility": "轮渡群，协调航班和码头"
+      },
+      "topics": [
+        {
+          "id": "schedule",
+          "title": "轮渡班次",
+          "summary": "调整大风期间航班",
+          "groupId": "ferry"
+        },
+        {
+          "id": "ramp",
+          "title": "码头跳板",
+          "summary": "维修登船跳板",
+          "groupId": "ferry"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "登船跳板的防滑条已经更换，试走正常。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "登船跳板的防滑条已经更换，试走正常",
+          "topic": "ramp"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "ramp"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-foundry-1",
+    "family": "existing-foundry",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "foundry",
+        "responsibility": "铸造车间群，协调炉温和模具"
+      },
+      "topics": [
+        {
+          "id": "furnace",
+          "title": "熔炉温控",
+          "summary": "检查温度探头",
+          "groupId": "foundry"
+        },
+        {
+          "id": "mold",
+          "title": "铸件模具",
+          "summary": "处理模具磨损",
+          "groupId": "foundry"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "熔炉温度探头的接线松动，重新固定后读数稳定。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "熔炉温度探头的接线松动，重新固定后读数稳定",
+          "topic": "furnace"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "furnace"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-foundry-2",
+    "family": "existing-foundry",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "foundry",
+        "responsibility": "铸造车间群，协调炉温和模具"
+      },
+      "topics": [
+        {
+          "id": "furnace",
+          "title": "熔炉温控",
+          "summary": "检查温度探头",
+          "groupId": "foundry"
+        },
+        {
+          "id": "mold",
+          "title": "铸件模具",
+          "summary": "处理模具磨损",
+          "groupId": "foundry"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "铸件模具边缘磨损，下一批生产前需要修补。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "铸件模具边缘磨损，下一批生产前需要修补",
+          "topic": "mold"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "mold"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-housing-1",
+    "family": "existing-housing",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "housing",
+        "responsibility": "社区物业群，处理门禁和照明"
+      },
+      "topics": [
+        {
+          "id": "access",
+          "title": "楼栋门禁",
+          "summary": "检修门禁读卡器",
+          "groupId": "housing"
+        },
+        {
+          "id": "light",
+          "title": "地下车库照明",
+          "summary": "更换故障灯具",
+          "groupId": "housing"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "楼栋门禁读卡器更换后，住户门卡已测试通过。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "楼栋门禁读卡器更换后，住户门卡已测试通过",
+          "topic": "access"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "access"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "existing-housing-2",
+    "family": "existing-housing",
+    "split": "development",
+    "category": "existing",
+    "input": {
+      "group": {
+        "id": "housing",
+        "responsibility": "社区物业群，处理门禁和照明"
+      },
+      "topics": [
+        {
+          "id": "access",
+          "title": "楼栋门禁",
+          "summary": "检修门禁读卡器",
+          "groupId": "housing"
+        },
+        {
+          "id": "light",
+          "title": "地下车库照明",
+          "summary": "更换故障灯具",
+          "groupId": "housing"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "地下车库照明恢复，损坏的灯管已全部更换。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "地下车库照明恢复，损坏的灯管已全部更换",
+          "topic": "light"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "light"
+      ]
+    },
+    "constructionFamily": "generated-existing"
+  },
+  {
+    "id": "multi-conference-1",
+    "family": "multi-conference",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "conference",
+        "responsibility": "会议会务群，协调签到与同传"
+      },
+      "topics": [
+        {
+          "id": "checkin",
+          "title": "会议签到",
+          "summary": "准备签到设备",
+          "groupId": "conference"
+        },
+        {
+          "id": "interpret",
+          "title": "同声传译",
+          "summary": "检查翻译耳机",
+          "groupId": "conference"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "签到平板已充电；同传耳机还有三副没有声音。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "签到平板已充电",
+          "topic": "checkin"
+        },
+        {
+          "messageId": "m1",
+          "source": "同传耳机还有三副没有声音",
+          "topic": "interpret"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "checkin",
+        "interpret"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-conference-2",
+    "family": "multi-conference",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "conference",
+        "responsibility": "会议会务群，协调签到与同传"
+      },
+      "topics": [
+        {
+          "id": "checkin",
+          "title": "会议签到",
+          "summary": "准备签到设备",
+          "groupId": "conference"
+        },
+        {
+          "id": "interpret",
+          "title": "同声传译",
+          "summary": "检查翻译耳机",
+          "groupId": "conference"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "签到平板已充电，入口处还需要准备备用电源。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "签到平板已充电，入口处还需要准备备用电源",
+          "topic": "checkin"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "checkin"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-bakery-1",
+    "family": "multi-bakery",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "bakery",
+        "responsibility": "烘焙店群，安排原料与设备"
+      },
+      "topics": [
+        {
+          "id": "flour",
+          "title": "面粉到货",
+          "summary": "核实面粉配送",
+          "groupId": "bakery"
+        },
+        {
+          "id": "oven",
+          "title": "烤箱检修",
+          "summary": "处理烤箱温差",
+          "groupId": "bakery"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "面粉今天到货；烤箱温差仍需校准。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "面粉今天到货",
+          "topic": "flour"
+        },
+        {
+          "messageId": "m1",
+          "source": "烤箱温差仍需校准",
+          "topic": "oven"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "flour",
+        "oven"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-bakery-2",
+    "family": "multi-bakery",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "bakery",
+        "responsibility": "烘焙店群，安排原料与设备"
+      },
+      "topics": [
+        {
+          "id": "flour",
+          "title": "面粉到货",
+          "summary": "核实面粉配送",
+          "groupId": "bakery"
+        },
+        {
+          "id": "oven",
+          "title": "烤箱检修",
+          "summary": "处理烤箱温差",
+          "groupId": "bakery"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "面粉今天到货，收货时请核对包装有无破损。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "面粉今天到货，收货时请核对包装有无破损",
+          "topic": "flour"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "flour"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-sports-1",
+    "family": "multi-sports",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "stadium",
+        "responsibility": "体育馆群，维护场地并组织比赛"
+      },
+      "topics": [
+        {
+          "id": "floor",
+          "title": "篮球场地板",
+          "summary": "处理地板起翘",
+          "groupId": "stadium"
+        },
+        {
+          "id": "score",
+          "title": "比赛计分设备",
+          "summary": "检查计分牌",
+          "groupId": "stadium"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "篮球场起翘的地板已拆除；计分牌遥控器需要换电池。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "篮球场起翘的地板已拆除",
+          "topic": "floor"
+        },
+        {
+          "messageId": "m1",
+          "source": "计分牌遥控器需要换电池",
+          "topic": "score"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "floor",
+        "score"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "multi-sports-2",
+    "family": "multi-sports",
+    "split": "development",
+    "category": "multi",
+    "input": {
+      "group": {
+        "id": "stadium",
+        "responsibility": "体育馆群，维护场地并组织比赛"
+      },
+      "topics": [
+        {
+          "id": "floor",
+          "title": "篮球场地板",
+          "summary": "处理地板起翘",
+          "groupId": "stadium"
+        },
+        {
+          "id": "score",
+          "title": "比赛计分设备",
+          "summary": "检查计分牌",
+          "groupId": "stadium"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "篮球场起翘的地板已拆除，底层还需测量含水率。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "篮球场起翘的地板已拆除，底层还需测量含水率",
+          "topic": "floor"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "floor"
+      ]
+    },
+    "constructionFamily": "generated-multi"
+  },
+  {
+    "id": "quote-volunteer-1",
+    "family": "quote-volunteer",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "rescue",
+        "responsibility": "救援志愿群，协调培训与装备"
+      },
+      "topics": [
+        {
+          "id": "training",
+          "title": "急救培训",
+          "summary": "确认培训教室",
+          "groupId": "rescue"
+        },
+        {
+          "id": "equipment",
+          "title": "救援装备",
+          "summary": "检查头盔",
+          "groupId": "rescue"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "急救培训教室还没有确认。",
+          "senderId": "member"
+        },
+        {
+          "messageId": "m2",
+          "text": "培训教室定在社区中心二层。",
+          "senderId": "member",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "急救培训教室还没有确认",
+          "topic": "training"
+        },
+        {
+          "messageId": "m2",
+          "source": "培训教室定在社区中心二层",
+          "topic": "training"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "training"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "quote-volunteer-2",
+    "family": "quote-volunteer",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "rescue",
+        "responsibility": "救援志愿群，协调培训与装备"
+      },
+      "topics": [
+        {
+          "id": "training",
+          "title": "急救培训",
+          "summary": "确认培训教室",
+          "groupId": "rescue"
+        },
+        {
+          "id": "equipment",
+          "title": "救援装备",
+          "summary": "检查头盔",
+          "groupId": "rescue"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "急救培训教室还没有确认。",
+          "senderId": "member"
+        },
+        {
+          "messageId": "m2",
+          "text": "收到。另外救援头盔有两顶需要更换。",
+          "senderId": "member",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "急救培训教室还没有确认",
+          "topic": "training"
+        },
+        {
+          "messageId": "m2",
+          "source": "救援头盔有两顶需要更换",
+          "topic": "equipment"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "training",
+        "equipment"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "quote-rail-1",
+    "family": "quote-rail",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "rail",
+        "responsibility": "铁路维护群，协调轨道和信号"
+      },
+      "topics": [
+        {
+          "id": "track",
+          "title": "轨道检查",
+          "summary": "复核钢轨磨耗",
+          "groupId": "rail"
+        },
+        {
+          "id": "signal",
+          "title": "信号检修",
+          "summary": "检查道岔信号",
+          "groupId": "rail"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "轨道检查发现钢轨磨耗需要复测。",
+          "senderId": "member"
+        },
+        {
+          "messageId": "m2",
+          "text": "复测显示钢轨磨耗未超限。",
+          "senderId": "member",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "轨道检查发现钢轨磨耗需要复测",
+          "topic": "track"
+        },
+        {
+          "messageId": "m2",
+          "source": "复测显示钢轨磨耗未超限",
+          "topic": "track"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "track"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "quote-rail-2",
+    "family": "quote-rail",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "rail",
+        "responsibility": "铁路维护群，协调轨道和信号"
+      },
+      "topics": [
+        {
+          "id": "track",
+          "title": "轨道检查",
+          "summary": "复核钢轨磨耗",
+          "groupId": "rail"
+        },
+        {
+          "id": "signal",
+          "title": "信号检修",
+          "summary": "检查道岔信号",
+          "groupId": "rail"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "轨道检查发现钢轨磨耗需要复测。",
+          "senderId": "member"
+        },
+        {
+          "messageId": "m2",
+          "text": "明白。另外道岔信号的电缆也要检查。",
+          "senderId": "member",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "轨道检查发现钢轨磨耗需要复测",
+          "topic": "track"
+        },
+        {
+          "messageId": "m2",
+          "source": "道岔信号的电缆也要检查",
+          "topic": "signal"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "track",
+        "signal"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "quote-publisher-1",
+    "family": "quote-publisher",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "publisher",
+        "responsibility": "出版社群，协调校对与封面"
+      },
+      "topics": [
+        {
+          "id": "proof",
+          "title": "诗集校对",
+          "summary": "检查目录页码",
+          "groupId": "publisher"
+        },
+        {
+          "id": "cover",
+          "title": "诗集封面",
+          "summary": "确认印刷色样",
+          "groupId": "publisher"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "诗集目录页码与正文不一致。",
+          "senderId": "member"
+        },
+        {
+          "messageId": "m2",
+          "text": "诗集目录页码已按新版正文更正。",
+          "senderId": "member",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "诗集目录页码与正文不一致",
+          "topic": "proof"
+        },
+        {
+          "messageId": "m2",
+          "source": "诗集目录页码已按新版正文更正",
+          "topic": "proof"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "proof"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "quote-publisher-2",
+    "family": "quote-publisher",
+    "split": "development",
+    "category": "quote",
+    "input": {
+      "group": {
+        "id": "publisher",
+        "responsibility": "出版社群，协调校对与封面"
+      },
+      "topics": [
+        {
+          "id": "proof",
+          "title": "诗集校对",
+          "summary": "检查目录页码",
+          "groupId": "publisher"
+        },
+        {
+          "id": "cover",
+          "title": "诗集封面",
+          "summary": "确认印刷色样",
+          "groupId": "publisher"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "诗集目录页码与正文不一致。",
+          "senderId": "member"
+        },
+        {
+          "messageId": "m2",
+          "text": "收到。诗集封面的印刷色样已经寄出。",
+          "senderId": "member",
+          "replyToMessageId": "m1"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "诗集目录页码与正文不一致",
+          "topic": "proof"
+        },
+        {
+          "messageId": "m2",
+          "source": "诗集封面的印刷色样已经寄出",
+          "topic": "cover"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "proof",
+        "cover"
+      ]
+    },
+    "constructionFamily": "generated-quote"
+  },
+  {
+    "id": "auth-cafeteria-1",
+    "family": "auth-cafeteria",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "food",
+        "responsibility": "食堂管理群，管理供应商资质"
+      },
+      "topics": [
+        {
+          "id": "supplier",
+          "title": "供应商资质审核",
+          "summary": "核对许可证有效期",
+          "groupId": "food"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "供应商许可证先由采购员核实，机器人不需要处理。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "供应商许可证先由采购员核实，机器人不需要处理",
+          "topic": "supplier"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "supplier"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "auth-cafeteria-2",
+    "family": "auth-cafeteria",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "food",
+        "responsibility": "食堂管理群，管理供应商资质"
+      },
+      "topics": [
+        {
+          "id": "supplier",
+          "title": "供应商资质审核",
+          "summary": "核对许可证有效期",
+          "groupId": "food"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请整理供应商资质审核中许可证的有效期，交采购员核实。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请整理供应商资质审核中许可证的有效期，交采购员核实",
+          "topic": "supplier"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "new-task",
+          "title": "整理供应商许可证有效期",
+          "objective": "整理供应商资质审核中许可证的有效期，交采购员核实"
+        }
+      ],
+      "candidateTopicIds": [
+        "supplier"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "auth-lifeguard-1",
+    "family": "auth-lifeguard",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "pool",
+        "responsibility": "游泳馆群，协调救生培训"
+      },
+      "topics": [
+        {
+          "id": "certificate",
+          "title": "救生员证书核查",
+          "summary": "核对证书到期时间",
+          "groupId": "pool"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "救生员证书到期情况先由主管人工核对。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "救生员证书到期情况先由主管人工核对",
+          "topic": "certificate"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "certificate"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "auth-lifeguard-2",
+    "family": "auth-lifeguard",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "pool",
+        "responsibility": "游泳馆群，协调救生培训"
+      },
+      "topics": [
+        {
+          "id": "certificate",
+          "title": "救生员证书核查",
+          "summary": "核对证书到期时间",
+          "groupId": "pool"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请列出救生员证书核查中即将到期的证书，交主管复核。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请列出救生员证书核查中即将到期的证书，交主管复核",
+          "topic": "certificate"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "new-task",
+          "title": "列出即将到期的救生员证书",
+          "objective": "列出救生员证书核查中即将到期的证书，交主管复核"
+        }
+      ],
+      "candidateTopicIds": [
+        "certificate"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "auth-research-1",
+    "family": "auth-research",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "research",
+        "responsibility": "研究协作群，整理访谈资料"
+      },
+      "topics": [
+        {
+          "id": "interview",
+          "title": "用户访谈整理",
+          "summary": "归纳受访者反馈",
+          "groupId": "research"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "用户访谈记录先由研究员自己归纳，不要交给机器人。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "用户访谈记录先由研究员自己归纳，不要交给机器人",
+          "topic": "interview"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "interview"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "auth-research-2",
+    "family": "auth-research",
+    "split": "development",
+    "category": "authorization",
+    "input": {
+      "group": {
+        "id": "research",
+        "responsibility": "研究协作群，整理访谈资料"
+      },
+      "topics": [
+        {
+          "id": "interview",
+          "title": "用户访谈整理",
+          "summary": "归纳受访者反馈",
+          "groupId": "research"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，请归纳用户访谈整理事项中已脱敏的反馈，供研究员审阅。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，请归纳用户访谈整理事项中已脱敏的反馈，供研究员审阅",
+          "topic": "interview"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "new-task",
+          "title": "归纳脱敏访谈反馈",
+          "objective": "归纳用户访谈整理事项中已脱敏的反馈，供研究员审阅"
+        }
+      ],
+      "candidateTopicIds": [
+        "interview"
+      ]
+    },
+    "constructionFamily": "generated-authorization"
+  },
+  {
+    "id": "task-transit-1",
+    "family": "task-transit",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "transit",
+        "responsibility": "公交运营群，协调站牌信息"
+      },
+      "topics": [
+        {
+          "id": "stops",
+          "title": "站牌核对",
+          "summary": "核对公交站牌线路信息",
+          "groupId": "transit"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "stops-job",
+          "topicId": "stops",
+          "state": "running",
+          "objective": "核对公交站牌线路信息",
+          "ownerActorId": "member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，继续公交站牌核对任务，新增检查夜班线路标识。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，继续公交站牌核对任务，新增检查夜班线路标识",
+          "topic": "stops"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-context",
+          "taskId": "stops-job"
+        }
+      ],
+      "candidateTopicIds": [
+        "stops"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "task-transit-2",
+    "family": "task-transit",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "transit",
+        "responsibility": "公交运营群，协调站牌信息"
+      },
+      "topics": [
+        {
+          "id": "stops",
+          "title": "站牌核对",
+          "summary": "核对公交站牌线路信息",
+          "groupId": "transit"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "stops-job",
+          "topicId": "stops",
+          "state": "running",
+          "objective": "核对公交站牌线路信息",
+          "ownerActorId": "member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，站牌方案需要重做，取消当前公交站牌核对任务。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，站牌方案需要重做，取消当前公交站牌核对任务",
+          "topic": "stops"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-cancel",
+          "taskId": "stops-job"
+        }
+      ],
+      "candidateTopicIds": [
+        "stops"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "task-orchard-1",
+    "family": "task-orchard",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "orchard",
+        "responsibility": "果园群，协调水果分级"
+      },
+      "topics": [
+        {
+          "id": "grading",
+          "title": "苹果分级",
+          "summary": "整理苹果分级标准",
+          "groupId": "orchard"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "grade-job",
+          "topicId": "grading",
+          "state": "running",
+          "objective": "整理苹果分级标准",
+          "ownerActorId": "member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，继续整理苹果分级标准，补充果径下限的说明。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，继续整理苹果分级标准，补充果径下限的说明",
+          "topic": "grading"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-context",
+          "taskId": "grade-job"
+        }
+      ],
+      "candidateTopicIds": [
+        "grading"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "task-orchard-2",
+    "family": "task-orchard",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "orchard",
+        "responsibility": "果园群，协调水果分级"
+      },
+      "topics": [
+        {
+          "id": "grading",
+          "title": "苹果分级",
+          "summary": "整理苹果分级标准",
+          "groupId": "orchard"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "grade-job",
+          "topicId": "grading",
+          "state": "running",
+          "objective": "整理苹果分级标准",
+          "ownerActorId": "member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，新标准还没批准，请取消当前苹果分级标准整理任务。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，新标准还没批准，请取消当前苹果分级标准整理任务",
+          "topic": "grading"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-cancel",
+          "taskId": "grade-job"
+        }
+      ],
+      "candidateTopicIds": [
+        "grading"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "task-subtitles-1",
+    "family": "task-subtitles",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "video",
+        "responsibility": "视频制作群，协调字幕"
+      },
+      "topics": [
+        {
+          "id": "subtitle",
+          "title": "纪录片字幕",
+          "summary": "整理纪录片字幕时间轴",
+          "groupId": "video"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "subtitle-job",
+          "topicId": "subtitle",
+          "state": "running",
+          "objective": "整理纪录片字幕时间轴",
+          "ownerActorId": "member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，继续整理纪录片字幕时间轴，片尾新增受访者姓名。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，继续整理纪录片字幕时间轴，片尾新增受访者姓名",
+          "topic": "subtitle"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-context",
+          "taskId": "subtitle-job"
+        }
+      ],
+      "candidateTopicIds": [
+        "subtitle"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "task-subtitles-2",
+    "family": "task-subtitles",
+    "split": "development",
+    "category": "task-continuation-cancellation",
+    "input": {
+      "group": {
+        "id": "video",
+        "responsibility": "视频制作群，协调字幕"
+      },
+      "topics": [
+        {
+          "id": "subtitle",
+          "title": "纪录片字幕",
+          "summary": "整理纪录片字幕时间轴",
+          "groupId": "video"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "subtitle-job",
+          "topicId": "subtitle",
+          "state": "running",
+          "objective": "整理纪录片字幕时间轴",
+          "ownerActorId": "member"
+        }
+      ],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，纪录片素材要重新剪辑，请取消字幕时间轴整理任务。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，纪录片素材要重新剪辑，请取消字幕时间轴整理任务",
+          "topic": "subtitle"
+        }
+      ],
+      "actions": [
+        {
+          "kind": "task-cancel",
+          "taskId": "subtitle-job"
+        }
+      ],
+      "candidateTopicIds": [
+        "subtitle"
+      ]
+    },
+    "constructionFamily": "generated-task-continuation-cancellation"
+  },
+  {
+    "id": "cross-balance-word-1",
+    "family": "cross-balance-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "accounting",
+        "responsibility": "财务群，管理银行账户余额"
+      },
+      "topics": [
+        {
+          "id": "bank-balance",
+          "title": "银行余额核对",
+          "summary": "核对对账单余额",
+          "groupId": "accounting"
+        },
+        {
+          "id": "balance-scale",
+          "title": "天平校准",
+          "summary": "校准实验室天平",
+          "groupId": "lab-balance"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "银行对账单余额与总账相差一笔手续费，财务正在核对。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "银行对账单余额与总账相差一笔手续费，财务正在核对",
+          "topic": "bank-balance"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "bank-balance"
+      ]
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "cross-balance-word-2",
+    "family": "cross-balance-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "accounting",
+        "responsibility": "财务群，管理银行账户余额"
+      },
+      "topics": [
+        {
+          "id": "bank-balance",
+          "title": "银行余额核对",
+          "summary": "核对对账单余额",
+          "groupId": "accounting"
+        },
+        {
+          "id": "balance-scale",
+          "title": "天平校准",
+          "summary": "校准实验室天平",
+          "groupId": "lab-balance"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "银行余额核对完成，手续费已入账。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "银行余额核对完成，手续费已入账",
+          "topic": "bank-balance"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "bank-balance"
+      ]
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "cross-screen-word-1",
+    "family": "cross-screen-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "cinema",
+        "responsibility": "影院群，维护放映屏幕"
+      },
+      "topics": [
+        {
+          "id": "movie-screen",
+          "title": "放映银幕维修",
+          "summary": "修复银幕划痕",
+          "groupId": "cinema"
+        },
+        {
+          "id": "patient-screen",
+          "title": "患者筛查",
+          "summary": "组织糖尿病筛查",
+          "groupId": "clinic-screen"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "放映银幕左侧划痕已记录，维修公司明天查看。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "放映银幕左侧划痕已记录，维修公司明天查看",
+          "topic": "movie-screen"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "movie-screen"
+      ]
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "cross-screen-word-2",
+    "family": "cross-screen-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "cinema",
+        "responsibility": "影院群，维护放映屏幕"
+      },
+      "topics": [
+        {
+          "id": "movie-screen",
+          "title": "放映银幕维修",
+          "summary": "修复银幕划痕",
+          "groupId": "cinema"
+        },
+        {
+          "id": "patient-screen",
+          "title": "患者筛查",
+          "summary": "组织糖尿病筛查",
+          "groupId": "clinic-screen"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "影院放映银幕的修补材料已经送到。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "影院放映银幕的修补材料已经送到",
+          "topic": "movie-screen"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "movie-screen"
+      ]
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "cross-sampling-word-1",
+    "family": "cross-sampling-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "factory",
+        "responsibility": "工厂质检群，抽检成品"
+      },
+      "topics": [
+        {
+          "id": "goods-sample",
+          "title": "成品抽样",
+          "summary": "检查成品尺寸",
+          "groupId": "factory"
+        },
+        {
+          "id": "audio-sample",
+          "title": "音频采样",
+          "summary": "检查音频采样率",
+          "groupId": "audio"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "成品抽样发现一批零件尺寸偏大，需要复测。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "成品抽样发现一批零件尺寸偏大，需要复测",
+          "topic": "goods-sample"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "goods-sample"
+      ]
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "cross-sampling-word-2",
+    "family": "cross-sampling-word",
+    "split": "development",
+    "category": "cross-group-homonym",
+    "input": {
+      "group": {
+        "id": "factory",
+        "responsibility": "工厂质检群，抽检成品"
+      },
+      "topics": [
+        {
+          "id": "goods-sample",
+          "title": "成品抽样",
+          "summary": "检查成品尺寸",
+          "groupId": "factory"
+        },
+        {
+          "id": "audio-sample",
+          "title": "音频采样",
+          "summary": "检查音频采样率",
+          "groupId": "audio"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "成品尺寸抽样复测完成，不合格零件已隔离。",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "成品尺寸抽样复测完成，不合格零件已隔离",
+          "topic": "goods-sample"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "goods-sample"
+      ]
+    },
+    "constructionFamily": "generated-cross-group-homonym"
+  },
+  {
+    "id": "context-deliveries-1",
+    "family": "context-deliveries",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "receiving",
+        "responsibility": "收货群，协调办公家具送货"
+      },
+      "topics": [
+        {
+          "id": "chairs",
+          "title": "办公椅送货",
+          "summary": "等待物流确认",
+          "groupId": "receiving"
+        },
+        {
+          "id": "desks",
+          "title": "办公桌送货",
+          "summary": "等待物流确认",
+          "groupId": "receiving"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，物流刚确认的送货是哪批家具？",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": [
+        "chairs",
+        "desks"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-deliveries-2",
+    "family": "context-deliveries",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "receiving",
+        "responsibility": "收货群，协调办公家具送货"
+      },
+      "topics": [
+        {
+          "id": "chairs",
+          "title": "办公椅送货",
+          "summary": "等待物流确认",
+          "groupId": "receiving"
+        },
+        {
+          "id": "desks",
+          "title": "办公桌送货",
+          "summary": "等待物流确认",
+          "groupId": "receiving"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，物流刚确认的送货是哪批家具？",
+          "senderId": "member"
+        },
+        {
+          "messageId": "m2",
+          "text": "补充，确认的是办公椅送货。",
+          "senderId": "member",
+          "replyToMessageId": "m1"
+        }
+      ],
+      "initialRoutingHold": {
+        "messageId": "m1",
+        "messageVersion": 1,
+        "epoch": 0,
+        "reason": "送货批次不明确"
+      },
+      "events": [
+        {
+          "kind": "ingest",
+          "messageId": "m2",
+          "sourceKind": "dingtalk",
+          "quotedMessageId": "m1"
+        },
+        {
+          "kind": "observe-recovery",
+          "messageId": "m1",
+          "previousEpoch": 0
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，物流刚确认的送货是哪批家具",
+          "topic": "chairs"
+        },
+        {
+          "messageId": "m2",
+          "source": "补充，确认的是办公椅送货",
+          "topic": "chairs"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "chairs"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-grants-1",
+    "family": "context-grants",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "grants",
+        "responsibility": "科研管理群，协调项目拨款"
+      },
+      "topics": [
+        {
+          "id": "grant-a",
+          "title": "生态项目拨款",
+          "summary": "等待财务确认",
+          "groupId": "grants"
+        },
+        {
+          "id": "grant-b",
+          "title": "材料项目拨款",
+          "summary": "等待财务确认",
+          "groupId": "grants"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，财务确认的是哪笔项目拨款？",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": [
+        "grant-a",
+        "grant-b"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-grants-2",
+    "family": "context-grants",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "grants",
+        "responsibility": "科研管理群，协调项目拨款"
+      },
+      "topics": [
+        {
+          "id": "grant-a",
+          "title": "生态项目拨款",
+          "summary": "等待财务确认",
+          "groupId": "grants"
+        },
+        {
+          "id": "grant-b",
+          "title": "材料项目拨款",
+          "summary": "等待财务确认",
+          "groupId": "grants"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，财务确认的是哪笔项目拨款？",
+          "senderId": "member"
+        },
+        {
+          "messageId": "m2",
+          "text": "是生态项目的拨款，材料项目还在审核。",
+          "senderId": "member",
+          "replyToMessageId": "m1"
+        }
+      ],
+      "initialRoutingHold": {
+        "messageId": "m1",
+        "messageVersion": 1,
+        "epoch": 0,
+        "reason": "拨款对象不明确"
+      },
+      "events": [
+        {
+          "kind": "ingest",
+          "messageId": "m2",
+          "sourceKind": "dingtalk",
+          "quotedMessageId": "m1"
+        },
+        {
+          "kind": "observe-recovery",
+          "messageId": "m1",
+          "previousEpoch": 0
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，财务确认的是哪笔项目拨款",
+          "topic": "grant-a"
+        },
+        {
+          "messageId": "m2",
+          "source": "是生态项目的拨款",
+          "topic": "grant-a"
+        },
+        {
+          "messageId": "m2",
+          "source": "材料项目还在审核",
+          "topic": "grant-b"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "grant-a",
+        "grant-b"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-vaccine-1",
+    "family": "context-vaccine",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "vaccine",
+        "responsibility": "疾控协调群，跟踪疫苗配送"
+      },
+      "topics": [
+        {
+          "id": "clinic-east",
+          "title": "东区门诊疫苗配送",
+          "summary": "等待到货",
+          "groupId": "vaccine"
+        },
+        {
+          "id": "clinic-west",
+          "title": "西区门诊疫苗配送",
+          "summary": "等待到货",
+          "groupId": "vaccine"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，刚刚到货的是哪个门诊的疫苗？",
+          "senderId": "member"
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "needs-context",
+      "routes": [],
+      "actions": [],
+      "candidateTopicIds": [
+        "clinic-east",
+        "clinic-west"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  },
+  {
+    "id": "context-vaccine-2",
+    "family": "context-vaccine",
+    "split": "development",
+    "category": "needs-context-recovery",
+    "input": {
+      "group": {
+        "id": "vaccine",
+        "responsibility": "疾控协调群，跟踪疫苗配送"
+      },
+      "topics": [
+        {
+          "id": "clinic-east",
+          "title": "东区门诊疫苗配送",
+          "summary": "等待到货",
+          "groupId": "vaccine"
+        },
+        {
+          "id": "clinic-west",
+          "title": "西区门诊疫苗配送",
+          "summary": "等待到货",
+          "groupId": "vaccine"
+        }
+      ],
+      "tasks": [],
+      "messages": [
+        {
+          "messageId": "m1",
+          "text": "机器人，刚刚到货的是哪个门诊的疫苗？",
+          "senderId": "member"
+        },
+        {
+          "messageId": "m2",
+          "text": "是西区门诊的疫苗，冷链记录完整。",
+          "senderId": "member",
+          "replyToMessageId": "m1"
+        }
+      ],
+      "initialRoutingHold": {
+        "messageId": "m1",
+        "messageVersion": 1,
+        "epoch": 0,
+        "reason": "门诊对象不明确"
+      },
+      "events": [
+        {
+          "kind": "ingest",
+          "messageId": "m2",
+          "sourceKind": "dingtalk",
+          "quotedMessageId": "m1"
+        },
+        {
+          "kind": "observe-recovery",
+          "messageId": "m1",
+          "previousEpoch": 0
+        }
+      ]
+    },
+    "expected": {
+      "routeStatus": "routed",
+      "routes": [
+        {
+          "messageId": "m1",
+          "source": "机器人，刚刚到货的是哪个门诊的疫苗",
+          "topic": "clinic-west"
+        },
+        {
+          "messageId": "m2",
+          "source": "是西区门诊的疫苗，冷链记录完整",
+          "topic": "clinic-west"
+        }
+      ],
+      "actions": [],
+      "candidateTopicIds": [
+        "clinic-west"
+      ]
+    },
+    "constructionFamily": "generated-needs-context-recovery"
+  }
+]

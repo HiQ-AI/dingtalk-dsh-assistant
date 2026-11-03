@@ -1,0 +1,73 @@
+TAP version 13
+# Subtest: 普通回复显式多收件人贯穿原生通知格式化 quoted=true
+ok 1 - 普通回复显式多收件人贯穿原生通知格式化 quoted=true
+  ---
+  duration_ms: 1162.2336
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":645,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":485,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":32,"aborted":false}
+# Subtest: 普通回复显式多收件人贯穿原生通知格式化 quoted=false
+ok 2 - 普通回复显式多收件人贯穿原生通知格式化 quoted=false
+  ---
+  duration_ms: 580.5769
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":167,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":393,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":21,"aborted":false}
+# Subtest: native task service preserves Topic routing, task association, ignored input and recovery idempotency
+ok 3 - native task service preserves Topic routing, task association, ignored input and recovery idempotency
+  ---
+  duration_ms: 3605.9209
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":1,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":3483,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":121,"aborted":false}
+# Subtest: native Topic handoff keeps the explicit requester as task and completion notification owner
+ok 4 - native Topic handoff keeps the explicit requester as task and completion notification owner
+  ---
+  duration_ms: 3682.8496
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":599,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2958,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":125,"aborted":false}
+# Subtest: business notices 423–424 and named owners remain in the original Topic without assistant tasks or replies
+ok 5 - business notices 423–424 and named owners remain in the original Topic without assistant tasks or replies
+  ---
+  duration_ms: 3624.5539
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":521,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2996,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":107,"aborted":false}
+# Subtest: scripted native aggregation keeps list requirements, screenshot delivery and later acceptance in one Topic and Task
+ok 6 - scripted native aggregation keeps list requirements, screenshot delivery and later acceptance in one Topic and Task
+  ---
+  duration_ms: 5661.3897
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":566,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":4974,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":121,"aborted":false}
+# Subtest: native Topic context accepts a requirement that only mentions notification recipients
+ok 7 - native Topic context accepts a requirement that only mentions notification recipients
+  ---
+  duration_ms: 2869.0859
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":554,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2204,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":111,"aborted":false}
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21840.3927

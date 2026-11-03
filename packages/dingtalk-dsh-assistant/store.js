@@ -10,7 +10,7 @@ import { correctOutOfScope } from './fixed-topic-correction.js'
 import { personAliasesSchema } from './group-person-aliases.js'
 import { taskPlanSchema } from './task-plan.js'
 import { storedTaskCheckpointBaseSchema, storedTaskResultSchema } from './task-result.js'
-import { topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, isWebTaskDecision, topicDecisionCoversEntry, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan, replyTopicForMessage } from './topic-model.js'
+import { routingHoldSchema, routingBlocksTopics, topicSchema, topicRefSchema, topicMessages, topicMessageCount, validateTopicRefs, stableId, fingerprint, isPendingDecision, isWebTaskDecision, topicDecisionCoversEntry, sourceRangeSchema, attachmentRefId, resolveRouteBatch, webTaskTopicReusePlan, replyTopicForMessage } from './topic-model.js'
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 import { PERFORMANCE_EVENT_TYPES, performanceProjectionSchema, performanceChunkKey, hasPerformanceFirstStream, projectPerformanceEvent, listPerformance, workflowPerformance, coordinationCosts } from './performance.js'
 
@@ -78,7 +78,7 @@ const messageFactFields = {
   activeUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(),
 }
 const inboundSchema = z.object({
-  ...messageFactFields, facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed']).default('pending'), routingError: z.string().optional(),
+  ...messageFactFields, facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed', 'needs-context']).default('pending'), routingError: z.string().optional(), routingHold: routingHoldSchema.optional(), routingEpoch: z.number().int().nonnegative().optional(), routingRecoveryMessageId: z.string().min(1).optional(),
   messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]),
   messageAiSendFlag: z.literal('DWS').optional(),
   senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(),
@@ -815,8 +815,13 @@ export async function openResidentStore(storageDomain) {
           // Sender/@/quote enrichment must not undo an explicit silent correction.
           // Changed message content still requires a new routing decision.
           next.routingStatus = manuallySettled(previous) && next.text === previous.text && isDeepStrictEqual(next.imageRefs ?? [], previous.imageRefs ?? []) ? 'routed' : 'pending'
+          next.routingHold = undefined
+          next.routingEpoch = (previous.routingEpoch ?? 0) + 1
           const now = new Date().toISOString()
-          return { ...latest, messages: latest.messages.map((item) => item.messageId === messageId ? next : item),
+          const quotedHold = next.sourceKind === 'dingtalk' && next.senderOpenDingTalkId && next.messageAiSendFlag !== 'DWS' && next.quotedMessage?.messageId !== messageId
+            ? latest.messages.find(item => item.messageId === next.quotedMessage?.messageId && item.routingStatus === 'needs-context') : undefined
+          return { ...latest, ...(quotedHold ? { routingRevision: latest.routingRevision + 1 } : {}), messages: latest.messages.map((item) => item.messageId === messageId ? next : item.messageId === quotedHold?.messageId
+            ? { ...item, routingStatus: 'pending', routingHold: undefined, routingEpoch: (item.routingEpoch ?? 0) + 1, routingRecoveryMessageId: messageId } : item),
             topics: latest.topics.map((topic) => {
               const active = [...new Map(topic.entries.filter((item) => item.messageId === messageId).map((item) => [item.unitId, item])).values()].filter((item) => item.action === 'add')
               if (!active.length) return topic
@@ -828,7 +833,12 @@ export async function openResidentStore(storageDomain) {
         sequence = latest.nextSequence
         const accepted = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage,
           imageRefs, mediaUnavailable, resourceRefs, sourceKind, messageVersion: messageVersion ?? 1, facts: [], routingStatus: 'pending', agentDeliveryStatus: 'pending' })
-        return { ...latest, nextSequence: sequence + 1, messages: [...latest.messages, accepted] }
+        const quotedHold = sourceKind === 'dingtalk' && senderOpenDingTalkId && messageAiSendFlag !== 'DWS' && quotedMessage?.messageId
+          ? latest.messages.find(item => item.messageId === quotedMessage.messageId && item.routingStatus === 'needs-context') : undefined
+        const messages = quotedHold ? latest.messages.map(item => item.messageId !== quotedHold.messageId ? item : {
+          ...item, routingStatus: 'pending', routingHold: undefined, routingEpoch: (item.routingEpoch ?? 0) + 1, routingRecoveryMessageId: messageId,
+        }) : latest.messages
+        return { ...latest, nextSequence: sequence + 1, ...(quotedHold ? { routingRevision: latest.routingRevision + 1 } : {}), messages: [...messages, accepted] }
       })
       return { duplicate, enriched, sequence, group }
     }),
@@ -883,11 +893,11 @@ export async function openResidentStore(storageDomain) {
       })
       return receipt
     }),
-    routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes }) => serialize(groupId, async () => {
+    routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes, expectedRoutingEpochs = [], preflight, audit }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (!routeId || !Array.isArray(routes) || routes.length === 0) throw new Error('topic_routes_invalid')
-      const requestFingerprint = fingerprint({ routingRevision, routes, ...(requireAllPending === true ? { requireAllPending: true } : {}) })
+      const requestFingerprint = fingerprint({ routingRevision, routes, ...(audit ? { audit } : {}), ...(requireAllPending === true ? { requireAllPending: true } : {}) })
       let receipt
       const group = await groups.update(entry[0], (latest) => {
         const previous = latest.routeHistory.find((item) => item.routeId === routeId)
@@ -897,6 +907,29 @@ export async function openResidentStore(storageDomain) {
         }
         if (routes.some(route => route.units?.some(unit => unit.dispatchOwner === 'coordination'))) throw new Error('INDEPENDENT_COORDINATION_RETIRED')
         if (latest.routingRevision !== routingRevision) throw new Error('topic_routing_stale')
+        preflight?.(latest)
+        if (routes.some(route => latest.messages.find(message => message.messageId === route.messageId)?.routingStatus === 'needs-context')) throw new Error('topic_routing_stale')
+        if (routes.some(route => {
+          const message = latest.messages.find(item => item.messageId === route.messageId)
+          return message?.routingRecoveryMessageId && !routes.some(item => item.messageId === message.routingRecoveryMessageId)
+        }) || latest.messages.some(message => message.routingStatus === 'pending' && message.routingRecoveryMessageId
+          && routes.some(route => route.messageId === message.routingRecoveryMessageId) && !routes.some(route => route.messageId === message.messageId))) throw new Error('topic_routing_recovery_incomplete')
+        for (const expected of expectedRoutingEpochs) {
+          const message = latest.messages.find(item => item.messageId === expected.messageId)
+          if (!message || message.messageVersion !== expected.messageVersion) throw new Error('topic_message_version_stale')
+          if ((message.routingEpoch ?? 0) !== expected.epoch || message.routingStatus === 'needs-context') throw new Error('topic_routing_stale')
+        }
+        for (const route of routes.filter(item => item.deferred)) {
+          const message = latest.messages.find(item => item.messageId === route.messageId)
+          if (!message || message.messageVersion !== route.messageVersion) throw new Error('topic_message_version_stale')
+          if (!route.deferred.reason?.trim() || route.units || route.topics || route.replyTopic || route.effectOwner || route.ignoredRefs?.length || route.reason) throw new Error('topic_route_deferred_invalid')
+          if (route.deferred.clarification) {
+            const { question, assignmentQuote, replyReview, reviewFingerprint, reviewMessageIds } = route.deferred.clarification
+            const offset = typeof assignmentQuote === 'string' ? message.text.indexOf(assignmentQuote) : -1
+            if (!question?.trim() || question.length > 2000 || !assignmentQuote || offset < 0 || message.text.indexOf(assignmentQuote, offset + 1) !== -1
+              || replyReview?.kind !== 'substantive' || replyReview.replaceOutboundIds?.length || !reviewFingerprint || !reviewMessageIds?.includes(route.messageId)) throw new Error('topic_route_clarification_invalid')
+          }
+        }
         // Host 直达入口必须在提交时覆盖全部待路由来源，包含新入站和旧消息富化产生的 pending。
         if (requireAllPending === true) {
           const pending = latest.messages.filter(message => message.routingStatus !== 'routed')
@@ -904,9 +937,10 @@ export async function openResidentStore(storageDomain) {
             && route.messageVersion === message.messageVersion))) throw new Error('topic_routing_stale')
         }
         if (new Set(routes.map((route) => route.messageId)).size !== routes.length) throw new Error('topic_route_message_duplicate')
-        const { newTopics, topicIdsByKey, unitsByMessage, ignoredByMessage } = resolveRouteBatch(latest, { groupId, routeId, routes })
+        const settledRoutes = routes.filter(route => !route.deferred)
+        const { newTopics, topicIdsByKey, unitsByMessage, ignoredByMessage } = resolveRouteBatch(latest, { groupId, routeId, routes: settledRoutes })
         const replyTopics = new Map()
-        for (const route of routes) {
+        for (const route of settledRoutes) {
           const ids = [...new Set(unitsByMessage.get(route.messageId).filter(unit => unit.dispatchOwner !== 'coordination')
             .flatMap(unit => unit.topics.map(ref => ref.topicId ?? topicIdsByKey[ref.newTopicKey])))]
           const selected = route.replyTopic ?? route.effectOwner
@@ -916,7 +950,7 @@ export async function openResidentStore(storageDomain) {
           replyTopics.set(route.messageId, replyTopicId)
         }
         const sourceDispatchOwnership = [...(latest.sourceDispatchOwnership ?? [])]
-        for (const route of routes) {
+        for (const route of settledRoutes) {
           const message = latest.messages.find(message => message.messageId === route.messageId)
           for (const unit of unitsByMessage.get(route.messageId)) {
             const previousOwned = sourceDispatchOwnership.filter(item => item.unitId === unit.unitId && item.dispatchOwner === 'coordination')
@@ -927,7 +961,7 @@ export async function openResidentStore(storageDomain) {
           }
         }
         let topics = [...latest.topics, ...newTopics.values()]
-        for (const route of routes) {
+        for (const route of settledRoutes) {
           const resolvedUnits = unitsByMessage.get(route.messageId)
           topics = topics.map((topic) => {
             const nextEntries = []
@@ -954,18 +988,42 @@ export async function openResidentStore(storageDomain) {
             return { ...topic, revision, status: 'active', updatedAt: new Date().toISOString(), entries }
           })
         }
-        receipt = { routeId, fingerprint: requestFingerprint, routingRevision: latest.routingRevision + 1, topicIdsByKey, createdAt: new Date().toISOString() }
+        receipt = { routeId, fingerprint: requestFingerprint, routingRevision: latest.routingRevision + 1, topicIdsByKey, ...(audit ? { audit } : {}), createdAt: new Date().toISOString() }
+        const deferredByMessage = new Map(routes.filter(route => route.deferred).map(route => [route.messageId, route.deferred]))
         const routedMessages = latest.messages.map((message) => {
+          const deferred = deferredByMessage.get(message.messageId)
+          if (deferred) return { ...message, routingStatus: 'needs-context', routingError: undefined, routingRecoveryMessageId: undefined,
+            routingHold: { messageVersion: message.messageVersion, epoch: message.routingEpoch ?? 0, reason: deferred.reason.trim(), createdAt: new Date().toISOString(), ...(deferred.clarification ? { clarification: { ...deferred.clarification, epoch: message.routingEpoch ?? 0 } } : {}) } }
           if (!unitsByMessage.has(message.messageId)) return message
           const current = unitsByMessage.get(message.messageId).map(({ topics: _topics, effectOwner: _owner, reason: _reason, ...unit }) => unit)
           const historical = [...(message.units ?? [])]
           for (const unit of current) if (!historical.some((item) => item.unitId === unit.unitId && item.unitRevision === unit.unitRevision)) historical.push(unit)
-          return { ...message, replyTopicId: replyTopics.get(message.messageId), units: historical, activeUnitRefs: current.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ignoredRanges: ignoredByMessage.get(message.messageId), routingStatus: 'routed', routingError: undefined }
+          return { ...message, replyTopicId: replyTopics.get(message.messageId), units: historical, activeUnitRefs: current.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ignoredRanges: ignoredByMessage.get(message.messageId), routingStatus: 'routed', routingError: undefined, routingHold: undefined, routingRecoveryMessageId: undefined }
         })
         return { ...latest, topics, sourceDispatchOwnership, routingRevision: latest.routingRevision + 1, routeHistory: [...latest.routeHistory, receipt],
           messages: settleCompletedMessageDeliveries(routedMessages, topics, sourceDispatchOwnership) }
       })
       return { status: 'routed', group, topics: group.topics, ...receipt }
+    }),
+    withRoutingHold: ({ groupId, messageId, messageVersion, epoch, commit }) => serialize(groupId, async () => {
+      const message = findGroupEntry(groupId)?.[1].messages.find(item => item.messageId === messageId)
+      if (!message || message.routingStatus !== 'needs-context' || message.messageVersion !== messageVersion || message.routingHold?.epoch !== epoch) throw new Error('topic_routing_hold_stale')
+      return commit(message)
+    }),
+    updateRoutingHold: ({ groupId, messageId, messageVersion, epoch, scope, resume = false }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error('topic_routing_hold_stale')
+      let updated
+      await groups.update(entry[0], latest => {
+        const message = latest.messages.find(item => item.messageId === messageId)
+        if (!message || message.routingStatus !== 'needs-context' || message.messageVersion !== messageVersion || message.routingHold?.epoch !== epoch) throw new Error('topic_routing_hold_stale')
+        if (!resume && (!Array.isArray(scope) || !scope.length || new Set(scope).size !== scope.length || scope.some(id => !latest.topics.some(topic => topic.topicId === id && !topic.mergedInto)))) throw new Error('topic_routing_hold_scope_invalid')
+        const nextEpoch = (message.routingEpoch ?? 0) + 1
+        updated = resume ? { ...message, routingStatus: 'pending', routingEpoch: nextEpoch, routingHold: undefined }
+          : { ...message, routingEpoch: nextEpoch, routingHold: { ...message.routingHold, epoch: nextEpoch, scope } }
+        return { ...latest, routingRevision: latest.routingRevision + 1, messages: latest.messages.map(item => item.messageId === messageId ? updated : item) }
+      })
+      return updated
     }),
     acceptTopicDecision: ({ groupId, topicId, revision, decisionId, decision, expectedTaskVersions = [], preflight }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
@@ -981,7 +1039,7 @@ export async function openResidentStore(storageDomain) {
           result = { status: 'duplicate', record: previous }; return latest
         }
         assertLegacyDecisionOwnership(latest, decision)
-        if (latest.messages.some((message) => message.routingStatus !== 'routed')) { result = { status: 'routing-required' }; return latest }
+        if (latest.messages.some(message => routingBlocksTopics(message, [topicId, ...(decision.actions ?? []).flatMap(action => (action.topicRefs ?? []).map(ref => ref.topicId))]))) { result = { status: 'routing-required' }; return latest }
         const veto = preflight?.(latest)
         if (veto !== undefined) { result = veto; return latest }
         for (const ref of (decision.actions ?? []).flatMap((action) => action.topicRefs ?? [])) {
@@ -1032,7 +1090,7 @@ export async function openResidentStore(storageDomain) {
       const entry = findGroupEntry(groupId), topic = entry?.[1].topics.find(item => item.topicId === topicId)
       if (!topic || topic.mergedInto || topic.revision !== revision || topic.summary !== expectedSummary
         || topic.processedRevision < topic.revision || topic.decisions.some(isPendingDecision)
-        || entry[1].messages.some(message => message.routingStatus !== 'routed')) return { status: 'topic-stale' }
+        || entry[1].messages.some(message => routingBlocksTopics(message, [topicId]))) return { status: 'topic-stale' }
       // Only local ledger I/O inside the existing group lock. No model or channel wait.
       return commit()
     }),
@@ -1096,7 +1154,7 @@ export async function openResidentStore(storageDomain) {
           if (previous.fingerprint !== digest) throw new Error('web_task_request_identity_conflict')
           result = { status: 'duplicate', topicId, messageId, record: previous }; return latest
         }
-        if (latest.messages.some((message) => message.routingStatus !== 'routed')) { result = { status: 'routing-required' }; return latest }
+        if (latest.messages.some(message => routingBlocksTopics(message, topicRefs.map(ref => ref.topicId)))) { result = { status: 'routing-required' }; return latest }
         if (new Set(topicRefs.map((ref) => ref.topicId)).size !== topicRefs.length) throw new Error('task_topic_duplicate')
         const task = action.taskId ? currentTask(action.taskId) : undefined
         const reopenBlockedContext = action.kind === 'task-reopen' && task?.state === 'cancelled' && task.restartRecoveryEligible === true

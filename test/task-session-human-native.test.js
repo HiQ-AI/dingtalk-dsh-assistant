@@ -51,7 +51,7 @@ for (const failure of ['none', 'empty', 'tool-limit', 'topic']) test(`群业务�
     if (incoming.requestId?.startsWith('coord-title-')) return [call('group_topic_title_submit', { requestId: incoming.requestId, topicId: incoming.topicId, title: '核对编辑持久化方案' })]
     const names = request.tools.map(tool => tool.name), routed = topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
-      if (topicId) for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId }]
+      if (topicId) for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId, reason: '原事项的人工答复与后续讨论' }]
       return routed
     }
     if (names.includes('group_decision_submit')) {
@@ -160,7 +160,7 @@ test('待实施批准期间事实追问保留来源并明确通知，内部证�
     }
     if (incoming.requestId?.startsWith('coord-title-')) return [call('group_topic_title_submit', { requestId: incoming.requestId, topicId: incoming.topicId, title: '核对编辑持久化方案' })]
     if (names.includes('group_topic_route_submit')) {
-      for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId }]
+      for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId, reason: '原事项的人工答复与后续讨论' }]
       return routed
     }
     if (names.includes('group_decision_submit')) {
@@ -587,7 +587,7 @@ t.onCancel(() => release.resolve())
     if (latestInput(request).trigger === 'task-facts') return topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
       const calls = topicTaskCalls(request)
-      for (const route of calls[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId: originalTopic }]
+      for (const route of calls[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId: originalTopic, reason: '原事项的人工答复与后续讨论' }]
       return calls
     }
     if (names.includes('group_decision_submit')) {
@@ -715,7 +715,7 @@ test('Topic-scoped waiting keeps unrelated progress, inspection and recovery liv
     if (input.trigger === 'task-facts') return topicTaskCalls(request)
     const routed = topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
-      if (topicId) for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId }]
+      if (topicId) for (const route of routed[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId, reason: '原事项的人工答复与后续讨论' }]
       return routed
     }
     if (names.includes('group_decision_submit')) {

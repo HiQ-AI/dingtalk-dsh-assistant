@@ -371,7 +371,7 @@ for (const mode of ['missing', 'preserve', 'replan', 'cancel']) test(`real coord
     const names = request.tools.map(tool => tool.name)
     if (names.includes('group_topic_route_submit')) {
       const calls = topicTaskCalls(request)
-      for (const route of calls[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId: task.topicRefs[0].topicId }]
+      for (const route of calls[0].args.routes) for (const unit of route.units) unit.topics = [{ topicId: task.topicRefs[0].topicId, reason: '原任务的后续输入' }]
       return calls
     }
     if (names.includes('group_decision_submit')) {
@@ -585,7 +585,7 @@ test('不同群成员续办已完成任务，旧授权拒绝显式重试仍保�
 for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague'], [false, 'native-user']]) test(`话题历史${ownEcho ? '自身通知不阻断人工补充' : '未准入真实消息仍拒绝更新且不发送成功回复'}-${followupActor}`, { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
   const fixture = await nativeCase(t, 'task-topic-source-')
   let topicId, originalTask, ownerCalls = 0
-  const readReviews = new Set()
+  const readReviews = new Set(), staleRequests = new Set()
   let h
   const model = async request => {
     assert.ok(h.requests.length < 12, JSON.stringify(h.toolResults.slice(-2)))
@@ -598,8 +598,10 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
       return calls
     }
     if (names.includes('group_decision_submit') && topicId) {
-      if (!readReviews.has(input.requestId)) {
-        readReviews.add(input.requestId)
+      const reviewKey = `${input.requestId}:${input.revision}`
+      if (staleRequests.has(reviewKey)) return []
+      if (!readReviews.has(reviewKey)) {
+        readReviews.add(reviewKey)
         return [call('group_reply_review_get', { requestIds: [input.requestId] })]
       }
       const basisUnitRefs = input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
@@ -626,6 +628,12 @@ for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague
   }
   await t.beginBusiness()
   h = await t.step(async () => fixture.host(model, { config: { assistantActorId: 'native-user' } }))
+  h.ctx.on('tools/result', (exec, result) => {
+    if (exec.name === 'group_decision_submit' && result.value?.status === 'topic-stale') {
+      const args = exec.args ?? exec.arguments
+      staleRequests.add(`${args.requestId}:${args.revision}`)
+    }
+  })
   await t.step(async () => h.service.ingest(message)); await t.step(async () => h.service.whenIdle())
   ;[originalTask] = await t.step(async () => h.query('task.list'))
   topicId = originalTask.topicRefs[0].topicId

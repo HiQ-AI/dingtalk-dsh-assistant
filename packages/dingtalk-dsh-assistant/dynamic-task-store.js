@@ -12,6 +12,7 @@ import { taskExecutionContext } from './execution-context.js'
 import { stableTaskResourceIdentity } from './task-message-projections.js'
 import { groupNotificationParts } from './group-notification.js'
 import { fixedTopicIds, fixedUnitRequestId, platformScheduleOutboundId } from './fixed-topics.js'
+import { stableId } from './topic-model.js'
 import { createExecutionResourceCatalog } from './execution-resource-catalog.js'
 import { DatabaseSync } from 'node:sqlite'
 import { retireIndependentCoordination, coordinationSchema, scheduleSchema } from './coordination-retirement.js'
@@ -1505,8 +1506,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'notification.prepare') {
       if (a.kind === 'coordination') fail('INDEPENDENT_COORDINATION_RETIRED')
-      const task = ['topic-reply', 'fixed-topic-reply'].includes(a.kind) ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
-      if (!['question','status','topic-reply','fixed-topic-reply'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
+      const task = ['topic-reply', 'fixed-topic-reply', 'routing-clarification'].includes(a.kind) ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
+      if (!['question','status','topic-reply','fixed-topic-reply','routing-clarification'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
       integer(a.requirementRevision, 'requirementRevision')
       if (a.kind === 'topic-reply' && (!Array.isArray(a.payload?.fact?.topicRefs) || !a.payload.fact.topicRefs.length)) fail('DYNAMIC_ARGUMENT_INVALID', 'topicRefs')
       if (a.kind === 'fixed-topic-reply') {
@@ -1533,6 +1534,25 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
             || s.messageId !== source.messageId || s.messageVersion !== source.version || s.unitId !== fact.unitId
             || s.unitRevision !== fact.unitRevision) fail('DYNAMIC_ARGUMENT_INVALID', 'fixedTopicArtifact')
         }
+      }
+      if (a.kind === 'routing-clarification') {
+        const p = record(a.payload), fact = record(p.fact), source = get('dynamic_sources', text(p.sourceId, 'sourceId'))
+        integer(p.sourceVersion, 'sourceVersion')
+        if (!Number.isSafeInteger(fact.epoch) || fact.epoch < 0) fail('DYNAMIC_ARGUMENT_INVALID', 'routingEpoch')
+        const quote = text(fact.assignmentQuote, 'assignmentQuote'), start = source.text.indexOf(quote)
+        const expectedId = stableId('routing-clarification', JSON.stringify([source.groupId, source.messageId, source.version, fact.epoch]))
+        if (a.taskId || p.taskIds?.length || p.topicRefs?.length || p.artifactFiles?.length || p.atAll
+          || source.channel !== 'im' || source.groupId !== p.conversationId || source.messageId !== p.sourceMessageId
+          || source.version !== p.sourceVersion || source.version !== fact.messageVersion || source.actorId !== p.actorId
+          || p.replyToMessageId !== source.messageId || p.replyToSenderOpenDingTalkId !== source.actorId
+          || p.sourceRef?.messageId !== source.messageId || p.sourceRef?.messageVersion !== source.version || p.sourceRef?.actorId !== source.actorId
+          || p.replyKind !== 'substantive' || p.atOpenDingTalkIds?.length !== 1 || p.atOpenDingTalkIds[0] !== source.actorId
+          || fact.agentDirected !== true || start < 0 || source.text.indexOf(quote, start + 1) >= 0
+          || typeof fact.question !== 'string' || !fact.question.trim() || fact.question.length > 2000
+          || typeof fact.reviewFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(fact.reviewFingerprint)
+          || id !== expectedId) fail('DYNAMIC_ARGUMENT_INVALID', 'routingClarificationSource')
+        if (all('dynamic_sources', "WHERE json_extract(body,'$.groupId')=? AND json_extract(body,'$.messageId')=?", [source.groupId, source.messageId])
+          .some(item => item.version > source.version)) fail('DYNAMIC_ROUTING_CLARIFICATION_STALE')
       }
       const body = { taskId: task?.taskId ?? null, requirementRevision: a.requirementRevision, kind: a.kind, payload: clone(record(a.payload)) }
       if (body.payload.atAll !== undefined && typeof body.payload.atAll !== 'boolean'
@@ -1640,13 +1660,21 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           put('dynamic_notifications', notification)
           return changed({ notification, topicFacts: topicFacts.requeueUnsent(notification) })
         }
-        const task = ['topic-reply','fixed-topic-reply','coordination'].includes(notification.kind) ? null : get('dynamic_tasks', notification.taskId)
+        const task = ['topic-reply','fixed-topic-reply','routing-clarification','coordination'].includes(notification.kind) ? null : get('dynamic_tasks', notification.taskId)
         const request = notification.kind === 'question' && task.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)
         if (notification.kind === 'question' && (notification.requirementRevision !== task.requirementRevision || task.status !== 'active' || task.control !== 'active'
           || !request || request.status !== 'waiting-reply' || request.requirementRevision !== task.requirementRevision
           || request.controlRevision !== task.controlRevision || (request.audience ?? 'operator') !== notification.payload.audience)) {
           notification.state = 'failed'; notification.reason = 'stale_question'; notification.updatedAt = stamp
           put('dynamic_notifications', notification); return changed({ notification })
+        }
+        if (notification.kind === 'routing-clarification') {
+          const p = notification.payload, fact = p.fact, proof = a.routingHold
+          const source = get('dynamic_sources', p.sourceId)
+          if (!proof || proof.messageVersion !== fact.messageVersion || proof.epoch !== fact.epoch || proof.reviewFingerprint !== fact.reviewFingerprint
+            || source.groupId !== p.conversationId || source.messageId !== p.sourceMessageId || source.version !== p.sourceVersion
+            || all('dynamic_sources', "WHERE json_extract(body,'$.groupId')=? AND json_extract(body,'$.messageId')=?", [source.groupId, source.messageId])
+              .some(item => item.version > source.version)) fail('DYNAMIC_ROUTING_CLARIFICATION_STALE')
         }
         assertNoLegacy(task?.taskId)
         notification.sendAttemptCount = (notification.sendAttemptCount ?? 0) + 1

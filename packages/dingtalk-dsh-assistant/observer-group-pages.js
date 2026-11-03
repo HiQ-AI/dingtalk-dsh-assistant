@@ -8,7 +8,7 @@ import {retiredSourceOwnership} from './coordination-retirement.js'
 
 const fields=['messageId','messageVersion','sequence','senderName','senderOpenDingTalkId','occurredAt','text','runId','activeUnitRefs','taskSessionRefs','workflowStatusDetail','agentDeliveryError','waiting','blockingSources','notifications']
 const pick=(value,keys)=>Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]))
-const messageInput=message=>pick(message,[...fields,'sourceKind','routingStatus','ignoredRanges','agentDeliveryStatus','agentDeliveryAt','units','messageAiSendFlag','quotedMessage','actorId'])
+const messageInput=message=>pick(message,[...fields,'sourceKind','routingStatus','routingHold','ignoredRanges','agentDeliveryStatus','agentDeliveryAt','units','messageAiSendFlag','quotedMessage','actorId'])
 const fail=code=>{throw Object.assign(new Error(code),{code})}
 
 // Derived, persistent list rows. Startup reconciles resident records once (including

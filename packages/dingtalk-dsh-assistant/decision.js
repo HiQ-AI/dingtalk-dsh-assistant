@@ -21,15 +21,15 @@ const dispatchAssessmentSchema = z.strictObject({
   businessObject: z.string().trim().min(1), agentDeliverable: z.string().trim().min(1),
   externalFollowup: z.array(z.string().trim().min(1)),
   sourceUnitRefs: z.array(unitRefSchema).min(1),
-  workflowRefs: z.array(z.strictObject({ id: z.string().min(1), revision: z.number().int().positive() })),
-  workflowReason: z.string().trim().min(1),
 })
+const legacyDispatchAssessmentSchema = dispatchAssessmentSchema.extend({ workflowRefs: z.array(z.strictObject({ id: z.string().min(1), revision: z.number().int().positive() })), workflowReason: z.string().trim().min(1) })
 const newTask = z.strictObject({ kind: z.literal('new-task').describe('查无适配任务的新交付；同一事项的多个功能和验收项可属于一个Task，不逐功能点创建。已有任务新增要求、截图交付或后续核查按状态使用 task-context/task-reopen；确有独立执行交付边界才拆任务，批量跟进分别操作原任务。'), title: z.string().min(1).max(120), objective: z.string().min(1), acceptanceCriteria: acceptanceCriteriaSchema, stageTasks: z.array(z.string().min(1)).optional(), dispatchAssessment: dispatchAssessmentSchema.optional(), ...taskSources })
 const taskContext = z.strictObject({ kind: z.literal('task-context'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...taskContextImpactFields, ...runPlan, ...taskSources })
   .superRefine((value, ctx) => { const message = taskContextSemanticsProblem(value); if (message) ctx.addIssue({ code: 'custom', path: ['progressImpact'], message }) })
 const taskReopen = z.strictObject({ kind: z.literal('task-reopen').describe('向已完成的原任务追加核查、修订或重新提测要求；复用原 Task 和会话，不重做已完成步骤。批量跟进在 actions 中为每个原任务分别提交。'), taskId: z.string().min(1), ...taskVersion, context: z.string().min(1), title: z.string().min(1).max(120).optional(), objective: z.string().min(1).optional(), ...runPlan, ...taskSources })
 const taskCancel = z.strictObject({ kind: z.literal('task-cancel'), taskId: z.string().min(1), ...taskVersion, reason: z.string().min(1), ...taskSources })
 const taskAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen, taskCancel])
+const legacyTaskAction = z.discriminatedUnion('kind', [taskProposal, newTask.extend({ dispatchAssessment: legacyDispatchAssessmentSchema.optional() }), taskContext, taskReopen, taskCancel])
 const replyReviewSchema = z.strictObject({
   kind: z.enum(['confirmation', 'substantive', 'correction']).describe('confirmation为接收/任务动作确认；substantive为实质结果且不得替换旧回复；correction为订正且必须指定同事项旧回复。只要有非空reply，即使没有历史候选也必须声明kind。'),
   reviewedOutboundIds: z.array(z.string().min(1)).default([]).describe('逐一审阅当前历史回复候选后填写其全部outboundId，集合必须与当前候选完全一致，不重复、不猜造；无候选时为[]。'),
@@ -37,26 +37,31 @@ const replyReviewSchema = z.strictObject({
   replaceOutboundIds: z.array(z.string().min(1)).default([]).describe('待替换旧回复ID，只能来自sameMatterOutboundIds。confirmation和correction必须与sameMatterOutboundIds集合完全相等；substantive必须为[]。不得自动补ID或跳过审阅。'),
 })
 // DSH 不支持数组长度约束；先按 reply / reason 分支，避免投影时把互斥字段合并为可同时填写。
-const replyDecisionSchema = z.strictObject({
-  ...decisionBasis, actions: z.array(taskAction),
+const makeDecisionSchema = actionSchema => {
+  const replyDecisionSchema = z.strictObject({
+  ...decisionBasis, actions: z.array(actionSchema),
   reply: z.string().describe('群回复或任务确认；actions 为空时必须非空，提交任务动作时 Host 也要求非空确认。此分支不得填写 reason。'),
   ...groupNotificationFields,
   replyReview: replyReviewSchema.optional().describe('有非空reply时Host要求提交本审阅，包括kind；即使候选为空也须声明kind及三个空ID列表。optional保留补答协议，并不表示可省略回复审阅；先阅读当前候选再填真实ID。'),
 }).superRefine((decision, ctx) => {
   if (decision.actions.length === 0 && decision.reply.length === 0) ctx.addIssue({ code: 'custom', path: ['reply'], message: 'actions 为空时 reply 必须非空；不回复请改用 actions: [] + reason 分支。' })
 })
-export const groupDecisionSchema = z.union([
-  replyDecisionSchema,
-  z.strictObject({ ...decisionBasis, actions: z.array(taskAction), reason: z.string().min(1).describe('不回复原因；只有来源明确由其他 Topic 统一回复时才可同时提交任务动作。不得同时填写 reply 或 replyReview。') }),
-])
+  return z.union([
+    replyDecisionSchema,
+    z.strictObject({ ...decisionBasis, actions: z.array(actionSchema), reason: z.string().min(1).describe('不回复原因；只有来源明确由其他 Topic 统一回复时才可同时提交任务动作。不得同时填写 reply 或 replyReview。') }),
+  ])
+}
+export const groupDecisionSchema = makeDecisionSchema(taskAction)
+const legacyGroupDecisionSchema = makeDecisionSchema(legacyTaskAction)
 
 const stringJsonSchema = { type: 'string' }
 export const replyReviewJsonSchema = toToolJsonSchema(replyReviewSchema)
 export const groupDecisionJsonSchema = toToolJsonSchema(groupDecisionSchema)
 
+const candidateComparisonSchema = z.strictObject({ topicId: z.string().min(1), revision: z.number().int().positive(), reason: z.string().trim().min(1) })
 const topicRouteTargetSchema = z.union([
-  z.strictObject({ topicId: z.string().min(1), relationship: z.enum(['continuation', 'affected']).optional(), reason: z.string().trim().min(1).optional() }),
-  z.strictObject({ newTopicKey: z.string().min(1), title: z.string().trim().min(1).max(TOPIC_TITLE_MAX_CHARS), relationship: z.enum(['continuation', 'affected']).optional(), reason: z.string().trim().min(1).optional() }),
+  z.strictObject({ topicId: z.string().min(1), relationship: z.enum(['continuation', 'affected']).optional(), reason: z.string().trim().min(1).optional(), candidateComparisons: z.array(candidateComparisonSchema).optional() }),
+  z.strictObject({ newTopicKey: z.string().min(1), title: z.string().trim().min(1).max(TOPIC_TITLE_MAX_CHARS), relationship: z.enum(['continuation', 'affected']).optional(), reason: z.string().trim().min(1).optional(), candidateComparisons: z.array(candidateComparisonSchema).optional() }),
 ])
 const topicRouteOwnerSchema = z.union([
   z.strictObject({ topicId: z.string().min(1) }),
@@ -74,6 +79,7 @@ export const topicRouteSubmissionSchema = z.strictObject({
   routes: z.array(z.strictObject({
     messageId: z.string().min(1), messageVersion: z.number().int().positive(),
     replyTopic: topicRouteOwnerSchema.optional(),
+    deferred: z.strictObject({ reason: z.string().trim().min(1), clarification: z.strictObject({ question: z.string().trim().min(1).max(2000), assignmentQuote: z.string().min(1), replyReview: replyReviewSchema }).optional() }).optional(),
     ignoredRefs: z.array(z.strictObject({ quote: z.string().min(1), reason: z.string().trim().min(1) })).default([]),
     units: z.array(z.strictObject({
       unitKey: z.string().min(1), summary: z.string().trim().min(1),
@@ -100,6 +106,10 @@ export const topicRouteSubmissionSchema = z.strictObject({
     topics: z.array(topicRouteTargetSchema).optional(), effectOwner: topicRouteOwnerSchema.optional(),
     reason: z.string().trim().min(1).optional(),
   }).superRefine((route, ctx) => {
+    if (route.deferred) {
+      if (route.units || route.topics || route.replyTopic || route.effectOwner || route.ignoredRefs.length || route.reason) ctx.addIssue({ code: 'custom', message: '待判消息不能同时提交归属或忽略记录', path: ['deferred'] })
+      return
+    }
     if (Boolean(route.units) === Boolean(route.topics)) ctx.addIssue({ code: 'custom', message: '必须且只能提交 units 或单事项旧 topics', path: ['units'] })
     if (route.units?.length === 0 && !route.ignoredRefs.length) ctx.addIssue({ code: 'custom', message: '空事项必须提供完整原文忽略记录及原因', path: ['ignoredRefs'] })
     if (route.topics && route.topics.length === 0 && !route.reason) ctx.addIssue({ code: 'custom', message: '无 Topic 归属必须说明原因', path: ['reason'] })
@@ -118,6 +128,7 @@ export const topicRouteSubmissionJsonSchema = {
       type: 'object', additionalProperties: false,
       properties: {
         messageId: stringJsonSchema, messageVersion: { type: 'integer' },
+        deferred: { type: 'object', additionalProperties: false, properties: { reason: stringJsonSchema, clarification: { type: 'object', additionalProperties: false, properties: { question: stringJsonSchema, assignmentQuote: stringJsonSchema, replyReview: replyReviewJsonSchema }, required: ['question', 'assignmentQuote', 'replyReview'] } }, required: ['reason'] },
         replyTopic: { oneOf: [
           { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
           { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema }, required: ['newTopicKey'] },
@@ -134,19 +145,22 @@ export const topicRouteSubmissionJsonSchema = {
           ] } },
           contextRefs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { quote: stringJsonSchema, purpose: stringJsonSchema }, required: ['quote', 'purpose'] } },
           topics: { type: 'array', items: { oneOf: [
-            { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, relationship: { type: 'string', enum: ['continuation', 'affected'] }, reason: stringJsonSchema }, required: ['topicId'] },
-            { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema, title: { ...stringJsonSchema, description: '建议 8–20 字且不超过 30 字的简洁话题名称，只概括共同讨论对象，不复述消息详情。' }, relationship: { type: 'string', enum: ['continuation', 'affected'] }, reason: stringJsonSchema }, required: ['newTopicKey', 'title'] },
+            { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, relationship: { type: 'string', enum: ['continuation', 'affected'] }, reason: stringJsonSchema, candidateComparisons: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, revision: { type: 'integer' }, reason: stringJsonSchema }, required: ['topicId', 'revision', 'reason'] } } }, required: ['topicId'] },
+            { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema, title: { ...stringJsonSchema, description: '建议 8–20 字且不超过 30 字的简洁话题名称，只概括共同讨论对象，不复述消息详情。' }, relationship: { type: 'string', enum: ['continuation', 'affected'] }, reason: stringJsonSchema, candidateComparisons: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, revision: { type: 'integer' }, reason: stringJsonSchema }, required: ['topicId', 'revision', 'reason'] } } }, required: ['newTopicKey', 'title'] },
           ] } }, effectOwner: { oneOf: [
             { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
             { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema }, required: ['newTopicKey'] },
           ] }, reason: stringJsonSchema,
         }, required: ['unitKey', 'summary', 'replacesUnitIds', 'sourceRefs', 'topics'] } }, reason: stringJsonSchema,
-      }, required: ['messageId', 'messageVersion', 'units', 'ignoredRefs'],
+      }, required: ['messageId', 'messageVersion'],
     } },
   }, required: ['requestId', 'routes'],
 }
 export const groupDecisionSubmissionSchema = z.strictObject({
   requestId: z.string().min(1), topicId: z.string().min(1), revision: z.number().int().positive(), decision: groupDecisionSchema,
+})
+export const legacyGroupDecisionSubmissionSchema = z.strictObject({
+  requestId: z.string().min(1), topicId: z.string().min(1), revision: z.number().int().positive(), decision: legacyGroupDecisionSchema,
 })
 export const groupDecisionSubmissionJsonSchema = {
   type: 'object', additionalProperties: false,
@@ -154,7 +168,9 @@ export const groupDecisionSubmissionJsonSchema = {
   required: ['requestId', 'topicId', 'revision', 'decision'],
 }
 
-export function validateTaskDispatchAssessment(action, { requiresAssessment = false, currentPrompts = [] } = {}) {
+export const legacyGroupDecisionSubmissionJsonSchema = { ...groupDecisionSubmissionJsonSchema, properties: { ...groupDecisionSubmissionJsonSchema.properties, decision: toToolJsonSchema(legacyGroupDecisionSchema) } }
+
+export function validateTaskDispatchAssessment(action, { requiresAssessment = false, currentPrompts } = {}) {
   const assessment = action.dispatchAssessment
   if (!assessment) {
     if (requiresAssessment) throw new Error('task_dispatch_assessment_required')
@@ -165,9 +181,11 @@ export function validateTaskDispatchAssessment(action, { requiresAssessment = fa
   const basis = new Set((action.basisUnitRefs ?? []).map(key))
   const declared = assessment.sourceUnitRefs.map(key)
   if (new Set(declared).size !== declared.length || declared.length !== basis.size || declared.some((ref) => !basis.has(ref))) issues.push({ field: 'dispatchAssessment.sourceUnitRefs', code: 'task_dispatch_source_units_invalid', message: 'task_dispatch_source_units_invalid' })
-  const prompts = new Map(currentPrompts.filter((item) => item.enabled).map((item) => [item.id, item.revision]))
-  const ids = assessment.workflowRefs.map((ref) => ref.id)
-  if (new Set(ids).size !== ids.length || assessment.workflowRefs.some((ref) => prompts.get(ref.id) !== ref.revision)) issues.push({ field: 'dispatchAssessment.workflowRefs', code: 'task_dispatch_workflow_refs_invalid', message: 'task_dispatch_workflow_refs_invalid', currentPrompts: [...prompts].map(([id, revision]) => ({ id, revision })) })
+  if (currentPrompts && assessment.workflowRefs) {
+    const prompts = new Map(currentPrompts.filter(item => item.enabled).map(item => [item.id, item.revision]))
+    const ids = assessment.workflowRefs.map(ref => ref.id)
+    if (new Set(ids).size !== ids.length || assessment.workflowRefs.some(ref => prompts.get(ref.id) !== ref.revision)) issues.push({ field: 'dispatchAssessment.workflowRefs', code: 'task_dispatch_workflow_refs_invalid', message: 'task_dispatch_workflow_refs_invalid', currentPrompts: [...prompts].map(([id, revision]) => ({ id, revision })) })
+  }
   if (issues.length) { const error = new Error(issues[0].message); error.issues = issues; throw error }
 }
 
@@ -321,7 +339,7 @@ export function blockTaskDecisionForUnavailableMedia(decision, mediaUnavailable)
 
 // Host 校验来源、版本和动作归属；是否交给助手由 TopicDecision 结合完整上下文判断，
 // 不能把 @、点名或最近称呼转换为硬性派工/拒绝规则。
-export function collectDecisionIssues(request, decision, { store, delta, ownership, unitKey, archivedTasks = new Map() }) {
+export function collectDecisionIssues(request, decision, { store, delta, ownership, unitKey, archivedTasks = new Map(), workflowPromptsEnabled = false }) {
   const issues = []
   let field = 'decision'
   const addIssue = (field, code) => issues.push({ field, code, message: code })
@@ -360,7 +378,7 @@ export function collectDecisionIssues(request, decision, { store, delta, ownersh
     if (action.kind === 'new-task') {
       const group = store.getGroup(request.groupId)
       const multiUnitSource = actionMessages.some((message) => (group.messages.find((item) => item.messageId === message.messageId)?.activeUnitRefs?.length ?? 0) > 1)
-      try { validateTaskDispatchAssessment(action, { requiresAssessment: multiUnitSource, currentPrompts: store.getTaskPrompts?.() ?? [] }) }
+      try { validateTaskDispatchAssessment(action, { requiresAssessment: multiUnitSource, ...(workflowPromptsEnabled ? { currentPrompts: store.getTaskPrompts?.() ?? [] } : {}) }) }
       catch (error) { for (const issue of error.issues ?? [{ field: 'dispatchAssessment', code: error.message, message: error.message }]) issues.push({ ...issue, field: field + '.' + issue.field }) }
       if (!group.responsibility?.trim()) addIssue(field, 'task_group_responsibility_required')
     }

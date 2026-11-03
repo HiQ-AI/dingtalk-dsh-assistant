@@ -9,6 +9,7 @@ import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { LlmRuntime, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createRequire } from 'node:module'
+import { coordinationTools } from '../packages/dingtalk-dsh-assistant/coordination-sessions.js'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { openResidentStore, resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.js'
 import { boundedTopicContext, createTopicCoordinator, projectTopicContext, TASK_REVIEW_MAX_CHARS } from '../packages/dingtalk-dsh-assistant/topic-runtime.js'
@@ -409,9 +410,89 @@ async function route(h, choices = {}) {
     let offset = message.text.length
     while (offset < message.textTotal) offset = (await h.call('group_topic_route_context_get', { requestId: request.requestId, messageId: message.messageId, offset })).nextOffset
   }
-  return h.call('group_topic_route_submit', { requestId: request.requestId, routes: request.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [typeof choices[message.messageId] === 'string' ? { topicId: choices[message.messageId] } : choices[message.messageId] ?? { newTopicKey: message.messageId, title: message.messageId }] })) })
+  const candidates = [...new Map([...(request.topics ?? []), ...(request.relatedTopics ?? []), ...(request.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()]
+  return h.call('group_topic_route_submit', { requestId: request.requestId, routes: request.messages.map((message) => {
+    const target = typeof choices[message.messageId] === 'string' ? { topicId: choices[message.messageId] } : choices[message.messageId] ?? { newTopicKey: message.messageId, title: message.messageId }
+    return { messageId: message.messageId, messageVersion: message.messageVersion, topics: [{ ...target, reason: target.reason ?? '按当前事项目标判断', ...(target.newTopicKey && candidates.length ? { candidateComparisons: candidates.map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '不是当前事项' })) } : {}) }] }
+  }) })
 }
 const submission = (request, patch = {}) => ({ requestId: request.requestId, topicId: request.topicId, revision: request.revision, decision: { basisMessageIds: [request.messages.at(-1)?.messageId ?? request.removedMessageIds?.[0]], ...(patch.reply ? { replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }, ...(!Object.hasOwn(patch, 'replyToMessageId') ? { replyToMessageId: request.messages.at(-1)?.messageId } : {}) } : {}), actions: [], ...(patch.reply === undefined ? { reason: '无需回复' } : {}), ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) } })
+
+test('超长引用元数据完整续读后才能路由', async t => {
+  const h = await setup(t)
+  const content = '长'.repeat(45_000)
+  await ingest(h, 'oversized-quote', { text: '请继续', quotedMessage: { messageId: 'prior', content } })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.ok(JSON.stringify(request).length <= 40_000)
+  assert.ok(request.messages[0].metadataReadCall)
+  const args = { requestId: request.requestId, routes: [{ messageId: 'oversized-quote', messageVersion: 1, deferred: { reason: '需补充上下文' } }] }
+  await assert.rejects(h.rawCall('group_topic_route_submit', args), /topic_route_metadata_unread/)
+  let offset = 0, result = '', page
+  do {
+    page = await h.rawCall('group_topic_route_context_get', { requestId: request.requestId, messageId: 'oversized-quote', section: 'messageMetadata', offset })
+    result += page.text; offset = page.nextOffset
+  } while (page.hasMore)
+  assert.equal(JSON.parse(result).quotedMessage.content, content)
+  assert.equal((await h.rawCall('group_topic_route_submit', args)).status, 'accepted')
+})
+
+test('路由首包按 JSON 实际长度预算并可续读转义原文', async t => {
+  const h = await setup(t)
+  const text = '"'.repeat(45_000)
+  await ingest(h, 'escaped', { text }); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.ok(JSON.stringify(request).length <= 40_000)
+  let restored = request.messages[0].text, offset = restored.length
+  while (offset < text.length) {
+    const page = await h.rawCall('group_topic_route_context_get', { requestId: request.requestId, messageId: 'escaped', offset })
+    restored += page.text; offset = page.nextOffset
+  }
+  assert.equal(restored, text)
+})
+
+test('大澄清候选走只读分页且未读完不能提交澄清', async t => {
+  const candidates = [{ outboundId: 'old', reply: '"'.repeat(7_000) }]
+  assert.ok(coordinationTools('route').includes('group_topic_route_context_get'))
+  assert.ok(!coordinationTools('route').includes('group_reply_review_get'))
+  const h = await setup(t, { reviewCandidates: () => candidates })
+  await ingest(h, 'clarify', { text: '@助理 请处理这个' }); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.ok(JSON.stringify(request).length <= 40_000)
+  assert.equal(request.clarificationReviewCandidateCount, 1)
+  assert.equal(request.clarificationReviewCandidates, undefined)
+  const args = { requestId: request.requestId, routes: [{ messageId: 'clarify', messageVersion: 1, deferred: { reason: '对象不明', clarification: {
+    question: '请问处理哪个事项？', assignmentQuote: '@助理 请处理这个', replyReview: { kind: 'substantive', reviewedOutboundIds: ['old'], sameMatterOutboundIds: [], replaceOutboundIds: [] },
+  } } }] }
+  await assert.rejects(h.rawCall('group_topic_route_submit', args), /topic_route_clarification_review_unread/)
+  let offset = 0, content = ''
+  do {
+    const page = await h.rawCall('group_topic_route_context_get', { requestId: request.requestId, section: 'clarificationReviewCandidates', offset })
+    content += page.text; offset = page.nextOffset
+  } while (offset < JSON.stringify(candidates).length)
+  assert.deepEqual(JSON.parse(content), candidates)
+  assert.equal((await h.rawCall('group_topic_route_submit', args)).status, 'accepted')
+})
+
+test('活跃路由审计已见候选及新建理由，拒绝猜造候选', async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  await ingest(h, 'prior')
+  const prior = await h.store.routeMessages({ groupId: 'g', routeId: 'existing', routingRevision: 0,
+    routes: [{ messageId: 'prior', messageVersion: 1, topics: [{ newTopicKey: 'old', title: '旧事项' }] }] })
+  await ingest(h, 'new')
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const candidate = request.topics.find(item => item.topicId === prior.topicIdsByKey.old)
+  const submit = target => h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'new', messageVersion: 1,
+    units: [{ unitKey: 'new', summary: '新事项', sourceRefs: [{ wholeMessage: true }], topics: [target] }], ignoredRefs: [] }] })
+  await assertDecisionIssue(submit({ newTopicKey: 'new', title: '新事项', reason: '独立交付' }), /topic_route_audit_reason_required/)
+  await assertDecisionIssue(submit({ newTopicKey: 'new', title: '新事项', reason: '独立交付', candidateComparisons: [{ topicId: 'outside', revision: 1, reason: '无关' }] }), /topic_route_audit_candidate_invalid/)
+  const accepted = await submit({ newTopicKey: 'new', title: '新事项', reason: '独立交付', candidateComparisons: [{ topicId: candidate.topicId, revision: candidate.revision, reason: '目标不同' }] })
+  assert.equal(accepted.status, 'accepted')
+  const receipt = h.store.getGroup('g').routeHistory.find(item => item.routeId === request.requestId)
+  assert.deepEqual(receipt.audit.candidates, [{ topicId: candidate.topicId, revision: candidate.revision }])
+  assert.equal(receipt.audit.selections[0].candidateComparisons[0].reason, '目标不同')
+})
 
 test('多依据普通回复应指向语义接收人而非最后解释者', async t => {
   const h = await setup(t)
@@ -2924,7 +3005,7 @@ test('fixed route categories are offered by active mode and bypass business deci
   const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'fixed-source', messageVersion: 1, units: [
     { unitKey: 'platform', summary: '平台查询', sourceRefs: [{ quote: '查平台；' }], fixedTopic: 'agent-platform', topics: [], reason: '平台整体查询' },
     { unitKey: 'outside', summary: '买咖啡', sourceRefs: [{ quote: '买咖啡；' }], fixedTopic: 'out-of-scope', topics: [], reason: '职责外' },
-    { unitKey: 'upr', summary: '修复UPR', sourceRefs: [{ quote: '修复UPR' }], topics: [{ newTopicKey: 'upr', title: 'UPR修复' }] },
+    { unitKey: 'upr', summary: '修复UPR', sourceRefs: [{ quote: '修复UPR' }], topics: [{ newTopicKey: 'upr', title: 'UPR修复', reason: '独立业务修复事项' }] },
   ] }] })
   assert.equal(result.status, 'accepted')
   assert.equal(result.pendingDecisions.length, 1)

@@ -34,6 +34,66 @@ async function route(store, id, items) {
 }
 const decision = (id, topicId, revision, extra = {}) => ({ groupId: 'g', topicId, revision, decisionId: id, decision: { actions: [], reason: '无需回复' }, ...extra })
 
+test('待判持久化、受信范围和恢复代次保持接纳屏障', async () => {
+  const { store, snapshot } = await setup()
+  await ingest(store, 'a'); await ingest(store, 'b')
+  const topics = (await route(store, 'initial', [['a', { newTopicKey: 'a', title: 'A' }], ['b', { newTopicKey: 'b', title: 'B' }]])).topicIdsByKey
+  await ingest(store, 'uncertain')
+  const revision = store.getGroup('g').routingRevision
+  await store.routeMessages({ groupId: 'g', routeId: 'hold', routingRevision: revision, routes: [{ messageId: 'uncertain', messageVersion: 1, deferred: { reason: '范围不明' } }] })
+  assert.equal(store.getGroup('g').messages.at(-1).routingStatus, 'needs-context')
+  assert.equal((await store.acceptTopicDecision(decision('blocked', topics.b, 1))).status, 'routing-required')
+  await store.close()
+  const reopened = await openResidentStore(facility(snapshot))
+  const hold = reopened.getGroup('g').messages.at(-1).routingHold
+  assert.equal(hold.reason, '范围不明')
+  await reopened.updateRoutingHold({ groupId: 'g', messageId: 'uncertain', messageVersion: 1, epoch: hold.epoch, scope: [topics.a] })
+  assert.equal((await reopened.acceptTopicDecision(decision('allowed', topics.b, 1))).status, 'accepted')
+  assert.equal((await reopened.acceptTopicDecision(decision('still-blocked', topics.a, 1))).status, 'routing-required')
+  await assert.rejects(reopened.updateRoutingHold({ groupId: 'g', messageId: 'uncertain', messageVersion: 1, epoch: hold.epoch, resume: true }), /topic_routing_hold_stale/)
+  await reopened.updateRoutingHold({ groupId: 'g', messageId: 'uncertain', messageVersion: 1, epoch: hold.epoch + 1, resume: true })
+  assert.equal(reopened.getGroup('g').messages.at(-1).routingStatus, 'pending')
+  assert.equal(reopened.getGroup('g').messages.at(-1).routingEpoch, hold.epoch + 2)
+  await reopened.close()
+})
+
+test('引用元数据晚到时恢复原待判并约束答复共同路由', async () => {
+  const { store } = await setup()
+  await ingest(store, 'original')
+  await store.routeMessages({ groupId: 'g', routeId: 'hold-late', routingRevision: store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'original', messageVersion: 1, deferred: { reason: '需要上下文' } }] })
+  await ingest(store, 'answer')
+  const result = await ingest(store, 'answer', { quotedMessage: { messageId: 'original' } })
+  assert.equal(result.enriched, true)
+  const group = store.getGroup('g')
+  assert.equal(group.messages.find(item => item.messageId === 'original').routingRecoveryMessageId, 'answer')
+  assert.equal(group.messages.find(item => item.messageId === 'answer').messageVersion, 2)
+  await assert.rejects(store.routeMessages({ groupId: 'g', routeId: 'partial-late', routingRevision: group.routingRevision,
+    routes: [{ messageId: 'answer', messageVersion: 2, topics: [], reason: '答复' }] }), /topic_routing_recovery_incomplete/)
+  await store.routeMessages({ groupId: 'g', routeId: 'together-late', routingRevision: group.routingRevision,
+    routes: [{ messageId: 'original', messageVersion: 1, topics: [], reason: '无需处理' }, { messageId: 'answer', messageVersion: 2, topics: [], reason: '无需处理' }] })
+  await store.close()
+})
+
+test('可信引用只恢复原待判并要求答复与原文共同路由', async () => {
+  const { store } = await setup()
+  await ingest(store, 'original'); await ingest(store, 'other')
+  await store.routeMessages({ groupId: 'g', routeId: 'holds', routingRevision: store.getGroup('g').routingRevision,
+    routes: ['original', 'other'].map(messageId => ({ messageId, messageVersion: 1, deferred: { reason: '需要上下文' } })) })
+  await ingest(store, 'unrelated')
+  assert.equal(store.getGroup('g').messages.find(message => message.messageId === 'original').routingStatus, 'needs-context')
+  await ingest(store, 'answer', { quotedMessage: { messageId: 'original', content: 'original' } })
+  const group = store.getGroup('g')
+  assert.equal(group.messages.find(message => message.messageId === 'original').routingRecoveryMessageId, 'answer')
+  assert.equal(group.messages.find(message => message.messageId === 'other').routingStatus, 'needs-context')
+  await assert.rejects(store.routeMessages({ groupId: 'g', routeId: 'partial', routingRevision: group.routingRevision,
+    routes: [{ messageId: 'answer', messageVersion: 1, topics: [], reason: '答复' }] }), /topic_routing_recovery_incomplete/)
+  await store.routeMessages({ groupId: 'g', routeId: 'together', routingRevision: group.routingRevision,
+    routes: [{ messageId: 'original', messageVersion: 1, topics: [], reason: '无需处理' }, { messageId: 'answer', messageVersion: 1, topics: [], reason: '无需处理' }] })
+  assert.equal(store.getGroup('g').messages.find(message => message.messageId === 'original').routingStatus, 'routed')
+  await store.close()
+})
+
 test('首次完成时钟不可变，重复complete与通知送达/重启不改语义终态', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-27T05:36:12Z') })
   const snapshot = { tables: {}, global: null }
@@ -337,6 +397,20 @@ test('归类整批预检拒绝跨群/重复/过时事实且幂等重试不重复
   assert.deepEqual(again.topicIdsByKey, first.topicIdsByKey)
   assert.equal(store.listTopics('g').length, 1)
   await assert.rejects(store.routeMessages({ ...input, routes: [] }), /topic_routes_invalid/)
+})
+
+test('路由审计理由变更不能重放已接纳路由或改变业务版本', async () => {
+  const { store } = await setup(); await ingest(store, 'audit')
+  const input = { groupId: 'g', routeId: 'audit', routingRevision: 0,
+    routes: [{ messageId: 'audit', messageVersion: 1, topics: [{ newTopicKey: 'a', title: 'A', reason: '独立事项' }] }],
+    audit: { candidates: [], selections: [{ reason: '独立事项' }] } }
+  const first = await store.routeMessages(input)
+  const before = structuredClone(store.getGroup('g'))
+  await store.routeMessages(input)
+  await assert.rejects(store.routeMessages({ ...input, audit: { ...input.audit, selections: [{ reason: '修改理由' }] } }), /topic_route_identity_conflict/)
+  assert.deepEqual(store.getGroup('g'), before)
+  assert.equal(store.getTopic('g', first.topicIdsByKey.a).revision, 1)
+  await store.close()
 })
 
 test('未知输入阻止提交，已归类无关B允许A提交，同A补充使旧版本失效', async () => {
