@@ -12,37 +12,33 @@ import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-
 import { handleRequest } from '../packages/dingtalk-dsh-assistant/http.js'
 
 const start = Date.parse('2026-10-16T10:00:00Z'), iso = minute => new Date(start + minute * 60000).toISOString()
-test('card elapsed sums open lifecycle intervals, counts waiting/paused time and freezes true terminal timestamps', t => {
-  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(iso(1000)) })
+test('card total elapsed includes completed-to-reopen gaps and all waiting/paused time', () => {
   const task = { taskId: 't', createdAt: iso(0), updatedAt: iso(999), status: 'active', control: 'paused', runSequence: 2, requirementRevision: 2 }
-  const history = [{ sequence: 2, at: iso(60), completedAt: iso(10) }]
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task, history)), { complete: true, closedMs: 600000, activeSince: iso(60) })
+  assert.deepEqual(projectTaskElapsed(task, Date.parse(iso(70))), { complete: true, closedMs: 0, activeSince: iso(0) })
   const ended = { ...task, status: 'completed', completion: { at: iso(75), requirementRevision: 2 } }
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(ended, history), ended), { complete: true, closedMs: 1500000, activeSince: null })
+  assert.deepEqual(projectTaskElapsed(ended, Date.parse(iso(100))), { complete: true, closedMs: 75 * 60000, activeSince: null })
+  assert.deepEqual(projectTaskElapsed({ ...ended, updatedAt: iso(9999) }, Date.parse(iso(1000))), projectTaskElapsed(ended, Date.parse(iso(100))))
   const cancelled = { ...task, control: 'cancelled', cancelledAt: iso(80) }
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(cancelled, history), cancelled), { complete: true, closedMs: 1800000, activeSince: null })
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle({ ...ended, updatedAt: iso(9999) }, history), ended), projectTaskElapsed(projectTaskLifecycle(ended, history), ended))
+  assert.deepEqual(projectTaskElapsed(cancelled, Date.parse(iso(100))), { complete: true, closedMs: 80 * 60000, activeSince: null })
+  assert.deepEqual(projectTaskElapsed({ ...cancelled, status: 'cancelled' }, Date.parse(iso(100))), projectTaskElapsed(cancelled, Date.parse(iso(100))))
 })
 
-test('card elapsed rejects stale current completion revisions and future terminal time', () => {
-  const task = { taskId: 't', createdAt: iso(0), status: 'completed', runSequence: 1, requirementRevision: 2,
-    completion: { at: iso(10), requirementRevision: 1 } }
+test('card total elapsed rejects missing, stale, future, contradictory or reversed endpoint evidence', () => {
+  const task = { createdAt: iso(0), status: 'completed', control: 'active', requirementRevision: 2, completion: { at: iso(10), requirementRevision: 2 } }
   const unknown = { complete: false, closedMs: null, activeSince: null }
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task), task, Date.parse(iso(20))), unknown)
-  task.completion.requirementRevision = 2
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task), task, Date.parse(iso(20))), { complete: true, closedMs: 600000, activeSince: null })
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task), task, Date.parse(iso(5))), unknown)
-})
-
-test('card elapsed does not turn incomplete, overlapping or missing terminal evidence into zero or an estimate', () => {
-  const unknown = { complete: false, closedMs: null, activeSince: null }
-  const task = { createdAt: iso(0), status: 'completed', runSequence: 2, updatedAt: iso(100) }
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle(task)), unknown)
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle({ ...task, runSequence: 1 })), unknown)
-  assert.deepEqual(projectTaskElapsed(projectTaskLifecycle({ ...task, status: 'failed', runSequence: 1 })), unknown)
-  assert.deepEqual(projectTaskElapsed({ complete: true, active: false, status: 'completed', endedAt: iso(30), segments: [
-    { startedAt: iso(0), endedAt: iso(20), active: false }, { startedAt: iso(10), endedAt: iso(30), active: false },
-  ] }, { requirementRevision: 1, completion: { at: iso(30), requirementRevision: 1 } }, Date.parse(iso(50))), unknown)
+  for (const patch of [{ createdAt: null }, { createdAt: 'invalid' }, { createdAt: iso(30) },
+    { completion: null }, { completion: { at: iso(10), requirementRevision: 1 } },
+    { completion: { at: iso(30), requirementRevision: 2 } }, { status: 'failed' },
+    { control: 'cancelled', cancelledAt: iso(10) }, { cancelledAt: iso(10) },
+    { status: 'cancelled', cancelledAt: iso(10) }, { status: 'active' },
+    { status: 'active', completion: null, cancelledAt: iso(10) },
+    { status: 'active', control: 'unknown', completion: null },
+    { status: 'cancelled', cancelledAt: null }, { status: 'cancelled', cancelledAt: iso(30) }]) {
+    assert.deepEqual(projectTaskElapsed({ ...task, ...patch }, Date.parse(iso(20))), unknown, JSON.stringify(patch))
+  }
+  assert.deepEqual(projectTaskElapsed(task, NaN), unknown)
+  assert.deepEqual(projectTaskElapsed({ ...task, completion: null, updatedAt: iso(10) }, Date.parse(iso(20))), unknown)
+  assert.deepEqual(projectTaskElapsed({ ...task, completion: { at: iso(0), requirementRevision: 2 } }, Date.parse(iso(20))), { complete: true, closedMs: 0, activeSince: null })
 })
 async function fixture(t) {
   t.mock.timers.enable({ apis: ['Date'], now: start })

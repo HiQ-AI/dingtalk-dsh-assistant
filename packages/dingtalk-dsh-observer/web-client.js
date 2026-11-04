@@ -185,6 +185,10 @@ window.__ModuleLoader__.load({
       [data-dingtalk-observer] .observer-task-output-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; }
       [data-dingtalk-observer] .observer-task-overview { padding: 28px 0 24px; }
       [data-dingtalk-observer] .observer-task-detail :is(summary, a):hover { color: ${colors.accent}; }
+      .observer-card-loading { display: grid; grid-template-columns: 14px minmax(0, 1fr); align-items: center; gap: 7px; min-height: 28px; padding: 6px 0; box-sizing: border-box; font-size: 11px; line-height: 1.5; }
+      .observer-card-loading-spinner { display: block; width: 12px; height: 12px; animation: observer-card-loading-spin 900ms linear infinite; }
+      @keyframes observer-card-loading-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .observer-card-loading-spinner { animation: none; } }
       @media (prefers-reduced-motion: reduce) { [data-dingtalk-observer] article { transition: none !important; } }
       @media (forced-colors: active) {
         [data-dingtalk-observer] { scrollbar-color: auto; }
@@ -855,17 +859,17 @@ window.__ModuleLoader__.load({
         primaryAction ? null : entry, failure)
     }
     const taskCardElapsed = (timing, now) => {
-      const explanation = '累计任务处理历时，含排队、等待和暂停；不含结束至重开的间隔，不累加并行执行。d为天，h为小时，m为分钟。'
+      const explanation = '任务从创建到当前或最终结束的总历时，含排队、等待、暂停及完成至重开的间隔，不累加并行执行。d为天，h为小时，m为分钟。'
       const start = typeof timing?.activeSince === 'string' ? Date.parse(timing.activeSince) : NaN
       const active = Number.isFinite(start)
       const elapsed = timing?.closedMs + (active ? now - start : 0)
       if (timing?.complete !== true || !Number.isSafeInteger(timing.closedMs) || timing.closedMs < 0
         || timing.activeSince !== null && !active || active && (!Number.isFinite(now) || now < start)
-        || !Number.isSafeInteger(elapsed) || elapsed < 0) return { value: '—', description: `累计历时未知：缺少可靠的完整起止证据或时间异常。${explanation}` }
+        || !Number.isSafeInteger(elapsed) || elapsed < 0) return { value: '—', description: `总历时未知：缺少可靠的完整起止证据或时间异常。${explanation}` }
       const minutes = Math.floor(elapsed / 60000), hours = Math.floor(minutes / 60), days = Math.floor(hours / 24)
       const value = days ? `${days}d${hours % 24 ? ` ${hours % 24}h` : ''}`
         : hours ? `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ''}` : minutes ? `${minutes}m` : '<1m'
-      return { value, description: `累计历时 ${value}${active ? '（进行中）' : '（已结束）'}。${explanation}` }
+      return { value, description: `总历时 ${value}${active ? '（进行中）' : '（已结束）'}。${explanation}` }
     }
     function ExecutionSessionDuration({ timing }) {
       const [clock, setClock] = useState(Date.now)
@@ -1653,7 +1657,7 @@ window.__ModuleLoader__.load({
       const visiblePage = page?.key === pageKey ? page : undefined
       const sessions = visiblePage?.executions || [], session = taskSession(task)
       return React.createElement('div', { 'aria-busy': !visiblePage && !error, style: { minHeight: Math.max(1, Math.min(10, Number(task.executionCount) || sessions.length)) * 28, fontSize: 11 } },
-        error ? React.createElement('p',{role:'alert',style:{margin:'6px 0',color:colors.danger}},`读取执行记录失败：${error}`, React.createElement(Button,{type:'button',variant:'outline',size:'sm',onClick:()=>setRetry(value=>value+1)},'重试')) : !visiblePage ? React.createElement('span',{role:'status','aria-label':'正在加载执行会话',style:{display:'inline-flex',alignItems:'center',gap:6,minHeight:28,color:colors.muted,fontSize:11}},React.createElement(StateDot,{state:'ongoing',size:7}),'加载中') : null,
+        error ? React.createElement('p',{role:'alert',style:{margin:'6px 0',color:colors.danger}},`读取执行记录失败：${error}`, React.createElement(Button,{type:'button',variant:'outline',size:'sm',onClick:()=>setRetry(value=>value+1)},'重试')) : !visiblePage ? React.createElement('span',{className:'observer-card-loading',role:'status','aria-label':'正在加载执行会话',style:{color:colors.muted}},React.createElement('svg',{className:'observer-card-loading-spinner',width:12,height:12,viewBox:'0 0 16 16',fill:'none',stroke:'currentColor',strokeWidth:1.5,'aria-hidden':true},React.createElement('circle',{cx:8,cy:8,r:6,opacity:0.2}),React.createElement('path',{d:'M8 2a6 6 0 0 1 6 6',strokeLinecap:'round'})),React.createElement('span',null,'加载中')) : null,
         visiblePage && !sessions.length ? React.createElement('p',{role:'status',style:{margin:'6px 0',color:colors.muted}},'暂无执行记录') : null,
         React.createElement('div', { style: { display: 'grid', gap: 2, paddingTop: 6 } }, ...sessions.map(execution => {
               const done = ['succeeded', 'completed'].includes(execution.status)
