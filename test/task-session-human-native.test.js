@@ -702,14 +702,17 @@ test('Web answer recalls its delivered operator notification once without recall
 }))
 
 
-test('Topic-scoped waiting keeps unrelated progress, inspection and recovery live and resumes its original member after answer', { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+test('anonymous missing-original-file wait preserves authorized repair progress, inspection and same-session recovery', { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
   const release = Promise.withResolvers(), unrelated = Promise.withResolvers(), failProvider = Promise.withResolvers()
   t.onCancel(() => { release.resolve(); unrelated.resolve(); failProvider.resolve() }); t.after(() => { release.resolve(); unrelated.resolve(); failProvider.resolve() })
   let original, topicId, asked = false, resumed = false, continuation = false, otherSteps = 0, sawInspection = false, sawOtherResult = false, attemptedPremature = false
   const reviewed = new Set()
   const rounds = new Map(), wait = summary => call('task_session_submit', { decision: { action: 'wait', summary, evidence: [], limitations: [] } })
-  const answer = '沿现有 UAT 验证入口完成，只读核验，不新建数据库或修改基础设施。'
+  const answer = '原件已通过原受管入口提供；仅只读复现，不修改权限、共享数据或部署。'
   const coordination = requestHuman('topic'); delete coordination.args.audience
+  coordination.args.reason = '源码已确认出口契约缺陷；只有原件特定错误复现缺少输入'
+  coordination.args.question = '请由Topic核对原需求负责人补充原件；可独立推进的授权内修复继续，不索取账号或扩大权限'
+  coordination.args.evidence = ['已确认的入口及产物契约', '原件复现尚未执行']
   const h = await fixture(t, async request => {
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
     if (input.trigger === 'task-facts') return topicTaskCalls(request)
@@ -733,26 +736,26 @@ test('Topic-scoped waiting keeps unrelated progress, inspection and recovery liv
     }
     if (routed) return routed
     if (!names.includes('task_delegate')) {
-      if (input.objective === '独立核对另一成果') {
+      if (input.objective === '修复已确认的导出契约') {
         otherSteps++
-        if (otherSteps === 1) { await unrelated.promise; return [call('execution_report_progress', { plan: '独立成果核验，不依赖A的路线', summary: 'B在A待答期间继续推进', evidence: ['B实际阶段成果'], activity: '继续独立核验' })] }
+        if (otherSteps === 1) { await unrelated.promise; return [call('execution_report_progress', { plan: '修复不依赖原件，不扩大共享写入或部署权限', summary: '原件待答期间按原授权继续修复已确认契约', evidence: ['B实际阶段成果'], activity: '继续独立核验' })] }
         if (otherSteps === 2) { await failProvider.promise; return [] }
-        return [call('execution_submit', { output: { status: 'completed', summary: '另一成果沿原生技术恢复完成', evidence: ['独立结果'], limitations: [], artifacts: [] } })]
+        return [call('execution_submit', { output: { status: 'completed', summary: '已确认的导出契约修复及隔离验证完成，原件验收仍待补证', evidence: ['独立结果'], limitations: [], artifacts: [] } })]
       }
       if (input.context?.includes(answer)) { resumed = true; return [call('execution_submit', { output: { status: 'completed', summary: '按原范围沿现有入口完成', evidence: [answer], limitations: [], artifacts: [] } })] }
       const count = rounds.get(input.executionId) ?? 0; rounds.set(input.executionId, count + 1)
-      if (!count) return [call('execution_report_progress', { plan: '核验业务成果', summary: '外部环境绕障不能推进原验收，需要另选路线', evidence: ['已有成果保留'], activity: '等待安全停止' })]
+      if (!count) return [call('execution_report_progress', { plan: '核验原件特定报错', summary: '原件缺失只阻塞精确复现；已确认的出口契约可独立修复', evidence: ['已有成果保留'], activity: '等待安全停止' })]
       await release.promise; return []
     }
-    if (!input.executions.length) return [call('task_delegate', { key: 'original', objective: '核验业务成果，不建设基础设施' }),
-      call('task_delegate', { key: 'independent', objective: '独立核对另一成果' }), wait('两个独立目标并行')]
+    if (!input.executions.length) return [call('task_delegate', { key: 'original', objective: '仅用原件只读复现，不修改权限或业务数据' }),
+      call('task_delegate', { key: 'independent', objective: '修复已确认的导出契约' }), wait('两个独立目标并行')]
     const execution = input.executions.find(item => item.key === 'original')
     if (input.humanReview) return [call('task_human_resolve', { requestId: input.humanReview.requestId, sourceId: input.humanReview.sourceIds[0],
       reason: 'Topic已将同一问题的真实答复与只读限制回流，未扩大范围', evidence: [answer] }), wait('保存真实答复，下一轮恢复原执行')]
     if (!asked) { asked = true; coordination.args.executionIds = [execution.executionId]; return [call('task_execution_cancel', { executionId: execution.executionId, reason: '停止为当前路线新增的环境绕障，保留成果及原会话' }), coordination] }
     if (input.task.humanRequests[0]?.status === 'waiting-reply') {
       if (input.executions.some(item => item.key === 'independent' && item.status === 'succeeded')) sawOtherResult = true
-      if (!attemptedPremature) { attemptedPremature = true; return [call('task_delegate', { executionId: execution.executionId, key: 'premature-resume', objective: '核验业务成果，不建设基础设施' })] }
+      if (!attemptedPremature) { attemptedPremature = true; return [call('task_delegate', { executionId: execution.executionId, key: 'premature-resume', objective: '仅用原件只读复现，不修改权限或业务数据' })] }
       const reviews = input.wakes.filter(wake => wake.kind === 'execution.progress.review')
       if (reviews.length) {
         sawInspection = true
@@ -762,10 +765,10 @@ test('Topic-scoped waiting keeps unrelated progress, inspection and recovery liv
       return [wait('A等待Topic，继续核对B的实际动作与结果')]
     }
     if (input.task.humanRequests[0]?.status === 'answered' && !continuation) { continuation = true; return [call('task_delegate', {
-      executionId: execution.executionId, key: 'resume-approved-route', objective: '核验业务成果，不建设基础设施', context: answer }), wait('原会话沿已核对路线继续')] }
+      executionId: execution.executionId, key: 'resume-approved-route', objective: '仅用原件只读复现，不修改权限或业务数据', context: answer }), wait('原会话沿已核对路线继续')] }
     return [wait('保留原执行结果与独立成员成果')]
   }, { providerError: request => {
-    try { return latestInput(request)?.objective === '独立核对另一成果' && otherSteps === 2
+    try { return latestInput(request)?.objective === '修复已确认的导出契约' && otherSteps === 2
       ? { code: 'PI_AI_ERROR', message: 'Codex error: Our servers are currently overloaded. Please try again later.' } : null }
     catch { return null } // Auxiliary summary/context requests have no execution envelope.
   } })
