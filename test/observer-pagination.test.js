@@ -18,7 +18,7 @@ function fixture(t,{archives=false}={}) {
  return {db,put,page:q=>observerPage(db,q,'test')}
 }
 
-test('task cards batch only selected-page reopen receipts and never project private results or execution time', t => {
+test('task cards use creation-to-final wall time without reading reopen receipts or execution time', t => {
  t.mock.timers.enable({apis:['Date'],now:Date.UTC(2026,10,3,2)})
  const {db,put,page}=fixture(t,{archives:true})
  db.exec('CREATE TABLE dynamic_receipts(id TEXT PRIMARY KEY,body TEXT)')
@@ -36,17 +36,16 @@ test('task cards batch only selected-page reopen receipts and never project priv
  const result=observerPage(proxy,{collection:'tasks',offset:0,limit:1},'test')
  assert.equal(result.items[0].taskId,'t')
  assert.equal(result.items[0].executionCount,2)
- assert.deepEqual(result.items[0].elapsedTiming,{complete:true,closedMs:20*60000,activeSince:null})
+ assert.deepEqual(result.items[0].elapsedTiming,{complete:true,closedMs:50*60000,activeSince:null})
  assert.equal(JSON.stringify(result.items[0].elapsedTiming).includes('PRIVATE'),false)
- assert.equal(queries.filter(sql=>sql.includes('FROM dynamic_wakes')).length,1)
- assert.equal(queries.filter(sql=>sql.includes('FROM dynamic_receipts r')).length,1)
- assert.ok(queries.find(sql=>sql.includes('FROM dynamic_receipts r')).includes('WHERE r.id IN'))
+ assert.equal(queries.filter(sql=>sql.includes('FROM dynamic_wakes')).length,0)
+ assert.equal(queries.filter(sql=>sql.includes('FROM dynamic_receipts r')).length,0)
  db.prepare('DELETE FROM dynamic_receipts WHERE id=?').run('complete:t:1')
- assert.deepEqual(page({collection:'tasks',limit:1}).items[0].elapsedTiming,{complete:false,closedMs:null,activeSince:null})
- // Archived lifecycle receipts remain readable through their immutable stubs.
+ assert.deepEqual(page({collection:'tasks',limit:1}).items[0].elapsedTiming,{complete:true,closedMs:50*60000,activeSince:null})
+ // Missing or archived historical receipts do not change the current task endpoints.
  put('receipts','complete:t:1',{archivedTaskId:'t'})
  db.prepare('INSERT INTO dynamic_archived_receipts VALUES(?,?,?)').run('complete:t:1',1,JSON.stringify({result:{task:{taskId:'t',status:'completed',requirementRevision:1,runSequence:1,completion:{at:iso(10),requirementRevision:1}}}}))
- assert.equal(page({collection:'tasks',limit:1}).items[0].elapsedTiming.closedMs,20*60000)
+ assert.equal(page({collection:'tasks',limit:1}).items[0].elapsedTiming.closedMs,50*60000)
 })
 test('task page joins only selected topic names once per group/id without reading topic history', async t => {
  const {put,page}=fixture(t)

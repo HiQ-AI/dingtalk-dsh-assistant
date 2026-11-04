@@ -99,27 +99,28 @@ export function projectTaskLifecycle(task, history = []) {
   }
   return { startedAt, endedAt, active: !terminal, status: task.status, complete, segments, events }
 }
-// Compact card projection: sum wall-clock open periods, never execution rows.
-export function projectTaskElapsed(lifecycle, task, now = Date.now()) {
+// Card total elapsed is one wall-clock span, including completed-to-reopen gaps.
+// Only the current task's creation and true final endpoint are needed; history
+// completeness and parallel execution duration do not affect this projection.
+export function projectTaskElapsed(task, now = Date.now()) {
   const unknown = { complete: false, closedMs: null, activeSince: null }
-  if (!lifecycle?.complete || !['active', 'completed', 'cancelled'].includes(lifecycle.status) || !lifecycle.segments?.length) return unknown
-  if (!Number.isFinite(now) || lifecycle.status === 'completed' && (!positive(task?.requirementRevision)
-    || task.completion?.requirementRevision !== task.requirementRevision || task.completion?.at !== lifecycle.endedAt)) return unknown
-  let closedMs = 0, previousEnd = null, activeSince = null
-  for (const [index, segment] of lifecycle.segments.entries()) {
-    const start = timestamp(segment.startedAt), end = timestamp(segment.endedAt)
-    if (!start || Date.parse(start) > now || previousEnd !== null && Date.parse(start) < previousEnd) return unknown
-    if (segment.active === true) {
-      if (!lifecycle.active || index !== lifecycle.segments.length - 1 || segment.endedAt !== null) return unknown
-      activeSince = start
-    } else {
-      if (!end || Date.parse(end) > now || Date.parse(end) < Date.parse(start)) return unknown
-      closedMs += Date.parse(end) - Date.parse(start)
-      previousEnd = Date.parse(end)
-    }
+  const start = timestamp(task?.createdAt)
+  if (!start || !Number.isFinite(now) || Date.parse(start) > now
+    || !['active', 'completed', 'cancelled'].includes(task.status)) return unknown
+  const cancelled = task.status === 'cancelled' || task.control === 'cancelled'
+  if (task.status === 'completed' && (cancelled || task.cancelledAt != null)
+    || cancelled && task.completion != null) return unknown
+  const terminal = task.status === 'completed' || cancelled
+  if (!terminal) {
+    if (!['active', 'paused'].includes(task.control) || task.completion != null || task.cancelledAt != null) return unknown
+    return { complete: true, closedMs: 0, activeSince: start }
   }
-  if (!Number.isSafeInteger(closedMs) || closedMs < 0 || lifecycle.active !== (activeSince !== null)) return unknown
-  return { complete: true, closedMs, activeSince }
+  if (task.status === 'completed' && (!positive(task.requirementRevision)
+    || task.completion?.requirementRevision !== task.requirementRevision)) return unknown
+  const end = timestamp(cancelled ? task.cancelledAt : task.completion?.at)
+  const elapsed = end ? Date.parse(end) - Date.parse(start) : NaN
+  if (!end || Date.parse(end) > now || !Number.isSafeInteger(elapsed) || elapsed < 0) return unknown
+  return { complete: true, closedMs: elapsed, activeSince: null }
 }
 
 // Read-only projection. Wakes are durable business milestones, never tool-log activity

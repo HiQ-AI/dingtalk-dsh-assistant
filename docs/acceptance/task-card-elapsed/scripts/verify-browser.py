@@ -57,7 +57,9 @@ def task(identity, state, minutes, active=False):
 tasks = [task('pending', 'queued', 0.25, True), task('running', 'running', 63, True),
          task('waiting', 'waiting', 35, True), task('completed', 'completed', 243),
          task('days', 'completed', 1560), {**task('unknown', 'completed', 0), 'elapsedTiming': {'complete': False, 'closedMs': None, 'activeSince': None}}]
-modes = {'freeze': False, 'fail': False}
+tasks[3]['executionCount'] = 2
+modes = {'freeze': False, 'fail': False, 'executions_ready': False}
+execution_requests = []
 requests, unexpected, archive_calls, errors = [], [], [], []
 server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -80,6 +82,12 @@ try:
                     return route.fulfill(json={**tasks[3], 'archivedAt': iso(now), 'archivedBy': 'synthetic'})
                 if request.method != 'GET':
                     unexpected.append('mutation'); return route.abort()
+                if url.path == '/state/tasks/completed/executions':
+                    assert parse_qs(url.query) == {'summary':['true'],'offset':['0'],'limit':['10']}
+                    if modes['executions_ready']:
+                        return route.fulfill(json={'executions':[],'total':0,'offset':0,'limit':10})
+                    execution_requests.append(route)
+                    return
                 if url.path == '/health':
                     return route.fulfill(json={'status': 'ok'})
                 if url.path == '/state/groups':
@@ -118,6 +126,30 @@ try:
             assert card('completed').locator('.observer-task-elapsed').inner_text() == '· 4h 3m'
             assert card('completed').locator('.observer-task-footer').bounding_box()['height'] == footer_height
             assert not any('/detail' in path or '/executions' in path for method,path in requests)
+            # Hold the first execution page to inspect the exact reported loading state.
+            card('completed').locator('summary').click()
+            loading = card('completed').get_by_role('status', name='正在加载执行会话')
+            loading.wait_for()
+            spinner = loading.locator('svg')
+            assert spinner.bounding_box()['width'] == spinner.bounding_box()['height'] == 12
+            assert spinner.evaluate("el=>getComputedStyle(el).animationName") == 'none'
+            assert loading.evaluate("el=>getComputedStyle(el).gridTemplateColumns.split(' ')[0]") == '14px'
+            assert len(execution_requests) == 1
+            page.emulate_media(reduced_motion='no-preference')
+            assert spinner.evaluate("el=>getComputedStyle(el).animationName") == 'observer-card-loading-spin'
+            card('completed').screenshot(path=str(args.output / 'loading-narrow.png'))
+            page.emulate_media(reduced_motion='reduce')
+            execution_requests.pop().fulfill(status=503,json={'error':'synthetic execution failure'})
+            card('completed').get_by_role('alert').wait_for()
+            assert loading.count() == 0
+            card('completed').get_by_role('button',name='重试',exact=True).click()
+            # Existing failure stays visible until the retry succeeds.
+            page.wait_for_timeout(50)
+            assert len(execution_requests) == 1
+            modes['executions_ready'] = True
+            execution_requests.pop().fulfill(json={'executions':[],'total':0,'offset':0,'limit':10})
+            card('completed').get_by_text('暂无执行记录',exact=True).wait_for()
+            assert loading.count() == 0
             modes['fail'] = True
             page.clock.run_for(6000)
             assert card('completed').locator('.observer-task-activity').inner_text() == '2026/11/3 19:21:44'
@@ -130,7 +162,7 @@ try:
             page.get_by_text('已归档：completed', exact=True).wait_for()
             assert len(archive_calls) == 1 and not unexpected and not errors, (archive_calls, unexpected, errors)
             result = {'passed': True, 'cards': 6, 'requests': len(requests), 'oneSharedClock': True,
-                      'dateUnchanged': True, 'archiveCalls': len(archive_calls), 'unexpected': unexpected, 'pageErrors': errors,
+                      'dateUnchanged': True, 'loadingGeometry': True, 'reducedMotion': True, 'loadingRetry': True, 'archiveCalls': len(archive_calls), 'unexpected': unexpected, 'pageErrors': errors,
                       'limits': 'real Observer and React; synthetic HTTP and host primitive adapters; no authenticated DSH E2E'}
             (args.output / 'results.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), 'utf-8')
             print(json.dumps(result, ensure_ascii=False))
