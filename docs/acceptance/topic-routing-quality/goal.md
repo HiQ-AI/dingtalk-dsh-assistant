@@ -42,7 +42,6 @@
 | SG4 | A根因修复、C正常恢复与D独立核验 | 当前固定14条经正式处理取得真实业务终态；必要阻断依赖不扩授权 | DONE：原14同版本canonical各唯一、来源完成14/pending0/完成决策覆盖14；842既有静默纠正另计。T1当前req4/control4/lease80完成并排空，input9成功且原分析产物3份经D核验，完成fact对应回复delivered/attempt1；T2当前req1完成并排空，真实用户确认依据及完成fact静默投影已核，不冒认助手修复 | 私有postCorrectionBusiness.finalReadback/D06:56:22.495Z；SHA256 4c7a31c1；round-17.md/matrix.csv已归档，原历史列保留 |
 | SG5 | Lead合并部署、C产物、D核验、E证据 | 合并代码、双包、原生退出、功能及独立回读 | 第15轮部署/fixture交付已完成；本次PR #343双包更新与独立安装/健康核验通过，第16轮证据保留原14条BLOCKED和测试限制，不等同业务处理完成 | PR #342/#343 MERGED；round-15历史、round-16.md、matrix.csv |
 | SG6 | A不明确输入分流、C隔离联调、D独立审查 | 职责外或真实发问闭环；合法scope仅阻断相关Topic；问句精确回链；旧units/效果及错误边界保持 | PAUSED_AT_DEPLOYMENT：产品1ca72d3c经PR #344合并0e52a2ff；runtime210/210、store定向2/2、原生13/13、实际包smoke14/14通过，merge复打双包SHA完全相同。未安装；用户要求先恢复原服务，暂停新版本部署 | round-17仅SG4；SG6候选Assistant eef7295f、Observer84e11494；round-18.md/matrix.csv已集中归档，恢复通过不冒称新规则上线 |
-
 | SG7 | 一级初诊回复与有界同会话追加 | 一级初步回复、多Topic分开发且精确引用；原会话steer、每批≤15、溢出下批；二级与Task后续事实不冒领/不重复 | IN_PROGRESS：用户已明确新合同，现状与方案取证中；实施前复用现有spec留决策快照，原团队分工，运行服务保持旧版不动 | 本工作树base0e52a2ff；round-18为上阶段结果，不当作SG7已验 |
 
 ## 当前检查点
