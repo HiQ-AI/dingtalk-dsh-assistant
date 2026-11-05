@@ -107,14 +107,25 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
     pending.add(disposal)
     entry.disposal = disposal
   }
-  function dispatch(request, message) {
+  function dispatch(request, message, { inFlightRouteUpdate = false } = {}) {
+    const running = active.get(request.groupId)
+    if (inFlightRouteUpdate && !closed && running?.request === request && triageRole(request) === 'route'
+      && running.active && running.slotDispatched && isCurrent(request) && !running.yieldRequested && !request.routingPaused) {
+      const agent = running.handle.agent
+      const exists = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].some(item => item.id === message.id)
+        || agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data?.id === message.id)
+      try {
+        if (!exists) agent.steer(message)
+        return Promise.resolve(agent)
+      } catch (error) { return Promise.reject(error) }
+    }
     const queuedAt = Date.now()
     let resolve, reject
     const delivered = new Promise((yes, no) => { resolve = yes; reject = no })
     const groupId = request.groupId
     const queue = queues.get(groupId) ?? []
     queues.set(groupId, queue)
-    const job = { request, message, resolve, reject, queuedAt, spanId: `queue:${randomUUID()}` }
+    const job = { request, message, resolve, reject, queuedAt, spanId: `queue:${randomUUID()}`, inFlightRouteUpdate }
     void reportStage(request, { spanId: job.spanId, stage: 'queue', requestId: request.requestId, attempt: request.attempt ?? 0,
       startedAt: new Date(queuedAt).toISOString(), completedAt: null })
     if (coordinationRole(request) === 'route') {
@@ -164,6 +175,15 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
               if (eventPrefix) agent.session.append(`${eventPrefix}/coordination-dispatched`, { requestId: request.requestId, queuedAt, dispatchedAt: Date.now(), role: entry.role, fairnessTurn, priorRouteBurst, queueDepth: queue.length })
               agent.steer(message)
             }
+            entry.slotDispatched = true
+            for (let index = 0; index < queue.length;) {
+              const update = queue[index]
+              if (!update.inFlightRouteUpdate || update.request !== request || !entry.active || !isCurrent(request) || entry.yieldRequested || request.routingPaused) { index++; continue }
+              queue.splice(index, 1)
+              void reportStage(request, { spanId: update.spanId, stage: 'queue', requestId: request.requestId,
+                attempt: request.attempt ?? 0, startedAt: new Date(update.queuedAt).toISOString(), completedAt: new Date().toISOString() })
+              dispatch(request, update.message, { inFlightRouteUpdate: true }).then(update.resolve, update.reject)
+            }
             resolve(agent)
             await Promise.race([agent.whenIdle(), released])
             if (entry.release === release) entry.release = undefined
@@ -177,7 +197,7 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
             }
             if (!queue.some(item => keyOf(item.request) === keyOf(request))) settle(entry)
           } catch (error) { settle(entry ?? entries.get(keyOf(request))); reject(error); if (error.message !== 'coordination_request_inactive') onError(Object.assign(error, { coordinationGroupId: groupId })) }
-          finally { if (active.get(groupId) === entry) active.delete(groupId) }
+          finally { if (entry) entry.slotDispatched = false; if (active.get(groupId) === entry) active.delete(groupId) }
         }
         tails.delete(groupId); queues.delete(groupId)
       })

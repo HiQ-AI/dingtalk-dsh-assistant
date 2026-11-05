@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
-import { openResidentStore, reconcileReplacementGraph } from '../packages/dingtalk-dsh-assistant/store.js'
+import { openResidentStore, reconcileReplacementGraph, routingRecoveryBoundary } from '../packages/dingtalk-dsh-assistant/store.js'
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
 import { topicSummaryContext } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 
@@ -156,6 +156,96 @@ test('澄清引用仅凭同群精确送达及原来源代次恢复待判', async
   const group = store.getGroup('g')
   assert.equal(group.messages.find(item => item.messageId === 'source').routingRecoveryMessageId, 'answer-question')
   assert.equal(group.messages.find(item => item.messageId === 'answer-question').quotedMessage.messageId, 'question-message')
+  await store.reconcileMessageDeliveries({ groupId: 'g' })
+  assert.equal(store.getGroup('g').messages.find(item => item.messageId === 'source').routingRecoveryMessageId, 'answer-question')
+  await store.close()
+})
+
+test('答复变更直接引用只保留当前恢复边，存量过期边按群恢复且保留历史', async () => {
+  const { store, snapshot } = await setup()
+  const originals = Array.from({ length: 15 }, (_, index) => `held-${index}`)
+  for (const id of originals) await ingest(store, id)
+  await store.routeMessages({ groupId: 'g', routeId: 'holds-many', routingRevision: store.getGroup('g').routingRevision,
+    routes: originals.map(messageId => ({ messageId, messageVersion: 1, deferred: { reason: '等待补充' } })) })
+  for (const id of originals) await ingest(store, 'answer-many', { quotedMessage: { messageId: id, content: id } })
+  let group = store.getGroup('g')
+  assert.deepEqual(group.messages.filter(item => item.routingRecoveryMessageId === 'answer-many').map(item => item.messageId), ['held-14'])
+  assert.equal(group.messages.filter(item => originals.includes(item.messageId) && item.routingStatus === 'pending').length, 15)
+  assert.equal(group.messages.find(item => item.messageId === 'answer-many').facts.length, 14)
+  await ingest(store, 'answer-many', { quotedMessage: { messageId: 'held-14', content: '补充原文' } })
+  assert.equal(store.getGroup('g').messages.find(item => item.messageId === 'held-14').routingRecoveryMessageId, 'answer-many')
+  await ingest(store, 'answer-many', { quotedMessage: { messageId: 'held-0', content: 'held-0' } })
+  assert.deepEqual(store.getGroup('g').messages.filter(item => item.routingRecoveryMessageId === 'answer-many').map(item => item.messageId), ['held-0'])
+  await ingest(store, 'answer-many', { quotedMessage: { messageId: 'held-14', content: 'held-14' } })
+  assert.deepEqual(store.getGroup('g').messages.filter(item => item.routingRecoveryMessageId === 'answer-many').map(item => item.messageId), ['held-14'])
+  await store.close()
+  const record = snapshot.tables.groups.g
+  record.messages.find(item => item.messageId === 'held-0').routingRecoveryMessageId = 'answer-many'
+  const revision = record.routingRevision
+  const reopened = await openResidentStore(facility(snapshot))
+  try {
+    await reopened.reconcileMessageDeliveries({ groupId: 'g' })
+    group = reopened.getGroup('g')
+    assert.equal(group.routingRevision, revision + 1)
+    assert.equal(group.messages.find(item => item.messageId === 'held-0').routingRecoveryMessageId, undefined)
+    assert.equal(group.messages.find(item => item.messageId === 'held-0').routingStatus, 'pending')
+    assert.equal(group.messages.find(item => item.messageId === 'held-14').routingRecoveryMessageId, 'answer-many')
+    const stableRevision = group.routingRevision
+    await reopened.reconcileMessageDeliveries({ groupId: 'g' })
+    assert.equal(reopened.getGroup('g').routingRevision, stableRevision)
+    const answer = group.messages.find(item => item.messageId === 'answer-many')
+    await assert.rejects(reopened.routeMessages({ groupId: 'g', routeId: 'partial-current', routingRevision: stableRevision,
+      routes: [{ messageId: 'held-14', messageVersion: 1, topics: [], reason: '需要共同处理' }] }), /topic_routing_recovery_incomplete/)
+    await reopened.routeMessages({ groupId: 'g', routeId: 'current-pair', routingRevision: stableRevision,
+      routes: [{ messageId: 'held-14', messageVersion: 1, topics: [], reason: '一起处理' }, { messageId: 'answer-many', messageVersion: answer.messageVersion, topics: [], reason: '一起处理' }] })
+  } finally { await reopened.close() }
+})
+
+for (const sourceFirst of [true, false]) test(`恢复关系跨批保存并在两端处理后闭合：原文先处理=${sourceFirst}`, async () => {
+  const { store, snapshot } = await setup()
+  await ingest(store, 'boundary-source')
+  await store.routeMessages({ groupId: 'g', routeId: 'boundary-hold', routingRevision: store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'boundary-source', messageVersion: 1, deferred: { reason: '需补充' } }] })
+  await ingest(store, 'boundary-answer', { quotedMessage: { messageId: 'boundary-source', content: 'boundary-source' } })
+  const first = sourceFirst ? 'boundary-source' : 'boundary-answer', second = sourceFirst ? 'boundary-answer' : 'boundary-source'
+  const initial = store.getGroup('g'), boundary = routingRecoveryBoundary(initial, [first])
+  const routeOne = { groupId: 'g', routeId: 'boundary-first', routingRevision: initial.routingRevision,
+    routes: [{ messageId: first, messageVersion: 1, topics: [], reason: '独立阶段处理' }], recoveryBoundary: boundary }
+  await assert.rejects(store.routeMessages(routeOne), /topic_routing_recovery_incomplete/)
+  const wrong = structuredClone(boundary); wrong[0].answerEpoch++
+  await assert.rejects(store.routeMessages({ ...routeOne, preflight() {}, recoveryBoundary: wrong }), /topic_routing_recovery_stale/)
+  const result = await store.routeMessages({ ...routeOne, preflight() {} })
+  assert.deepEqual(result.recoveryBoundary, boundary)
+  await store.close()
+  const reopened = await openResidentStore(facility(snapshot))
+  try {
+    const group = reopened.getGroup('g'), nextBoundary = routingRecoveryBoundary(group, [second])
+    assert.equal(nextBoundary.length, 1)
+    await reopened.routeMessages({ groupId: 'g', routeId: 'boundary-second', routingRevision: group.routingRevision,
+      routes: [{ messageId: second, messageVersion: 1, topics: [], reason: '处理剩余来源' }], recoveryBoundary: nextBoundary, preflight() {} })
+    assert.deepEqual(routingRecoveryBoundary(reopened.getGroup('g'), [second]), [])
+    assert.equal(reopened.getGroup('g').messages.filter(message => message.routingStatus === 'routed').length, 2)
+  } finally { await reopened.close() }
+})
+
+test('跨批答复改引用后旧收据保留但不阻塞新批次', async () => {
+  const { store } = await setup()
+  await ingest(store, 'old-source'); await ingest(store, 'new-source')
+  await store.routeMessages({ groupId: 'g', routeId: 'old-hold', routingRevision: store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'old-source', messageVersion: 1, deferred: { reason: '需补充' } }] })
+  await ingest(store, 'answer', { quotedMessage: { messageId: 'old-source', content: 'old-source' } })
+  const first = store.getGroup('g'), boundary = routingRecoveryBoundary(first, ['old-source'])
+  await store.routeMessages({ groupId: 'g', routeId: 'old-first', routingRevision: first.routingRevision,
+    routes: [{ messageId: 'old-source', messageVersion: 1, topics: [], reason: '处理原文' }], recoveryBoundary: boundary, preflight() {} })
+  await ingest(store, 'answer', { quotedMessage: { messageId: 'new-source', content: 'new-source' } })
+  const changed = store.getGroup('g')
+  assert.deepEqual(routingRecoveryBoundary(changed, ['answer']), [])
+  assert.deepEqual(routingRecoveryBoundary(changed, ['new-source']), [])
+  await assert.rejects(store.routeMessages({ groupId: 'g', routeId: 'old-second', routingRevision: changed.routingRevision,
+    routes: [{ messageId: 'answer', messageVersion: 2, topics: [], reason: '处理答复' }], recoveryBoundary: boundary, preflight() {} }), /topic_routing_recovery_stale/)
+  await store.routeMessages({ groupId: 'g', routeId: 'new-second', routingRevision: changed.routingRevision,
+    routes: [{ messageId: 'answer', messageVersion: 2, topics: [], reason: '处理答复' }] })
+  assert.equal(store.getGroup('g').routeHistory.find(item => item.routeId === 'old-first').recoveryBoundary.length, 1)
   await store.close()
 })
 
@@ -518,6 +608,37 @@ test('归类整批预检拒绝跨群/重复/过时事实且幂等重试不重复
   assert.deepEqual(again.topicIdsByKey, first.topicIdsByKey)
   assert.equal(store.listTopics('g').length, 1)
   await assert.rejects(store.routeMessages({ ...input, routes: [] }), /topic_routes_invalid/)
+})
+
+test('一级初诊与路由原子落账并绑定各自来源、单元和真实Topic', async () => {
+  const { store, snapshot } = await setup()
+  await ingest(store, 'initial-a'); await ingest(store, 'initial-b')
+  const review = { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }
+  const input = { groupId: 'g', routeId: 'initial-route', routingRevision: store.getGroup('g').routingRevision,
+    routes: ['a', 'b'].map(key => ({ messageId: `initial-${key}`, messageVersion: 1, topics: [{ newTopicKey: key, title: `事项${key}` }] })),
+    initialReplies: ['a', 'b'].map(key => ({ messageId: `initial-${key}`, messageVersion: 1, unitKey: 'whole-message', target: { newTopicKey: key }, text: `初步看是事项${key}，还需核对。`, replyReview: review,
+      reviewFingerprint: 'review-snapshot', reviewMessageIds: [`initial-${key}`], reviewMessageVersions: [{ messageId: `initial-${key}`, messageVersion: 1 }] })) }
+  const before = structuredClone(store.getGroup('g'))
+  const wrong = structuredClone(input); wrong.initialReplies[0].target = { newTopicKey: 'b' }
+  await assert.rejects(store.routeMessages(wrong), /topic_initial_reply_invalid/)
+  assert.deepEqual(store.getGroup('g'), before)
+  const duplicate = structuredClone(input); duplicate.initialReplies.push(duplicate.initialReplies[0])
+  await assert.rejects(store.routeMessages(duplicate), /topic_initial_reply_duplicate/)
+  assert.deepEqual(store.getGroup('g'), before)
+  const first = await store.routeMessages(input), repeated = await store.routeMessages(input)
+  assert.deepEqual(first.initialReplies, repeated.initialReplies)
+  assert.equal(new Set(first.initialReplies.map(reply => reply.outboundId)).size, 2)
+  for (const [index, key] of ['a', 'b'].entries()) {
+    const reply = first.initialReplies[index], topic = store.getTopic('g', first.topicIdsByKey[key])
+    assert.equal(reply.topicId, topic.topicId); assert.equal(reply.topicRevision, topic.revision)
+    assert.deepEqual(reply.sourceRef, { messageId: `initial-${key}`, messageVersion: 1, actorId: 'od-a' })
+    assert.ok(topic.entries.some(entry => entry.unitId === reply.unitRef.unitId && entry.unitRevision === reply.unitRef.unitRevision))
+  }
+  await assert.rejects(store.routeMessages({ ...input, initialReplies: [] }), /topic_route_identity_conflict/)
+  await store.close()
+  const reopened = await openResidentStore(facility(snapshot))
+  try { assert.deepEqual(reopened.getGroup('g').routeHistory.find(item => item.routeId === input.routeId).initialReplies, first.initialReplies) }
+  finally { await reopened.close() }
 })
 
 test('路由审计理由变更不能重放已接纳路由或改变业务版本', async () => {

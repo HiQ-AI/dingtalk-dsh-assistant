@@ -309,7 +309,7 @@ export function topicTaskCalls(request, { title = '原消息交办', objective }
   if (input.requestId?.startsWith('coord-summary-')) return [{ name: 'group_topic_summary_submit', args: {
     requestId: input.requestId, topicId: input.topicId, summary: title,
   } }]
-  if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes: input.messages.map(message => ({
+  if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, ...(input.batchRevision !== undefined ? { batchRevision: input.batchRevision } : {}), routes: input.messages.map(message => ({
     messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
     units: [{ unitKey: 'request', summary: title, sourceRefs: [{ quote: message.text }], topics: [{ newTopicKey: message.messageId, title, reason: '当前消息是新的交付事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '当前测试消息是独立交付事项' })) }] }],
   })) } }]
