@@ -1,0 +1,19 @@
+TAP version 13
+# Subtest: 待实施批准期间事实追问保留来源并明确通知，内部证据不外发且不恢复旧执行
+ok 1 - 待实施批准期间事实追问保留来源并明确通知，内部证据不外发且不恢复旧执行
+  ---
+  duration_ms: 6061.2571
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":920,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":4900,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":240,"aborted":false}
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6778.4827

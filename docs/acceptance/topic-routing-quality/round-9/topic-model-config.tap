@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: 两级模型配置兼容旧记录、独立持久化并可重置继承
+ok 1 - 两级模型配置兼容旧记录、独立持久化并可重置继承
+  ---
+  duration_ms: 11.019
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 501.2555

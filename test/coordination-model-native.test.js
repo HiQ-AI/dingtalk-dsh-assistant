@@ -82,6 +82,52 @@ t.onCancel(() => release.resolve())
     assert.ok(h.requests.every(request => !request.tools.some(tool => tool.name === 'coordination_submit')))
   }))
 
+test('native 两级话题模型独立选择并保留 Owner 配置',
+  { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'topic-two-models-'))
+    let h, runtime, delegated = false
+    t.after(async () => { await h?.service?.close(); if (h) h.service = undefined; await runtime?.close(); if (h) h.residentStore = undefined; await h?.close(); await rm(root, { recursive: true, force: true }) })
+    await t.beginBusiness()
+    h = await t.step(async () => nativeTaskHost(root, request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      if (names.includes('task_delegate')) {
+        const done = input.executions.some(execution => execution.status === 'succeeded' && execution.drained)
+        const calls = delegated ? [] : [{ name: 'task_delegate', args: { key: 'owner-model', objective: '核对模型边界' } }]
+        delegated = true
+        return [...calls, { name: 'task_session_submit', args: { decision: { action: done ? 'complete' : 'wait', summary: '核对模型边界', evidence: [], limitations: [] } } }]
+      }
+      if (names.includes('execution_submit')) return [{ name: 'execution_submit', args: { output: { status: 'completed', summary: '已核对', evidence: [], limitations: [], artifacts: [] } } }]
+      const calls = topicTaskCalls(request)
+      if (request.tools.some(tool => tool.name === 'group_decision_submit')) for (const item of calls ?? []) {
+        item.args.decision.actions = []; item.args.decision.reason = '仅记录讨论'
+        item.args.decision.topicUpdate = { summary: '记录讨论。' }
+        delete item.args.decision.reply; delete item.args.decision.replyToMessageId; delete item.args.decision.replyReview
+      }
+      return calls ?? []
+    }, { resident: true }))
+    const store = h.residentStore = await t.step(async () => openResidentStore(h.ctx.storageDomain))
+    runtime = await t.step(async () => openTaskResidentRuntime(h.ctx, store, root, { agentPreset: 'native-test', taskSessionModel: { provider: 'native-task-test', model: 'owner-model', reasoningEffort: 'low' } }))
+    await t.step(async () => runtime.subscribe({ groupId: 'native-group', name: '模型隔离群' }))
+    const config = model => ({ provider: 'native-task-test', model, reasoningMode: 'model-default', reasoningEffort: null })
+    await t.step(async () => runtime.updateAgentConfig({ topicRouteModel: config('route-model'), topicDecisionModel: config('decision-model') }))
+    h.service = await t.step(async () => openTaskSessionService({ ctx: h.ctx, legacy: runtime, residentStore: store,
+      config: { dbPath: join(root, 'dynamic.db'), instanceId: 'topic-two-models', initialize: true, ownerActorId: 'native-user', webActorId: 'native-user' },
+      notifications: { async send() { assert.fail('不应发送消息') }, async readback() { assert.fail('不应回读消息') } } }))
+    await t.step(async () => h.service.ingest({ groupId: 'native-group', messageId: 'two-models', senderOpenDingTalkId: 'native-user', text: '请记录一个独立业务事项。', timestamp: new Date().toISOString() }))
+    await t.step(async () => h.service.whenIdle())
+    const routes = h.requests.filter(request => request.tools.some(tool => tool.name === 'group_topic_route_submit'))
+    const decisions = h.requests.filter(request => request.tools.some(tool => tool.name === 'group_decision_submit'))
+    assert.ok(routes.length); assert.ok(decisions.length)
+    assert.ok(routes.every(request => request.model === 'route-model'))
+    assert.ok(decisions.every(request => request.model === 'decision-model'))
+    assert.equal(runtime.getAgentConfig().taskSessionModel.model, 'owner-model')
+    assert.equal(store.listTopics('native-group')[0].decisions[0].status, 'completed')
+    await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'two-models-owner', objective: '核对模型边界' }))
+    await t.step(async () => h.service.whenIdle())
+    const owners = h.requests.filter(request => request.tools.some(tool => tool.name === 'task_delegate'))
+    assert.ok(owners.length); assert.ok(owners.every(request => request.model === 'owner-model'))
+  }))
+
 test('retired coordination settings cannot activate planning while ordinary native Topic routing remains available',
   { ...({ skip: !available ? reason : false, timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'coordination-model-disabled-'))

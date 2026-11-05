@@ -19,6 +19,10 @@ for (const role of ['route','decision']) test('role prompt retains semantic boun
   } else {
     assert.ok(text.includes('progressImpact') && text.includes('atOpenDingTalkIds'))
     assert.ok(text.includes('task-proposal') && text.includes('inputVersion/runSequence'))
+    assert.ok(text.includes('首次回复不必重写完整摘要'))
+    assert.ok(text.includes('承接或静默的判断及分工依据写入规范决策'))
+    assert.ok(text.includes('inlineDecisionContext.task 完整可见时可直接使用'))
+    assert.ok(text.includes('inlineDecisionContext.replyReview 是同轮完整紧凑审阅'))
   }
   for (const name of ['read','glob','grep','skill','group_task_list','group_task_context_get','group_topic_list','group_topic_context_get','group_message_get','group_resource_get']) assert.ok(coordinationTools(role).includes(name), name)
 })

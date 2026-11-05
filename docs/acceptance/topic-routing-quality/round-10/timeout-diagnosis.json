@@ -1,0 +1,265 @@
+{
+  "scope": "synthetic native tests only; no production replay",
+  "cases": [
+    {
+      "case": "none",
+      "name": "群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：none",
+      "interruptedBase": "f7215aa9884db8872c9642bf867d79ad0e43a59b",
+      "diagnosticTestBlob": "c163887fb3caf7dccb5de4b4c2ecd77340d9a601",
+      "snapshotRequests": 632,
+      "snapshotToolResults": 632,
+      "modelRoles": {
+        "route": 631,
+        "decision": 0
+      },
+      "unreadRouteResults": 631,
+      "routeContextReadCalls": 0,
+      "nextCall": {
+        "name": "group_topic_context_get",
+        "arguments": {
+          "revision": 1,
+          "section": "unsummarized",
+          "offset": 0
+        }
+      },
+      "blockedSyntheticMessages": [
+        {
+          "messageId": "unrelated-owner",
+          "routingStatus": "pending",
+          "agentDeliveryStatus": "pending"
+        }
+      ],
+      "priorExecutions": 0,
+      "isolatedSends": 0,
+      "isolatedReadbacks": 0,
+      "phases": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 15096,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 30016,
+          "aborted": true
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 18710,
+          "aborted": false
+        }
+      ],
+      "tap": "none-interrupted-repro.tap",
+      "tapSha256": "bf8762b55e9042a954db4a21d8124df9c2db7421cb37a7536f594d48cd2d0ec5",
+      "snapshotCountNote": "none raw snapshot counts differ from later TAP counters during asynchronous diagnostic write"
+    },
+    {
+      "case": "empty",
+      "name": "群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：empty",
+      "interruptedBase": "f7215aa9884db8872c9642bf867d79ad0e43a59b",
+      "diagnosticTestBlob": "aaa5502e5baa14ceebfe4e511508157726085d93",
+      "snapshotRequests": 699,
+      "snapshotToolResults": 699,
+      "modelRoles": {
+        "route": 698,
+        "decision": 0
+      },
+      "unreadRouteResults": 698,
+      "routeContextReadCalls": 0,
+      "nextCall": {
+        "name": "group_topic_context_get",
+        "arguments": {
+          "revision": 1,
+          "section": "unsummarized",
+          "offset": 0
+        }
+      },
+      "blockedSyntheticMessages": [
+        {
+          "messageId": "unrelated-owner",
+          "routingStatus": "pending",
+          "agentDeliveryStatus": "pending"
+        }
+      ],
+      "priorExecutions": 0,
+      "isolatedSends": 0,
+      "isolatedReadbacks": 0,
+      "phases": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 932,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 30013,
+          "aborted": true
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 16219,
+          "aborted": false
+        }
+      ],
+      "tap": "empty-interrupted-repro.tap",
+      "tapSha256": "b3f7bce9b00fc0b0aeedbca5ecdbe6aa03c744aeb49dd55aab4d956d60efb3ad",
+      "snapshotCountNote": "captured before serialization/write"
+    },
+    {
+      "case": "tool-limit",
+      "name": "群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：tool-limit",
+      "interruptedBase": "f7215aa9884db8872c9642bf867d79ad0e43a59b",
+      "diagnosticTestBlob": "aaa5502e5baa14ceebfe4e511508157726085d93",
+      "snapshotRequests": 720,
+      "snapshotToolResults": 720,
+      "modelRoles": {
+        "route": 719,
+        "decision": 0
+      },
+      "unreadRouteResults": 719,
+      "routeContextReadCalls": 0,
+      "nextCall": {
+        "name": "group_topic_context_get",
+        "arguments": {
+          "revision": 1,
+          "section": "unsummarized",
+          "offset": 0
+        }
+      },
+      "blockedSyntheticMessages": [
+        {
+          "messageId": "unrelated-owner",
+          "routingStatus": "pending",
+          "agentDeliveryStatus": "pending"
+        }
+      ],
+      "priorExecutions": 0,
+      "isolatedSends": 0,
+      "isolatedReadbacks": 0,
+      "phases": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 898,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 30039,
+          "aborted": true
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 15466,
+          "aborted": false
+        }
+      ],
+      "tap": "tool-limit-interrupted-repro.tap",
+      "tapSha256": "8f2a3898ea952a6a7c807c48058537573650ee51c6fb60d868d37ef00de23012",
+      "snapshotCountNote": "captured before serialization/write"
+    },
+    {
+      "case": "topic",
+      "name": "群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：topic",
+      "interruptedBase": "f7215aa9884db8872c9642bf867d79ad0e43a59b",
+      "diagnosticTestBlob": "aaa5502e5baa14ceebfe4e511508157726085d93",
+      "snapshotRequests": 673,
+      "snapshotToolResults": 679,
+      "modelRoles": {
+        "route": 663,
+        "decision": 5
+      },
+      "unreadRouteResults": 661,
+      "routeContextReadCalls": 0,
+      "nextCall": {
+        "name": "group_topic_context_get",
+        "arguments": {
+          "revision": 2,
+          "section": "unsummarized",
+          "offset": 0
+        }
+      },
+      "blockedSyntheticMessages": [
+        {
+          "messageId": "business-answer",
+          "routingStatus": "pending",
+          "agentDeliveryStatus": "pending"
+        }
+      ],
+      "priorExecutions": 0,
+      "isolatedSends": 3,
+      "isolatedReadbacks": 3,
+      "phases": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 867,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 30056,
+          "aborted": true
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 11629,
+          "aborted": false
+        }
+      ],
+      "tap": "topic-interrupted-repro.tap",
+      "tapSha256": "c8c8a3ce7b9c13d9eb351c9eba327326e6ee1bc89d501a27b662a554ac2c95f2",
+      "snapshotCountNote": "captured before serialization/write"
+    },
+    {
+      "case": "fact-followup",
+      "name": "待实施批准期间事实追问保留来源并明确通知，内部证据不外发且不恢复旧执行",
+      "interruptedBase": "f7215aa9884db8872c9642bf867d79ad0e43a59b",
+      "diagnosticTestBlob": "aaa5502e5baa14ceebfe4e511508157726085d93",
+      "snapshotRequests": 726,
+      "snapshotToolResults": 740,
+      "modelRoles": {
+        "route": 715,
+        "decision": 0
+      },
+      "unreadRouteResults": 715,
+      "routeContextReadCalls": 0,
+      "nextCall": {
+        "name": "group_topic_context_get",
+        "arguments": {
+          "revision": 1,
+          "section": "unsummarized",
+          "offset": 0
+        }
+      },
+      "blockedSyntheticMessages": [
+        {
+          "messageId": "fact-question",
+          "routingStatus": "pending",
+          "agentDeliveryStatus": "pending"
+        }
+      ],
+      "priorExecutions": 1,
+      "isolatedSends": 0,
+      "isolatedReadbacks": 0,
+      "phases": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 844,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 30067,
+          "aborted": true
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 15225,
+          "aborted": false
+        }
+      ],
+      "tap": "fact-followup-interrupted-repro.tap",
+      "tapSha256": "9280e775b7582a138d2acb3048486b280209f5aab6eb809c9f8df82e402a899e",
+      "snapshotCountNote": "captured before serialization/write"
+    }
+  ]
+}

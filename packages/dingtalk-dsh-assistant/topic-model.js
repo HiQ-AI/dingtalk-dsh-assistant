@@ -144,10 +144,10 @@ export function topicSourceEntries(group, topic, revision, messageId, messageVer
   }
   return sources.get(messageId)?.get(messageVersion) ?? []
 }
-export function topicMessages(group,topic,revision,{offset=0,limit=Infinity}={}) {
+export function topicMessages(group,topic,revision,{offset=0,limit=Infinity,afterRevision=0}={}) {
   let messages=topicMessageIndexes.get(group.messages)
   if(!messages){messages=new Map(group.messages.map(message=>[message.messageId,message]));topicMessageIndexes.set(group.messages,messages)}
-  return indexedTopicRefs(group,topic,revision).slice(offset,offset+limit).map(([unitId, entry]) => {
+  return indexedTopicRefs(group,topic,revision).filter(([, entry]) => entry.revision > afterRevision).slice(offset,offset+limit).map(([unitId, entry]) => {
     const { messageId, messageVersion: version, unitRevision } = entry
     const current = messages.get(messageId)
     const fact = current?.messageVersion === version ? current : current?.facts?.find((item) => item.messageVersion === version)
@@ -160,6 +160,16 @@ export function topicMessages(group,topic,revision,{offset=0,limit=Infinity}={})
     const projectRange = ({ start, end, purpose }) => ({ start, end, ...(purpose ? { purpose } : {}) })
     return { ...snapshot, text: unitText, _sourceMessageText: snapshot.text, unitId, unitRevision, unitSummary: unit.summary, sourceRanges: unit.sourceRanges.map(projectRange), sourceAttachments: unit.sourceAttachments ?? [], contextRanges: (unit.contextRanges ?? []).map(projectRange), predecessorUnitRefs: unit.predecessorUnitRefs ?? [], effectInheritance: unit.effectInheritance, revisionReason: unit.revisionReason }
   })
+}
+
+// 摘要可落后于受理版本；已处理增量仍须随旧摘要提供，不能当成新的执行授权。
+export function topicSummaryContext(group, topic) {
+  const entries = topic.entries.filter(entry => entry.revision > topic.summaryRevision && entry.revision <= topic.revision)
+  const messages = entries.length ? topicMessages(group, topic, topic.revision, { afterRevision: topic.summaryRevision }) : []
+  return { summary: topic.summary, summaryRevision: topic.summaryRevision, openQuestions: topic.openQuestions,
+    unsummarized: { throughRevision: topic.revision, entries, messages,
+      decisions: topic.decisions.filter(record => record.revision > topic.summaryRevision && record.revision <= topic.revision)
+        .map(({ decisionId, revision, status, decision }) => ({ decisionId, revision, status, decision })) } }
 }
 
 export function validateTopicRefs(group, value) {

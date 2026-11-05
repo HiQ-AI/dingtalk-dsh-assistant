@@ -1,0 +1,26 @@
+✖ anonymous missing-original-file wait preserves authorized repair progress, inspection and same-session recovery (31228.5367ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":641,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":30145,"aborted":true}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":441,"aborted":false}
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 31985.4758
+
+✖ failing tests:
+
+test at test\task-session-human-native.test.js:705:1
+✖ anonymous missing-original-file wait preserves authorized repair progress, inspection and same-session recovery (31228.5367ms)
+  Error: lifecycle business exceeded 30000ms
+      at expired (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/test/fixtures/lifecycle-stages.js:24:41)
+      at Timeout.<anonymous> (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/test/fixtures/lifecycle-stages.js:28:50)
+      at listOnTimeout (node:internal/timers:635:17)
+      at process.processTimers (node:internal/timers:571:7) {
+    code: 'TEST_STAGE_TIMEOUT',
+    phase: 'business',
+    lifecyclePhase: 'business'
+  }

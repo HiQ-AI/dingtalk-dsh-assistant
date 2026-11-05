@@ -1,0 +1,10 @@
+Restored interrupted test base: f7215aa9884db8872c9642bf867d79ad0e43a59b
+c163887fb3caf7dccb5de4b4c2ecd77340d9a601
+d2a04eea7e0bdce8576a0a88014fcd348a092f94
+ba9ff8d444261acb07f7db559f5b9c389013a454
+5f804d55c45ec3847773838990e0b7f8ef4696b8
+
+Remaining four-case diagnostic test blob: aaa5502e5baa14ceebfe4e511508157726085d93
+Profile: DSH_NATIVE_TEST_PROFILE=D:/dsh_home/profiles/web/package.json
+Each test uses node --test --test-reporter=tap --test-name-pattern=<exact case> test/task-session-human-native.test.js
+Original business deadline=30000ms; independent Node processes, sequential execution.

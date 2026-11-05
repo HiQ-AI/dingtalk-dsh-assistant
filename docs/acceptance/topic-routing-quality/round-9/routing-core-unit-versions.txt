@@ -1,0 +1,16 @@
+命令: node --test --test-reporter=tap test/topic-runtime.test.js test/decision-payload.test.js test/coordination-sessions.test.js test/group-decision-contract.test.js test/topic-role-context.test.js test/topic-facts.test.js
+结果: 250 tests, 250 pass, 0 fail, 0 cancelled, 0 skipped; TAP: routing-core-unit.tap
+绑定: 以下 git blob 在测试开始前和结束后均一致。
+packages/dingtalk-dsh-assistant/decision.js fbb9e71288480ae42076405f228c71016f7746c9
+packages/dingtalk-dsh-assistant/topic-runtime.js d2a04eea7e0bdce8576a0a88014fcd348a092f94
+packages/dingtalk-dsh-assistant/coordination-sessions.js d23100a6c55abfb54c2092ec78e898046dcdb217
+packages/dingtalk-dsh-assistant/task-topic-coordinator.js ba9ff8d444261acb07f7db559f5b9c389013a454
+packages/dingtalk-dsh-assistant/topic-facts.js 7d8b87e62157afde425a1a954228ecd8cd5145b4
+packages/dingtalk-dsh-assistant/topic-model.js 653bfc340620a778ee44c1285f47520b6532a3a9
+packages/dingtalk-dsh-assistant/store.js 40f60a57bfebceca6748c5f2f59d838aa94a8bc7
+test/topic-runtime.test.js 982eef4aed3c256e2fa5d431729046aab973dc0e
+test/decision-payload.test.js 3a0b0751911b407d0d4269e232b104c0d6333aa8
+test/coordination-sessions.test.js 4cb7e7563a37f68afe332f16d1a76a1c0f7f2cb2
+test/group-decision-contract.test.js c0340ba893164cd9fe8434323de4f6965eb7e53a
+test/topic-role-context.test.js 2da59d7942d70cbe74464587dc88ceda4cdda6a7
+test/topic-facts.test.js 6eb9e636efd74247fa580340dd0a8a960cfb9e87

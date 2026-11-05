@@ -78,6 +78,41 @@ test('HTTP task settings validate, persist, refresh and reopen without touching 
 })
 
 
+test('两级话题模型经 HTTP 独立预检、保存、重开和继承', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'topic-model-settings-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const { facility } = memoryFacility()
+  const original = { provider: 'gateway', model: 'sol', reasoningEffort: 'low' }
+  let writes = 0
+  const ctx = { agentDefaultModel: { currentSelection: () => ({ ...original }), saveSelection: async () => { writes++ } },
+    llm: { resolveCallConfig: async value => {
+      if (value.provider !== 'gateway' || !['sol', 'pearl', 'dew'].includes(value.model) || value.reasoningEffort && value.reasoningEffort !== 'low') throw Error('MODEL_INVALID')
+      return value
+    } } }
+  let runtime = await openTaskResidentRuntime(ctx, await openResidentStore(facility), root)
+  const server = createServer((req, res) => handleRequest(req, res, runtime).catch(error => { res.writeHead(400); res.end(JSON.stringify({ error: error.message })) }))
+  await new Promise(done => server.listen(0, '127.0.0.1', done))
+  t.after(async () => { await new Promise(done => server.close(done)); await runtime.close() })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const read = async () => (await fetch(base + '/state/agent-config')).json()
+  const save = body => fetch(base + '/config/agent', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const initial = await read()
+  assert.equal(initial.topicRouteModel, null); assert.equal(initial.topicDecisionModel, null)
+  const route = { provider: 'gateway', model: 'pearl', reasoningMode: 'model-default', reasoningEffort: null }
+  const decision = { provider: 'gateway', model: 'dew', reasoningMode: 'explicit', reasoningEffort: 'low' }
+  for (const invalid of [{}, { ...route, model: '' }, { ...route, provider: '' }, { ...route, model: 'missing' }, { ...route, reasoningMode: 'explicit', reasoningEffort: 'high' }]) {
+    assert.equal((await save({ topicRouteModel: invalid, topicDecisionModel: decision })).status, 400)
+    assert.equal((await read()).topicDecisionModel, null)
+  }
+  assert.equal((await save({ topicRouteModel: route, topicDecisionModel: decision })).status, 200)
+  assert.deepEqual((await read()).topicRouteModel, route); assert.deepEqual((await read()).topicDecisionModel, decision)
+  await runtime.close(); runtime = await openTaskResidentRuntime(ctx, await openResidentStore(facility), root)
+  assert.deepEqual((await read()).topicRouteModel, route); assert.deepEqual((await read()).topicDecisionModel, decision)
+  assert.equal((await save({ topicRouteModel: null })).status, 200)
+  assert.equal((await read()).topicRouteModel, null); assert.deepEqual((await read()).topicDecisionModel, decision)
+  assert.deepEqual((await read()).taskSessionModel, initial.taskSessionModel); assert.equal(writes, 0)
+})
+
 test('unified save preflights both models and reports readback on independent-store failures without compensation', async t => {
   const root=await mkdtemp(join(tmpdir(),'agent-unified-save-'))
   t.after(()=>rm(root,{recursive:true,force:true}))

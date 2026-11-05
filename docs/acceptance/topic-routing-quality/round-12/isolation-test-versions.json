@@ -1,0 +1,77 @@
+{
+  "scope": "existing five synthetic tests only; no paid provider calls",
+  "before": {
+    "test/first-reply-history.test.js": "cc1516501e5e2b3fe646ae174bb9a21edbe4fb6c",
+    "test/first-reply-isolation-native.test.js": "baf21c09214624966729acc31325101748a20b50",
+    "docs/acceptance/topic-routing-quality/scripts/first-reply-history.mjs": "731d3959c41a5fadf67658661e2c0b1044d89b48",
+    "docs/acceptance/topic-routing-quality/scripts/first-reply-isolation.mjs": "0e6cab14707e57046531f0923d76842c6459c17d",
+    "test/fixtures/task-session-native-host.js": "5f804d55c45ec3847773838990e0b7f8ef4696b8",
+    "packages/dingtalk-dsh-assistant/topic-runtime.js": "d2a04eea7e0bdce8576a0a88014fcd348a092f94",
+    "packages/dingtalk-dsh-assistant/task-topic-coordinator.js": "ba9ff8d444261acb07f7db559f5b9c389013a454"
+  },
+  "after": {
+    "test/first-reply-history.test.js": "cc1516501e5e2b3fe646ae174bb9a21edbe4fb6c",
+    "test/first-reply-isolation-native.test.js": "baf21c09214624966729acc31325101748a20b50",
+    "docs/acceptance/topic-routing-quality/scripts/first-reply-history.mjs": "731d3959c41a5fadf67658661e2c0b1044d89b48",
+    "docs/acceptance/topic-routing-quality/scripts/first-reply-isolation.mjs": "0e6cab14707e57046531f0923d76842c6459c17d",
+    "test/fixtures/task-session-native-host.js": "5f804d55c45ec3847773838990e0b7f8ef4696b8",
+    "packages/dingtalk-dsh-assistant/topic-runtime.js": "d2a04eea7e0bdce8576a0a88014fcd348a092f94",
+    "packages/dingtalk-dsh-assistant/task-topic-coordinator.js": "ba9ff8d444261acb07f7db559f5b9c389013a454"
+  },
+  "drift": [],
+  "result": {
+    "tests": 5,
+    "pass": 5,
+    "fail": 0,
+    "skipped": 0,
+    "cancelled": 0
+  },
+  "lifecyclePhases": [
+    {
+      "lifecyclePhase": "prepare",
+      "elapsedMs": 1095,
+      "aborted": false
+    },
+    {
+      "lifecyclePhase": "business",
+      "elapsedMs": 395,
+      "aborted": false
+    },
+    {
+      "lifecyclePhase": "cleanup",
+      "elapsedMs": 36,
+      "aborted": false
+    },
+    {
+      "lifecyclePhase": "prepare",
+      "elapsedMs": 134,
+      "aborted": false
+    },
+    {
+      "lifecyclePhase": "business",
+      "elapsedMs": 118,
+      "aborted": false
+    },
+    {
+      "lifecyclePhase": "cleanup",
+      "elapsedMs": 21,
+      "aborted": false
+    },
+    {
+      "lifecyclePhase": "prepare",
+      "elapsedMs": 111,
+      "aborted": false
+    },
+    {
+      "lifecyclePhase": "business",
+      "elapsedMs": 319,
+      "aborted": false
+    },
+    {
+      "lifecyclePhase": "cleanup",
+      "elapsedMs": 25,
+      "aborted": false
+    }
+  ],
+  "tapSha256": "b0191ab16271a41c305f45efddbe481100433e819a156c9a227ce35c424c98d3"
+}

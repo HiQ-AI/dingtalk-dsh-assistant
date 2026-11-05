@@ -3,6 +3,7 @@ import test from 'node:test'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { openResidentStore, reconcileReplacementGraph } from '../packages/dingtalk-dsh-assistant/store.js'
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
+import { topicSummaryContext } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 
 // 使用真实 DomainFacility 的验证与串行持久化链；只有介质写入被隔离为内存。
 function facility(snapshot = { tables: {}, global: null }, beforePut = () => {}) {
@@ -18,6 +19,42 @@ async function setup() {
   await store.subscribe({ groupId: 'g' })
   return { snapshot, storage, store }
 }
+test('两级模型配置兼容旧记录、独立持久化并可重置继承', async () => {
+  const { store, snapshot } = await setup()
+  assert.equal(store.getTopicRouteModelConfig(), undefined)
+  assert.equal(store.getTopicDecisionModelConfig(), undefined)
+  const owner = { provider: 'owner', model: 'owner-model', reasoningMode: 'explicit', reasoningEffort: 'high' }
+  const route = { provider: 'gateway', model: 'route-model', reasoningMode: 'model-default', reasoningEffort: null }
+  const decision = { provider: 'gateway', model: 'decision-model', reasoningMode: 'explicit', reasoningEffort: 'high' }
+  await store.setAgentSettings({ taskSessionModel: owner, topicRouteModel: route, topicDecisionModel: decision })
+  assert.deepEqual(store.getTopicRouteModelConfig(), route)
+  assert.deepEqual(store.getTopicDecisionModelConfig(), decision)
+  await store.close()
+  const reopened = await openResidentStore(facility(snapshot))
+  try {
+    assert.deepEqual(reopened.getTopicRouteModelConfig(), route)
+    assert.deepEqual(reopened.getTopicDecisionModelConfig(), decision)
+    for (const field of ['topicRouteModel', 'topicDecisionModel']) {
+      for (const invalid of [{ ...route, provider: '' }, { ...route, provider: '   ' }, { ...route, model: '' }, { ...route, model: '   ' }, { ...route, reasoningMode: 'unknown' }, { ...route, reasoningEffort: 1 }]) {
+        const malformed = structuredClone(snapshot)
+        malformed.tables.scheduler.runtime[field] = invalid
+        await assert.rejects(openResidentStore(facility(malformed)), { code: 'invalid-record' })
+      }
+    }
+    assert.deepEqual(reopened.getTopicRouteModelConfig(), route)
+    assert.deepEqual(reopened.getTopicDecisionModelConfig(), decision)
+    await reopened.setAgentSettings({ topicRouteModel: null })
+    assert.equal(reopened.getTopicRouteModelConfig(), null)
+    assert.deepEqual(reopened.getTopicDecisionModelConfig(), decision)
+    await reopened.setAgentSettings({ topicDecisionModel: null })
+  } finally { await reopened.close() }
+  const reset = await openResidentStore(facility(snapshot))
+  try {
+    assert.equal(reset.getTopicRouteModelConfig(), null)
+    assert.equal(reset.getTopicDecisionModelConfig(), null)
+    assert.deepEqual(reset.getTaskSessionModelConfig(), owner)
+  } finally { await reset.close() }
+})
 test('无替换的大量发件只按线性次数读取邻接关系', () => {
   let reads = 0
   const outbox = Array.from({ length: 4000 }, (_, index) => ({ outboundId: `o-${index}`, status: 'sent',
@@ -546,6 +583,72 @@ test('固定版本不暴露后来摘要，旧决策完成不关闭已收到新�
   assert.equal(previous.topic.summary, '')
   assert.equal(previous.topic.decisions.length, 1)
   assert.deepEqual(previous.topic.openQuestions, [])
+})
+
+test('受理不等待摘要，重启后旧摘要携带已受理原文及后续未汇总增量', async () => {
+  const { store, snapshot } = await setup()
+  await ingest(store, 'summary-base', { text: '只核查，不修改生产' })
+  const topicId = (await route(store, 'summary-base-route', [['summary-base', { newTopicKey: 'summary', title: '核查事项' }]])).topicIdsByKey.summary
+  await store.acceptTopicDecision(decision('summary-base-decision', topicId, 1, { decision: { actions: [], reason: '记录只读范围', topicUpdate: { summary: '仅核查，不改生产' } } }))
+  await store.completeTopicDecision({ groupId: 'g', topicId, decisionId: 'summary-base-decision' })
+  await ingest(store, 'accepted-delta', { text: '只核对开发分支，仍不批准发布' })
+  await route(store, 'accepted-delta-route', [['accepted-delta', topicId]])
+  const accepted = decision('accepted-without-summary', topicId, 2, { decision: { basisMessageIds: ['accepted-delta'], actions: [], reply: '已接纳核对分支，未执行发布' } })
+  await store.acceptTopicDecision(accepted)
+  await store.completeTopicDecision({ groupId: 'g', topicId, decisionId: accepted.decisionId })
+  assert.equal(store.getTopic('g', topicId).processedRevision, 2)
+  assert.equal(store.getTopic('g', topicId).summaryRevision, 1)
+  await store.close()
+  const reopened = await openResidentStore(facility(snapshot))
+  try {
+    await ingest(reopened, 'new-delta', { text: '补充核对日志，不增加实施授权' })
+    await route(reopened, 'new-delta-route', [['new-delta', topicId]])
+    const context = topicSummaryContext(reopened.getGroup('g'), reopened.getTopic('g', topicId))
+    assert.equal(context.summary, '仅核查，不改生产')
+    assert.equal(context.summaryRevision, 1)
+    assert.equal(context.unsummarized.throughRevision, 3)
+    assert.deepEqual(context.unsummarized.messages.map(message => message.text), ['只核对开发分支，仍不批准发布', '补充核对日志，不增加实施授权'])
+    assert.deepEqual(context.unsummarized.entries.map(entry => entry.revision), [2, 3])
+    assert.deepEqual(context.unsummarized.decisions, [{ decisionId: accepted.decisionId, revision: 2, status: 'completed', decision: accepted.decision }])
+    assert.equal((await reopened.acceptTopicDecision(accepted)).status, 'duplicate')
+    assert.equal(reopened.getTopic('g', topicId).decisions.length, 2)
+    assert.equal(reopened.listTasks().length, 0)
+  } finally { await reopened.close() }
+})
+
+test('未汇总投影保留移出来源且不展开已汇总历史正文', () => {
+  let oldReads = 0
+  const original = { messageId: 'base', messageVersion: 1, sequence: 1, get text() { oldReads++; throw new Error('不应展开已汇总原文') } }
+  const added = { messageId: 'delta', messageVersion: 1, sequence: 2, text: '只读取新增原文' }
+  const topic = { revision: 3, summaryRevision: 1, summary: '已有摘要', openQuestions: [], decisions: [], entries: [
+    { revision: 1, messageId: 'base', messageVersion: 1, unitId: 'base-unit', unitRevision: 1, action: 'add' },
+    { revision: 2, messageId: 'delta', messageVersion: 1, unitId: 'delta-unit', unitRevision: 1, action: 'add' },
+    { revision: 3, messageId: 'removed', messageVersion: 1, unitId: 'removed-unit', unitRevision: 1, action: 'remove', reason: '归属已订正' },
+  ] }
+  const context = topicSummaryContext({ messages: [original, added] }, topic)
+  assert.equal(oldReads, 0)
+  assert.deepEqual(context.unsummarized.messages.map(message => message.text), ['只读取新增原文'])
+  assert.equal(context.unsummarized.entries[1].action, 'remove')
+  assert.equal(context.unsummarized.entries[1].reason, '归属已订正')
+})
+
+test('纯事实未写摘要不推进摘要版本，显式汇总后清除已覆盖增量', async () => {
+  const { store } = await setup()
+  try {
+    await ingest(store, 'fact-summary')
+    const topicId = (await route(store, 'fact-summary-route', [['fact-summary', { newTopicKey: 'fact', title: '事实汇总' }]])).topicIdsByKey.fact
+    await store.acceptTopicDecision(decision('fact-decision', topicId, 1))
+    await store.completeTopicDecision({ groupId: 'g', topicId, decisionId: 'fact-decision' })
+    await store.applyTopicFactSummary({ groupId: 'g', topicId, revision: 1, requestId: 'fact-no-summary', expectedSummary: '', decision: { topicUpdate: { openQuestions: ['仍待核验'] } } })
+    let topic = store.getTopic('g', topicId)
+    assert.equal(topic.summaryRevision, 0)
+    assert.deepEqual(topic.openQuestions, ['仍待核验'])
+    assert.equal(topicSummaryContext(store.getGroup('g'), topic).unsummarized.messages.length, 1)
+    await store.applyTopicFactSummary({ groupId: 'g', topicId, revision: 1, requestId: 'fact-with-summary', expectedSummary: '', decision: { topicUpdate: { summary: '已记录事实，仍待核验' } } })
+    topic = store.getTopic('g', topicId)
+    assert.equal(topic.summaryRevision, 1)
+    assert.deepEqual(topicSummaryContext(store.getGroup('g'), topic).unsummarized, { throughRevision: 1, entries: [], messages: [], decisions: [] })
+  } finally { await store.close() }
 })
 
 test('不同Topic不能同时接受撤回同一Outbox的意图', async () => {

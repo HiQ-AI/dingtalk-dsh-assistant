@@ -41,26 +41,38 @@ const legacyTaskAction = z.discriminatedUnion('kind', [taskProposal, newTask.ext
 const replyReviewSchema = z.strictObject({
   kind: z.enum(['confirmation', 'substantive', 'correction']).describe('confirmation为接收/任务动作确认；substantive为实质结果且不得替换旧回复；correction为订正且必须指定同事项旧回复。只要有非空reply，即使没有历史候选也必须声明kind。'),
   reviewedOutboundIds: z.array(z.string().min(1)).default([]).describe('逐一审阅当前历史回复候选后填写其全部outboundId，集合必须与当前候选完全一致，不重复、不猜造；无候选时为[]。'),
-  sameMatterOutboundIds: z.array(z.string().min(1)).default([]).describe('reviewedOutboundIds中经原文与任务事实核对属于同一事项的子集。confirmation必须包含候选中与本次确认Task相同的已有confirmation，不能漏掉；correction至少一个目标。'),
-  replaceOutboundIds: z.array(z.string().min(1)).default([]).describe('待替换旧回复ID，只能来自sameMatterOutboundIds。confirmation和correction必须与sameMatterOutboundIds集合完全相等；substantive必须为[]。不得自动补ID或跳过审阅。'),
+  sameMatterOutboundIds: z.array(z.string().min(1)).default([]).describe('reviewedOutboundIds中经原文与任务事实核对属于同一事项的子集。confirmation仅选择同事项的confirmation候选，并必须包含与本次确认Task相同的已有confirmation；不能将实质结果、订正或类型未知的回复纳入。correction至少一个目标。'),
+  replaceOutboundIds: z.array(z.string().min(1)).default([]).describe('待替换旧回复ID，只能来自sameMatterOutboundIds。confirmation和correction必须与sameMatterOutboundIds集合完全相等；confirmation仅可替换明确标记为confirmation的候选，不能替换实质结果、订正或类型未知的回复；substantive必须为[]。不得自动补ID或跳过审阅。'),
 })
 // DSH 不支持数组长度约束；先按 reply / reason 分支，避免投影时把互斥字段合并为可同时填写。
-const makeDecisionSchema = actionSchema => {
+const makeDecisionSchema = (actionSchema, basis = decisionBasis, review = replyReviewSchema) => {
   const replyDecisionSchema = z.strictObject({
-  ...decisionBasis, actions: z.array(actionSchema),
+  ...basis, actions: z.array(actionSchema),
   reply: z.string().describe('群回复或任务确认；actions 为空时必须非空，此分支不得填写 reason。任务动作通常要求非空确认；来源明确由其他 Topic 统一回复，或全部动作为 factFeedback:true、preserve、authorizationChange:none 且无合同变更的纯事实 task-context 时，可改用 reason 分支静默回流。'),
   ...groupNotificationFields,
-  replyReview: replyReviewSchema.optional().describe('有非空reply时Host要求提交本审阅，包括kind；即使候选为空也须声明kind及三个空ID列表。optional保留补答协议，并不表示可省略回复审阅；先阅读当前候选再填真实ID。'),
+  replyReview: review.optional().describe(basis === decisionBasis ? '有非空reply时Host要求提交本审阅，包括kind；即使候选为空也须声明kind及三个空ID列表。optional保留补答协议，并不表示可省略回复审阅；先阅读当前候选再填真实ID。' : '有非空reply时声明kind并显式选择sameMatterOutboundIds和replaceOutboundIds；可使用已读候选的shortRef，无候选时两个数组均为空。Host确认全部冻结候选可见且未变化后补全已审阅身份。'),
 }).superRefine((decision, ctx) => {
   if (decision.actions.length === 0 && decision.reply.length === 0) ctx.addIssue({ code: 'custom', path: ['reply'], message: 'actions 为空时 reply 必须非空；不回复请改用 actions: [] + reason 分支。' })
 })
   return z.union([
     replyDecisionSchema,
-    z.strictObject({ ...decisionBasis, actions: z.array(actionSchema), reason: z.string().min(1).describe('不回复原因；actions 可为空。带任务动作时只限来源明确由其他 Topic 统一回复，或全部动作为 factFeedback:true、preserve、authorizationChange:none 且无标题/目标/验收/阶段/证据变更的纯事实 task-context；其他或混合动作仍须群回复。不得同时填写 reply 或 replyReview。') }),
+    z.strictObject({ ...basis, actions: z.array(actionSchema), reason: z.string().min(1).describe('不回复原因；actions 可为空。带任务动作时只限来源明确由其他 Topic 统一回复，或全部动作为 factFeedback:true、preserve、authorizationChange:none 且无标题/目标/验收/阶段/证据变更的纯事实 task-context；其他或混合动作仍须群回复。不得同时填写 reply 或 replyReview。') }),
   ])
 }
 export const groupDecisionSchema = makeDecisionSchema(taskAction)
 const legacyGroupDecisionSchema = makeDecisionSchema(legacyTaskAction)
+const compactUnits = z.array(z.string().min(1)).min(1)
+const compactAction = z.discriminatedUnion('kind', [taskProposal, newTask, taskContext, taskReopen, taskCancel].map(schema =>
+  z.strictObject({ ...schema.shape, basisUnitRefs: compactUnits, topicRefs: z.array(z.union([z.string().min(1), topicRefSchema])).min(1),
+    ...(schema.shape.dispatchAssessment ? { dispatchAssessment: z.strictObject({ ...dispatchAssessmentSchema.shape, sourceUnitRefs: compactUnits }).optional() } : {}) })))
+const compactReviewSchema = z.strictObject({
+  kind: replyReviewSchema.shape.kind,
+  sameMatterOutboundIds: z.array(z.string().min(1)).describe(replyReviewSchema.shape.sameMatterOutboundIds.description),
+  replaceOutboundIds: z.array(z.string().min(1)).describe(replyReviewSchema.shape.replaceOutboundIds.description),
+})
+const compactDecisionSchema = makeDecisionSchema(compactAction, { ...decisionBasis, basisUnitRefs: compactUnits }, compactReviewSchema)
+export const compactGroupDecisionSubmissionSchema = z.strictObject({ revision: z.number().int().positive(), decision: compactDecisionSchema })
+export const compactGroupDecisionSubmissionJsonSchema = toToolJsonSchema(compactGroupDecisionSubmissionSchema)
 
 const stringJsonSchema = { type: 'string' }
 export const replyReviewJsonSchema = toToolJsonSchema(replyReviewSchema)
@@ -164,6 +176,17 @@ export const topicRouteSubmissionJsonSchema = {
     } },
   }, required: ['requestId', 'routes'],
 }
+export const compactTopicRouteSubmissionJsonSchema = structuredClone(topicRouteSubmissionJsonSchema)
+compactTopicRouteSubmissionJsonSchema.properties.newTopics = {
+  type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+    newTopicKey: stringJsonSchema, title: stringJsonSchema,
+    candidateComparisons: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, revision: { type: 'integer' }, reason: stringJsonSchema }, required: ['topicId', 'revision', 'reason'] } },
+  }, required: ['newTopicKey', 'title', 'candidateComparisons'] },
+}
+const compactRouteTargets = compactTopicRouteSubmissionJsonSchema.properties.routes.items.properties.units.items.properties.topics.items.oneOf
+compactRouteTargets[0].required.push('reason')
+compactRouteTargets[1] = { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema, relationship: { type: 'string', enum: ['continuation', 'affected'] }, reason: stringJsonSchema }, required: ['newTopicKey', 'reason'] }
+
 export const groupDecisionSubmissionSchema = z.strictObject({
   requestId: z.string().min(1), topicId: z.string().min(1), revision: z.number().int().positive(), decision: groupDecisionSchema,
 })

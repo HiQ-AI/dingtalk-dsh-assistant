@@ -32,7 +32,7 @@ async function setup(t, options = {}) {
   const consumedEvents = []
   const agent = { session: options.session ?? { snapshotEvents: () => consumedEvents }, inbox: options.inbox, steer(message) { consumedEvents.push({ type: 'user/message', data: message }); sent.push(message.content[0].text); options.onSteer?.(message) }, whenIdle: options.whenIdle ?? (() => new Promise(() => {})) }
   const coordinator = createTopicCoordinator({
-    taskFacts: options.taskFacts, fixedTopicsEnabled: options.fixedTopicsEnabled, workflowPromptsEnabled: options.workflowPromptsEnabled, dispatchRequest: options.dispatchRequest, checkStartupRecovery: options.checkStartupRecovery, quotedReminderContext: options.quotedReminderContext,
+    taskFacts: options.taskFacts, taskDecisionView: options.taskDecisionView, fixedTopicsEnabled: options.fixedTopicsEnabled, workflowPromptsEnabled: options.workflowPromptsEnabled, dispatchRequest: options.dispatchRequest, checkStartupRecovery: options.checkStartupRecovery, quotedReminderContext: options.quotedReminderContext,
     store, getAgent: () => agent, assertSession(exec, groupId) { if (exec?.groupId !== groupId) throw new Error('wrong_session') },
     serializeTasks: options.serializeTasks ?? ((fn) => fn()), isClosing: options.isClosing ?? (() => false), retryDelayMs: options.retryDelayMs ?? 60_000,
     reviewCandidates: options.reviewCandidates ?? (() => []), onDecisionRequest: options.onDecisionRequest, maxRequestAttempts: options.maxRequestAttempts ?? 3,
@@ -55,7 +55,17 @@ async function setup(t, options = {}) {
   return { store, snapshot, coordinator, sent, errors, applications, tools,
     rawCall: (name, args, exec = { groupId: 'g' }) => tools.get(name).execute(args, exec),
     async call(name, args, exec = { groupId: 'g' }) {
-      const result = await tools.get(name).execute(args, exec)
+      let result = await tools.get(name).execute(args, exec)
+      while (name === 'group_topic_route_submit' && result.status === 'context-required') {
+        const scoped = new Map(), scope = { requestId: args.requestId }
+        coordinator.register({ tools: { register(tool) { scoped.set(tool.name, tool) } } }, 'g', scope)
+        let page, next = result.nextCall.arguments
+        do {
+          page = await scoped.get('group_topic_context_get').execute(next, exec)
+          next = { ...next, offset: page.nextOffset }
+        } while (page.hasMore)
+        result = await tools.get(name).execute(args, exec)
+      }
       if (name !== 'group_topic_route_submit' || result.status !== 'accepted') return result
       const receipt = store.getGroup('g').routeHistory.find((item) => item.routeId === args.requestId)
       const pendingDecisions = (await coordinator.schedule('g')).map((item) => ({ ...item, messages: resolveTopicMessages(store.getGroup('g'), item.topicId, item.revision) }))
@@ -474,6 +484,137 @@ test('大澄清候选走只读分页且未读完不能提交澄清', async t => 
   assert.equal((await h.rawCall('group_topic_route_submit', args)).status, 'accepted')
 })
 
+test('路由短引用仅绑定本请求并持久化完整身份', async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  await ingest(h, 'old-short'); await h.coordinator.schedule('g')
+  const old = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const oldRef = old.messages[0].shortRef
+  await h.call('group_topic_route_submit', { requestId: old.requestId, routes: [{ messageId: oldRef, messageVersion: 1, topics: [{ newTopicKey: 'old', title: '既有事项', reason: '独立事项' }] }] })
+  const topic = h.store.getGroup('g').topics[0]
+  await ingest(h, 'new-short'); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const candidate = request.topics.find(item => item.topicId === topic.topicId)
+  const input = { requestId: request.requestId, routes: [{ messageId: oldRef, messageVersion: 1, topics: [{ topicId: candidate.shortRef, reason: '同一事项' }] }] }
+  await assert.rejects(h.rawCall('group_topic_route_submit', input), /coordination_reference_invalid/)
+  input.routes[0].messageId = request.messages[0].shortRef
+  assert.equal((await h.rawCall('group_topic_route_submit', input)).status, 'accepted')
+  const group = h.store.getGroup('g')
+  assert.equal(group.topics[0].entries.at(-1).messageId, 'new-short')
+  assert.equal(group.routeHistory.at(-1).audit.selections[0].topicId, topic.topicId)
+})
+
+test('路由复用旧摘要话题前读取固定未汇总记录', async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  await ingest(h, 'summary-old')
+  const first = await route(h, { 'summary-old': { newTopicKey: 'same', title: '旧事项' } })
+  await complete(h, first.pendingDecisions[0])
+  await h.coordinator.schedule('g')
+  assert.equal(h.envelope('[GROUP_TOPIC_SUMMARY_MIGRATION]'), undefined)
+  await ingest(h, 'summary-new'); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const candidate = request.topics.find(item => item.topicId === first.topicIdsByKey.same)
+  assert.equal(candidate.hasUnsummarized, true)
+  const input = { requestId: request.requestId, routes: [{ messageId: 'summary-new', messageVersion: 1, topics: [{ topicId: candidate.topicId, reason: '同一事项' }] }] }
+  const missing = await h.rawCall('group_topic_route_submit', input)
+  assert.equal(missing.error, 'topic_route_context_unread')
+  const tools = new Map()
+  h.coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g', request)
+  let page, offset = 0, text = ''
+  do {
+    page = await tools.get('group_topic_context_get').execute({ ...missing.nextCall.arguments, offset }, { groupId: 'g' })
+    text += page.text; offset = page.nextOffset
+  } while (page.hasMore)
+  assert.ok(JSON.parse(text).unsummarized.decisions.length > 0)
+  assert.equal((await h.rawCall('group_topic_route_submit', input)).status, 'accepted')
+  const decision = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(h.coordinator.getReadOnlyDecisionContext('g', decision.requestId).hasOmittedMessages, true)
+})
+
+test('未汇总历史读取后摘要变化使路由快照失效', async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  await ingest(h, 'summary-before')
+  const first = await route(h, { 'summary-before': { newTopicKey: 'same', title: '旧事项' } })
+  await complete(h, first.pendingDecisions[0])
+  await ingest(h, 'summary-after'); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]'), candidate = request.topics.find(item => item.topicId === first.topicIdsByKey.same)
+  const input = { requestId: request.requestId, routes: [{ messageId: 'summary-after', messageVersion: 1, topics: [{ topicId: candidate.topicId, reason: '同一事项' }] }] }
+  const missing = await h.rawCall('group_topic_route_submit', input), tools = new Map()
+  h.coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g', request)
+  let page, offset = 0
+  do {
+    page = await tools.get('group_topic_context_get').execute({ ...missing.nextCall.arguments, offset }, { groupId: 'g' })
+    offset = page.nextOffset
+  } while (page.hasMore)
+  await h.store.updateTopicSummary({ groupId: 'g', topicId: candidate.topicId, expectedRevision: candidate.revision, expectedSummary: '', summary: '已更新' })
+  assert.equal((await h.rawCall('group_topic_route_submit', input)).status, 'stale')
+  assert.equal(h.store.getGroup('g').routeHistory.some(item => item.routeId === request.requestId), false)
+})
+
+test('固定决策短引用展开来源并拒绝伪造', async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  await ingest(h, 'compact-source')
+  const routed = await route(h, { 'compact-source': { newTopicKey: 'compact', title: '精简决策' } })
+  const request = h.envelope('[GROUP_TOPIC_DECISION]'), tools = new Map()
+  h.coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g', request)
+  const submit = tools.get('group_decision_submit').execute
+  const unitRef = request.messages[0].unitShortRef
+  const input = { revision: request.revision, decision: { basisMessageIds: [request.messages[0].messageShortRef], basisUnitRefs: ['~ref-invalid-0'], actions: [], reason: '无需动作' } }
+  await assert.rejects(submit(input, { groupId: 'g' }), /coordination_reference_invalid/)
+  input.decision.basisUnitRefs = [unitRef]
+  assert.equal((await submit(input, { groupId: 'g' })).status, 'accepted')
+  const topic = h.store.getTopic('g', routed.topicIdsByKey.compact)
+  assert.deepEqual(topic.decisions.at(-1).decision.basisMessageIds, ['compact-source'])
+  assert.deepEqual(topic.decisions.at(-1).decision.basisUnitRefs, [{ unitId: request.messages[0].unitId, unitRevision: request.messages[0].unitRevision }])
+})
+
+test('未进入当前surface的决策短引用不授权来源', async t => {
+  const session = Session.create('decision-not-visible')
+  const h = await setup(t, { session, workflowPromptsEnabled: false })
+  await ingest(h, 'unseen-source')
+  await route(h, { 'unseen-source': { newTopicKey: 'unseen', title: '未读事项' } })
+  const request = h.envelope('[GROUP_TOPIC_DECISION]'), tools = new Map()
+  h.coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g', request)
+  const input = { revision: request.revision, decision: { basisMessageIds: [request.messages[0].messageShortRef], basisUnitRefs: [request.messages[0].unitShortRef], actions: [], reason: '无需动作' } }
+  await assert.rejects(tools.get('group_decision_submit').execute(input, { groupId: 'g' }), /topic_decision_delta_unread/)
+  assert.equal(h.store.getTopic('g', request.topicId).decisions.length, 0)
+})
+
+test('固定Topic原文只有末页可见时不能冒充完整来源', async t => {
+  const session = Session.create('partial-source-surface')
+  const h = await setup(t, { session, workflowPromptsEnabled: false })
+  await ingest(h, 'partial-source', { text: '甲'.repeat(45_000) })
+  const routed = await route(h, { 'partial-source': { newTopicKey: 'partial', title: '长来源' } })
+  const request = routed.pendingDecisions[0], scope = h.envelope('[GROUP_TOPIC_DECISION]'), tools = new Map()
+  h.coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g', scope)
+  const read = tools.get('group_topic_context_get').execute
+  const first = await read({}, { groupId: 'g' })
+  assert.equal(first.hasMoreMessages, true)
+  const second = await read({ offset: first.nextOffset, textOffset: first.nextTextOffset }, { groupId: 'g' })
+  assert.equal(second.hasMoreMessages, false)
+  visibleTool(session, 'group_topic_context_get', second)
+  await assert.rejects(h.rawCall('group_decision_submit', submission(request)), /topic_decision_delta_unread/)
+  visibleTool(session, 'group_topic_context_get', first)
+  assert.equal((await h.rawCall('group_decision_submit', submission(request))).status, 'accepted')
+})
+
+test('精简回复只在审阅候选后展开完整身份', async t => {
+  const candidates = [{ outboundId: 'outbound-full-identifier', sourceMessageId: 'review-source', reply: '旧回复', taskIds: [], sourceMessages: [], tasks: [] }]
+  const h = await setup(t, { workflowPromptsEnabled: false, reviewCandidates: () => candidates })
+  await ingest(h, 'review-source')
+  const routed = await route(h, { 'review-source': { newTopicKey: 'review', title: '审阅事项' } })
+  const request = h.envelope('[GROUP_TOPIC_DECISION]'), tools = new Map()
+  h.coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g', request)
+  const submit = input => tools.get('group_decision_submit').execute(input, { groupId: 'g' })
+  const input = { revision: request.revision, decision: { basisMessageIds: ['review-source'], basisUnitRefs: [request.messages[0].unitShortRef], actions: [], reply: '已核对', replyToMessageId: 'review-source', atOpenDingTalkIds: ['od-a'], replyReview: { kind: 'substantive', sameMatterOutboundIds: [], replaceOutboundIds: [] } } }
+  assert.equal((await submit(input)).status, 'review-required')
+  const review = await tools.get('group_reply_review_get').execute({}, { groupId: 'g' })
+  input.decision.replyReview.sameMatterOutboundIds = [review.candidates[0].shortRef]
+  assert.equal((await submit(input)).status, 'accepted')
+  const stored = h.store.getTopic('g', routed.topicIdsByKey.review).decisions.at(-1).decision.replyReview
+  assert.deepEqual(stored.reviewedOutboundIds, ['outbound-full-identifier'])
+  assert.deepEqual(stored.sameMatterOutboundIds, ['outbound-full-identifier'])
+})
+
 test('活跃路由审计已见候选及新建理由，拒绝猜造候选', async t => {
   const h = await setup(t, { workflowPromptsEnabled: false })
   await ingest(h, 'prior')
@@ -492,6 +633,114 @@ test('活跃路由审计已见候选及新建理由，拒绝猜造候选', async
   const receipt = h.store.getGroup('g').routeHistory.find(item => item.routeId === request.requestId)
   assert.deepEqual(receipt.audit.candidates, [{ topicId: candidate.topicId, revision: candidate.revision }])
   assert.equal(receipt.audit.selections[0].candidateComparisons[0].reason, '目标不同')
+})
+
+test('共享新话题定义要求显式引用并保留逐来源审计', async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  await ingest(h, 'prior-shared')
+  const prior = await h.store.routeMessages({ groupId: 'g', routeId: 'old-shared', routingRevision: 0, routes: [{ messageId: 'prior-shared', messageVersion: 1, topics: [{ newTopicKey: 'old', title: '旧事故' }] }] })
+  await ingest(h, 'new-shared-1')
+  await ingest(h, 'new-shared-2')
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const candidate = request.topics.find(item => item.topicId === prior.topicIdsByKey.old)
+  const definition = { newTopicKey: 'current', title: '本次事故', candidateComparisons: [{ topicId: candidate.shortRef, revision: candidate.revision, reason: '不同事故' }] }
+  const routes = ['new-shared-1', 'new-shared-2'].map(messageId => ({ messageId, messageVersion: 1, ignoredRefs: [], units: [{ unitKey: messageId, summary: '本次事故', sourceRefs: [{ wholeMessage: true }], topics: [{ newTopicKey: 'current', reason: messageId }] }] }))
+  const submit = (newTopics, selected = routes) => h.call('group_topic_route_submit', { requestId: request.requestId, newTopics, routes: selected })
+  assert.equal((await submit([definition, definition])).issues[0].code, 'topic_route_definition_duplicate')
+  const malformed = await submit([{ ...definition, candidateComparisons: [{ topicId: candidate.topicId, revision: 'bad', reason: '不同' }] }])
+  assert.equal(malformed.issues[0].field, 'newTopics.0.candidateComparisons.0.revision')
+  assert.equal((await submit([definition, { ...definition, newTopicKey: 'unused' }])).issues[0].code, 'topic_route_definition_unused')
+  assert.equal((await submit([{ ...definition, newTopicKey: 'missing' }])).issues[0].code, 'topic_route_definition_invalid')
+  const conflict = structuredClone(routes)
+  conflict[0].units[0].topics[0].title = '不同标题'
+  assert.equal((await submit([definition], conflict)).issues[0].code, 'topic_route_definition_invalid')
+  await assert.rejects(submit([{ ...definition, candidateComparisons: [{ ...definition.candidateComparisons[0], topicId: '~ref-foreign-0' }] }]), /coordination_reference_invalid/)
+  assert.equal((await submit([{ ...definition, candidateComparisons: [{ ...definition.candidateComparisons[0], revision: candidate.revision + 1 }] }])).issues[0].code, 'topic_route_audit_candidate_invalid')
+  const missingReason = structuredClone(routes)
+  delete missingReason[1].units[0].topics[0].reason
+  const invalid = await submit([definition], missingReason)
+  assert.equal(invalid.issues[0].field, 'routes[1].units[0].topics[0].reason')
+  assert.equal(h.store.getGroup('g').routeHistory.some(item => item.routeId === request.requestId), false)
+  assert.equal((await submit([definition])).status, 'accepted')
+  const receipt = h.store.getGroup('g').routeHistory.find(item => item.routeId === request.requestId)
+  assert.deepEqual(receipt.audit.selections.map(item => item.reason), ['new-shared-1', 'new-shared-2'])
+  assert.ok(receipt.audit.selections.every(item => item.candidateComparisons[0].topicId === candidate.topicId))
+})
+
+test('共享定义使用的候选摘要同版本变化时不能提交旧比较', async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  await ingest(h, 'old-candidate')
+  const prior = await h.store.routeMessages({ groupId: 'g', routeId: 'candidate-base', routingRevision: 0, routes: [{ messageId: 'old-candidate', messageVersion: 1, topics: [{ newTopicKey: 'old', title: '旧事项' }] }] })
+  await ingest(h, 'new-candidate')
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const candidate = request.topics.find(item => item.topicId === prior.topicIdsByKey.old)
+  await h.store.updateTopicSummary({ groupId: 'g', topicId: candidate.topicId, expectedRevision: candidate.revision, expectedSummary: '', summary: '更新后的事实' })
+  const result = await h.rawCall('group_topic_route_submit', { requestId: request.requestId, newTopics: [{ newTopicKey: 'new', title: '新事项', candidateComparisons: [{ topicId: candidate.shortRef, revision: candidate.revision, reason: '旧摘要的比较' }] }], routes: [{ messageId: 'new-candidate', messageVersion: 1, units: [{ unitKey: 'new', summary: '新事项', sourceRefs: [{ wholeMessage: true }], topics: [{ newTopicKey: 'new', reason: '归入新事项' }] }] }] })
+  assert.equal(result.status, 'stale')
+  assert.equal(h.store.getGroup('g').routeHistory.some(item => item.routeId === request.requestId), false)
+})
+
+for (const reread of [false, true]) test('候选全文补读后同版本摘要尾部变化' + (reread ? '须重读后接纳' : '拒绝旧比较'), async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  await ingest(h, 'context-prior')
+  const prior = await h.store.routeMessages({ groupId: 'g', routeId: 'context-prior-route', routingRevision: 0, routes: [{ messageId: 'context-prior', messageVersion: 1, topics: [{ newTopicKey: 'old', title: '旧事项' }] }] })
+  const topicId = prior.topicIdsByKey.old, summary = '甲'.repeat(250) + '旧结论'
+  await h.store.updateTopicSummary({ groupId: 'g', topicId, expectedRevision: 1, expectedSummary: '', summary })
+  await ingest(h, 'context-new')
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]'), candidate = request.topics.find(item => item.topicId === topicId)
+  const scoped = new Map()
+  h.coordinator.register({ tools: { register(tool) { scoped.set(tool.name, tool) } } }, 'g', { requestId: request.requestId })
+  const read = () => scoped.get('group_topic_context_get').execute({ topicId, revision: candidate.revision }, { groupId: 'g' })
+  assert.equal((await read()).topic.summary, summary)
+  await h.store.updateTopicSummary({ groupId: 'g', topicId, expectedRevision: 1, expectedSummary: summary, summary: '甲'.repeat(250) + '新结论' })
+  if (reread) assert.match((await read()).topic.summary, /新结论$/u)
+  const result = await h.rawCall('group_topic_route_submit', { requestId: request.requestId, newTopics: [{ newTopicKey: 'new', title: '新事项', candidateComparisons: [{ topicId, revision: candidate.revision, reason: '独立事项' }] }], routes: [{ messageId: 'context-new', messageVersion: 1, units: [{ unitKey: 'new', summary: '新事项', sourceRefs: [{ wholeMessage: true }], topics: [{ newTopicKey: 'new', reason: '独立事项' }] }] }] })
+  assert.equal(result.status, reread ? 'accepted' : 'stale')
+})
+
+test('首包以外的当前候选可经 context 补读并参与比较', async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  const routes = []
+  for (let index = 0; index < 35; index++) {
+    const messageId = `catalog-${index}`
+    await ingest(h, messageId)
+    routes.push({ messageId, messageVersion: 1, topics: [{ newTopicKey: messageId, title: `目录事项${index}` }] })
+  }
+  const prior = await h.store.routeMessages({ groupId: 'g', routeId: 'catalog-base', routingRevision: 0, routes })
+  await ingest(h, 'catalog-new', { text: '独立的新事件' })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const seen = new Set([...request.topics, ...request.relatedTopics, ...request.recalledTopics].map(item => item.topicId))
+  const topicId = Object.values(prior.topicIdsByKey).find(id => !seen.has(id))
+  assert.ok(topicId, '测试需要首包未曝光的候选')
+  const scoped = new Map()
+  h.coordinator.register({ tools: { register(tool) { scoped.set(tool.name, tool) } } }, 'g', { requestId: request.requestId })
+  const context = await scoped.get('group_topic_context_get').execute({ topicId, revision: 1 }, { groupId: 'g' })
+  assert.equal(context.topic.revision, 1)
+  const result = await h.rawCall('group_topic_route_submit', { requestId: request.requestId, newTopics: [{ newTopicKey: 'new', title: '新事件', candidateComparisons: [{ topicId, revision: 1, reason: '不同事件' }] }], routes: [{ messageId: 'catalog-new', messageVersion: 1, units: [{ unitKey: 'new', summary: '新事件', sourceRefs: [{ wholeMessage: true }], topics: [{ newTopicKey: 'new', reason: '新事件' }] }] }] })
+  assert.equal(result.status, 'accepted')
+})
+
+test('读取历史版本不能替代当前候选版本', async t => {
+  const h = await setup(t, { workflowPromptsEnabled: false })
+  await ingest(h, 'history-first')
+  const prior = await h.store.routeMessages({ groupId: 'g', routeId: 'history-first-route', routingRevision: 0, routes: [{ messageId: 'history-first', messageVersion: 1, topics: [{ newTopicKey: 'old', title: '旧事项' }] }] })
+  const topicId = prior.topicIdsByKey.old
+  await ingest(h, 'history-next')
+  await h.store.routeMessages({ groupId: 'g', routeId: 'history-next-route', routingRevision: h.store.getGroup('g').routingRevision, routes: [{ messageId: 'history-next', messageVersion: 1, topics: [{ topicId, revision: 1 }] }] })
+  await ingest(h, 'history-new')
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]'), candidate = request.topics.find(item => item.topicId === topicId)
+  assert.equal(candidate.revision, 2)
+  const scoped = new Map()
+  h.coordinator.register({ tools: { register(tool) { scoped.set(tool.name, tool) } } }, 'g', { requestId: request.requestId })
+  assert.equal((await scoped.get('group_topic_context_get').execute({ topicId, revision: 1 }, { groupId: 'g' })).topic.revision, 1)
+  const submit = revision => h.rawCall('group_topic_route_submit', { requestId: request.requestId, newTopics: [{ newTopicKey: 'new', title: '新事项', candidateComparisons: [{ topicId, revision, reason: '不同事项' }] }], routes: [{ messageId: 'history-new', messageVersion: 1, units: [{ unitKey: 'new', summary: '新事项', sourceRefs: [{ wholeMessage: true }], topics: [{ newTopicKey: 'new', reason: '不同事项' }] }] }] })
+  assert.equal((await submit(1)).issues[0].code, 'topic_route_audit_candidate_invalid')
+  assert.equal((await submit(2)).status, 'accepted')
 })
 
 test('多依据普通回复应指向语义接收人而非最后解释者', async t => {
@@ -605,8 +854,8 @@ test('同批混合来源并发推进，跨Topic同源只确认一次，各自来
 async function complete(h, request, patch = {}) {
   const envelope = h.envelope('[GROUP_TOPIC_DECISION]')
   if (envelope?.requestId === request.requestId) {
-    for (const section of ['messages', 'quotedMessages', 'sourceMessages', 'removedUnitRefs', 'rejectedDecisions', 'ownership']) {
-      if (envelope[section]?.section !== section) continue
+    for (const section of ['messages', 'quotedMessages', 'sourceMessages', 'removedUnitRefs', 'rejectedDecisions', 'ownership', 'summary']) {
+      if ((section === 'summary' ? envelope.summaryContext : envelope[section])?.section !== section) continue
       let offset = 0, page
       do {
         page = await h.call('group_decision_context_get', { requestId: request.requestId, section, offset })
@@ -653,7 +902,9 @@ test('超长直接引用保持当前事项可见，引用续读前拒绝决策',
   assert.equal(envelope.messages[0].messageId, 'quoted-long')
   assert.equal(envelope.quotedMessages.section, 'quotedMessages')
   assert.ok(Buffer.byteLength(h.sent.findLast((item) => item.startsWith('[GROUP_TOPIC_DECISION]')), 'utf8') <= 12 * 1024)
-  await assert.rejects(h.call('group_decision_submit', submission(request)), /topic_decision_context_unread/)
+  const unread = await h.call('group_decision_submit', submission(request))
+  assert.equal(unread.error, 'topic_decision_context_unread')
+  assert.deepEqual(unread.nextCall, { name: 'group_decision_context_get', arguments: { requestId: request.requestId, section: 'quotedMessages', offset: 0 } })
   let offset = 0, text = '', page
   do {
     page = await h.call('group_decision_context_get', { requestId: request.requestId, section: 'quotedMessages', offset })
@@ -818,6 +1069,68 @@ async function taskFixture(h, message = {}) {
   const { task } = await h.store.createTask({ groupId: 'g', topicRefs: [{ topicId: request.topicId, revision: request.revision }], title: '核验 A', objective: '核验 A', acceptanceCriteria: ['结果有证据'] })
   return { task, request }
 }
+
+for (const [length, inline] of [[14000, true], [70000, false]]) test('完整未汇总材料按首包字节预算' + (inline ? '内联' : '保留分页门禁'), async t => {
+  const visible = [], session = { snapshotEvents: () => [] }
+  const h = await setup(t, { session, onSteer: message => visible.push(message), workflowPromptsEnabled: false, taskDecisionView: task => structuredClone(task) })
+  const { request: first } = await taskFixture(h, { text: 'a'.repeat(length) })
+  await ingest(h, 'summary-current', { text: '继续核对当前事项' })
+  const request = (await route(h, { 'summary-current': first.topicId })).pendingDecisions[0]
+  const envelope = h.envelope('[GROUP_TOPIC_DECISION]')
+  const body = h.sent.findLast(item => item.startsWith('[GROUP_TOPIC_DECISION]'))
+  session.deriveMessages = () => visible
+  assert.ok(envelope.inlineDecisionContext?.task)
+  assert.ok(Buffer.byteLength(body, 'utf8') <= 64 * 1024)
+  if (inline) {
+    assert.equal(envelope.summaryContext, undefined)
+    assert.ok(envelope.unsummarized.messages.some(item => item.messageId === 'a1' && item.text.length === length))
+    const current = visible.pop()
+    assert.equal((await h.rawCall('group_decision_submit', submission(request))).status, 'task-stale')
+    visible.push(current)
+    assert.equal((await h.rawCall('group_decision_submit', submission(request))).status, 'accepted')
+  } else {
+    assert.equal(envelope.summaryContext.section, 'summary')
+    let result = await h.rawCall('group_decision_submit', submission(request))
+    assert.equal(result.error, 'topic_decision_context_unread', JSON.stringify(result))
+    let page
+    do {
+      assert.equal(result.nextCall.name, 'group_decision_context_get')
+      page = await h.rawCall(result.nextCall.name, result.nextCall.arguments)
+      const id = `summary-page-${page.offset}`
+      visible.push({ role: 'assistant', content: [{ type: 'tool-call', id, name: 'group_decision_context_get' }] }, { role: 'tool', toolCallId: id, content: [{ type: 'text', text: JSON.stringify(page) }] })
+      result = await h.rawCall('group_decision_submit', submission(request))
+    } while (page.hasMore)
+    assert.equal(result.status, 'accepted')
+  }
+})
+
+test('同轮版本更新后外置摘要必须重新连续读取', async t => {
+  const visible = [], session = { snapshotEvents: () => [] }
+  const h = await setup(t, { session, onSteer: message => visible.push(message), workflowPromptsEnabled: false, taskDecisionView: task => structuredClone(task) })
+  const { task, request: first } = await taskFixture(h, { text: 'a'.repeat(14000) })
+  await ingest(h, 'inline-current', { text: '继续核对当前事项' })
+  const pending = (await route(h, { 'inline-current': first.topicId })).pendingDecisions[0]
+  assert.ok(h.envelope('[GROUP_TOPIC_DECISION]').unsummarized)
+  await h.store.updateTask(task.taskId, current => ({ ...current, objective: 'b'.repeat(70000) }))
+  await ingest(h, 'inline-next', { text: '补充当前事项' })
+  const next = (await route(h, { 'inline-next': first.topicId })).pendingDecisions[0]
+  assert.equal(next.requestId, pending.requestId)
+  const envelope = h.envelope('[GROUP_TOPIC_DECISION]')
+  assert.equal(envelope.inlineDecisionContext, undefined)
+  assert.equal(envelope.summaryContext.section, 'summary')
+  session.snapshotEvents = () => visible.filter(message => message.role === 'user').map(data => ({ type: 'user/message', data }))
+  session.deriveMessages = () => visible
+  let result = await h.rawCall('group_decision_submit', submission(next))
+  assert.equal(result.error, 'topic_decision_context_unread', JSON.stringify(result))
+  let page
+  do {
+    page = await h.rawCall(result.nextCall.name, result.nextCall.arguments)
+    const id = `revision-summary-page-${page.offset}`
+    visible.push({ role: 'assistant', content: [{ type: 'tool-call', id, name: 'group_decision_context_get' }] }, { role: 'tool', toolCallId: id, content: [{ type: 'text', text: JSON.stringify(page) }] })
+    result = await h.rawCall('group_decision_submit', submission(next))
+  } while (page.hasMore)
+  assert.equal(result.status, 'accepted')
+})
 
 test('引用已送达助手回复的对象纠正可以沟通而不变更任务', async t => {
   const h = await setup(t)
@@ -2322,7 +2635,7 @@ function visibleTool(session, name, result) {
 }
 
 test('材料清单从当前surface分页形成，跨请求与压缩摘要不冒充正文', async t => {
-  const session = Session.create('manifest-session'), h = await setup(t, { session }), { task } = await taskFixture(h)
+  const session = Session.create('manifest-session'), h = await setup(t, { session, onSteer: message => session.append('user/message', message, { surfaceOp: 'append' }) }), { task } = await taskFixture(h)
   const pending = h.coordinator.requestReview('checkpoint', task, { kind: 'plan-confirmed', summary: '材料'.repeat(3000) }).catch(() => {})
   const requestId = h.envelope('[TASK_CHECKPOINT_REVIEW]', '审阅请求').requestId
   const manifest = () => h.call('group_task_review_context_get', { requestId, section: 'manifest' })
@@ -2462,7 +2775,7 @@ test('原生 surface 流程正文与连续页跨请求复用，压缩后历史�
 })
 
 test('审阅复用当前流程正文，压缩或禁用后重新门禁而不是沿用已读标记', async (t) => {
-  const session = Session.create('session-review-visible'), h = await setup(t, { session }), fixture = await taskFixture(h)
+  const session = Session.create('session-review-visible'), h = await setup(t, { session, onSteer: message => session.append('user/message', message, { surfaceOp: 'append' }) }), fixture = await taskFixture(h)
   await h.store.setTaskPrompts([reviewPrompt('delivery')], 0)
   const task = await h.store.updateTask(fixture.task.taskId, (current) => ({ ...current, taskPromptRefs: [{ id: 'delivery', revision: 1 }] }))
   visibleTool(session, 'group_task_prompt_get', { prompts: h.store.getTaskPrompts() })
@@ -2758,6 +3071,8 @@ test('紧凑目录连续分页无漏项，引用同消息全部旧事项保留�
   assert.ok(request.topics.every(topic => (topic.summary?.length ?? 0) <= 240 && !Object.hasOwn(topic, 'processedRevision')))
   for (const topic of request.topics) assert.deepEqual(topic.readCall, { name: 'group_topic_context_get', arguments: { topicId: topic.topicId, revision: topic.revision } })
   assert.ok(JSON.stringify(request.relatedTopics).length <= 3000)
+  const hiddenRef = request.relatedTopics[0].shortRef.replace(/[^-]+$/, (100).toString(36))
+  await assert.rejects(h.rawCall('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'catalog-current', messageVersion: 1, topics: [{ topicId: hiddenRef }] }] }), /coordination_reference_invalid/)
   const relatedIds = request.relatedTopics.map(topic => topic.topicId)
   let relatedOffset = request.nextRelatedTopicOffset
   while (relatedOffset < request.totalRelatedTopics) {
@@ -2855,7 +3170,7 @@ test('固定请求绑定审阅身份与当前Topic，路由缺Topic明确拒绝�
   assert.equal(missing.status, 'invalid-arguments')
   assert.equal(missing.issues[0].code, 'topic_id_required')
   assert.deepEqual(missing.nextCall, { name: 'group_topic_list', arguments: { offset: 0, limit: 50 } })
-  assert.deepEqual(missing.choices, [])
+  assert.equal(missing.choices, undefined)
   await h.call('group_topic_route_submit', { requestId: route.requestId, routes: [{ messageId: 'bound-read', messageVersion: 1,
     topics: [{ newTopicKey: 'bound', title: '固定请求读取' }] }] })
   const request = h.envelope('[GROUP_TOPIC_DECISION]'), scoped = new Map()

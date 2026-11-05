@@ -1,9 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createCoordinationSessions, createCoordinationStepGate, coordinationTools } from '../packages/dingtalk-dsh-assistant/coordination-sessions.js'
+import { createCoordinationSessions, createCoordinationStepGate, coordinationTools, triageRole } from '../packages/dingtalk-dsh-assistant/coordination-sessions.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+
+test('仅普通两级分诊收紧通用工具并排除迁移提交', () => {
+  for (const [role, request] of [['route', { requestId: 'coord-route-a' }], ['decision', { requestId: 'coord-decision-a' }]]) {
+    assert.equal(triageRole(request), role)
+    for (const name of ['read', 'glob', 'grep', 'skill', 'group_topic_title_submit', 'group_topic_summary_submit']) assert.ok(!coordinationTools(role, request).includes(name), name)
+    assert.ok(coordinationTools(role, request).includes('group_message_get'))
+  }
+  for (const [role, request] of [['route', { requestId: 'coord-title-a' }], ['route', { requestId: 'coord-summary-a' }], ['decision', { requestId: 'coord-decision-f', trigger: 'task-facts' }], ['review', { requestId: 'coord-decision-review', kind: 'completion' }]]) {
+    assert.equal(triageRole(request), null)
+    assert.ok(coordinationTools(role, request).includes('read'))
+  }
+})
 
 test('仅未获得句柄的创建错误标记为启动失败，steer 失败不可自动重放', async t => {
   const startup = Object.assign(new Error('invalid preset'), { code: 'agent-preset/invalid' })

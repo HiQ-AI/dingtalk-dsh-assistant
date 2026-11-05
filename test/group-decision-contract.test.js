@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
-import { groupDecisionSchema, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema } from '../packages/dingtalk-dsh-assistant/decision.js'
+import { compactTopicRouteSubmissionJsonSchema, compactGroupDecisionSubmissionSchema, compactGroupDecisionSubmissionJsonSchema, groupDecisionSchema, groupDecisionSubmissionSchema, groupDecisionSubmissionJsonSchema } from '../packages/dingtalk-dsh-assistant/decision.js'
 
 const topicRefs = [{ topicId: 'topic-recall', revision: 1 }]
 const basis = { basisMessageIds: ['message-recall'], basisUnitRefs: [{ unitId: 'unit-recall', unitRevision: 1 }] }
@@ -13,6 +13,29 @@ const actions = [
   { kind: 'task-reopen', taskId: 'task-recall', inputVersion: 1, runSequence: 1, context: '继续核查新证据', topicRefs },
   { kind: 'task-cancel', taskId: 'task-recall', inputVersion: 1, runSequence: 1, reason: '用户取消', topicRefs },
 ]
+
+test('路由原生结构允许显式共享定义并要求逐来源理由', () => {
+  assert.doesNotThrow(() => assertSupportedJsonSchema(compactTopicRouteSubmissionJsonSchema))
+  const input = { requestId: 'coord-route-test', newTopics: [{ newTopicKey: 'new', title: '新事故', candidateComparisons: [{ topicId: 'old', revision: 1, reason: '不是同一事故' }] }], routes: [{ messageId: 'm', messageVersion: 1, units: [{ unitKey: 'u', summary: '本次事故', replacesUnitIds: [], sourceRefs: [{ wholeMessage: true }], topics: [{ newTopicKey: 'new', reason: '属于本次事故' }] }] }] }
+  assert.deepEqual(validateJsonSchemaValue(compactTopicRouteSubmissionJsonSchema, input), [])
+  delete input.routes[0].units[0].topics[0].reason
+  assert.notDeepEqual(validateJsonSchemaValue(compactTopicRouteSubmissionJsonSchema, input), [])
+})
+
+test('精简决策合同可被原生工具使用且要求逐动作来源', () => {
+  assert.doesNotThrow(() => assertSupportedJsonSchema(compactGroupDecisionSubmissionJsonSchema))
+  const replyBranch = compactGroupDecisionSubmissionJsonSchema.properties.decision.oneOf.find(branch => branch.properties.replyReview)
+  const review = replyBranch.properties.replyReview.properties
+  assert.match(review.kind.description, /confirmation/u)
+  assert.match(review.sameMatterOutboundIds.description, /confirmation/u)
+  assert.match(review.replaceOutboundIds.description, /类型未知/u)
+  const input = { revision: 1, decision: { basisMessageIds: ['message-recall'], basisUnitRefs: ['unit-ref'], actions: [{ ...actions[2], topicRefs: ['topic-ref'], basisUnitRefs: ['unit-ref'] }], reply: '已收到' } }
+  assert.deepEqual(validateJsonSchemaValue(compactGroupDecisionSubmissionJsonSchema, input), [])
+  assert.equal(compactGroupDecisionSubmissionSchema.safeParse(input).success, true)
+  delete input.decision.actions[0].basisUnitRefs
+  assert.ok(validateJsonSchemaValue(compactGroupDecisionSubmissionJsonSchema, input).length > 0)
+  assert.equal(compactGroupDecisionSubmissionSchema.safeParse(input).success, false)
+})
 
 test('task-context requires explicit semantics in both Zod and actual native tool JSON schema', () => {
   const action = actions.find(item => item.kind === 'task-context')

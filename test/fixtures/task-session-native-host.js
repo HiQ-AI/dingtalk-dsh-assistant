@@ -149,7 +149,8 @@ export async function nativeTaskHost(root, decide, options = {}) {
       yield { type: 'finish', reason: { kind: calls.length ? 'tool-calls' : 'stop' } }
     }
   }
-  ctx.llm.registerAdapter(options.modelProviders ?? ['native-task-test'], new ScriptedModel())
+  if (options.installModelAdapter) await options.installModelAdapter(ctx)
+  else ctx.llm.registerAdapter(options.modelProviders ?? ['native-task-test'], new ScriptedModel())
   ctx.on('tools/result', (exec, result) => toolResults.push({ name: exec.name, sessionId: exec.agent?.id, result: structuredClone(result) }))
   if (options.resident) { ready = true; construction.resolve(); return h }
   h.residentStore = await openResidentStore(ctx.storageDomain)

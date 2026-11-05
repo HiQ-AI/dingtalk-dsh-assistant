@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { listPerformance } from './performance.js'
 import { normalizeReplySignature } from './group-reply-format.js'
-import { taskModelConfig, taskModelSelection } from './task-model-config.js'
+import { taskModelConfig, taskModelSelection, topicModelConfig } from './task-model-config.js'
 
 const retired = () => { throw Object.assign(new Error('WORKFLOW_RETIRED'), { code: 'WORKFLOW_RETIRED' }) }
 const validateExecutionBackend = value => {
@@ -37,6 +37,8 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
   const taskSelection = () => taskModelConfig(store.getTaskSessionModelConfig?.() ?? taskSessionModel)
   const getAgentConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], agentPreset, workspaceDir: store.getAgentWorkspaceDir?.() ?? root, ...selection(),
     taskSessionModel: taskSelection(),
+    topicRouteModel: store.getTopicRouteModelConfig?.() ?? null,
+    topicDecisionModel: store.getTopicDecisionModelConfig?.() ?? null,
     executionBackend: store.getExecutionBackend?.() ?? initialExecutionBackend,
     replySignature: store.getReplySignature?.() ?? initialSignature,
     proxyUrl: store.getProxyUrl?.() ?? '', maxConcurrentTasks: store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks })
@@ -84,6 +86,8 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
           patch.proxyUrl = input.proxyUrl.trim()
         }
         if (input.taskSessionModel !== undefined) patch.taskSessionModel = taskModelConfig(input.taskSessionModel)
+        for (const key of ['topicRouteModel', 'topicDecisionModel'])
+          if (Object.hasOwn(input, key)) patch[key] = topicModelConfig(input[key])
         const old = selection(), changesDefault = input.provider !== undefined || input.model !== undefined || input.reasoningEffort !== undefined
         if (input.model !== undefined && typeof input.model !== 'string') throw new Error('agent_model_required')
         if (input.reasoningEffort !== undefined && typeof input.reasoningEffort !== 'string') throw new Error('agent_reasoning_effort_invalid')
@@ -95,6 +99,10 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
         // Preflight the complete requested state before either independent store is written.
         if (changesDefault) await ctx.llm.resolveCallConfig(proposedSelection)
         if (patch.taskSessionModel || input.reasoningEffort !== undefined) await ctx.llm.resolveCallConfig(taskModelSelection(proposedSelection, patch.taskSessionModel ?? taskSelection()))
+        for (const key of ['topicRouteModel', 'topicDecisionModel']) {
+          const configured = Object.hasOwn(patch, key) ? patch[key] : getAgentConfig()[key]
+          if (configured && (Object.hasOwn(patch, key) || changesDefault)) await ctx.llm.resolveCallConfig(taskModelSelection(proposedSelection, configured))
+        }
         try {
           if (changesDefault) await ctx.agentDefaultModel.saveSelection(proposedSelection)
           if (Object.keys(patch).length) await store.setAgentSettings(patch)

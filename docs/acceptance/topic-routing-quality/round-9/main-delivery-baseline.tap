@@ -1,0 +1,12 @@
+✔ anonymous missing-original-file wait preserves authorized repair progress, inspection and same-session recovery (39801.3065ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":20015,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":19377,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":407,"aborted":false}
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 42394.9582
