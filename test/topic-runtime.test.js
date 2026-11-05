@@ -461,6 +461,94 @@ test('路由首包按 JSON 实际长度预算并可续读转义原文', async t 
   assert.equal(restored, text)
 })
 
+test('不确定来源按Host策略静默归入职责外，不创建任务或回复', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  await ingest(h, 'chatter', { text: '那个好像挺有意思' }); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const result = await h.rawCall('group_topic_route_submit', { requestId: request.requestId,
+    routes: [{ messageId: 'chatter', messageVersion: 1, deferred: { reason: '事项不确定' } }] })
+  assert.equal(result.status, 'accepted')
+  const group = h.store.getGroup('g'), message = group.messages.find(item => item.messageId === 'chatter')
+  assert.equal(message.routingStatus, 'routed')
+  assert.equal(message.units.at(-1).fixedTopic, 'out-of-scope')
+  assert.equal(group.routeHistory.at(-1).audit.selections.at(-1).kind, 'host-uncertain-policy')
+  assert.deepEqual(group.outbox, [])
+  assert.deepEqual(h.applications, [])
+})
+
+test('不确定来源的无效澄清不能降级为职责外', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  await ingest(h, 'invalid-draft', { text: '请处理这个' }); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const result = h.rawCall('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'invalid-draft', messageVersion: 1,
+    deferred: { reason: '缺目标', clarification: { question: '具体哪个？', assignmentQuote: '不存在',
+      replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } } }] })
+  await assert.rejects(result, /topic_route_clarification_invalid/)
+  assert.equal(h.store.getGroup('g').messages[0].routingStatus, 'pending')
+})
+
+test('资源读取失败不能按不确定来源静默归类', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  await ingest(h, 'unavailable', { text: '请看附件', mediaUnavailable: ['image:read_failed'] })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await assert.rejects(h.rawCall('group_topic_route_submit', { requestId: request.requestId,
+    routes: [{ messageId: 'unavailable', messageVersion: 1, deferred: { reason: '无法辨别' } }] }), /topic_route_policy_resource_unavailable/)
+  const group = h.store.getGroup('g')
+  assert.equal(group.messages[0].routingStatus, 'pending')
+  assert.equal(group.routeHistory.length, 0)
+})
+
+test('已有活跃事项的不完整分流结构化拒绝且保留原账', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  await ingest(h, 'existing-active', { text: '处理原事项' })
+  const first = await route(h, { 'existing-active': { newTopicKey: 'active', title: '原事项' } })
+  await complete(h, first.pendingDecisions[0])
+  await ingest(h, 'existing-active', { text: '处理原事项并补充资料', messageVersion: 2 })
+  await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const before = structuredClone(h.store.getGroup('g'))
+  assert.ok(before.messages.find(item => item.messageId === 'existing-active').activeUnitRefs?.length)
+  const message = request.messages.find(item => item.messageId === 'existing-active')
+  const result = await h.rawCall('group_topic_route_submit', { requestId: request.requestId,
+    routes: [{ messageId: message.messageId, messageVersion: message.messageVersion, deferred: { reason: '对象不明确' } }] })
+  assert.equal(result.status, 'invalid-arguments')
+  assert.ok(result.issues.some(issue => issue.code === 'topic_route_policy_existing_units' && issue.field === 'routes[0]'))
+  const after = h.store.getGroup('g')
+  for (const key of ['messages', 'topics', 'outbox', 'routeHistory', 'sourceDispatchOwnership']) assert.deepEqual(after[key], before[key])
+  assert.equal(after.routingRevision, before.routingRevision)
+  h.store.setTaskSessionReader({ clarificationPolicyEligible: () => true, listTasks: () => [] })
+  const topic = request.topics.find(item => item.topicId === first.topicIdsByKey.active)
+  const accepted = await h.call('group_topic_route_submit', { requestId: request.requestId,
+    routes: [{ messageId: message.messageId, messageVersion: message.messageVersion, deferred: { reason: '对象不明确',
+      scope: [{ topicId: topic.topicId, revision: topic.revision }], clarification: { question: '请说明具体资料？',
+        assignmentQuote: message.text, replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } } }] })
+  assert.equal(accepted.status, 'accepted')
+  const held = h.store.getGroup('g')
+  assert.deepEqual(held.messages[0].activeUnitRefs, before.messages[0].activeUnitRefs)
+  assert.deepEqual(held.messages[0].units, before.messages[0].units)
+  assert.deepEqual(held.topics, before.topics)
+  assert.deepEqual(held.outbox, before.outbox)
+  assert.deepEqual(held.messages[0].routingHold.scope, [topic.topicId])
+})
+
+test('澄清仅接受已曝光话题版本并持久限定范围', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  h.store.setTaskSessionReader({ clarificationPolicyEligible: () => true, listTasks: () => [] })
+  await ingest(h, 'existing'); const first = await route(h, { existing: { newTopicKey: 'existing', title: '现有事项' } })
+  const topicId = first.topicIdsByKey.existing
+  await ingest(h, 'uncertain', { text: '请看看具体对象' }); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]'), candidate = request.topics.find(item => item.topicId === topicId)
+  const clarification = { question: '请说明具体对象？', assignmentQuote: '请看看具体对象', replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }
+  const submit = scope => h.rawCall('group_topic_route_submit', { requestId: request.requestId,
+    routes: [{ messageId: 'uncertain', messageVersion: 1, deferred: { reason: '缺对象', scope, clarification } }] })
+  await assertDecisionIssue(submit([{ topicId, revision: candidate.revision + 1 }]), /topic_route_scope_unseen/)
+  await assertDecisionIssue(submit([{ topicId, revision: candidate.revision }, { topicId, revision: candidate.revision }]), /topic_route_scope_duplicate/)
+  assert.equal((await submit([{ topicId, revision: candidate.revision }])).status, 'accepted')
+  const hold = h.store.getGroup('g').messages.find(item => item.messageId === 'uncertain').routingHold
+  assert.deepEqual(hold.scope, [topicId]); assert.equal(hold.clarification.authorization, 'routing-policy')
+})
+
 test('大澄清候选走只读分页且未读完不能提交澄清', async t => {
   const candidates = [{ outboundId: 'old', reply: '"'.repeat(7_000) }]
   assert.ok(coordinationTools('route').includes('group_topic_route_context_get'))

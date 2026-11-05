@@ -99,7 +99,7 @@ export const topicRouteSubmissionSchema = z.strictObject({
   routes: z.array(z.strictObject({
     messageId: z.string().min(1), messageVersion: z.number().int().positive(),
     replyTopic: topicRouteOwnerSchema.optional(),
-    deferred: z.strictObject({ reason: z.string().trim().min(1), clarification: z.strictObject({ question: z.string().trim().min(1).max(2000), assignmentQuote: z.string().min(1), replyReview: replyReviewSchema }).optional() }).optional(),
+    deferred: z.strictObject({ reason: z.string().trim().min(1), scope: z.array(z.strictObject({ topicId: z.string().min(1), revision: z.number().int().nonnegative() })).min(1).optional(), clarification: z.strictObject({ question: z.string().trim().min(1).max(2000), assignmentQuote: z.string().min(1), replyReview: replyReviewSchema }).optional() }).optional(),
     ignoredRefs: z.array(z.strictObject({ quote: z.string().min(1), reason: z.string().trim().min(1) })).default([]),
     units: z.array(z.strictObject({
       unitKey: z.string().min(1), summary: z.string().trim().min(1),
@@ -148,7 +148,7 @@ export const topicRouteSubmissionJsonSchema = {
       type: 'object', additionalProperties: false,
       properties: {
         messageId: stringJsonSchema, messageVersion: { type: 'integer' },
-        deferred: { type: 'object', additionalProperties: false, properties: { reason: stringJsonSchema, clarification: { type: 'object', additionalProperties: false, properties: { question: stringJsonSchema, assignmentQuote: stringJsonSchema, replyReview: replyReviewJsonSchema }, required: ['question', 'assignmentQuote', 'replyReview'] } }, required: ['reason'] },
+        deferred: { type: 'object', additionalProperties: false, properties: { reason: stringJsonSchema, scope: { type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, revision: { type: 'integer', minimum: 0 } }, required: ['topicId', 'revision'] } }, clarification: { type: 'object', additionalProperties: false, properties: { question: stringJsonSchema, assignmentQuote: stringJsonSchema, replyReview: replyReviewJsonSchema }, required: ['question', 'assignmentQuote', 'replyReview'] } }, required: ['reason'] },
         replyTopic: { oneOf: [
           { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
           { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema }, required: ['newTopicKey'] },
