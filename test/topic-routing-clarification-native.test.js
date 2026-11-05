@@ -86,12 +86,18 @@ test('发送许可前 epoch 已恢复时拒绝旧澄清，不产生网络发送'
   { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
     assert.ok(available, reason)
     const root = await nativeTemporaryDirectory(join(tmpdir(), 'routing-clarification-race-'))
-    let host, disclosed = false, sends = 0
-    t.after(async () => { await host?.close(); await nativeRemove(root, { recursive: true, force: true }) })
-    host = await t.step(() => nativeTaskHost(root, request => hold(request), { notifications: {
-      async canDisclose() {
+    let host, disclosed = false, sends = 0, oldNotificationId
+    const resumedRoute = Promise.withResolvers(), rejected = Promise.withResolvers()
+    t.onCancel(() => resumedRoute.resolve())
+    t.after(async () => { resumedRoute.resolve(); await host?.close(); await nativeRemove(root, { recursive: true, force: true }) })
+    host = await t.step(() => nativeTaskHost(root, async request => {
+      if (disclosed) { await resumedRoute.promise; return hold(request, false) }
+      return hold(request)
+    }, { notifications: {
+      async canDisclose(notification) {
         if (!disclosed) {
           disclosed = true
+          oldNotificationId = notification.id
           const source = host.residentStore.getGroup('native-group').messages.find(item => item.messageId === 'race')
           await host.residentStore.updateRoutingHold({ groupId: 'native-group', messageId: source.messageId,
             messageVersion: source.messageVersion, epoch: source.routingHold.epoch, resume: true })
@@ -101,15 +107,25 @@ test('发送许可前 epoch 已恢复时拒绝旧澄清，不产生网络发送'
       async send() { sends++; assert.fail('过期澄清不得外发') },
     } }))
     await t.step(() => scopeTopic(host))
+    const withRoutingHold = host.residentStore.withRoutingHold
+    host.residentStore.withRoutingHold = async args => {
+      try { return await withRoutingHold(args) }
+      catch (error) { if (disclosed && error.message === 'topic_routing_hold_stale') rejected.resolve(); throw error }
+    }
     await t.beginBusiness()
     await t.step(() => host.service.ingest(message('race', '测试助手，请核查那张发票。')))
-    await t.step(() => host.service.whenIdle())
+    await t.step(() => rejected.promise)
     assert.ok(disclosed)
     assert.equal(sends, 0)
-    const notification = (await t.step(() => host.query('notification.list')))[0]
+    const notification = await t.step(() => host.query('notification.get', { notificationId: oldNotificationId }))
     assert.equal(notification.state, 'prepared')
     assert.equal(notification.sendAttemptCount, undefined)
-    assert.equal(host.residentStore.getGroup('native-group').messages.find(item => item.messageId === 'race').routingStatus, 'pending')
+    const source = host.residentStore.getGroup('native-group').messages.find(item => item.messageId === 'race')
+    assert.equal(source.routingStatus, 'pending')
+    assert.equal(source.routingEpoch, 1)
+    resumedRoute.resolve()
+    await t.step(() => host.service.whenIdle())
+    assert.equal(sends, 0)
   }))
 
 test('只有冻结出箱尚未prepare的冷启动沿原正文恢复一次，不重调模型',

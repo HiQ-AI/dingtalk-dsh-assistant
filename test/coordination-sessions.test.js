@@ -30,9 +30,9 @@ test('仅未获得句柄的创建错误标记为启动失败，steer 失败不�
   t.after(() => created.close())
   await assert.rejects(created.dispatch(request, { id: 'original' }), error => error === steering && error.coordinationStartupFailure !== true)
 })
-function fixture(t) {
+function fixture(t, onStage) {
   const requests = new Set(), handles = [], errors = []
-  const manager = createCoordinationSessions({ isCurrent: request => requests.has(request), onError: error => errors.push(error),
+  const manager = createCoordinationSessions({ isCurrent: request => requests.has(request), onError: error => errors.push(error), ...(onStage ? { onStage } : {}),
     create: async entry => {
       const events = [], idle = deferred()
       const handle = { entry, events, idle, disposed: 0, cancellations: 0,
@@ -65,6 +65,62 @@ test('请求句柄按群和请求隔离，重复提醒复用；失效请求拒�
   await tick(); await tick()
   assert.equal(h.handles[0].disposed, 1)
   assert.equal(h.errors.length, 0)
+})
+
+test('活跃路由追加立即进入原会话，稳定消息身份不重复投递', async t => {
+  const h = fixture(t), route = h.request('route', 'live')
+  const agent = await h.manager.dispatch(route, { id: 'initial' })
+  const update = { id: 'batch-1' }
+  assert.equal(await h.manager.dispatch(route, update, { inFlightRouteUpdate: true }), agent)
+  assert.equal(await h.manager.dispatch(route, update, { inFlightRouteUpdate: true }), agent)
+  assert.deepEqual(h.handles[0].events.filter(event => event.type === 'user/message').map(event => event.data.id), ['initial', 'batch-1'])
+  assert.equal(h.handles.length, 1)
+})
+
+test('在途追加 steer 失败向调用方返回，不自动重放', async t => {
+  const h = fixture(t), route = h.request('route', 'steer-error')
+  const agent = await h.manager.dispatch(route, { id: 'initial' })
+  const failure = new Error('update failed')
+  let attempts = 0
+  agent.steer = () => { attempts++; throw failure }
+  await assert.rejects(h.manager.dispatch(route, { id: 'batch-1' }, { inFlightRouteUpdate: true }), error => error === failure)
+  assert.equal(attempts, 1)
+  assert.equal(h.handles.length, 1)
+})
+
+test('首包尚未投递时追加不能抢先进入会话', async t => {
+  const entered = deferred(), release = deferred()
+  let blocked = false
+  const h = fixture(t, async (_request, stage) => {
+    if (stage.completedAt && !blocked) { blocked = true; entered.resolve(); await release.promise }
+  })
+  t.after(() => release.resolve())
+  const route = h.request('route', 'starting')
+  const first = h.manager.dispatch(route, { id: 'initial' })
+  await entered.promise
+  const update = h.manager.dispatch(route, { id: 'batch-1' }, { inFlightRouteUpdate: true })
+  assert.equal(h.handles[0].events.some(event => event.type === 'user/message'), false)
+  release.resolve(); await first; await tick()
+  assert.deepEqual(h.handles[0].events.filter(event => event.type === 'user/message').map(event => event.data.id), ['initial', 'batch-1'])
+  await update
+  h.handles[0].idle.resolve()
+})
+
+test('已让出或失效的路由追加不得绕过同群队列', async t => {
+  const h = fixture(t), route = h.request('route', 'yield'), other = h.request('checkpoint', 'other')
+  await h.manager.dispatch(route, { id: 'initial' })
+  const pendingOther = h.manager.dispatch(other, { id: 'other' })
+  h.handles[0].entry.yieldRequested = true
+  let delivered = false
+  const update = h.manager.dispatch(route, { id: 'batch-1' }, { inFlightRouteUpdate: true }).then(() => { delivered = true })
+  await tick()
+  assert.equal(delivered, false)
+  assert.equal(h.handles[0].events.some(event => event.data?.id === 'batch-1'), false)
+  h.requests.delete(route)
+  const rejected = assert.rejects(update, /inactive/)
+  h.handles[0].idle.resolve()
+  await Promise.all([pendingOther, rejected])
+  assert.equal(h.handles[0].events.some(event => event.data?.id === 'batch-1'), false)
 })
 
 test('同群模型串行，入站路由抢占当前审阅并先于排队审阅，不增加模型并发', async t => {

@@ -129,6 +129,8 @@ export function taskNotificationOutbound(notification) {
     outboundId: notification.id,
     notificationRecovery: taskNotificationRecovery(notification),
     ...(notification.supersededBy ? { supersededByOutboundId: notification.supersededBy, supersededAt: notification.updatedAt } : {}),
+    ...(notification.reason === 'topic_initial_reply_stale' && notification.state === 'superseded'
+      ? { supersededReason: notification.reason, supersededAt: notification.updatedAt } : {}),
     // One source can produce both a question and completion. Deduplicate by notification.
     sourceMessageId: `task-notification:${notification.id}`,
     text: payload.text,

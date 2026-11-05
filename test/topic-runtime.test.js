@@ -1318,7 +1318,7 @@ test('关联Task内联后发生版本变化，旧快照不能放行Task动作', 
   assert.equal(h.store.getGroup('g').outbox.length, 0)
 })
 
-test('归类 exact batch 零副作用拒绝漏项，新增消息进入下一批', async (t) => {
+test('归类 exact batch 拒绝漏项，新来源追加当前请求', async (t) => {
   const h = await setup(t)
   await ingest(h, 'a'); await ingest(h, 'b'); await h.coordinator.schedule('g')
   const request = h.envelope('[GROUP_TOPIC_ROUTE]')
@@ -1328,10 +1328,15 @@ test('归类 exact batch 零副作用拒绝漏项，新增消息进入下一批'
   assert.deepEqual(h.store.getGroup('g'), before)
   await assert.rejects(h.call('group_topic_route_submit', { requestId: request.requestId, routes }, { groupId: 'foreign' }), /wrong_session/)
   await ingest(h, 'c')
-  const accepted = await h.call('group_topic_route_submit', { requestId: request.requestId, routes })
+  const stale = await h.call('group_topic_route_submit', { requestId: request.requestId, routes })
+  assert.equal(stale.status, 'route-batch-stale')
+  assert.equal(h.store.listTopics('g').length, 0)
+  const update = h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]')
+  assert.equal(update.requestId, request.requestId)
+  const updatedRoutes = update.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [{ newTopicKey: message.messageId, title: message.messageId }] }))
+  const accepted = await h.call('group_topic_route_submit', { requestId: request.requestId, batchRevision: update.batchRevision, routes: updatedRoutes })
   assert.equal(accepted.status, 'accepted')
-  assert.equal(h.store.listTopics('g').length, 2)
-  assert.deepEqual(h.envelope('[GROUP_TOPIC_ROUTE]').messages.map((message) => message.messageId), ['c'])
+  assert.equal(h.store.listTopics('g').length, 3)
 })
 
 test('A/B 独立提交不要求覆盖其他 Topic，先完成 B 不消费 A', async (t) => {
@@ -3089,6 +3094,202 @@ test('精确关联未通过时保留普通话题目录，路由不自行猜测�
   assert.equal(request.messages[0].quotedReminder, undefined); assert.equal(request.quotedReminderGuide, undefined)
 })
 
+test('超限恢复链跨批只读完整边界后提交，来源不丢失或重复路由', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  for (let index = 0; index < 15; index++) await ingest(h, `chain-${index}`)
+  await h.store.routeMessages({ groupId: 'g', routeId: 'chain-holds', routingRevision: h.store.getGroup('g').routingRevision,
+    routes: Array.from({ length: 15 }, (_, index) => ({ messageId: `chain-${index}`, messageVersion: 1, deferred: { reason: '需要上下文' } })) })
+  await ingest(h, 'chain-answer', { quotedMessage: { messageId: 'chain-14', content: '@助理 chain-14' } })
+  for (let index = 14; index > 0; index--) await ingest(h, `chain-${index}`, { quotedMessage: { messageId: `chain-${index - 1}`, content: `@助理 chain-${index - 1}` } })
+  await h.coordinator.schedule('g')
+  for (const expectedCount of [15, 1]) {
+    const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+    assert.equal(request.messages.length, expectedCount)
+    const args = { requestId: request.requestId, routes: request.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion,
+      units: [{ unitKey: 'outside', summary: '职责外讨论', sourceRefs: [{ wholeMessage: true }], topics: [], fixedTopic: 'out-of-scope', reason: '职责外' }] })) }
+    let result = await h.rawCall('group_topic_route_submit', args)
+    assert.equal(result.status, 'context-required')
+    assert.equal(result.error, 'topic_route_recovery_unread')
+    let next = result.nextCall.arguments, page
+    do { page = await h.rawCall('group_topic_route_context_get', next); next = { ...next, offset: page.nextOffset } } while (page.hasMore)
+    if (expectedCount === 15) {
+      await ingest(h, 'chain-answer', { senderName: '更新后的作者', quotedMessage: { messageId: 'chain-14', content: '@助理 chain-14' } })
+      result = await h.rawCall('group_topic_route_submit', args)
+      assert.equal(result.status, 'route-batch-stale')
+      const update = h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]')
+      args.batchRevision = update.batchRevision
+      result = await h.rawCall('group_topic_route_submit', args)
+      assert.equal(result.error, 'topic_route_recovery_unread')
+      next = result.nextCall.arguments
+      do { page = await h.rawCall('group_topic_route_context_get', next); next = { ...next, offset: page.nextOffset } } while (page.hasMore)
+    }
+    result = await h.rawCall('group_topic_route_submit', args)
+    assert.equal(result.status, 'accepted')
+  }
+  assert.equal(h.store.getGroup('g').messages.filter(message => message.routingStatus === 'routed').length, 16)
+})
+
+test('一级初诊按真实来源和话题原子保存，不替换旧回复', async t => {
+  const h = await setup(t)
+  await ingest(h, 'initial-source'); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const args = { requestId: request.requestId, routes: [{ messageId: 'initial-source', messageVersion: 1,
+    units: [{ unitKey: 'work', summary: '排查问题', sourceRefs: [{ wholeMessage: true }], topics: [{ newTopicKey: 'work', title: '问题排查' }] }] }],
+  initialReplies: [{ messageId: 'initial-source', messageVersion: 1, unitKey: 'work', target: { newTopicKey: 'work' }, text: '我会先了解相关情况。',
+    replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }] }
+  const result = await h.call('group_topic_route_submit', args)
+  assert.equal(result.status, 'accepted')
+  const receipt = h.store.getGroup('g').routeHistory.find(item => item.routeId === request.requestId)
+  assert.equal(receipt.initialReplies.length, 1)
+  assert.equal(receipt.initialReplies[0].topicId, result.topicIdsByKey.work)
+  assert.deepEqual(receipt.initialReplies[0].sourceRef, { messageId: 'initial-source', messageVersion: 1, actorId: 'od-a' })
+  assert.equal(receipt.initialReplies[0].text, args.initialReplies[0].text)
+  assert.equal(h.store.getGroup('g').outbox.length, 0, '仅原子保存草稿，不伪装发送')
+  await Promise.all([h.coordinator.schedule('g'), h.coordinator.schedule('g')])
+  assert.equal(h.envelope('[GROUP_TOPIC_DECISION]'), undefined, '初诊尚未冻结时并发调度不得启动二级')
+  const draft = receipt.initialReplies[0]
+  await h.store.appendOutbox({ groupId: 'g', outboundId: draft.outboundId, sourceMessageId: `task-notification:${draft.outboundId}`,
+    topicRefs: [{ topicId: draft.topicId, revision: draft.topicRevision }], text: draft.text, replyKind: 'substantive',
+    sourceRef: draft.sourceRef, replyToMessageId: draft.sourceRef.messageId, replyToSenderOpenDingTalkId: draft.sourceRef.actorId,
+    atOpenDingTalkIds: [draft.sourceRef.actorId], matterUnitRefs: [draft.unitRef], matterSourceMessageIds: [draft.sourceRef.messageId], taskIds: [] })
+  await h.coordinator.schedule('g')
+  assert.equal(h.envelope('[GROUP_TOPIC_DECISION]'), undefined, '仅有 Resident 出箱时通知尚未进入 Dynamic')
+  const outbound = h.store.getGroup('g').outbox.find(item => item.outboundId === draft.outboundId)
+  await h.store.projectTaskNotification({ groupId: 'g', outbound: { ...outbound, notificationState: 'prepared' } })
+  await h.coordinator.schedule('g')
+  assert.equal(h.envelope('[GROUP_TOPIC_DECISION]').topicId, draft.topicId)
+})
+
+test('显式归属复核超过十五条时拒绝，不截断来源', async t => {
+  const h = await setup(t)
+  const result = await h.rawCall('group_topic_route_review', { messageIds: Array.from({ length: 16 }, (_, index) => `review-${index}`), reason: '复核' })
+  assert.equal(result.status, 'invalid-arguments')
+  assert.equal(h.sent.length, 0)
+})
+
+test('容量不足的恢复配对留到下批，不重建已有活动批次', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  await ingest(h, 'overflow-held')
+  await h.store.routeMessages({ groupId: 'g', routeId: 'overflow-hold', routingRevision: h.store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'overflow-held', messageVersion: 1, deferred: { reason: '需要补充' } }] })
+  for (let index = 0; index < 14; index++) await ingest(h, `existing-${index}`)
+  await h.coordinator.schedule('g')
+  const first = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await ingest(h, 'overflow-answer', { quotedMessage: { messageId: 'overflow-held', content: '@助理 overflow-held' } })
+  await h.coordinator.schedule('g')
+  assert.equal(h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]'), undefined)
+  const result = await h.rawCall('group_topic_route_submit', { requestId: first.requestId, routes: first.messages.map(item => ({
+    messageId: item.messageId, messageVersion: item.messageVersion,
+    units: [{ unitKey: 'outside', summary: '职责外', sourceRefs: [{ wholeMessage: true }], topics: [], fixedTopic: 'out-of-scope', reason: '职责外' }],
+  })) })
+  assert.equal(result.status, 'accepted')
+  assert.deepEqual(new Set(h.envelope('[GROUP_TOPIC_ROUTE]').messages.map(item => item.messageId)), new Set(['overflow-held', 'overflow-answer']))
+})
+
+test('恢复配对新增时吸收群路由版本并在原会话提交', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  await ingest(h, 'held-source')
+  await h.store.routeMessages({ groupId: 'g', routeId: 'held-route', routingRevision: h.store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'held-source', messageVersion: 1, deferred: { reason: '需要补充' } }] })
+  await ingest(h, 'existing-source'); await h.coordinator.schedule('g')
+  const first = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const revision = h.store.getGroup('g').routingRevision
+  await ingest(h, 'held-answer', { quotedMessage: { messageId: 'held-source', content: '@助理 held-source' } })
+  assert.ok(h.store.getGroup('g').routingRevision > revision)
+  await h.coordinator.schedule('g')
+  const update = h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]')
+  assert.equal(update.requestId, first.requestId)
+  assert.deepEqual(new Set(update.messages.map(item => item.messageId)), new Set(['held-source', 'held-answer', 'existing-source']))
+  const result = await h.rawCall('group_topic_route_submit', { requestId: first.requestId, batchRevision: update.batchRevision, routes: update.messages.map(item => ({
+    messageId: item.messageId, messageVersion: item.messageVersion,
+    units: [{ unitKey: 'outside', summary: '职责外', sourceRefs: [{ wholeMessage: true }], topics: [], fixedTopic: 'out-of-scope', reason: '职责外' }],
+  })) })
+  assert.equal(result.status, 'accepted')
+})
+
+test('追加来源续读页被压缩后必须重新曝光', async t => {
+  const visible = [], events = []
+  const session = { deriveMessages: () => visible, snapshotEvents: () => events }
+  const h = await setup(t, { fixedTopicsEnabled: true, session, onSteer(message) { visible.push(message); events.push({ type: 'user/message', data: message }) } })
+  await ingest(h, 'paged-first'); await h.coordinator.schedule('g')
+  const first = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await ingest(h, 'paged-second', { text: '长'.repeat(1500) }); await h.coordinator.schedule('g')
+  const update = h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]')
+  const args = { requestId: first.requestId, batchRevision: update.batchRevision, routes: update.messages.map(item => ({
+    messageId: item.messageId, messageVersion: item.messageVersion,
+    units: [{ unitKey: 'outside', summary: '职责外', sourceRefs: [{ wholeMessage: true }], topics: [], fixedTopic: 'out-of-scope', reason: '职责外' }],
+  })) }
+  let result = await h.rawCall('group_topic_route_submit', args)
+  assert.equal(result.error, 'topic_route_source_unread')
+  const read = result.nextCall, page = await h.rawCall(read.name, read.arguments)
+  const call = { role: 'assistant', content: [{ type: 'tool-call', id: 'page-call', name: read.name }] }
+  const output = { role: 'tool', toolCallId: 'page-call', content: [{ type: 'text', text: JSON.stringify(page) }] }
+  visible.push(call, output)
+  visible.splice(visible.indexOf(output), 1)
+  result = await h.rawCall('group_topic_route_submit', args)
+  assert.equal(result.error, 'topic_route_source_unread')
+  assert.equal(result.nextCall.arguments.offset, 1000)
+  const reread = await h.rawCall(result.nextCall.name, result.nextCall.arguments)
+  visible.push({ ...output, content: [{ type: 'text', text: JSON.stringify(reread) }] })
+  assert.equal((await h.rawCall('group_topic_route_submit', args)).status, 'accepted')
+})
+
+test('活动更新必须进入当前模型 surface 才允许提交', async t => {
+  const visible = [], events = [], inbox = { nextStep: [], nextTurn: [] }
+  const session = { deriveMessages: () => visible, snapshotEvents: () => events }
+  const h = await setup(t, { fixedTopicsEnabled: true, session, inbox, onSteer(message) {
+    if (message.id.includes('-batch-')) inbox.nextStep.push(message)
+    else { visible.push(message); events.push({ type: 'user/message', data: message }) }
+  } })
+  await ingest(h, 'surface-one'); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await ingest(h, 'surface-two'); await h.coordinator.schedule('g')
+  const update = h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]')
+  const args = { requestId: request.requestId, batchRevision: update.batchRevision, routes: update.messages.map(message => ({
+    messageId: message.messageId, messageVersion: message.messageVersion,
+    units: [{ unitKey: 'outside', summary: '职责外', sourceRefs: [{ wholeMessage: true }], topics: [], fixedTopic: 'out-of-scope', reason: '职责外' }],
+  })) }
+  assert.equal((await h.rawCall('group_topic_route_submit', args)).status, 'route-update-unread')
+  assert.equal(h.store.getGroup('g').routeHistory.length, 0)
+  const message = inbox.nextStep.shift()
+  visible.push(message); events.push({ type: 'user/message', data: message })
+  visible.splice(visible.indexOf(message), 1)
+  assert.equal((await h.rawCall('group_topic_route_submit', args)).status, 'route-update-unread')
+  const reexposed = inbox.nextStep.shift()
+  assert.notEqual(reexposed.id, message.id)
+  visible.push(reexposed); events.push({ type: 'user/message', data: reexposed })
+  assert.equal((await h.rawCall('group_topic_route_submit', args)).status, 'accepted')
+})
+
+test('活动路由追加来源并拒绝旧批次，消费更新后一起提交', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  await ingest(h, 'active-one'); await h.coordinator.schedule('g')
+  const first = h.envelope('[GROUP_TOPIC_ROUTE]')
+  await ingest(h, 'active-two'); await h.coordinator.schedule('g')
+  const update = h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]')
+  assert.equal(update.requestId, first.requestId)
+  assert.equal(update.batchRevision, 1)
+  assert.deepEqual(update.messages.map(message => message.messageId), ['active-one', 'active-two'])
+  const route = message => ({ messageId: message.messageId, messageVersion: message.messageVersion,
+    units: [{ unitKey: 'outside', summary: '职责外', sourceRefs: [{ wholeMessage: true }], topics: [], fixedTopic: 'out-of-scope', reason: '职责外' }] })
+  assert.equal((await h.call('group_topic_route_submit', { requestId: first.requestId, batchRevision: 0, routes: first.messages.map(route) })).status, 'route-batch-stale')
+  assert.equal((await h.call('group_topic_route_submit', { requestId: first.requestId, batchRevision: 1, routes: update.messages.map(route) })).status, 'accepted')
+})
+
+test('路由每批最多十五条，溢出来源在下一批继续处理', async t => {
+  const h = await setup(t, { fixedTopicsEnabled: true })
+  for (let index = 0; index < 16; index++) await ingest(h, `batch-${index}`)
+  await h.coordinator.schedule('g')
+  const first = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.equal(first.messages.length, 15)
+  const result = await h.call('group_topic_route_submit', { requestId: first.requestId, routes: first.messages.map(message => ({
+    messageId: message.messageId, messageVersion: message.messageVersion,
+    units: [{ unitKey: 'outside', summary: '职责外讨论', sourceRefs: [{ wholeMessage: true }], topics: [], fixedTopic: 'out-of-scope', reason: '职责外' }],
+  })) })
+  assert.equal(result.status, 'accepted')
+  assert.deepEqual(h.envelope('[GROUP_TOPIC_ROUTE]').messages.map(message => message.messageId), ['batch-15'])
+})
+
 test('普通新事项不调用提醒关联，混合批次保留原目录', async t => {
   let calls = 0
   const h = await quotedReminderRouting(t, async () => { calls++; return quotedReminder })
@@ -3110,7 +3311,7 @@ test('精确引用查询异常显式报告并释放未派发路由请求，恢�
   assert.deepEqual(h.envelope('[GROUP_TOPIC_ROUTE]').topics, [])
 })
 
-test('引用关联等待期间版本变化只重建原批次，新增消息不丢失也不混入旧请求', async t => {
+test('引用关联等待期间版本变化重建原来源并在同会话追加新消息', async t => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers(), versions = []
   t.after(() => release.resolve())
   const h = await quotedReminderRouting(t, async args => {
@@ -3130,11 +3331,14 @@ test('引用关联等待期间版本变化只重建原批次，新增消息不�
   assert.deepEqual(versions, [1, 2])
   assert.equal(h.sent.filter(item => item.startsWith('[GROUP_TOPIC_ROUTE]')).length, 1, '旧版本不能占用一次模型往返')
   assert.deepEqual(request.messages.map(item => [item.messageId, item.messageVersion]), [['quoted-enrichment', 2]])
-  const accepted = await h.call('group_topic_route_submit', { requestId: request.requestId, routes: [{ messageId: 'quoted-enrichment', messageVersion: 2,
+  const update = h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]')
+  assert.equal(update.requestId, request.requestId)
+  assert.deepEqual(update.messages.map(item => item.messageId), ['quoted-enrichment', 'later-independent'])
+  const accepted = await h.call('group_topic_route_submit', { requestId: request.requestId, batchRevision: update.batchRevision, routes: [{ messageId: 'quoted-enrichment', messageVersion: 2,
     ignoredRefs: [], units: [{ unitKey: 'change', summary: '提醒提前三分钟', sourceRefs: [{ quote: original.text }],
-      fixedTopic: 'agent-platform', topics: [], reason: '平台提醒变更请求' }] }] })
+      fixedTopic: 'agent-platform', topics: [], reason: '平台提醒变更请求' }] }, { messageId: 'later-independent', messageVersion: 1,
+    units: [{ unitKey: 'login', summary: '核查登录失败', sourceRefs: [{ wholeMessage: true }], fixedTopic: 'agent-platform', topics: [], reason: '平台问题' }] }] })
   assert.equal(accepted.status, 'accepted')
-  assert.deepEqual(h.envelope('[GROUP_TOPIC_ROUTE]').messages.map(item => item.messageId), ['later-independent'])
   assert.equal(h.errors.length, 0)
 })
 

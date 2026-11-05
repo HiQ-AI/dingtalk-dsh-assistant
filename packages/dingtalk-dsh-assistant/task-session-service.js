@@ -195,6 +195,18 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         ...(group?.topics.flatMap(topic => topic.entries.filter(entry => units.has(entry.unitId)).map(entry => entry.messageId)) ?? []),
         ...(['fixed-topic-reply', 'routing-clarification'].includes(groupNotification.kind) ? [p.sourceRef?.messageId ?? p.sourceMessageId] : [])].filter(Boolean))]
       receipt = await residentStore.withNotificationSource({ groupId, messageIds, commit: own => {
+        if (p.fact?.initialReply && groupNotification.state === 'prepared') {
+          const current = residentStore.getGroup(groupId)
+          const route = current.routeHistory.find(item => item.initialReplies?.some(draft => draft.outboundId === groupNotification.id))
+          const draft = route?.initialReplies.find(item => item.outboundId === groupNotification.id)
+          try {
+            if (!draft) fail('topic_initial_reply_stale')
+            assertInitialReply(groupId, route, draft)
+          } catch (error) {
+            if (error.code !== 'topic_initial_reply_stale') throw error
+            args = { ...args, initialReplyStale: true }
+          }
+        }
         if (groupNotification.state === 'prepared') args = { ...args, ownNotificationSources: { groupId, messageIds },
           ...(own ? { ownNotificationEvidence: { groupId, messageIds } } : {}) }
         return commit()
@@ -935,6 +947,72 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       }
     }
   }
+  function assertInitialReply(groupId, receipt, draft) {
+    const group = residentStore.getGroup(groupId), source = group?.messages.find(item => item.messageId === draft.sourceRef.messageId)
+    const topic = group?.topics.find(item => item.topicId === draft.topicId && !item.mergedInto)
+    if (!source || source.messageVersion !== draft.sourceRef.messageVersion || source.senderOpenDingTalkId !== draft.sourceRef.actorId
+      || source.sourceKind !== 'dingtalk' || source.messageAiSendFlag === 'DWS' || source.ownNotificationRetirement
+      || isOwnNotification({ groupId, messageId: source.messageId }) || !topic
+      || !source.activeUnitRefs?.some(ref => ref.unitId === draft.unitRef.unitId && ref.unitRevision === draft.unitRef.unitRevision)
+      || !topicSourceEntries(group, topic, topic.revision, source.messageId, source.messageVersion)
+        .some(entry => entry.unitId === draft.unitRef.unitId && entry.unitRevision === draft.unitRef.unitRevision)) fail('topic_initial_reply_stale')
+    const reviewMessages = draft.reviewMessageIds.map(id => group.messages.find(item => item.messageId === id)).filter(Boolean)
+    if (reviewMessages.length !== draft.reviewMessageIds.length || draft.reviewMessageVersions.length !== reviewMessages.length
+      || reviewMessages.some(message => !draft.reviewMessageVersions.some(ref => ref.messageId === message.messageId && ref.messageVersion === message.messageVersion))) fail('topic_initial_reply_stale')
+    const ids = new Set(receipt.initialReplies.map(item => item.outboundId))
+    const candidates = buildReplyReviewCandidates({ group: { ...group, outbox: group.outbox.filter(item => !ids.has(item.outboundId)) },
+      tasks: residentStore.listTasks().filter(task => task.groupId === groupId && !task.archivedAt), currentMessages: reviewMessages })
+    if (fingerprint(candidates) !== draft.reviewFingerprint) fail('topic_initial_reply_stale')
+    return source
+  }
+  const initialReplyPreparation = new Map()
+  async function prepareInitialReplies(groupId) {
+    const previous = initialReplyPreparation.get(groupId) ?? Promise.resolve()
+    const work = previous.catch(() => {}).then(() => prepareInitialRepliesForGroup(groupId))
+    initialReplyPreparation.set(groupId, work)
+    try { await work } finally { if (initialReplyPreparation.get(groupId) === work) initialReplyPreparation.delete(groupId) }
+  }
+  async function prepareInitialRepliesForGroup(groupId) {
+    const group = residentStore.getGroup(groupId)
+    for (const receipt of group?.routeHistory ?? []) for (const draft of receipt.initialReplies ?? []) {
+      if (closed || notificationCache.has(draft.outboundId)) continue
+      const latest = residentStore.getGroup(groupId)
+      const previous = latest.outbox.find(item => item.outboundId === draft.outboundId)
+      if (previous?.status === 'sent' || previous?.status === 'superseded') continue
+      try {
+      const source = assertInitialReply(groupId, receipt, draft)
+      const sourceId = `im:${hash([groupId, source.messageId, source.messageVersion])}`
+      const persistedSource = await query('source.get', { sourceId })
+      if (!persistedSource || persistedSource.channel !== 'im' || persistedSource.actorId !== source.senderOpenDingTalkId) fail('topic_initial_reply_source_invalid')
+      const topicRefs = [{ topicId: draft.topicId, revision: draft.topicRevision }]
+      const args = { groupId, outboundId: draft.outboundId, sourceMessageId: `task-notification:${draft.outboundId}`, topicRefs,
+        sourceRef: draft.sourceRef, matterSourceMessageIds: [source.messageId], matterUnitRefs: [draft.unitRef], taskIds: [], replyKind: 'substantive',
+        replyToMessageId: source.messageId, replyToSenderOpenDingTalkId: source.senderOpenDingTalkId, atOpenDingTalkIds: [source.senderOpenDingTalkId] }
+      const reply = previous ?? prepareGroupNotification({ ...args, text: draft.text, sourceText: source.text,
+        signature: legacy.getAgentConfig().replySignature, includeSignature: true, internalIds: await topicReplyInternalIds(args) })
+      const saved = await residentStore.appendOutbox({ ...args, text: reply.text, preflight: () => { assertInitialReply(groupId, receipt, draft) } })
+      if (saved?.status) fail('topic_initial_reply_not_prepared')
+      await command('notification.prepare', { notificationId: draft.outboundId, taskId: null, requirementRevision: 1, kind: 'topic-reply',
+        payload: { text: reply.text, topicRefs, replyTopicId: draft.topicId, taskIds: [], replyKind: 'substantive', conversationId: groupId,
+          sourceId, sourceVersion: source.messageVersion, sourceMessageId: source.messageId, actorId: source.senderOpenDingTalkId, sourceRef: draft.sourceRef,
+          replyToMessageId: source.messageId, replyToSenderOpenDingTalkId: source.senderOpenDingTalkId, atOpenDingTalkIds: args.atOpenDingTalkIds,
+          fact: { topicRefs, initialReply: true }, kind: 'topic-reply' } }, `prepare-notification:${draft.outboundId}`)
+      } catch (error) {
+        if (error.code !== 'topic_initial_reply_stale') throw error
+        if (await query('notification.get', { notificationId: draft.outboundId })) continue
+        const current = residentStore.getGroup(groupId).outbox.find(item => item.outboundId === draft.outboundId)
+        if (current?.sendStartedAt || ['starting', 'unknown', 'delivered'].includes(current?.notificationState)) fail('topic_initial_reply_recovery_required')
+        await residentStore.projectTaskNotification({ groupId, outbound: {
+          ...current, outboundId: draft.outboundId, sourceMessageId: `task-notification:${draft.outboundId}`,
+          text: current?.text ?? draft.text, status: 'superseded', supersededReason: error.code, notificationKnownNotSent: true,
+          supersededAt: new Date().toISOString(), sourceRef: draft.sourceRef,
+          topicRefs: [{ topicId: draft.topicId, revision: draft.topicRevision }],
+          matterSourceMessageIds: [draft.sourceRef.messageId], matterUnitRefs: [draft.unitRef],
+        } })
+        failures.set(draft.outboundId, { id: draft.outboundId, code: error.code })
+      }
+    }
+  }
   const topicCoordinator = await openTaskTopicCoordinator({ ctx, store: residentStore, legacy, root, models, applyAction: applyTopicAction, taskFacts: topicFacts,
     // 独立协调已移除；保留普通 Topic 路由和事实回复。
     onStage: recordMessageStage, readMentioned,
@@ -966,7 +1044,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         if (messageIds.includes(source.messageId) && Array.isArray(message?.activeUnitRefs) && !sameProcessingRefs(source, message.activeUnitRefs)) await command('source.processingStarted', { sourceId: source.sourceId,
           messageVersion: source.version, activeUnitRefs: message.activeUnitRefs })
       }
+      await prepareInitialReplies(groupId)
       await prepareRoutingClarifications(groupId)
+      void deliverNotifications()
     },
     quotedReminderContext: async () => null,
     // 在接纳业务决定前拒绝泄漏正文，让原模型修改后重提，不能先创建任务再卡在外发。
@@ -1020,7 +1100,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   function kickGroup(groupId, factsOnly = false) {
     if (closed) return Promise.resolve()
     // 正在处理旧来源时的新入站必须续跑一轮，不能等恢复定时器才解除发送暂缓。
-    if (inflightGroups.has(groupId)) { rerouteGroups.set(groupId, (rerouteGroups.get(groupId) ?? true) && factsOnly); return inflightGroups.get(groupId) }
+    if (inflightGroups.has(groupId)) {
+      rerouteGroups.set(groupId, (rerouteGroups.get(groupId) ?? true) && factsOnly)
+      void topicCoordinator.schedule(groupId).catch(error => failures.set(groupId, { id: groupId, code: error.code ?? error.message }))
+      return inflightGroups.get(groupId)
+    }
     return track(inflightGroups, groupId, async () => {
       if (!factsOnly) await refreshTasks()
       await reconcileOwnNotifications(groupId)
@@ -1776,6 +1860,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       for (const key of failures.keys()) if (key.startsWith('topic-fact-projection:')) failures.delete(key)
       for (const failure of factFailures) failures.set(`topic-fact-projection:${failure.id}`, failure)
       for (const group of residentStore.listGroups()) await reconcileOwnNotifications(group.groupId)
+      for (const group of residentStore.listGroups()) await prepareInitialReplies(group.groupId)
       await topicCoordinator.recover()
       for (const group of residentStore.listGroups()) await prepareRoutingClarifications(group.groupId)
       for (const source of await query('source.list')) {

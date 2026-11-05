@@ -2,7 +2,7 @@
 
 > 状态：ACTIVE
 > Goal ID：topic-routing-quality
-> 最近维护：2026-11-05T15:53:50+08:00
+> 最近维护：2026-11-05T21:01:04+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/docs/acceptance/topic-routing-quality/goal.md
 
 ## 总目标
@@ -19,11 +19,12 @@
 - 用户2026-11-05重复明确先本机部署：基于已合并代码按runbook双包切换并独立回读，再只读检查最近固定20条卡点。此项本轮已完成，不等于整体性能与审阅目标完成。
 - 用户追加要求正常处理固定14条及其必要路由依赖：逐条取得覆盖当前版本的决策与canonical source完成终态，必要Task/通知按原始授权完成；不得只清看板状态或以恢复回执代替完成。
 - 用户2026-11-05新增规则：不明确输入应归“职责外话题”或由Host真实引用原消息主动询问，不能仅持久化无问句/无法发送的待判并阻塞其他Topic；真正问询后的回复须按精确送达ID回链恢复原来源。语义职责外缺省如实记录为程序策略，不吞版本/资源/权限/持久化错误，不覆盖已有单位及历史效果。
+- 用户新增一级初诊合同：一级利用已见Topic摘要形成非结论性的初步回复；同会话steer新消息及其批次绑定前移到一级。单批最多15条，分诊完成前新到消息在容量内追加，超出排下一批；多Topic结果分别回复并引用各自对应原消息。保持Host发送/审阅/来源版本及Task权限边界。
 - 生产中位首回≤60秒仍是未验证目标，不能用隔离通知或进程健康代替真实钉钉送达。
 
 ## 范围与约束
 
-- 唯一工作树D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality。原PR #342部署源码960ddadc；本次产品9c2e623e0ffb3f69d5d33ffbb33b34cf05560755经PR #343于2026-11-05T04:55:21Z合并，merge为38f061956fcd73d8c5379fdfa6ae1367da914106，已独立回读。相同工作树现用worktree-own-source-recovery-evidence保留后续证据，不续推已合并分支。已从merged源码打双包，当前正式实例已按该合并版更新。
+- 唯一工作树D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality。原PR #342部署源码960ddadc；本次产品9c2e623e0ffb3f69d5d33ffbb33b34cf05560755经PR #343于2026-11-05T04:55:21Z合并，merge为38f061956fcd73d8c5379fdfa6ae1367da914106，已独立回读。PR #344后同一工作树使用worktree-routing-policy-deployment保留后续证据，不续推已合并分支。已从merged源码打双包，当前正式实例已按该合并版更新。
 - 主仓main、AGENTS.md及未知bash.exe.stackdump不动。私有docs/tmp/semantic-latency不强入Git；业务、身份、完整会话、凭据不入PR或公共产物。非源码归现有docs子目录。
 - Windows 11、PowerShell 7、pnpm workspace；不改全局设置、权限、PATH、执行策略或模型，不整体链接主检出node_modules。保留原五会话，不另开、clear、compact或关闭。
 - 用户最新明确要求“我要你正常处理掉这十几条”：授权对当前反馈的处理中消息及其必要阻断依赖，沿既有正式恢复入口正常路由、决策和业务处理；依原始来源授权执行正常副作用。不得手改账/状态、造scope、重放ingest、放宽门禁或发送测试消息。不重复旧960ddadc部署或以重启代替修复。恢复暴露的自身回流与资源错配先最小修复、相关实跑和独立审查；必要新版本落地只走已合并源码及既有runbook，不热改安装目录、不强杀/停全实例或删订阅。不运行CI、创建发行tag或推main。
@@ -40,14 +41,19 @@
 | SG3 | C真实模型对照 | 同初态、真实adapter、终态及独立语义/性能 | 原五配对已完，但语义/性能未达整体交付；history5、隔离Native3已按影响补验，不新增模型调用 | round-13/14、私有metrics aa1562bf |
 | SG4 | A根因修复、C正常恢复与D独立核验 | 当前固定14条经正式处理取得真实业务终态；必要阻断依赖不扩授权 | DONE：原14同版本canonical各唯一、来源完成14/pending0/完成决策覆盖14；842既有静默纠正另计。T1当前req4/control4/lease80完成并排空，input9成功且原分析产物3份经D核验，完成fact对应回复delivered/attempt1；T2当前req1完成并排空，真实用户确认依据及完成fact静默投影已核，不冒认助手修复 | 私有postCorrectionBusiness.finalReadback/D06:56:22.495Z；SHA256 4c7a31c1；round-17.md/matrix.csv已归档，原历史列保留 |
 | SG5 | Lead合并部署、C产物、D核验、E证据 | 合并代码、双包、原生退出、功能及独立回读 | 第15轮部署/fixture交付已完成；本次PR #343双包更新与独立安装/健康核验通过，第16轮证据保留原14条BLOCKED和测试限制，不等同业务处理完成 | PR #342/#343 MERGED；round-15历史、round-16.md、matrix.csv |
-| SG6 | A不明确输入分流、C隔离联调、D独立审查 | 职责外或真实发问闭环；合法scope仅阻断相关Topic；问句精确回链；旧units/效果及错误边界保持 | IN_PROGRESS：实现与冻结本地验证完成；runtime210/210、store定向2/2、当前原生13/13、实际包smoke14/14；产品提交1ca72d3c已推；PR #344 OPEN/CLEAN/MERGEABLE，待合并与本机部署，不等同真实新消息验收 | runtime3dde2dc1/store6ece9dfc/serviceb55ed35c；Native测试ed518cdc；候选Assistant eef7295f；第18轮阶段末集中归档 |
+| SG6 | A不明确输入分流、C隔离联调、D独立审查 | 职责外或真实发问闭环；合法scope仅阻断相关Topic；问句精确回链；旧units/效果及错误边界保持 | PAUSED_AT_DEPLOYMENT：产品1ca72d3c经PR #344合并0e52a2ff；runtime210/210、store定向2/2、原生13/13、实际包smoke14/14通过，merge复打双包SHA完全相同。未安装；用户要求先恢复原服务，暂停新版本部署 | round-17仅SG4；SG6候选Assistant eef7295f、Observer84e11494；round-18.md/matrix.csv已集中归档，恢复通过不冒称新规则上线 |
+| SG7 | 一级初诊回复与有界同会话追加 | 一级初步回复、多Topic分开发且精确引用；原会话steer、每批≤15、溢出下批；二级与Task后续事实不冒领/不重复 | CODE_AND_LOCAL_VALIDATION_DONE：产品f2525c73，PR #345 OPEN/MERGEABLE（已独立回读）；本轮只到PR，未合并/部署。Native44/44、包smoke14/14、SG6整文件13/13及最终取消钩子定向1/1；不等同真实模型语义或生产性能达标 | round-19.md/matrix.csv/round-19/validation.json及5份最终日志；runtime219/219、角色3/3、sessions17/17、Store58/59且既有摘要FAIL保留。Assistant f1c926ec、Observer84e11494；210源码打包前后和smoke后一致 |
 
 ## 当前检查点
 
-- 当前子目标：SG6
-- 当前执行：SG4已独立核完并形成第17轮；SG6六模块及README已冻结，D增量及Native夹具审查已收束，当前原生13/13、runtime210/210、store定向2/2均通过；Lead对本次候选实际包使用既有预打包入口完整release-smoke14/14、0失败/跳过，原断言/时限。候选Assistant SHA256 eef7295ff7219f8f461f2577c37d36adc4ad0495728d0f2f90d9e6e89345c33e，Observer84e11494不变；正式实例仍38f06195，尚未安装新包。
-- 唯一下一步：第17轮报告、矩阵与旧附件清理已独立核对，提交文档后合并PR #344（https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/344）；最新fetch的main仍38f06195，PR门禁CLEAN且无自动checks。部署前正式端口3080/18998回查未监听，D正只读核原PID10052、计划任务及退出原因；主控未执行新版本-Check、停机、安装或启动，不盲目重启。现场条件确认后核合并源码/包一致，沿runbook先-Check再双包切换和独立回读；保持包源码冻结。E仅在SG6阶段结束后集中归第18轮。原14无需再恢复/wake，不造正式测试消息、不手动触发CI或新模型评测。长期Goal仍ACTIVE。
-- SG6验证边界：Native为真实隔离Host/脚本provider与隔离发送适配器，不是真实钉钉或模型语义质量验收；Service恶意proof/错误作者/未送达引用的独立Native负例尚未实跑，store层身份/送达ID/版本/epoch/outbox反例及静态接线已覆盖。组合回归455/456保留既有摘要“第一版”对空串失败，组合启动未捕获最终指纹，仅作诊断；最终定向验证分别绑定实际冻结blob，不据此称全仓全绿。
+- 当前子目标：SG7
+- 当前执行：产品f2525c73b4550b7cb9726e95debfdf8d3f431c09已提交/推送并逐项核Git blob与受测工作树对应。PR #345 https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/345 已独立gh回读OPEN/MERGEABLE，main ← worktree-routing-policy-deployment。第19轮最终证据与历史矩阵守恒已核；仅文档收口，正式实例仍是原安装38f06195，本轮未启停/安装。旧版08:10:12.6184408Z的PID28268/双端口/健康回执只是该时点测量，未据此声称之后持续健康。
+- 唯一下一步：PR #345审阅；本轮交付边界为代码、相关本地验证和开放PR，不自动合并/部署，不再扩验。长期真实语义/生产首回≤60秒仍未验，后续合并/部署等待用户明确要求，不动运行服务、不CI。
+- 整合里程碑：A runtime46747803的219/219、B coordinator fe857dab/角色3/3已有原回执。Service49105119即时schedule、sessions a0f2563c首包drain（强断言旧实现0/1红→整文件17/17绿）经D审。最终Native test7b1f506b/fixture2e10a8b7整文件44/44，0fail/cancel/skip，107530.1393ms；Lead已读原spec日志（不是TAP）、SHA256 c4e85437664107436d349f49b41a8f56572b8805e13fb9af92f85f6f6348df56，以及C原工具回执10:37:33.917Z/任务bbkavxg43的首尾9blob，与当前磁盘一致。局部解析仅当前同request真实user消息、UPDATE覆盖，D关闭角色边界finding。仅隔离脚本模型/通知适配器，不是生产/真实模型/60秒验收。
+- 当前失败与候选：第一轮Native31项21过/10失败后OOM（SHA256 453c28a3149c8fce9e566e83750676c22f3d8980859b36f1df61398560c24d8e），修后44/44通过，原失败摘要保留。Store0f636ff4/model6843657b/test d463a6ff前后一致，实跑59项58过/1既有第一版≠空串FAIL（test:788），原断言未改，最终日志round-19/topic-store.log。最新双包由冻结210源码打出，实际包smoke14/14、0fail/cancel/skip、business26956ms/health8305ms、原30秒断言保持；源及包摘要经独立核对，完整SHA与实际组件/测试blob见round-19/validation.json。双包未安装，旧d26候选已清理，不复用旧包证明SG7。
+- 工作区边界纠正：E误加主仓README的SG7段落后已停写；用户明确选择仅撤误加段。Lead零副作用自检后精确删除1755字节，删除前SHA256 e66d739d0491a0e3d2b434cd0317f580e226fc552cbe57350f550e6f180e02e2；独立回读与预期SHA256 eac9abecd98dd0c10021ec2ff4f792a56cea6052acdd689a04151106957b2e8d一致，其余字节未动。当前继续仅在授权worktree写入。
+- 本次停机事实：D核旧PID10052不存在、双端口/替代web/旧子树均空、计划任务Ready且LastTaskResult=1，当前owner空、未排空任务/执行/群及starting均0，unknown操作3/通知0保持。实际末端栈指向已安装@deepseek-ai/dsh-storage-json 0.2.1-rc.2的writeAtomic rename EPERM（同目录随机临时文件→Resident JSON）；文件非ReadOnly，正常单Domain已有串行，不能推定具体占用方、ACL/安全软件或具体业务调用。此异常发生于旧版；未改上游存储库。原始日志含token，禁止复制全文/入库。退出精确时点和底层触发原因未收敛。
+- SG6关联复验：本轮整文件初跑12/13；旧epoch通知确被锁内withRoutingHold拒绝，模型在即时schedule后重路由生成合法新epoch问句，原全局发送次数混淆新旧身份。仅测试加门闩隔离旧许可阶段、按精确旧ID核prepared/未attempt及pending/epoch1并保留零网络发送断言；test73b77db3整文件13/13，后加取消释放钩子最终97643f4f定向1/1，Lead独立核原输出和前后blob。产品/fixture不变，D关闭时序及失败清理finding；没有单独故障注入。完整Service→Resident恶意proof/错误作者/未送达引用逐项负例未逐一实跑，原静态/Store分层边界保持，不称全仓全绿。
 - SG4最终独立回读：D于2026-11-05T06:56:22.495Z核原14同基线版本、canonical各唯一、sourceCompleted14/pending0/completedDecisionCovered14，两Task均当前版本completed/drained，pending人类请求0。T1 req4/control4/lease80 input9执行成功且Owner已真实读取结果，3份分析产物符合仅分析不修改/部署要求；本次completed fact已accepted/projected，原同群回复06:54:13.028Z delivered/attempt1、精确receipt且覆盖该fact。T2 req1由真实用户确认收口，完成fact正式静默审阅，不冒认助手修复。T1保留一条回合中到达的execution.result pending wake，终态Task不再调度，不能写全wake acked或人工清账。Lead独立核私有current-processing-14.json/postCorrectionBusiness.finalReadback，整文件SHA256 4c7a31c1547d6f51901c90f19d4610233ee17a4a409c1d82f20d1ec53430aab4；跨账非原子采样、businessFinalVerified仅限固定14和必要两Task，不代表新规则或整体性能完成。
 - 已核必要依赖：842根据用户真实闲聊反馈沿既有fixed-topic out-of-scope correction静默处理，routingRevision779→780、closedTopic0；Resident routed、canonical于06:06:54.941Z自然recover完成，无新Task/通知/outbox，历史hold字段不再生效。该处置不依赖新产品或发版；C随后对当前2个配置群一次普查，现存needs_clarification均0，本轮无需全库历史迁移/重放。证据复用私有recovery-nine-receipts.json/currentHoldCensus，最近核摘要702feb06b300296853f02d201599cce53540378e0dd25efeea3f42a959ba6c6b。
 - 过程检查点（历史，D读取06:17:34.120Z）：T2当前reqRev1/control1/lease2于06:14:04.967Z产生权威completion，submit complete已accepted、Owner结束并drained，创建/补充wake已ack，无人工待答；无execution是Owner直接完成，不是未启动，不扩大为结果内容已验。T1当前reqRev4/control4匹配，Owner已成功委派inputVersion9实际执行，submit wait已accepted、Owner drained/lastDecision wait且reopen wake已ack，是合法等待执行；早先8次read错误已被后续真实读取/委派取代，不当当前阻断。两原通知C按精确主键回读均delivered/attempt1，最终通知仍按本次实际需要核验。
@@ -77,6 +83,6 @@ A负责schema/runtime及已完成只读冲突合同核验；B唯一写coordinato
 - 当前必要根因决策：docs/spec/own-notification-late-retirement.md，明确精确自身身份、合法退役/旧收据保留、许可与跨账恢复；不为误接纳的自身来源内部计划另赋未来执行权。原计划：docs/spec/first-reply-latency-contract.md、docs/spec/structured-routing-host-execution.md；已交付旧任务round-7/8。当前runbook为docs/ops/task-session-clean-start.md的已初始化原生双包更新，不Bootstrap。
 - 历史验证：round-9核心250/下午观察；round-10五超时；round-11相关Native57；round-12旧隔离/凭据；round-13真实五对；round-14新核心237、fact2、history5、隔离3。按实际版本引用，不重复累计或将脚本模型说成真实质量。
 - 私有metrics SHA256 aa1562bf18fb9c51c26d242255409e922c243c8340609c95b32be26ff56636e1。toolIsErrorCount仅isError=true，不含isError=false业务拒绝，不是网络错误数。基线recent-processing-predeploy.json SHA256 8f485479928e362d3461ef23091bb5e729a141701c7ca386b6d800850d111ab9。
-- 本轮冻结Native证据：docs/acceptance/topic-routing-quality/round-16/own-late-readback-native.tap SHA256 ad000d3920e8cdaa7384d5b8b10d5fe6386f8587dadc80b318a22618c08f0710；service ceaff17b、dynamic c4d20342、store 0f2995db、native 78eff022、runtime 9299ec6f，均为测试时未提交工作树blob，随后绑定产品9c2e623e/合并38f06195，不是commit SHA；未在提交后重跑。
-- 本阶段原生补验：docs/acceptance/topic-routing-quality/round-16/内release-smoke-native.tap（首12/14）、fixed-topics-native.tap（12/12）、package-native-prepacked.tap（2/2）；各原始SHA与C迟回读TAP已交E集中归round16。实际验证包SHA256 fd7debd7d9204fe59076fd715b9cbc4ff379a37778b4c029804c8b3b24a8d7ae；合并版packages/test与测试版内容相同，无新增模型调用或真实测试发信。
-- 本次正式部署入口：docs/tmp/local-deploy-38f06195-evidence；原SIGINT退出60180、剩余后代0，ownerProcessExited true但ownerReleased false/staleOwner true；unknownOperations3/unknownNotifications0保持。Assistant SHA256 fd7debd7d9204fe59076fd715b9cbc4ff379a37778b4c029804c8b3b24a8d7ae，Observer完整SHA同第15轮。该部署成功不刷新原14业务终态。
+- 本轮冻结Native证据：docs/acceptance/topic-routing-quality/round-16/own-late-readback-native.tap SHA256 ad000d3920e8cdaa7384d5b8b10d5fe6386f8587dadc80b318a22618c08f0710；service ceaff17b、dynamic c4d20342、store 0f2995db、native 78eff022、runtime 9299ec6f，均为测试时未提交工作树blob，随后绑定产品9c2e623e/合并38f06195，不是commit SHA；未在提交后重跑。 第18轮收口时旧附件已按保留规则清理，原结果/摘要见round-16.md，不再依赖该附件路径。
+- 本阶段原生补验：docs/acceptance/topic-routing-quality/round-16/内release-smoke-native.tap（首12/14）、fixed-topics-native.tap（12/12）、package-native-prepacked.tap（2/2）；各原始SHA与C迟回读TAP已交E集中归round16。实际验证包SHA256 fd7debd7d9204fe59076fd715b9cbc4ff379a37778b4c029804c8b3b24a8d7ae；合并版packages/test与测试版内容相同，无新增模型调用或真实测试发信。 旧TAP附件已清理，原测试结论与SHA仍在round-16.md。
+- 本次正式部署入口：docs/tmp/local-deploy-38f06195-evidence；原SIGINT退出60180、剩余后代0，ownerProcessExited true但ownerReleased false/staleOwner true；unknownOperations3/unknownNotifications0保持。Assistant SHA256 fd7debd7d9204fe59076fd715b9cbc4ff379a37778b4c029804c8b3b24a8d7ae，Observer完整SHA同第15轮。该部署成功不刷新原14业务终态。 该旧轮临时部署目录于第18轮收口清理；摘要与文字证据保留在round-16.md。

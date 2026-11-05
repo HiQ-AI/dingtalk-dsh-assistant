@@ -96,6 +96,11 @@ const sameRouteTarget = (left, right) => left?.topicId ? left.topicId === right.
 
 export const topicRouteSubmissionSchema = z.strictObject({
   requestId: z.string().min(1),
+  batchRevision: z.number().int().nonnegative().optional(),
+  initialReplies: z.array(z.strictObject({
+    messageId: z.string().min(1), messageVersion: z.number().int().positive(), unitKey: z.string().min(1),
+    target: topicRouteOwnerSchema, text: z.string().trim().min(1).max(2000), replyReview: replyReviewSchema,
+  })).optional(),
   routes: z.array(z.strictObject({
     messageId: z.string().min(1), messageVersion: z.number().int().positive(),
     replyTopic: topicRouteOwnerSchema.optional(),
@@ -144,6 +149,14 @@ export const topicRouteSubmissionJsonSchema = {
   type: 'object', additionalProperties: false,
   properties: {
     requestId: stringJsonSchema,
+    batchRevision: { type: 'integer', minimum: 0, description: '追加消息后的当前批次版本，必须与最近一次批次更新一致。' },
+    initialReplies: { type: 'array', description: '按真实来源和话题分别提交非结论性初诊草稿；不得执行任务或直接发送。', items: { type: 'object', additionalProperties: false, properties: {
+      messageId: stringJsonSchema, messageVersion: { type: 'integer' }, unitKey: stringJsonSchema,
+      target: { oneOf: [
+        { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
+        { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema }, required: ['newTopicKey'] },
+      ] }, text: stringJsonSchema, replyReview: replyReviewJsonSchema,
+    }, required: ['messageId', 'messageVersion', 'unitKey', 'target', 'text', 'replyReview'] } },
     routes: { type: 'array', items: {
       type: 'object', additionalProperties: false,
       properties: {

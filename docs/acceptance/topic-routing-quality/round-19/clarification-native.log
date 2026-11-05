@@ -1,0 +1,60 @@
+✔ 明确交办的澄清沿真实通知账送达；待判来源不结清，冷恢复不重问且自身回声不解锁 (1944.9939ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":1401,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":504,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":38,"aborted":false}
+✔ 普通讨论不追问 (537.4842ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":185,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":283,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":69,"aborted":false}
+✔ 未声明需要澄清的交办不自动发问 (844.1591ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":402,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":361,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":81,"aborted":false}
+✔ 其他助手通知不追问 (811.4781ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":428,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":297,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":85,"aborted":false}
+✔ 正文仅提到助手不算向助手交办 (1063.5277ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":623,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":339,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":101,"aborted":false}
+✔ 发送许可前 epoch 已恢复时拒绝旧澄清，不产生网络发送 (1447.8378ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":528,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":774,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":145,"aborted":false}
+✔ 只有冻结出箱尚未prepare的冷启动沿原正文恢复一次，不重调模型 (1421.485ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":496,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":853,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":72,"aborted":false}
+✔ 未知澄清发送冷恢复仅只读核验，hold继续等待且不重发 (1418.9129ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":457,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":876,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":85,"aborted":false}
+✔ 明确交办cc前缀不被无@元数据误否决 (1138.6387ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":608,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":456,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":74,"aborted":false}
+✔ 明确交办带前置空白的点名不被无@元数据误否决 (1040.7217ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":430,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":496,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":114,"aborted":false}
+✔ 分诊策略问句真实送达后以精确引用恢复原来源 (1658.2731ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":613,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":948,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":97,"aborted":false}
+✔ 范围声明只更新屏障CAS，不改变澄清通知身份：发送前=false (1260.2664ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":610,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":553,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":97,"aborted":false}
+✔ 范围声明只更新屏障CAS，不改变澄清通知身份：发送前=true (1185.2605ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":604,"aborted":false}
+ℹ {"lifecyclePhase":"business","elapsedMs":486,"aborted":false}
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":95,"aborted":false}
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16809.043

@@ -78,7 +78,7 @@ const messageFactFields = {
   activeUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(),
 }
 const inboundSchema = z.object({
-  ...messageFactFields, facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed', 'needs-context']).default('pending'), routingError: z.string().optional(), routingHold: routingHoldSchema.optional(), routingEpoch: z.number().int().nonnegative().optional(), routingRecoveryMessageId: z.string().min(1).optional(),
+  ...messageFactFields, facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed', 'needs-context']).default('pending'), routingError: z.string().optional(), routingHold: routingHoldSchema.optional(), routingEpoch: z.number().int().nonnegative().optional(), routingRecoveryMessageId: z.string().min(1).optional(), routingRecoveryPreviousMessageId: z.string().min(1).optional(),
   ownNotificationRetirement: z.object({ outboundId: z.string().min(1), at: z.string().min(1) }).optional(),
   messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]),
   messageAiSendFlag: z.literal('DWS').optional(),
@@ -320,6 +320,54 @@ function settleCompletedMessageDeliveries(messages, topics, sourceDispatchOwners
     const { agentDeliveryError: _error, agentDecisionRetryAt: _retryAt, ...current } = message
     return { ...current, agentDeliveryStatus: 'delivered', agentDeliveryAt: deliveredAt }
   })
+}
+
+export function routingRecoveryBoundary(group, selectedMessageIds) {
+  const selected = new Set(selectedMessageIds), byId = new Map(group.messages.map(message => [message.messageId, message]))
+  const edges = new Map()
+  const add = (sourceMessageId, answerMessageId) => edges.set(JSON.stringify([sourceMessageId, answerMessageId]), { sourceMessageId, answerMessageId })
+  for (const message of group.messages) if (message.routingStatus === 'pending' && message.routingRecoveryMessageId) add(message.messageId, message.routingRecoveryMessageId)
+  for (const receipt of group.routeHistory) for (const edge of receipt.recoveryBoundary ?? []) {
+    const source = byId.get(edge.sourceMessageId), answer = byId.get(edge.answerMessageId)
+    const quote = answer?.quotedMessage?.messageId, target = byId.get(quote)
+    if (source?.routingStatus === 'routed' && quote !== edge.answerQuoteMessageId && quote !== source.messageId
+      && target && !target.ownNotificationRetirement && !group.outbox.some(item => item.deliveredMessageId === quote)) continue
+    if (source?.routingStatus === 'routed' || source?.routingRecoveryMessageId === edge.answerMessageId) add(edge.sourceMessageId, edge.answerMessageId)
+  }
+  const boundary = []
+  for (const edge of edges.values()) {
+    const source = byId.get(edge.sourceMessageId), answer = byId.get(edge.answerMessageId)
+    if (!source || !answer) throw new Error('topic_routing_recovery_stale')
+    if (source.routingStatus === 'routed' && answer.routingStatus === 'routed') continue
+    if (selected.has(source.messageId) === selected.has(answer.messageId)) continue
+    boundary.push({ sourceMessageId: source.messageId, sourceMessageVersion: source.messageVersion, sourceEpoch: source.routingEpoch ?? 0,
+      answerMessageId: answer.messageId, answerMessageVersion: answer.messageVersion, answerEpoch: answer.routingEpoch ?? 0, answerQuoteMessageId: answer.quotedMessage?.messageId })
+  }
+  return boundary.sort((a, b) => JSON.stringify([a.sourceMessageId, a.answerMessageId]).localeCompare(JSON.stringify([b.sourceMessageId, b.answerMessageId])))
+}
+
+function normalizeRoutingRecoveryEdges(group) {
+  const byId = new Map(group.messages.map(message => [message.messageId, message]))
+  const delivered = new Set(group.outbox.map(item => item.deliveredMessageId).filter(Boolean))
+  let changed = false
+  const messages = group.messages.map(message => {
+    if (message.routingStatus !== 'pending') return message
+    if (!message.routingRecoveryMessageId && message.routingRecoveryPreviousMessageId) {
+      const answer = byId.get(message.routingRecoveryPreviousMessageId)
+      if (answer?.sourceKind === 'dingtalk' && answer.senderOpenDingTalkId && answer.messageAiSendFlag !== 'DWS'
+        && !answer.ownNotificationRetirement && answer.quotedMessage?.messageId === message.messageId) {
+        changed = true
+        return { ...message, routingRecoveryMessageId: answer.messageId, routingRecoveryPreviousMessageId: undefined, routingEpoch: (message.routingEpoch ?? 0) + 1 }
+      }
+    }
+    if (!message.routingRecoveryMessageId) return message
+    const answer = byId.get(message.routingRecoveryMessageId), quote = answer?.quotedMessage?.messageId
+    const target = byId.get(quote)
+    if (!quote || quote === message.messageId || delivered.has(quote) || !target || target.ownNotificationRetirement) return message
+    changed = true
+    return { ...message, routingRecoveryPreviousMessageId: message.routingRecoveryMessageId, routingRecoveryMessageId: undefined, routingEpoch: (message.routingEpoch ?? 0) + 1 }
+  })
+  return changed ? { ...group, messages, routingRevision: group.routingRevision + 1 } : group
 }
 
 function recoverWebSkippedTopicInputs(group) {
@@ -800,7 +848,7 @@ export async function openResidentStore(storageDomain) {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       let duplicate = false, enriched = false, sequence
-      const group = await groups.update(entry[0], (latest) => {
+      const applyIngress = (latest) => {
         const quotedHoldFor = message => {
           if (message.sourceKind !== 'dingtalk' || !message.senderOpenDingTalkId || message.messageAiSendFlag === 'DWS' || !message.quotedMessage?.messageId) return undefined
           const direct = latest.messages.find(item => item.messageId === message.quotedMessage.messageId && !item.ownNotificationRetirement && item.routingStatus === 'needs-context')
@@ -834,6 +882,7 @@ export async function openResidentStore(storageDomain) {
           // Changed message content still requires a new routing decision.
           next.routingStatus = manuallySettled(previous) && next.text === previous.text && isDeepStrictEqual(next.imageRefs ?? [], previous.imageRefs ?? []) ? 'routed' : 'pending'
           next.routingHold = undefined
+          next.routingRecoveryPreviousMessageId = undefined
           next.routingEpoch = (previous.routingEpoch ?? 0) + 1
           const now = new Date().toISOString()
           const quotedHold = next.quotedMessage?.messageId !== messageId ? quotedHoldFor(next) : undefined
@@ -855,7 +904,8 @@ export async function openResidentStore(storageDomain) {
           ...item, routingStatus: 'pending', routingHold: undefined, routingEpoch: (item.routingEpoch ?? 0) + 1, routingRecoveryMessageId: messageId,
         }) : latest.messages
         return { ...latest, nextSequence: sequence + 1, ...(quotedHold ? { routingRevision: latest.routingRevision + 1 } : {}), messages: [...messages, accepted] }
-      })
+      }
+      const group = await groups.update(entry[0], latest => normalizeRoutingRecoveryEdges(applyIngress(latest)))
       return { duplicate, enriched, sequence, group }
     }),
     listTopics: (groupId) => [...groups.entries()].flatMap(([, group]) => groupId === undefined || group.groupId === groupId ? group.topics : []),
@@ -918,7 +968,7 @@ export async function openResidentStore(storageDomain) {
         if (!message || message.ownNotificationRetirement) { retired = message; return latest }
         const at = new Date().toISOString()
         retired = { ...message, ownNotificationRetirement: { outboundId, at }, routingEpoch: (message.routingEpoch ?? 0) + 1,
-          routingHold: undefined, routingRecoveryMessageId: undefined, activeUnitRefs: [] }
+          routingHold: undefined, routingRecoveryMessageId: undefined, routingRecoveryPreviousMessageId: undefined, activeUnitRefs: [] }
         const retiredDecisionIds = new Set()
         const unitIds = new Set(latest.topics.flatMap(topic => topic.entries.filter(item => item.messageId === messageId).map(item => item.unitId).filter(Boolean)))
         const topics = latest.topics.map(topic => {
@@ -940,15 +990,16 @@ export async function openResidentStore(storageDomain) {
         return { ...latest, routingRevision: latest.routingRevision + 1, topics,
           taskReservations: latest.taskReservations.filter(item => !retiredDecisionIds.has(item.decisionId)),
           messages: latest.messages.map(item => item.messageId === messageId ? retired
-            : item.routingRecoveryMessageId === messageId ? { ...item, routingRecoveryMessageId: undefined } : item) }
+            : item.routingRecoveryMessageId === messageId || item.routingRecoveryPreviousMessageId === messageId
+              ? { ...item, ...(item.routingRecoveryMessageId === messageId ? { routingRecoveryMessageId: undefined } : {}), ...(item.routingRecoveryPreviousMessageId === messageId ? { routingRecoveryPreviousMessageId: undefined } : {}) } : item) }
       })
       return retired
     }),
-    routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes, expectedRoutingEpochs = [], preflight, audit }) => serialize(groupId, async () => {
+    routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes, expectedRoutingEpochs = [], recoveryBoundary, initialReplies = [], preflight, audit }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (!routeId || !Array.isArray(routes) || routes.length === 0) throw new Error('topic_routes_invalid')
-      const requestFingerprint = fingerprint({ routingRevision, routes, ...(audit ? { audit } : {}), ...(requireAllPending === true ? { requireAllPending: true } : {}) })
+      const requestFingerprint = fingerprint({ routingRevision, routes, ...(recoveryBoundary?.length ? { recoveryBoundary } : {}), ...(initialReplies.length ? { initialReplies } : {}), ...(audit ? { audit } : {}), ...(requireAllPending === true ? { requireAllPending: true } : {}) })
       let receipt
       const group = await groups.update(entry[0], (latest) => {
         const previous = latest.routeHistory.find((item) => item.routeId === routeId)
@@ -962,11 +1013,9 @@ export async function openResidentStore(storageDomain) {
         if (routes.some(route => latest.messages.find(message => message.messageId === route.messageId)?.ownNotificationRetirement
           || taskSessionReader?.isOwnNotification?.({ groupId, messageId: route.messageId }))) throw new Error('topic_routing_stale')
         if (routes.some(route => latest.messages.find(message => message.messageId === route.messageId)?.routingStatus === 'needs-context')) throw new Error('topic_routing_stale')
-        if (routes.some(route => {
-          const message = latest.messages.find(item => item.messageId === route.messageId)
-          return message?.routingRecoveryMessageId && !routes.some(item => item.messageId === message.routingRecoveryMessageId)
-        }) || latest.messages.some(message => message.routingStatus === 'pending' && message.routingRecoveryMessageId
-          && routes.some(route => route.messageId === message.routingRecoveryMessageId) && !routes.some(route => route.messageId === message.messageId))) throw new Error('topic_routing_recovery_incomplete')
+        const currentBoundary = routingRecoveryBoundary(latest, routes.map(route => route.messageId))
+        if (currentBoundary.length && (recoveryBoundary === undefined || typeof preflight !== 'function')) throw new Error('topic_routing_recovery_incomplete')
+        if (!isDeepStrictEqual(currentBoundary, recoveryBoundary ?? [])) throw new Error('topic_routing_recovery_stale')
         for (const expected of expectedRoutingEpochs) {
           const message = latest.messages.find(item => item.messageId === expected.messageId)
           if (!message || message.messageVersion !== expected.messageVersion) throw new Error('topic_message_version_stale')
@@ -1043,17 +1092,37 @@ export async function openResidentStore(storageDomain) {
             return { ...topic, revision, status: 'active', updatedAt: new Date().toISOString(), entries }
           })
         }
-        receipt = { routeId, fingerprint: requestFingerprint, routingRevision: latest.routingRevision + 1, topicIdsByKey, ...(audit ? { audit } : {}), createdAt: new Date().toISOString() }
+        const resolvedReplies = initialReplies.map(reply => {
+          const source = latest.messages.find(message => message.messageId === reply.messageId)
+          const route = settledRoutes.find(item => item.messageId === reply.messageId && item.messageVersion === reply.messageVersion)
+          const unit = unitsByMessage.get(reply.messageId)?.find(item => item.unitKey === reply.unitKey)
+          const target = reply.target?.topicId ?? topicIdsByKey[reply.target?.newTopicKey]
+          const topic = topics.find(item => item.topicId === target && !item.mergedInto)
+          if (!source || source.messageVersion !== reply.messageVersion || source.sourceKind !== 'dingtalk' || !source.senderOpenDingTalkId
+            || source.messageAiSendFlag === 'DWS' || source.ownNotificationRetirement || !route || !unit || unit.fixedTopic || !topic
+            || Boolean(reply.target?.topicId) === Boolean(reply.target?.newTopicKey)
+            || !unit.topics.some(ref => (ref.topicId ?? topicIdsByKey[ref.newTopicKey]) === target)
+            || !reply.text?.trim() || !reply.replyReview || !reply.reviewFingerprint
+            || !Array.isArray(reply.reviewMessageIds) || !reply.reviewMessageIds.includes(source.messageId)
+            || !Array.isArray(reply.reviewMessageVersions) || !reply.reviewMessageVersions.some(item => item.messageId === source.messageId && item.messageVersion === source.messageVersion)
+            || reply.reviewMessageVersions.some(item => !latest.messages.some(message => message.messageId === item.messageId && message.messageVersion === item.messageVersion))) throw new Error('topic_initial_reply_invalid')
+          return { outboundId: stableId('topic-initial-reply', JSON.stringify([groupId, routeId, target])), topicId: target, topicRevision: topic.revision,
+            sourceRef: { messageId: source.messageId, messageVersion: source.messageVersion, actorId: source.senderOpenDingTalkId },
+            unitRef: { unitId: unit.unitId, unitRevision: unit.unitRevision }, text: reply.text, replyReview: reply.replyReview,
+            reviewFingerprint: reply.reviewFingerprint, reviewMessageIds: reply.reviewMessageIds, reviewMessageVersions: reply.reviewMessageVersions }
+        })
+        if (new Set(resolvedReplies.map(reply => reply.topicId)).size !== resolvedReplies.length) throw new Error('topic_initial_reply_duplicate')
+        receipt = { routeId, fingerprint: requestFingerprint, routingRevision: latest.routingRevision + 1, topicIdsByKey, ...(currentBoundary.length ? { recoveryBoundary: currentBoundary } : {}), ...(resolvedReplies.length ? { initialReplies: resolvedReplies } : {}), ...(audit ? { audit } : {}), createdAt: new Date().toISOString() }
         const deferredByMessage = new Map(routes.filter(route => route.deferred).map(route => [route.messageId, route.deferred]))
         const routedMessages = latest.messages.map((message) => {
           const deferred = deferredByMessage.get(message.messageId)
-          if (deferred) return { ...message, routingStatus: 'needs-context', routingError: undefined, routingRecoveryMessageId: undefined,
+          if (deferred) return { ...message, routingStatus: 'needs-context', routingError: undefined, routingRecoveryMessageId: undefined, routingRecoveryPreviousMessageId: undefined,
             routingHold: { messageVersion: message.messageVersion, epoch: message.routingEpoch ?? 0, reason: deferred.reason.trim(), createdAt: new Date().toISOString(), ...(deferred.scope ? { scope: deferred.scope.map(ref => ref.topicId) } : {}), ...(deferred.clarification ? { clarification: { ...deferred.clarification, epoch: message.routingEpoch ?? 0 } } : {}) } }
           if (!unitsByMessage.has(message.messageId)) return message
           const current = unitsByMessage.get(message.messageId).map(({ topics: _topics, effectOwner: _owner, reason: _reason, ...unit }) => unit)
           const historical = [...(message.units ?? [])]
           for (const unit of current) if (!historical.some((item) => item.unitId === unit.unitId && item.unitRevision === unit.unitRevision)) historical.push(unit)
-          return { ...message, replyTopicId: replyTopics.get(message.messageId), units: historical, activeUnitRefs: current.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ignoredRanges: ignoredByMessage.get(message.messageId), routingStatus: 'routed', routingError: undefined, routingHold: undefined, routingRecoveryMessageId: undefined }
+          return { ...message, replyTopicId: replyTopics.get(message.messageId), units: historical, activeUnitRefs: current.map(({ unitId, unitRevision }) => ({ unitId, unitRevision })), ignoredRanges: ignoredByMessage.get(message.messageId), routingStatus: 'routed', routingError: undefined, routingHold: undefined, routingRecoveryMessageId: undefined, routingRecoveryPreviousMessageId: undefined }
         })
         return { ...latest, topics, sourceDispatchOwnership, routingRevision: latest.routingRevision + 1, routeHistory: [...latest.routeHistory, receipt],
           messages: settleCompletedMessageDeliveries(routedMessages, topics, sourceDispatchOwnership) }
@@ -1382,7 +1451,10 @@ export async function openResidentStore(storageDomain) {
     reconcileMessageDeliveries: ({ groupId }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
-      return groups.update(entry[0], (latest) => ({ ...latest, messages: settleCompletedMessageDeliveries(latest.messages, latest.topics, latest.sourceDispatchOwnership) }))
+      return groups.update(entry[0], (latest) => {
+        const normalized = normalizeRoutingRecoveryEdges(latest)
+        return { ...normalized, messages: settleCompletedMessageDeliveries(normalized.messages, normalized.topics, normalized.sourceDispatchOwnership) }
+      })
     }),
     updateTopicTitle: ({ groupId, topicId, expectedTitle, expectedSummary, title }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)

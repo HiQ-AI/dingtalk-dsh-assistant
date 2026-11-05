@@ -1656,6 +1656,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       const notification = get('dynamic_notifications', a.notificationId)
       if (kind === 'notification.start') {
         if (notification.state !== 'prepared') return changed({ notification })
+        if (a.initialReplyStale === true && notification.kind === 'topic-reply' && notification.payload.fact?.initialReply === true) {
+          notification.state = 'superseded'; notification.reason = 'topic_initial_reply_stale'; notification.updatedAt = stamp
+          put('dynamic_notifications', notification); return changed({ notification })
+        }
         if (['fixed-topic-reply', 'topic-reply', 'routing-clarification'].includes(notification.kind)) {
           const { conversationId, sourceRef, sourceMessageId } = notification.payload
           const supplied = a.ownNotificationSources
