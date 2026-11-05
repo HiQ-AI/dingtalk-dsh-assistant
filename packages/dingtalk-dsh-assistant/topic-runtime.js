@@ -320,7 +320,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       ownedDeltaMessageIds: [...new Set(messages.filter((message) => !consumedFacts.has(unitKey(message)) && ownerByFact.get(unitKey(message)) === topicId && delta.has(unitKey(message))).map((message) => message.messageId))],
     }
   }
-  const pendingInput = (groupId) => (store.getGroup(groupId)?.messages ?? []).filter((message) => message.routingStatus !== 'routed')
+  const pendingInput = (groupId) => (store.getGroup(groupId)?.messages ?? []).filter((message) => !message.ownNotificationRetirement && message.routingStatus !== 'routed')
   const routableInput = (groupId) => pendingInput(groupId).filter(message => message.routingStatus !== 'needs-context')
   const pendingFor = (groupId, topicIds) => pendingInput(groupId).filter(message => routingBlocksTopics(message, topicIds))
   const pendingInputAt = (groupId, sequence, topicIds = []) => pendingFor(groupId, topicIds).filter(message => message.routingStatus === 'needs-context' || message.sequence <= sequence)
@@ -705,7 +705,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     if (!currentGroup || request.routingRevision !== currentGroup.routingRevision || !sameVersions(messages, currentMessages)) {
       routes.delete(request.requestId)
       // await 期间的富化会使原快照失效；只重取原批次，后来的独立消息仍由提交后的调度接续。
-      if (currentGroup && currentMessages.length === messages.length) return createRouteRequest(groupId, currentMessages, reason)
+      const retained = currentMessages.filter(message => !message.ownNotificationRetirement)
+      if (currentGroup && currentMessages.length === messages.length && retained.length) return createRouteRequest(groupId, retained, reason)
       return
     }
     const allTopics = store.listTopics(groupId).filter(topic => !topic.mergedInto)
@@ -820,7 +821,11 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const pending = pendingInput(groupId)
     const routable = routableInput(groupId)
     for (const [id, request] of routes) {
-      if (request.groupId === groupId && request.exhausted && !sameVersions(request.messages, routable)) routes.delete(id)
+      if (request.groupId !== groupId) continue
+      if (request.messages.some(message => group.messages.some(current => current.messageId === message.messageId && current.ownNotificationRetirement))) {
+        supersedeRequest(request, 'own-notification', 'own-notification-retired')
+        routes.delete(id)
+      } else if (request.exhausted && !sameVersions(request.messages, routable)) routes.delete(id)
     }
     if (routable.length && ![...routes.values()].some((request) => request.groupId === groupId)) {
       const recovery = routable.find(message => message.routingRecoveryMessageId && routable.some(item => item.messageId === message.routingRecoveryMessageId))
@@ -936,10 +941,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       }
       if (await store.rejectInvalidTopicDecision({ groupId, topicId, decisionId })) return store.getTopic(groupId, topicId).decisions.find(item => item.decisionId === decisionId)
       record = await store.updateTopicDecision({ groupId, topicId, decisionId, patch: { status: 'applying', error: undefined, attempt: (record.attempt ?? 0) + 1, nextRetryAt: undefined } })
+      record = store.getTopic(groupId, topicId).decisions.find(item => item.decisionId === decisionId)
+      if (!isPendingDecision(record)) return record
       const decision = record.decision
       for (const action of decision.actions) if (action.kind === 'task-cancel') cancelTask(action.taskId)
       for (let index = 0; index < record.operations.length; index++) {
         record = store.getTopic(groupId, topicId).decisions.find((item) => item.decisionId === decisionId)
+        if (!isPendingDecision(record)) return record
         const operation = record.operations[index]
         if (operation.status === 'applied') continue
         activeOperation = operation
@@ -951,10 +959,13 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         await store.updateTopicDecision({ groupId, topicId, decisionId, patch: { operations: record.operations.map((item, at) => at === index ? { ...item, status: 'applying', attempt: (item.attempt ?? 0) + 1 } : item) } })
         await applyAction(groupId, record.decision.actions[operation.actionIndex], operation, record)
         record = store.getTopic(groupId, topicId).decisions.find((item) => item.decisionId === decisionId)
+        if (!isPendingDecision(record)) return record
         await store.updateTopicDecision({ groupId, topicId, decisionId, patch: {
           operations: record.operations.map((item, at) => at === index ? { ...item, status: 'applied' } : item),
         } })
       }
+      record = store.getTopic(groupId, topicId).decisions.find(item => item.decisionId === decisionId)
+      if (!isPendingDecision(record)) return record
       // 回复可能声明任务已承接；必须先确认全部动作落账。失败恢复沿原 operationId 对账。
       activeOperation = undefined
       if (decision.reply?.trim()) {
@@ -1912,7 +1923,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         const delta = [...entries.values()].filter(entry => entry.action === 'add' && entry.revision > topic.processedRevision)
         const messages = request.messages.filter(message => {
           const current = group.messages.find(item => item.messageId === message.messageId && item.messageVersion === message.messageVersion)
-          if (!current) return false
+          if (!current || current.ownNotificationRetirement) return false
           if (!topic) return current.routingStatus !== 'routed'
           return current.routingStatus === 'routed'
             && (!Array.isArray(current.activeUnitRefs) || current.activeUnitRefs.some(ref => ref.unitId === message.unitId && ref.unitRevision === message.unitRevision))

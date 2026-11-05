@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import { isolationBinding, isolationDigest, hasRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 import { openDynamicTaskStore, pendingTaskHumanReview } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { projectTaskTimeline, latestExecutionRoundTiming } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
+import { fixedUnitRequestId } from '../packages/dingtalk-dsh-assistant/fixed-topics.js'
 
 test('正常初始化与重启不触发全库完整性审计，任务身份保持', async t => {
   const prepare = DatabaseSync.prototype.prepare
@@ -431,6 +432,65 @@ for (const invalidated of ['cancelled', 'stale']) test(`native drain cannot wake
   else await f.command('task.revise', { taskId: 'task', request: 'Changed objective' })
   await f.command('execution.drained', { binding })
   assert.equal((await f.query({ kind: 'wake.list', taskId: 'task' })).some(wake => wake.id === `execution-drained:${binding.executionId}:${binding.inputVersion}`), false)
+})
+
+test('已确认自身消息的固定回复不再获得发送许可', async t => {
+  const f = await fixture(t)
+  const source = { sourceId: 'echo', groupId: 'g', messageId: 'echo', actorId: 'a', text: '消息' }
+  await f.command('source.record', source)
+  const fact = { fixedTopic: 'agent-platform', unitId: 'u', unitRevision: 1 }
+  const id = fixedUnitRequestId('g', { messageId: 'echo', messageVersion: 1 }, fact)
+  await f.command('notification.prepare', { notificationId: id, requirementRevision: 1, kind: 'fixed-topic-reply', payload: {
+    conversationId: 'g', sourceId: 'echo', sourceVersion: 1, sourceRef: { messageId: 'echo', messageVersion: 1, actorId: 'a' },
+    fact, text: '回复', topicRefs: [], taskIds: [], kind: 'fixed-topic-reply' } })
+  await f.command('notification.prepare', { notificationId: 'original', requirementRevision: 1, kind: 'topic-reply', payload: {
+    conversationId: 'g', fact: { topicRefs: [{ topicId: 't', revision: 1 }] }, text: '原消息' } })
+  const start = await f.command('notification.start', { notificationId: 'original' })
+  await f.command('notification.ack', { notificationId: 'original', dispatchToken: start.result.notification.dispatchToken, ack: { openTaskId: 'task' } })
+  await f.command('notification.receipt', { notificationId: 'original', dispatchToken: start.result.notification.dispatchToken,
+    state: 'delivered', receipt: { messageId: 'echo' } })
+  const result = await f.command('notification.start', { notificationId: id })
+  assert.equal(result.dispatchEligible, false)
+  assert.equal(result.result.notification.state, 'superseded')
+  assert.equal(result.result.notification.reason, 'own-notification')
+  await f.command('notification.prepare', { notificationId: 'topic-from-echo', requirementRevision: 1, kind: 'topic-reply', payload: {
+    conversationId: 'g', fact: { topicRefs: [{ topicId: 't', revision: 1 }] }, text: '旧业务答复' } })
+  const topic = await f.command('notification.start', { notificationId: 'topic-from-echo', ownNotificationSources: { groupId: 'g', messageIds: ['echo'] } })
+  assert.equal(topic.dispatchEligible, false)
+  assert.equal(topic.result.notification.reason, 'own-notification')
+  await f.command('notification.prepare', { notificationId: 'resident-only', requirementRevision: 1, kind: 'topic-reply', payload: {
+    conversationId: 'g', fact: { topicRefs: [{ topicId: 't', revision: 1 }] }, text: '居民账回复' } })
+  const resident = await f.command('notification.start', { notificationId: 'resident-only', ownNotificationSources: { groupId: 'g', messageIds: ['resident'] },
+    ownNotificationEvidence: { groupId: 'g', messageIds: ['resident'] } })
+  assert.equal(resident.dispatchEligible, false)
+  assert.equal(resident.result.notification.reason, 'own-notification')
+  assert.equal((await f.query({ kind: 'notification.get', notificationId: 'original' })).receipt.messageId, 'echo')
+  await assert.rejects(f.command('task.create', { taskId: 'blocked', request: '不要执行自身消息', ownSourceFence: [{ sourceId: 'echo', groupId: 'g', messageId: 'echo' }] }), { code: 'DYNAMIC_SOURCE_RETIRED' })
+  await f.command('source.record', { ...source, sourceId: 'human', messageId: 'human' })
+  await f.command('task.create', { taskId: 'allowed', request: '正常真人消息', ownSourceFence: [{ sourceId: 'human', groupId: 'g', messageId: 'human' }] })
+})
+
+test('自身通知退役保留原路由回执并在重启后排除待路由来源', async t => {
+  const f = await fixture(t)
+  const original = { sourceId: 'own', groupId: 'g', messageId: 'm', actorId: 'same', text: '消息' }
+  const human = { ...original, sourceId: 'human', messageId: 'human' }
+  await f.command('source.record', original)
+  await f.command('source.record', human)
+  await f.command('source.routed', { sourceId: 'own', receipt: [{ topicId: 'old', revision: 1 }] })
+  await f.command('source.processingStarted', { sourceId: 'own', messageVersion: 1, activeUnitRefs: [] })
+  const evidence = { groupId: 'g', messageId: 'm', outboundId: 'out' }
+  await f.command('source.retireOwnNotification', { sourceId: 'own', evidence }, 'retire-own')
+  assert.equal((await f.command('source.retireOwnNotification', { sourceId: 'own', evidence }, 'retire-own')).replayed, true)
+  await f.command('source.record', original)
+  await f.reopen()
+  const saved = await f.query({ kind: 'source.get', sourceId: 'own' })
+  assert.deepEqual(saved.routeReceipt, [{ topicId: 'old', revision: 1 }])
+  assert.equal(saved.ownNotificationRetirement.kind, 'own-notification')
+  assert.equal(saved.processingPending, false)
+  assert.equal(saved.processingCompleted, undefined)
+  assert.deepEqual((await f.query({ kind: 'source.list', groupId: 'g', unrouted: true })).map(source => source.sourceId), ['human'])
+  assert.deepEqual((await f.command('group.claim', { groupId: 'g' })).result.sourceIds, ['human'])
+  await assert.rejects(f.command('source.processingStarted', { sourceId: 'own', messageVersion: 1, activeUnitRefs: [] }), { code: 'DYNAMIC_SOURCE_RETIRED' })
 })
 
 async function fixture(t, options = {}) {

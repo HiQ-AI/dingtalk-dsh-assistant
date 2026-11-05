@@ -14,9 +14,10 @@ export function createFixedTopicHandler({ ctx, store, legacy, root, models, appe
   const notify = createPlatformNotifier({ store, root, appendOutbox })
   const schedules = createPlatformSchedules({ ctx, store, legacy, root, models, readTasks, appendOutbox, notify, now })
   let closed = false
-  const current = (groupId, message, unit) => !closed && store.getGroup(groupId)?.messages.some(item => item.messageId === message.messageId
+  const current = (groupId, message, unit) => !closed && !store.isOwnNotification?.({ groupId, messageId: message.messageId }) && store.getGroup(groupId)?.messages.some(item => item.messageId === message.messageId
     && item.messageVersion === message.messageVersion && activeFixedUnits(item).some(value => value.unitId === unit.unitId && value.unitRevision === unit.unitRevision))
   async function process(groupId, message, unit) {
+    if (!current(groupId, message, unit)) return
     const requestId = fixedUnitRequestId(groupId, message, unit)
     const previous = store.getGroup(groupId).outbox.find(item => item.outboundId === requestId)
     const finish = async () => { await store.markFixedTopicHandled({ groupId, messageId: message.messageId, messageVersion: message.messageVersion, unitId: unit.unitId, unitRevision: unit.unitRevision }); onSettled(groupId) }
@@ -108,7 +109,7 @@ export function createFixedTopicHandler({ ctx, store, legacy, root, models, appe
   function schedule(groupId) {
     if (closed) return
     for (const message of store.getGroup(groupId)?.messages ?? []) {
-      if (message.routingStatus !== 'routed') continue
+      if (message.routingStatus !== 'routed' || store.isOwnNotification?.({ groupId, messageId: message.messageId })) continue
       for (const unit of activeFixedUnits(message)) {
         const id = fixedUnitRequestId(groupId, message, unit)
         if (flights.has(id)) continue

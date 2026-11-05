@@ -59,7 +59,8 @@ test('only the matching original task send can register a status; ingress waits 
     projectTaskNotification: async ({ outbound }) => outbox.push(structuredClone(outbound)) }
   const original = { id: 'send-op', taskId: 'task', state: 'succeeded', result: observation(send(), ack) }
   const statusOperation = { id: 'status-op', taskId: 'task', state: 'succeeded', result: observation(`${query}; ${mget}`, status(), { messages: [] }) }
-  const observer = createNativeDwsObserver({ operations, residentStore })
+  const identified = []
+  const observer = createNativeDwsObserver({ operations, residentStore, onIdentified: groupId => identified.push({ groupId, messageId: outbox.at(-1)?.deliveredMessageId }) })
   await observer.observe(statusOperation); assert.equal(outbox.length, 0, 'No original accepted send')
   operations.set(original.id, original)
   await observer.observe({ ...statusOperation, taskId: 'other-task' }); assert.equal(outbox.length, 0)
@@ -67,6 +68,7 @@ test('only the matching original task send can register a status; ingress waits 
   assert.equal(outbox.length, 1); assert.equal(outbox[0].sourceMessageId, `native-operation:${original.id}`)
   assert.equal(outbox[0].sendReceipt.openTaskId, 'send-task')
   assert.equal(outbox[0].deliveredMessageId, 'message')
+  assert.deepEqual(identified, [{ groupId: 'group', messageId: 'message' }])
   operations.set(statusOperation.id, statusOperation)
   await createNativeDwsObserver({ operations, residentStore }).recover()
   assert.equal(outbox.length, 1, 'Restart must not add a duplicate outgoing record')
@@ -141,7 +143,9 @@ for (const kind of ['text', 'file', 'image']) test(`queued ${kind} echo identity
   const notification = { id: 'notice', taskId: 'task', kind: 'topic-reply', state: 'starting',
     payload: { conversationId: 'group', text: 'final result', ...(kind !== 'text' ? { artifact: { fileName: `accepted.${kind}` } } : {}) } }
   notifications.set(notification.id, notification)
+  const identified = []
   const observer = createNativeDwsObserver({ operations: new Map(), residentStore, notificationCache: notifications,
+    onIdentified: groupId => identified.push({ groupId, messageId: outbox.at(-1)?.deliveredMessageId, receipt: notification.receipt }),
     querySendStatus: async (id, options) => { assert.equal(id, 'send-task'); assert.equal(options, undefined); return status() } })
   observer.notificationChanged(notification)
   const early = observer.beforeIngress('group')
@@ -152,6 +156,7 @@ for (const kind of ['text', 'file', 'image']) test(`queued ${kind} echo identity
   assert.equal(outbox[0].deliveredMessageId, 'message')
   assert.equal(outbox[0].status, 'pending'); assert.equal(outbox[0].notificationState, 'unknown')
   assert.equal(notification.receipt, undefined, 'Identity is not the final content readback')
+  assert.deepEqual(identified, [{ groupId: 'group', messageId: 'message', receipt: undefined }])
   assert.deepEqual(outbox[0].sendReceipt, { openTaskId: 'send-task', conversationId: 'group', messageId: 'message' })
   await observer.beforeIngress('group'); assert.equal(outbox.length, 1)
   observer.close()

@@ -17,7 +17,7 @@ export function createPlatformSchedules({ ctx, store, legacy, root, models, read
   const flights = new Map(), mounted = new Map(), recovered = new Set()
   let recovery = Promise.resolve()
   const source = binding => {
-    if (closed) return null
+    if (closed || store.isOwnNotification?.({ groupId: binding.groupId, messageId: binding.messageId })) return null
     const message = store.getGroup(binding.groupId)?.messages.find(item => item.messageId === binding.messageId && item.messageVersion === binding.messageVersion)
     const unit = message?.units?.find(item => item.unitId === binding.unitId && item.unitRevision === binding.unitRevision && item.fixedTopic === 'agent-platform')
     return unit && message.activeUnitRefs?.some(ref => ref.unitId === unit.unitId && ref.unitRevision === unit.unitRevision)

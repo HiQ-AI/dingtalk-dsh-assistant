@@ -82,6 +82,19 @@ test('资源ID必须来自当前消息，文本真实分页，读取失败不缓
   assert.equal(first.contentFingerprint, next.contentFingerprint)
 })
 
+test('引用资源错配时提示读取原消息且不自动重试', async () => {
+  const calls = [], ref = { type: 'mediaId', resourceId: 'image' }
+  const h = harness({ request: { requestId: 'r', groupId: 'g', messages: [{ messageId: 'a', text: '查看图片', quotedMessage: { messageId: 'b' }, resourceRefs: [ref] }] },
+    readMessage: async (_group, id) => ({ groupId: 'g', messageId: id, text: '原图', resourceRefs: [ref] }),
+    readResource: async (_group, id) => { calls.push(id); if (id === 'a') throw new Error('dws_resource_read_failed:3'); return { text: '图片内容' } } })
+  await assert.rejects(h.call('group_resource_get', { messageId: 'a', ...ref }), /dws_resource_read_failed:3.*group_message_get.*b/u)
+  assert.deepEqual(calls, ['a'])
+  const original = await h.call('group_message_get', { messageId: 'b' })
+  assert.deepEqual(original.resourceRefs, [ref])
+  assert.equal((await h.call('group_resource_get', { messageId: 'b', ...ref })).text, '图片内容')
+  assert.deepEqual(calls, ['a', 'b'])
+})
+
 test('公网链接限于精确消息引用，异步读取后请求过期不能交付', async () => {
   let calls = 0
   const h = harness({ readMessage: async (_group, id) => ({ groupId: 'g', messageId: id, text: 'https://example.org/report' }), readUrl: async () => { calls++; h.stop(); return { text: '公开资料' } } })

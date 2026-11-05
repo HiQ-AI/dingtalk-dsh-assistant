@@ -71,6 +71,32 @@ async function route(store, id, items) {
 }
 const decision = (id, topicId, revision, extra = {}) => ({ groupId: 'g', topicId, revision, decisionId: id, decision: { actions: [], reason: '无需回复' }, ...extra })
 
+test('自身来源退役解除待判并使原话题请求过期，保留历史路由', async () => {
+  const { store, snapshot } = await setup()
+  await ingest(store, 'routed'); await ingest(store, 'held')
+  const routed = await route(store, 'original', [['routed', { newTopicKey: 't', title: '事项' }]])
+  const topicId = routed.topicIdsByKey.t
+  const oldRevision = store.getGroup('g').routingRevision
+  await store.routeMessages({ groupId: 'g', routeId: 'hold', routingRevision: oldRevision,
+    routes: [{ messageId: 'held', messageVersion: 1, deferred: { reason: '范围不明' } }] })
+  const staleRevision = store.getGroup('g').routingRevision
+  await store.retireOwnNotification({ groupId: 'g', messageId: 'held', outboundId: 'out-held' })
+  await assert.rejects(store.routeMessages({ groupId: 'g', routeId: 'stale', routingRevision: staleRevision,
+    routes: [{ messageId: 'held', messageVersion: 1, topics: [{ topicId }] }] }), /topic_routing_stale/)
+  await store.retireOwnNotification({ groupId: 'g', messageId: 'routed', outboundId: 'out-routed' })
+  const group = store.getGroup('g'), topic = group.topics.find(item => item.topicId === topicId)
+  assert.equal(topic.entries.at(-1).action, 'remove')
+  assert.equal(topic.entries[0].action, 'add')
+  assert.equal(group.routeHistory.find(item => item.routeId === 'original').fingerprint, routed.fingerprint)
+  assert.deepEqual(group.messages.find(item => item.messageId === 'routed').activeUnitRefs, [])
+  await store.close()
+  const reopened = await openResidentStore(facility(snapshot))
+  try {
+    assert.equal(reopened.getGroup('g').messages.find(item => item.messageId === 'held').ownNotificationRetirement.outboundId, 'out-held')
+    assert.equal(reopened.getGroup('g').topics.find(item => item.topicId === topicId).entries.at(-1).action, 'remove')
+  } finally { await reopened.close() }
+})
+
 test('待判持久化、受信范围和恢复代次保持接纳屏障', async () => {
   const { store, snapshot } = await setup()
   await ingest(store, 'a'); await ingest(store, 'b')
@@ -278,6 +304,25 @@ async function revisionFixture() {
   const input = decision('revision-decision', topicId, 1, { decision: { actions: [action], basisMessageIds: ['revision-source'], reply: '重新验证' }, expectedTaskVersions: [{ taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence }] })
   return { ...fixture, topicId, task, action, input }
 }
+
+test('自身来源退役释放未完成决策预约并保留既有任务事实', async () => {
+  const { store, task, input, topicId } = await revisionFixture()
+  assert.equal((await store.acceptTopicDecision(input)).status, 'accepted')
+  const before = structuredClone(store.getTopic('g', topicId).decisions[0])
+  assert.equal(store.getGroup('g').taskReservations.length, 1)
+  await store.retireOwnNotification({ groupId: 'g', messageId: 'revision-source', outboundId: 'out' })
+  const retired = store.getTopic('g', topicId).decisions[0]
+  assert.equal(retired.status, 'rejected')
+  assert.equal(retired.error, 'own-notification-retired')
+  assert.deepEqual(retired.operations, before.operations)
+  assert.deepEqual(store.getTask(task.taskId), task)
+  assert.equal(store.getGroup('g').taskReservations.length, 0)
+  await ingest(store, 'human')
+  await route(store, 'human-route', [['human', topicId]])
+  const revision = store.getTopic('g', topicId).revision
+  assert.equal((await store.acceptTopicDecision(decision('human-decision', topicId, revision))).status, 'accepted')
+  await store.close()
+})
 
 test('阶段修订在原子接纳前拒绝未知ID，修正同请求可接受；Web遵循相同校验', async () => {
   for (const web of [false, true]) {

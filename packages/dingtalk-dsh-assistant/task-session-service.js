@@ -91,7 +91,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const deliveryFiles = createTaskArtifactFiles({ root: join(root, 'delivery-files') })
   notifications = withTaskFileNotifications(notifications, deliveryFiles)
   const inflightTasks = new Map(), inflightExecutions = new Map(), inflightGroups = new Map(), inflightNotifications = new Map()
-  let nativeDws
+  let nativeDws, scheduleOwnRetirement
+  const receiptMessageId = value => value?.messageId ?? value?.messageRef?.openMessageId ?? value?.sendReceipt?.messageId ?? value?.result?.messageId ?? value?.result?.openMessageId
   const admissions = new Map(), admissionHolds = new Set()
   const sourceProjections = new Set(), notificationSends = new Set(), notificationReadbacks = new Set()
   const failures = new Map(), taskSlots = new Set(), messageRecoveryFlights = new Set()
@@ -122,6 +123,15 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   if (residentStore.retireIndependentCoordination)
     await residentStore.retireIndependentCoordination(await query('coordination.retirement'))
   const taskCache = new Map(), operationCache = new Map(), notificationCache = new Map(), executionCache = new Map()
+  const ownNotificationEvidence = message => {
+    if (!message.messageId) return undefined
+    const outbound = residentStore?.getGroup(message.groupId)?.outbox.find(item => item.deliveredMessageId === message.messageId)
+    if (outbound) return { groupId: message.groupId, messageId: message.messageId, outboundId: outbound.outboundId }
+    const notification = [...notificationCache.values()].find(item => item.payload?.conversationId === message.groupId
+      && [receiptMessageId(item.receipt), receiptMessageId(item.ack)].includes(message.messageId))
+    return notification && { groupId: message.groupId, messageId: message.messageId, outboundId: notification.id }
+  }
+  const isOwnNotification = message => Boolean(ownNotificationEvidence(message))
   const documentTails = new Map()
   function publishExecutionDocument(executionId) {
     const previous = documentTails.get(executionId) ?? Promise.resolve()
@@ -150,9 +160,15 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const command = async (kind, args, id) => {
     if (kind === 'execution.continue' || kind === 'execution.retry-provider') await refreshExecutionDocument(args.executionId ?? args.binding.executionId)
     let clarification = kind === 'notification.prepare' && args.kind === 'routing-clarification' ? args.payload : undefined
+    let groupNotification
     if (kind === 'notification.start') {
-      const notification = notificationCache.get(args.notificationId) ?? await query('notification.get', { notificationId: args.notificationId })
-      if (notification?.kind === 'routing-clarification') clarification = notification.payload
+      const notification = await query('notification.get', { notificationId: args.notificationId })
+      if (notification?.kind === 'routing-clarification') {
+        const p = notification.payload, message = residentStore.getGroup(p.conversationId)?.messages.find(item => item.messageId === p.sourceMessageId)
+        if (message?.ownNotificationRetirement || isOwnNotification({ groupId: p.conversationId, messageId: p.sourceMessageId })) groupNotification = notification
+        else clarification = p
+      }
+      if (['fixed-topic-reply', 'topic-reply'].includes(notification?.kind)) groupNotification = notification
     }
     const commit = () => store.command({ id: id ?? `${kind}:${randomUUID()}`, kind, args: clean(args) })
     // 发送许可与待判版本在同一群锁内线性化；缓存/出箱投影必须留在锁外。
@@ -169,6 +185,24 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
             throw Object.assign(error, { code: 'DYNAMIC_NOTIFICATION_SOURCE_PENDING' })
           throw error
         })
+    } else if (groupNotification) {
+      const p = groupNotification.payload, groupId = p.conversationId, group = residentStore.getGroup(groupId)
+      const outbound = group?.outbox.find(item => item.outboundId === (p.deliveryId ?? groupNotification.id))
+      const decision = group?.topics.flatMap(topic => topic.decisions).find(item => item.outboundId === (p.deliveryId ?? groupNotification.id))
+      const units = new Set((decision?.decision.basisUnitRefs ?? []).map(ref => ref.unitId))
+      const messageIds = [...new Set([...(outbound?.matterSourceMessageIds ?? []),
+        ...(decision?.decision.basisMessageIds ?? []),
+        ...(group?.topics.flatMap(topic => topic.entries.filter(entry => units.has(entry.unitId)).map(entry => entry.messageId)) ?? []),
+        ...(['fixed-topic-reply', 'routing-clarification'].includes(groupNotification.kind) ? [p.sourceRef?.messageId ?? p.sourceMessageId] : [])].filter(Boolean))]
+      receipt = await residentStore.withNotificationSource({ groupId, messageIds, commit: own => {
+        if (groupNotification.state === 'prepared') args = { ...args, ownNotificationSources: { groupId, messageIds },
+          ...(own ? { ownNotificationEvidence: { groupId, messageIds } } : {}) }
+        return commit()
+      } })
+    } else if (args.ownSourceFence?.length) {
+      const groupId = args.ownSourceFence[0].groupId
+      if (args.ownSourceFence.some(ref => ref.groupId !== groupId)) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
+      receipt = await residentStore.withOwnSourceFence({ groupId, messageIds: args.ownSourceFence.map(ref => ref.messageId), commit })
     } else receipt = await commit()
     observerGroupPage?.sourceChanged(receipt.result?.source ?? args.source)
     // 幂等收据保存的是当时快照；通知当前态须独立回读，不能用旧 prepared 覆盖已送达缓存。
@@ -192,6 +226,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const previous=notificationCache.get(receipt.result.notification.id), notification=receipt.result.notification
       notificationCache.set(notification.id,notification)
       nativeDws?.notificationChanged(notification)
+      if (notification.payload?.conversationId && [receiptMessageId(notification.receipt), receiptMessageId(notification.ack)].some(Boolean))
+        scheduleOwnRetirement?.(notification.payload.conversationId)
       if(observerGroupPage)for(const item of [previous,notification].filter(Boolean))
         for(const value of [item.receipt,item.ack])observerGroupPage.sourceChanged({groupId:item.payload?.conversationId,messageId:receiptMessageId(value)})
     }
@@ -221,7 +257,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     for (const item of await query('execution.list')) executionCache.set(item.executionId, item)
   })
   nativeDws = createNativeDwsObserver({ operations: operationCache, residentStore, notificationCache,
-    querySendStatus: notifications?.querySendStatus, warn: error => ctx.logger?.warn?.(`native DWS receipt: ${error.code ?? error.message}`) })
+    querySendStatus: notifications?.querySendStatus, onIdentified: groupId => scheduleOwnRetirement?.(groupId),
+    warn: error => ctx.logger?.warn?.(`native DWS receipt: ${error.code ?? error.message}`) })
   await nativeDws.recover()
   // 仅为启动时已停住的技术等待补一次唤醒；同一实现重启不能反复驱动模型。
   const runtimeRevision = hash(await Promise.all(['task-session-service.js', 'task-session.js', 'execution-session.js', 'claude-execution-session.js', 'dynamic-native-job.js', 'dynamic-operation-readback.js']
@@ -231,15 +268,6 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       && task.lastDecision.limitations?.includes('TASK_SESSION_NO_SUBMISSION')
       || task.lastDecision?.action === 'wait'
       && [...operationCache.values()].some(operation => operation.taskId === task.taskId && operation.state === 'unknown')))
-  const receiptMessageId = value => value?.messageId ?? value?.messageRef?.openMessageId ?? value?.sendReceipt?.messageId ?? value?.result?.messageId ?? value?.result?.openMessageId
-  const isOwnNotification = message => {
-    if (!message.messageId) return false
-    // Account, the generic DWS flag, quote and body do not identify this plugin's send.
-    // Reuse both durable outbound projections and current exact send acknowledgements.
-    if (residentStore?.getGroup(message.groupId)?.outbox.some(item => item.deliveredMessageId === message.messageId)) return true
-    return [...notificationCache.values()].some(item => item.payload?.conversationId === message.groupId
-      && [receiptMessageId(item.receipt), receiptMessageId(item.ack)].includes(message.messageId))
-  }
   const observation = createTaskSessionObservability({ store: residentStore, listTasks: () => [...taskCache.values()], resolveSessionIdentity: sessionId => {
     const task = [...taskCache.values()].find(item => item.sessionId === sessionId && item.sessionBound)
     if (task) return { taskId: task.taskId, groupId: task.groupId, role: 'owner' }
@@ -253,7 +281,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     ...(closeTrace ? { onProgress: queued => closeTrace.sample('service.observation-progress', () => ({ queued })) } : {}),
   })
   const stopObservation = ctx.on?.('session/event', (session, event) => { observationQueue.enqueue(session, event) })
-  residentStore?.setTaskSessionReader?.({ getTask: id => taskCache.get(id), listTasks: () => [...taskCache.values()],
+  residentStore?.setTaskSessionReader?.({ getTask: id => taskCache.get(id), listTasks: () => [...taskCache.values()], isOwnNotification,
     hasAppliedOperation: async operationId => !!await query('receipt.get', { id: `topic-operation:${operationId}` }),
     isTaskQuiescent: taskId => [...executionCache.values()].filter(item => item.taskId === taskId).every(item => item.drained && !item.recovering) })
   const models = () => { const { provider, model, reasoningEffort } = legacy.getAgentConfig(); return { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } }
@@ -629,7 +657,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   const sameProcessingRefs = (source, refs) => hash((source.activeUnitRefs ?? source.processingCompleted?.activeUnitRefs ?? []).map(ref => [ref.unitId, ref.unitRevision]).sort())
     === hash(refs.map(ref => [ref.unitId, ref.unitRevision]).sort()) && (source.activeUnitRefs !== undefined || source.processingCompleted !== undefined)
   async function projectSource(source) {
-    if (source.channel === 'web' || !residentStore) return
+    if (source.channel === 'web' || source.ownNotificationRetirement || !residentStore) return
     const group = residentStore.getGroup(source.groupId)
     const message = group?.messages.find(item => item.messageId === source.messageId)
     if (!message || message.routingStatus !== 'routed') return
@@ -713,7 +741,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     }
     const actionUnits = action.topicRefs.flatMap(ref => resolveTopicMessages(residentStore.getGroup(groupId), ref.topicId, ref.revision))
       .filter(message => (action.basisUnitRefs ?? record.decision.basisUnitRefs).some(ref => ref.unitId === message.unitId && ref.unitRevision === message.unitRevision))
+    if (actionUnits.some(message => isOwnNotification({ ...message, groupId }))) fail('DYNAMIC_SOURCE_RETIRED')
     const basis = sources.filter(source => actionUnits.some(message => message.messageId === source.messageId))
+    const ownSourceFence = basis.map(({ sourceId, groupId, messageId }) => ({ sourceId, groupId, messageId }))
     const existingTask = action.kind === 'new-task' ? null : await requireTask(operation.taskId)
     if (existingTask?.archivedAt) fail('DYNAMIC_TASK_ARCHIVED_CONFLICT')
     // 群续办按本次真实来源接纳；最初发起人身份不代表后续交办的唯一作者。
@@ -730,7 +760,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     let task
     if (action.kind === 'new-task') {
       const receipt = await measure('task-commit', () => command('task.create', { taskId: operation.taskId, groupId, ownerActorId: source.actorId,
-        sourceRefs: sources.map(item => item.sourceId), topicRefs: refs, replyBindings, operationId: operation.operationId,
+        sourceRefs: sources.map(item => item.sourceId), ownSourceFence, topicRefs: refs, replyBindings, operationId: operation.operationId,
         title: action.title, objective: action.objective, request: sources.map(item => item.text).join('\n\n'),
         requirements: action.acceptanceCriteria ?? [], metadata: { channel: source.channel ?? 'im', authorizationSourceId: source.sourceId } }, id))
       task = receipt.result.task
@@ -739,7 +769,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (action.kind === 'task-context' && action.progressImpact === 'preserve' && action.title !== undefined && action.title !== task.title) fail('TASK_CONTEXT_CLASSIFICATION_CONFLICT')
       const topicRefs = [...new Map([...(task.topicRefs ?? []), ...refs].map(ref => [ref.topicId, ref])).values()]
       const args = { taskId: task.taskId, expectedRequirementRevision: action.inputVersion, expectedControlRevision: task.controlRevision,
-        topicRefs, ...(replyBindings.length ? { replyBindings } : {}), operationId: operation.operationId }
+        topicRefs, ownSourceFence, ...(replyBindings.length ? { replyBindings } : {}), operationId: operation.operationId }
       const changesRequirements = action.authorizationChange === 'changed' || action.progressImpact === 'replan' || action.impactEvidence !== undefined
         || action.objective !== undefined || action.acceptanceCriteria !== undefined || action.stageTasks !== undefined
       const supplement = action.kind === 'task-context' && action.progressImpact === 'preserve' && action.authorizationChange !== 'changed'
@@ -989,6 +1019,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (inflightGroups.has(groupId)) { rerouteGroups.set(groupId, (rerouteGroups.get(groupId) ?? true) && factsOnly); return inflightGroups.get(groupId) }
     return track(inflightGroups, groupId, async () => {
       if (!factsOnly) await refreshTasks()
+      await reconcileOwnNotifications(groupId)
       await topicCoordinator.schedule(groupId)
       await topicCoordinator.whenIdle()
       if (!factsOnly) for (const source of await query('source.list', { groupId })) await projectSource(source)
@@ -1001,6 +1032,29 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       rerouteGroups.delete(groupId)
       if (!closed) void kickGroup(groupId, nextFactsOnly)
     })
+  }
+  async function reconcileOwnNotifications(groupId) {
+    const sources = await query('source.list', { groupId })
+    const group = residentStore.getGroup(groupId)
+    for (const message of group?.messages ?? []) {
+      const evidence = ownNotificationEvidence({ groupId, messageId: message.messageId })
+      if (!evidence) continue
+      const matching = sources.filter(source => source.messageId === message.messageId)
+      if (!message.ownNotificationRetirement && message.routingStatus === 'routed' && !activeFixedUnits(message).length
+        && (!matching.length || matching.every(source => source.routed && !source.processingPending))) continue
+      await residentStore.retireOwnNotification(evidence)
+      for (const source of matching) if (!source.ownNotificationRetirement)
+        await command('source.retireOwnNotification', { sourceId: source.sourceId, evidence }, `source-own-notification:${source.sourceId}`)
+    }
+  }
+  scheduleOwnRetirement = groupId => {
+    const work = reconcileOwnNotifications(groupId).then(async () => {
+      if (!closed) await topicCoordinator.schedule(groupId)
+      failures.delete(`own-notification:${groupId}`)
+      if (!closed) { void kickGroup(groupId); void deliverNotifications() }
+    }).catch(error => failures.set(`own-notification:${groupId}`, { id: groupId, code: error.code ?? error.message }))
+    sourceProjections.add(work)
+    void work.finally(() => sourceProjections.delete(work))
   }
   async function ingest(message) {
     const receivedAt = new Date().toISOString()
@@ -1073,6 +1127,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         failures.set(`timing:${currentSourceId}`, { id: `timing:${currentSourceId}`, code: error.code ?? error.message })
         ctx.logger?.warn?.(`message timing: ${error.code ?? error.message}`)
       }
+    }
+    if (isOwnNotification(message)) {
+      await reconcileOwnNotifications(message.groupId)
+      return { accepted: false, sourceId: currentSourceId, processing: 'ignored', reason: 'own-notification' }
     }
     void kickGroup(message.groupId)
     return { accepted: true, sourceId: currentSourceId, processing: stored.result.source.routed ? 'routed' : 'pending' }
@@ -1526,6 +1584,11 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       messages: [{ messageId: current.payload.sourceRef?.messageId ?? current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined
   async function notificationDeliveryGate(notification) {
     if (notification.kind === 'coordination' || notification.state === 'superseded') return false
+    if (notification.state === 'prepared' && ['fixed-topic-reply', 'routing-clarification'].includes(notification.kind)) {
+      const p = notification.payload, messageId = p.sourceRef?.messageId ?? p.sourceMessageId
+      const message = residentStore.getGroup(p.conversationId)?.messages.find(item => item.messageId === messageId)
+      if (message?.ownNotificationRetirement || isOwnNotification({ groupId: p.conversationId, messageId })) return true
+    }
     if (notification.kind === 'routing-clarification' && ['prepared', 'failed'].includes(notification.state)) {
       try { assertRoutingClarification(notification.payload, notification.id) }
       catch (error) {
@@ -1703,12 +1766,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const factFailures = await topicFacts.recover()
       for (const key of failures.keys()) if (key.startsWith('topic-fact-projection:')) failures.delete(key)
       for (const failure of factFailures) failures.set(`topic-fact-projection:${failure.id}`, failure)
+      for (const group of residentStore.listGroups()) await reconcileOwnNotifications(group.groupId)
       await topicCoordinator.recover()
       for (const group of residentStore.listGroups()) await prepareRoutingClarifications(group.groupId)
       for (const source of await query('source.list')) {
         await projectSource(source)
         const current = await query('source.get', { sourceId: source.sourceId })
-        if (!current.routed || current.processingPending) void kickGroup(source.groupId)
+        if (!current.ownNotificationRetirement && (!current.routed || current.processingPending)) void kickGroup(source.groupId)
       }
       for await (const candidate of executionIndex()) {
         if (!executionProgressDue(candidate)) continue
