@@ -2,7 +2,7 @@
 
 > 状态：ACTIVE
 > Goal ID：topic-routing-quality
-> 最近维护：2026-11-05T15:32:28+08:00
+> 最近维护：2026-11-05T15:53:50+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/docs/acceptance/topic-routing-quality/goal.md
 
 ## 总目标
@@ -38,15 +38,15 @@
 | SG1 | A核心与B审阅门禁 | 完整首包、紧凑语义及审阅防退化 | A修复及D审完成，237/237、fact目标2/2；B新增类型门禁仍未实施，用户确认先部署当前版，不绕其审批 | round-14；runtime4a7a76b1、decision7b778ba4、coordinator ba9ff8d4 |
 | SG2 | 分层模型与原Native超时 | 默认继承/Owner不变、原断言通过 | 原五项逐项证因5/5，相关Native57/57；仅适用各自旧冻结版本，不套后续源码 | round-10/11；round-9旧核心250/250 |
 | SG3 | C真实模型对照 | 同初态、真实adapter、终态及独立语义/性能 | 原五配对已完，但语义/性能未达整体交付；history5、隔离Native3已按影响补验，不新增模型调用 | round-13/14、私有metrics aa1562bf |
-| SG4 | A根因修复、C正常恢复与D独立核验 | 当前固定14条经正式处理取得真实业务终态；必要阻断依赖不扩授权 | DONE：原14同版本canonical各唯一、来源完成14/pending0/完成决策覆盖14；842既有静默纠正另计。T1当前req4/control4/lease80完成并排空，input9成功且原分析产物3份经D核验，完成fact对应回复delivered/attempt1；T2当前req1完成并排空，真实用户确认依据及完成fact静默投影已核，不冒认助手修复 | 私有postCorrectionBusiness.finalReadback/D06:56:22.495Z；SHA256 4c7a31c1；第17轮待阶段末集中归档 |
+| SG4 | A根因修复、C正常恢复与D独立核验 | 当前固定14条经正式处理取得真实业务终态；必要阻断依赖不扩授权 | DONE：原14同版本canonical各唯一、来源完成14/pending0/完成决策覆盖14；842既有静默纠正另计。T1当前req4/control4/lease80完成并排空，input9成功且原分析产物3份经D核验，完成fact对应回复delivered/attempt1；T2当前req1完成并排空，真实用户确认依据及完成fact静默投影已核，不冒认助手修复 | 私有postCorrectionBusiness.finalReadback/D06:56:22.495Z；SHA256 4c7a31c1；round-17.md/matrix.csv已归档，原历史列保留 |
 | SG5 | Lead合并部署、C产物、D核验、E证据 | 合并代码、双包、原生退出、功能及独立回读 | 第15轮部署/fixture交付已完成；本次PR #343双包更新与独立安装/健康核验通过，第16轮证据保留原14条BLOCKED和测试限制，不等同业务处理完成 | PR #342/#343 MERGED；round-15历史、round-16.md、matrix.csv |
-| SG6 | A不明确输入分流、C隔离联调、D独立审查 | 职责外或真实发问闭环；合法scope仅阻断相关Topic；问句精确回链；旧units/效果及错误边界保持 | IN_PROGRESS：实现与冻结本地验证完成；runtime210/210、store定向2/2、当前原生13/13、实际包smoke14/14；待PR、合并与本机部署，不等同真实新消息验收 | runtime3dde2dc1/store6ece9dfc/serviceb55ed35c；Native测试ed518cdc；候选Assistant eef7295f；第18轮阶段末集中归档 |
+| SG6 | A不明确输入分流、C隔离联调、D独立审查 | 职责外或真实发问闭环；合法scope仅阻断相关Topic；问句精确回链；旧units/效果及错误边界保持 | IN_PROGRESS：实现与冻结本地验证完成；runtime210/210、store定向2/2、当前原生13/13、实际包smoke14/14；产品提交1ca72d3c已推；PR #344 OPEN/CLEAN/MERGEABLE，待合并与本机部署，不等同真实新消息验收 | runtime3dde2dc1/store6ece9dfc/serviceb55ed35c；Native测试ed518cdc；候选Assistant eef7295f；第18轮阶段末集中归档 |
 
 ## 当前检查点
 
 - 当前子目标：SG6
 - 当前执行：SG4已独立核完并形成第17轮；SG6六模块及README已冻结，D增量及Native夹具审查已收束，当前原生13/13、runtime210/210、store定向2/2均通过；Lead对本次候选实际包使用既有预打包入口完整release-smoke14/14、0失败/跳过，原断言/时限。候选Assistant SHA256 eef7295ff7219f8f461f2577c37d36adc4ad0495728d0f2f90d9e6e89345c33e，Observer84e11494不变；正式实例仍38f06195，尚未安装新包。
-- 唯一下一步：接回D最终冻结结论后提交并回读新PR，按既有授权合并后核源码/包一致，沿runbook先-Check再排空双包切换及独立回读；从打包至安装核验保持包源码冻结。E集中收口第17轮业务结果及旧附件，第18轮在新规则验证/部署阶段结束后集中归档。C原SG4三观察均已接回，无须重复等待或wake；不造正式测试消息、不手动触发CI或新模型评测。长期Goal仍ACTIVE。
+- 唯一下一步：第17轮报告、矩阵与旧附件清理已独立核对，提交文档后合并PR #344（https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/344）；最新fetch的main仍38f06195，PR门禁CLEAN且无自动checks。部署前正式端口3080/18998回查未监听，D正只读核原PID10052、计划任务及退出原因；主控未执行新版本-Check、停机、安装或启动，不盲目重启。现场条件确认后核合并源码/包一致，沿runbook先-Check再双包切换和独立回读；保持包源码冻结。E仅在SG6阶段结束后集中归第18轮。原14无需再恢复/wake，不造正式测试消息、不手动触发CI或新模型评测。长期Goal仍ACTIVE。
 - SG6验证边界：Native为真实隔离Host/脚本provider与隔离发送适配器，不是真实钉钉或模型语义质量验收；Service恶意proof/错误作者/未送达引用的独立Native负例尚未实跑，store层身份/送达ID/版本/epoch/outbox反例及静态接线已覆盖。组合回归455/456保留既有摘要“第一版”对空串失败，组合启动未捕获最终指纹，仅作诊断；最终定向验证分别绑定实际冻结blob，不据此称全仓全绿。
 - SG4最终独立回读：D于2026-11-05T06:56:22.495Z核原14同基线版本、canonical各唯一、sourceCompleted14/pending0/completedDecisionCovered14，两Task均当前版本completed/drained，pending人类请求0。T1 req4/control4/lease80 input9执行成功且Owner已真实读取结果，3份分析产物符合仅分析不修改/部署要求；本次completed fact已accepted/projected，原同群回复06:54:13.028Z delivered/attempt1、精确receipt且覆盖该fact。T2 req1由真实用户确认收口，完成fact正式静默审阅，不冒认助手修复。T1保留一条回合中到达的execution.result pending wake，终态Task不再调度，不能写全wake acked或人工清账。Lead独立核私有current-processing-14.json/postCorrectionBusiness.finalReadback，整文件SHA256 4c7a31c1547d6f51901c90f19d4610233ee17a4a409c1d82f20d1ec53430aab4；跨账非原子采样、businessFinalVerified仅限固定14和必要两Task，不代表新规则或整体性能完成。
 - 已核必要依赖：842根据用户真实闲聊反馈沿既有fixed-topic out-of-scope correction静默处理，routingRevision779→780、closedTopic0；Resident routed、canonical于06:06:54.941Z自然recover完成，无新Task/通知/outbox，历史hold字段不再生效。该处置不依赖新产品或发版；C随后对当前2个配置群一次普查，现存needs_clarification均0，本轮无需全库历史迁移/重放。证据复用私有recovery-nine-receipts.json/currentHoldCensus，最近核摘要702feb06b300296853f02d201599cce53540378e0dd25efeea3f42a959ba6c6b。
@@ -72,7 +72,7 @@
 
 A负责schema/runtime及已完成只读冲突合同核验；B唯一写coordinator，未绕其限制；C负责fact/隔离评测、5行fixture与最终去标识validation；D只读独立核，不写业务；E负责报告/matrix；Lead唯一Goal/Git/PR，并因已证工具环境差异承接本轮Native及部署执行权。五会话保留；A本次负责资源错配与自身回流的最小产品修复/相关测试/README，不触碰B唯一coordinator文件；D只读独立审查和固定14终态核验，C唯一正式业务恢复，Lead唯一Goal/Git/必要新版本整合。无新评测、模型或CI授权。
 
-- 第15轮部署最终证据：round-15.md、round-15/validation.json及必要TAP；文档提交36ea622e已推送并独立核远端。第16轮为历史BLOCKED阶段；当前业务恢复与新规则验证记第17轮，E负责报告/矩阵，不覆盖旧轮、不写整体report.md。PR #342仍MERGED，收尾分支不续推#342。
+- 第15轮部署最终证据：round-15.md、round-15/validation.json及必要TAP；文档提交36ea622e已推送并独立核远端。第16轮为历史BLOCKED阶段；第17轮仅记录SG4最终业务恢复，第18轮记录SG6新规则验证/部署，E负责报告/矩阵，不覆盖旧轮、不写整体report.md。PR #342仍MERGED，收尾分支不续推#342。
 - 本轮资源反证私有回执：docs/tmp/semantic-latency/host-resource-check-result.json SHA256 e33b4051…；resource-check-828-841-result.json SHA256 4a28be5c…，Lead已独立匹配冻结摘要并按精确owner/resource核原图字节。这两份早期回执仅证明实际下载链可用；后续Host真实图像曝光另见第16轮，原14业务终态仍未完成。
 - 当前必要根因决策：docs/spec/own-notification-late-retirement.md，明确精确自身身份、合法退役/旧收据保留、许可与跨账恢复；不为误接纳的自身来源内部计划另赋未来执行权。原计划：docs/spec/first-reply-latency-contract.md、docs/spec/structured-routing-host-execution.md；已交付旧任务round-7/8。当前runbook为docs/ops/task-session-clean-start.md的已初始化原生双包更新，不Bootstrap。
 - 历史验证：round-9核心250/下午观察；round-10五超时；round-11相关Native57；round-12旧隔离/凭据；round-13真实五对；round-14新核心237、fact2、history5、隔离3。按实际版本引用，不重复累计或将脚本模型说成真实质量。

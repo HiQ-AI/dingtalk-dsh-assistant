@@ -20,12 +20,12 @@
 
 ## 最终证据
 
-下列 TAP 已逐份读取并核对 SHA256，保留在本轮目录；它们支持各自运行，不覆盖首轮失败或扩大验收范围。 `.gitattributes` 仅对本轮TAP禁用换行归一化，保留Windows原始字节，使仓库blob与下列摘要一致；不修改测试输出或重跑结果。
+下列四份 TAP 已逐份读取并核对 SHA256；第17轮最终记录核验落盘后，附件按留存规则清理。报告继续保留每份原始测试结论、附件名称和 SHA256，不转移或备份附件。 归档时曾仅对本轮 TAP 禁用换行归一化，保留 Windows 原始字节，使当时仓库 blob 与下列摘要一致；附件清理后同步移除已无目标的局部属性规则。未修改原测试输出或重跑结果。
 
-- `round-16/release-smoke-native.tap`：SHA256 `d9e266878a3d321621c3db45b65076e5fe9edbbaf11bc2761878712beb591e05`；原生环境 12/14 的首轮结果。
-- `round-16/fixed-topics-native.tap`：SHA256 `914868897a0cfbd25e533cf55a714c7d4f4f0a5ccaf8c3a020ca5c2834d9886b`；fixed-topics-native 12/12。
-- `round-16/package-native-prepacked.tap`：SHA256 `f3627c12c30a96bc0b123e7d893b22ec721bb8a53c4f316de78f6017de87bc4f`；两个实际包用例按原断言定向复验 2/2。
-- `round-16/own-late-readback-native.tap`：SHA256 `ad000d3920e8cdaa7384d5b8b10d5fe6386f8587dadc80b318a22618c08f0710`；自身通知迟回读 1/1。
+- `round-16/release-smoke-native.tap`（附件已清理）：SHA256 `d9e266878a3d321621c3db45b65076e5fe9edbbaf11bc2761878712beb591e05`；原生环境 12/14 的首轮结果。
+- `round-16/fixed-topics-native.tap`（附件已清理）：SHA256 `914868897a0cfbd25e533cf55a714c7d4f4f0a5ccaf8c3a020ca5c2834d9886b`；fixed-topics-native 12/12。
+- `round-16/package-native-prepacked.tap`（附件已清理）：SHA256 `f3627c12c30a96bc0b123e7d893b22ec721bb8a53c4f316de78f6017de87bc4f`；两个实际包用例按原断言定向复验 2/2。
+- `round-16/own-late-readback-native.tap`（附件已清理）：SHA256 `ad000d3920e8cdaa7384d5b8b10d5fe6386f8587dadc80b318a22618c08f0710`；自身通知迟回读 1/1。
 
 A 四文件定向回归及干净基线复现的输出由执行会话保留；本报告记录命令、计数、失败断言及冻结 blob，不引入其临时宿主日志或原始会话转录。
 
