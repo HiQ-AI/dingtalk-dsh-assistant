@@ -135,6 +135,7 @@ export function agentSaveSummary(desired, actual) {
   const modelSaved = (desired.provider === undefined || desired.provider === actual.provider) && desired.model.trim() === actual.model && (desired.reasoningEffort || '') === (actual.reasoningEffort || '')
   const pluginSaved = equal([...new Set(desired.agentNames)], actual.agentNames) && desired.replySignature.trim() === (actual.replySignature || '')
     && desired.proxyUrl.trim() === (actual.proxyUrl || '') && equal(desired.taskSessionModel, actual.taskSessionModel)
+    && equal(desired.topicRouteModel ?? null, actual.topicRouteModel ?? null) && equal(desired.topicDecisionModel ?? null, actual.topicDecisionModel ?? null)
     && (desired.executionBackend ?? 'dsh') === (actual.executionBackend ?? 'dsh')
   return `保存未全部完成。默认模型：${modelSaved ? '已生效' : '未全部生效'}；插件设置（含统筹和执行后端）：${pluginSaved ? '已生效' : '未全部生效'}。草稿已保留，请核对后再保存。`
 }
@@ -157,6 +158,10 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
   const [replySignature, setReplySignature] = useState('')
   const [agentModel, setAgentModel] = useState({ provider: '', model: '', reasoningEffort: 'low' })
   const [taskModel, setTaskModel] = useState(independentModelDefault)
+  const [routeModel, setRouteModel] = useState(null)
+  const [decisionModel, setDecisionModel] = useState(null)
+  const { options: routeOptions, error: routeError } = useIndependentModelOptions(routeModel ?? agentModel)
+  const { options: decisionOptions, error: decisionError } = useIndependentModelOptions(decisionModel ?? agentModel)
   const [executionBackend, setExecutionBackend] = useState('dsh')
   const { options: taskOptions, error: taskOptionsError } = useIndependentModelOptions(taskModel)
   const [taskFeedback, setTaskFeedback] = useState(null)
@@ -198,7 +203,11 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
   useEffect(() => {
     if (!taskDirty.current && overview?.agentConfig?.taskSessionModel) setTaskModel(overview.agentConfig.taskSessionModel)
     if (!taskDirty.current) setExecutionBackend(overview?.agentConfig?.executionBackend ?? 'dsh')
-  }, [overview?.agentConfig?.taskSessionModel, overview?.agentConfig?.executionBackend])
+    if (!taskDirty.current) {
+      setRouteModel(overview?.agentConfig?.topicRouteModel ?? null)
+      setDecisionModel(overview?.agentConfig?.topicDecisionModel ?? null)
+    }
+  }, [overview?.agentConfig?.taskSessionModel, overview?.agentConfig?.executionBackend, overview?.agentConfig?.topicRouteModel, overview?.agentConfig?.topicDecisionModel])
   useEffect(() => {
     if (taskFeedback?.kind !== 'success') return
     const timer = setTimeout(() => setTaskFeedback(null), 5000)
@@ -210,18 +219,28 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
   const taskEffortInvalid = !!requestedTaskEffort && !taskEfforts.some(value => value.id === requestedTaskEffort)
   const taskChanged = JSON.stringify(taskModel) !== JSON.stringify(overview?.agentConfig?.taskSessionModel)
   const taskValid = taskOptions?.available && !taskOptionsError && !taskEffortInvalid && !!taskModel.provider.trim() && !!taskModel.model.trim()
+  const topicValid = (model, options, error) => {
+    if (!model) return true
+    const effort = model.reasoningMode === 'inherit' ? agentModel.reasoningEffort : model.reasoningMode === 'explicit' ? model.reasoningEffort : undefined
+    return options?.available && !error && !!model.provider.trim() && !!model.model.trim()
+      && (!effort || (options.reasoning?.efforts ?? []).some(value => value.id === effort))
+  }
+  const topicsValid = topicValid(routeModel, routeOptions, routeError) && topicValid(decisionModel, decisionOptions, decisionError)
+  const topicsChanged = JSON.stringify(routeModel) !== JSON.stringify(overview?.agentConfig?.topicRouteModel ?? null)
+    || JSON.stringify(decisionModel) !== JSON.stringify(overview?.agentConfig?.topicDecisionModel ?? null)
 
   const saveAgentConfig = async event => {
     event?.preventDefault()
-    if (taskSaving.current || !taskValid || !(taskChanged || agentConfigChanged)) return
+    if (taskSaving.current || !taskValid || !topicsValid || !(taskChanged || topicsChanged || agentConfigChanged)) return
     taskDirty.current = true
     taskSaving.current = true; setTaskBusy(true); setTaskFeedback(null)
-    const desired = { agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl, taskSessionModel: taskModel, executionBackend }
+    const desired = { agentNames: agentNames.split(',').map(name => name.trim()).filter(Boolean), replySignature, workspaceDir: agentWorkspace, ...agentModel, proxyUrl, taskSessionModel: taskModel, topicRouteModel: routeModel, topicDecisionModel: decisionModel, executionBackend }
     try {
       const saved = await request('/config/agent', { method: 'PUT', body: JSON.stringify(desired) })
       refreshGeneration.current++
       taskDirty.current = false
       setOverview(current => ({ ...current, agentConfig: saved })); setTaskModel(saved.taskSessionModel)
+      setRouteModel(saved.topicRouteModel ?? null); setDecisionModel(saved.topicDecisionModel ?? null)
       setExecutionBackend(saved.executionBackend ?? 'dsh')
       setAgentNames((saved.agentNames ?? []).join(',')); setReplySignature(saved.replySignature ?? ''); setAgentWorkspace(saved.workspaceDir); setAgentModel({ provider: saved.provider, model: saved.model, reasoningEffort: saved.reasoningEffort ?? '' }); setProxyUrl(saved.proxyUrl ?? '')
       setTaskFeedback({ kind: 'success', message: 'Agent 配置已保存；执行后端仅用于新执行，已有执行及续办保持原后端。' })
@@ -338,7 +357,14 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '通过 dsh 原生默认模型设置保存；保存后从下一次模型请求起生效，不中断当前在途请求。'),
     React.createElement(IndependentModelFields, { id: 'task', label: '统筹模型', value: taskModel, change: changeTask,
       bridge: modelBridge, options: taskOptions, error: taskOptionsError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort,
-      help: '仅影响任务统筹的下一轮请求；DSH 原生执行和话题仍使用默认处理模型。' }),
+      help: '仅影响任务统筹的下一轮请求；DSH 原生执行仍使用默认处理模型。' }),
+      ...[[ '消息路由模型', routeModel, setRouteModel, routeOptions, routeError, '仅影响新建消息路由会话。' ],
+        [ '事项决策模型', decisionModel, setDecisionModel, decisionOptions, decisionError, '仅影响新建普通事项决策会话。' ]].map(([label, value, setValue, options, modelError, help]) =>
+        React.createElement('div', { key: label, style: { display: 'grid', gap: ui.space3 } },
+          React.createElement('label', null, React.createElement('input', { type: 'checkbox', disabled: taskBusy, checked: value === null,
+            onChange: event => { taskDirty.current = true; setTaskFeedback(null); setValue(event.target.checked ? null : { provider: agentModel.provider, model: agentModel.model, reasoningMode: 'model-default', reasoningEffort: null }) } }), `${label}跟随默认处理模型`),
+          value && React.createElement(IndependentModelFields, { label, value, change: transform => { taskDirty.current = true; setTaskFeedback(null); setValue(transform) },
+            bridge: modelBridge, options, error: modelError, busy: taskBusy, defaultEffort: agentModel.reasoningEffort, help: `${help}保存后对新会话生效，不影响任务统筹。` }))),
 
       React.createElement('label', { htmlFor: 'dingtalk-execution-backend', style: { fontSize: 13, fontWeight: 600, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '执行后端'),
       React.createElement('select', { id: 'dingtalk-execution-backend', disabled: taskBusy, style: input, value: executionBackend, 'aria-describedby': 'dingtalk-execution-backend-help', onChange: event => { taskDirty.current = true; setExecutionBackend(event.target.value); setTaskFeedback(null) } },
@@ -348,7 +374,7 @@ export function DingTalkDshAssistantCard({ modelBridge }) {
       React.createElement('strong', { style: { fontSize: 13, borderTop: `1px solid ${colors.border}`, paddingTop: 12 } }, '网络代理'),
       React.createElement('input', { 'aria-label': 'Agent 网络代理', disabled: taskBusy, placeholder: '例如 http://127.0.0.1:10808；留空表示不使用', style: input, value: proxyUrl, onChange: (event) => setProxyUrl(event.target.value) }),
       React.createElement('div', { style: { fontSize: 12, color: colors.muted } }, '用于 resident Agent 调用模型；保存后写入插件配置并立即应用，重启后仍保留。'),
-React.createElement('button', { type: 'submit', style: { ...button, justifySelf: 'end', minWidth: 132, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: taskBusy || !taskValid || !agentModel.model.trim() || !(agentConfigChanged || taskChanged), 'aria-busy': taskBusy }, taskBusy ? '正在保存…' : '保存配置'),
+React.createElement('button', { type: 'submit', style: { ...button, justifySelf: 'end', minWidth: 132, background: colors.accent, color: '#fff', borderColor: colors.accent }, disabled: taskBusy || !taskValid || !topicsValid || !agentModel.model.trim() || !(agentConfigChanged || taskChanged || topicsChanged), 'aria-busy': taskBusy }, taskBusy ? '正在保存…' : '保存配置'),
       React.createElement('div', { role: taskFeedback?.kind === 'error' ? 'alert' : 'status', style: { minHeight: 20, fontSize: ui.textSm, color: taskFeedback?.kind === 'error' ? colors.danger : colors.muted } }, taskFeedback?.message ?? '')),
     React.createElement('div', { style: { color: colors.muted, fontSize: ui.textSm } }, '在“运行看板 → 任务看板”查看任务会话、动态执行、结果与日志路径。'),
     React.createElement('section', { style: panel }, React.createElement('strong', null, '常驻群与会话职责'),

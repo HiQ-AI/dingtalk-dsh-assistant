@@ -35,7 +35,18 @@ function completionReviews() {
 }
 async function fixture(t, decide, options) {
   const root = await mkdtemp(join(tmpdir(), 'task-human-native-'))
-  const h = await nativeTaskHost(root, decide, options)
+  const h = await nativeTaskHost(root, (request, ...args) => {
+    const input = latestInput(request)
+    if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) {
+      const last = modelToolValues(request).at(-1)
+      if (last?.status === 'context-required' && last.error === 'topic_route_context_unread' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
+    }
+    if (request.tools.some(tool => tool.name === 'group_decision_submit') && (input.summaryContext?.section === 'summary' || input.summaryContext?.readCall?.arguments?.section === 'summary')) {
+      const page = modelToolValues(request).filter(value => value.requestId === input.requestId && value.section === 'summary').at(-1)
+      if (!page || page.hasMore) return [call('group_decision_context_get', { ...(input.summaryContext.readCall?.arguments ?? { requestId: input.requestId, section: 'summary' }), offset: page?.nextOffset ?? 0 })]
+    }
+    return decide(request, ...args)
+  }, options)
   t.after(async () => { try { await h.close() } finally { await rm(root, { recursive: true, force: true }) } })
   return h
 }

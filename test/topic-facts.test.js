@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
+import { Session } from '@deepseek-ai/dsh-session'
+import { createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task-resident-runtime.js'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
@@ -44,7 +46,7 @@ async function fixture(t, { signature = '' } = {}) {
   const context = () => handler.context('group', resident.getTopic('group', topicId))
   const submission = (ctx, id, reply) => ({ requestId: id, groupId: 'group', topicId, revision: resident.getTopic('group', topicId).revision,
     factContext: ctx, decision: { actions: [], topicUpdate: { summary: '已核对结果' }, reason: '有新结论', ...(reply ? { reply, replyToMessageId: 'origin', atOpenDingTalkIds: ['user'] } : {}) } })
-  const submit = request => handler.submit(request, Object.fromEntries(['requestId', 'topicId', 'revision', 'decision'].map(key => [key, request[key]])))
+  const submit = (request, options) => handler.submit(request, Object.fromEntries(['requestId', 'topicId', 'revision', 'decision'].map(key => [key, request[key]])), options)
   async function task(taskId, sourceIds = ['source']) {
     await commit('task.create', { taskId, groupId: 'group', ownerActorId: 'user', title: '核对结果', request: '核对结果', sourceRefs: sourceIds,
       topicRefs: [{ topicId, revision: 1 }], replyBindings: [{ groupId: 'group', topicId, sourceIds }] })
@@ -256,6 +258,58 @@ test('旧事实请求不能覆盖已到达补充或任务新版本，新结论�
   assert.equal((await f.query('notification.list')).length, 2)
 })
 
+test('事实提交在群锁内复验材料，过期或未读不消费事实及通知', async t => {
+  const f = await fixture(t), binding = await f.task('preflight-task')
+  await f.finish(binding)
+  const ctx = await f.context(), sub = f.submission(ctx, 'preflight-result')
+  const before = f.resident.getTopic('group', f.topicId)
+  const expectedQuestions = JSON.stringify(before.openQuestions)
+  let enter, release, checks = 0
+  const entered = new Promise(resolve => { enter = resolve })
+  const blocked = new Promise(resolve => { release = resolve })
+  const holder = f.resident.commitTopicFactDecision({ groupId: 'group', topicId: f.topicId,
+    revision: before.revision, expectedSummary: before.summary, commit: async () => {
+      enter()
+      await blocked
+      return { status: 'held' }
+    } })
+  await entered
+  // 先排队真实的同版本材料变更，再排队提交，验证回调没有提前在锁外运行。
+  const changed = f.resident.applyTopicFactSummary({ groupId: 'group', topicId: f.topicId,
+    revision: before.revision, expectedSummary: before.summary, requestId: 'changed-context',
+    decision: { topicUpdate: { openQuestions: ['禁止上线'] } } })
+  const pending = f.submit(sub, { preflight: () => {
+    checks++
+    return JSON.stringify(f.resident.getTopic('group', f.topicId).openQuestions) === expectedQuestions
+  } })
+  try { assert.equal(checks, 0) } finally { release() }
+  await holder
+  await changed
+  assert.equal((await pending).status, 'topic-stale')
+  assert.equal(checks, 1)
+  assert.equal(f.resident.getTopic('group', f.topicId).revision, before.revision)
+  assert.equal(f.resident.getTopic('group', f.topicId).summary, before.summary)
+  assert.equal((await f.query('topic.fact.pending', { groupId: 'group', topicId: f.topicId })).length, 1)
+  assert.deepEqual(await f.query('notification.list'), [])
+  assert.deepEqual(f.resident.getGroup('group').outbox, [])
+
+  await assert.rejects(f.submit(sub, { preflight: () => { throw new Error('topic_decision_context_unread') } }), /topic_decision_context_unread/)
+  assert.equal((await f.query('topic.fact.pending', { groupId: 'group', topicId: f.topicId })).length, 1)
+  assert.deepEqual(await f.query('notification.list'), [])
+  assert.deepEqual(f.resident.getGroup('group').outbox, [])
+
+  const current = await f.context(), fresh = f.submission(current, 'fresh-preflight-result', '已核对，保持未上线。')
+  fresh.decision.topicUpdate = { summary: '已核对，保持未上线', openQuestions: ['禁止上线'] }
+  assert.equal((await f.submit(fresh, { preflight: () => {
+    checks++
+    return JSON.stringify(f.resident.getTopic('group', f.topicId).openQuestions) === JSON.stringify(current.input.openQuestions)
+  } })).status, 'accepted')
+  assert.equal(checks, 2)
+  assert.deepEqual(await f.query('topic.fact.pending', { groupId: 'group', topicId: f.topicId }), [])
+  assert.equal((await f.query('notification.list')).length, 1)
+  assert.equal(f.resident.getGroup('group').outbox.length, 1)
+})
+
 test('事实轮拒绝任何任务动作，引用已送达回复能反查 Topic', async t => {
   const f = await fixture(t), a = await f.task('alpha'); await f.finish(a)
   const texts = [], tools = new Map(), actions = []
@@ -283,6 +337,75 @@ test('事实轮拒绝任何任务动作，引用已送达回复能反查 Topic',
   const route = envelopes().find(value => value.messages?.some(item => item.messageId === 'followup'))
   assert.deepEqual(route.messages[0].quotedReply, { topicId: f.topicId, taskIds: ['alpha'], coveredEventIds: request.facts.map(f => f.eventId) })
   assert.ok(route.relatedTopics.some(topic => topic.topicId === f.topicId))
+})
+
+test('事实轮旧摘要必须读完当前表面的未汇总材料后才能消费', async t => {
+  const f = await fixture(t), binding = await f.task('unsummarized-task')
+  await f.resident.ingest({ groupId: 'group', messageId: 'scope-delta', text: '只核查不部署。' + '保留全部约束。'.repeat(3000),
+    senderOpenDingTalkId: 'user', occurredAt: new Date().toISOString() })
+  await f.resident.routeMessages({ groupId: 'group', routeId: 'scope-route', routingRevision: f.resident.getGroup('group').routingRevision,
+    routes: [{ messageId: 'scope-delta', messageVersion: 1, topics: [{ topicId: f.topicId }] }] })
+  await f.resident.acceptTopicDecision({ groupId: 'group', topicId: f.topicId, revision: 2, decisionId: 'scope-accepted',
+    decision: { basisMessageIds: ['scope-delta'], actions: [], reason: '仅接纳核查，不批准实施或部署' } })
+  await f.resident.completeTopicDecision({ groupId: 'group', topicId: f.topicId, decisionId: 'scope-accepted' })
+  await f.finish(binding)
+  const session = Session.create('fact-unsummarized-surface'), tools = new Map(), texts = [], actions = []
+  const agent = { session, steer(message) { texts.push(message.content[0].text); session.append('user/message', message, { surfaceOp: 'append' }) }, whenIdle: () => new Promise(() => {}) }
+  const coordinator = createTopicCoordinator({ store: f.resident, taskFacts: f.handler, workflowPromptsEnabled: false,
+    getAgent: () => agent, assertSession() {}, serializeTasks: run => run(), applyAction: action => actions.push(action), appendOutbox() {},
+    reviewCandidates: () => [], validateReplyReview() {}, onError: error => { throw error }, isClosing: () => false })
+  t.after(() => coordinator.close())
+  await coordinator.schedule('group')
+  const request = JSON.parse(texts.find(text => text.startsWith('[GROUP_TOPIC_DECISION]')).split('\n').find(line => line.startsWith('Topic 请求：')).slice('Topic 请求：'.length))
+  assert.equal(request.trigger, 'task-facts')
+  assert.equal(request.revision, 2)
+  assert.equal(request.summaryRevision, 1)
+  assert.equal(request.hasUnsummarized, true)
+  coordinator.register({ tools: { register: tool => tools.set(tool.name, tool) } }, 'group', request)
+  const submit = () => tools.get('group_decision_submit').execute({ requestId: request.requestId, topicId: request.topicId, revision: request.revision,
+    decision: { actions: [], topicUpdate: { summary: '只读核查已完成，未实施或部署' }, reason: '结果与受理范围一致', reply: '只读核查完成，未实施或部署。', atOpenDingTalkIds: ['user'] } })
+  const assertPending = async () => {
+    assert.equal((await f.query('topic.fact.pending', { groupId: 'group', topicId: f.topicId })).length, 1)
+    assert.deepEqual(await f.query('notification.list'), [])
+    assert.deepEqual(f.resident.getGroup('group').outbox, [])
+  }
+  const contextRequired = offset => ({ status: 'context-required', error: 'topic_decision_context_unread',
+    nextCall: { name: 'group_decision_context_get', arguments: { requestId: request.requestId, section: 'summary', offset } } })
+  const first = await submit()
+  assert.deepEqual(first, contextRequired(0))
+  await assertPending()
+  const read = args => tools.get('group_decision_context_get').execute(args)
+  const visible = result => {
+    const id = `fact-read-${session.snapshotEvents().length}`
+    session.append('assistant/message', { turn: 1, step: 1, stream: [], message: { id: `assistant-${id}`, role: 'assistant', source: { kind: 'model', provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'tool-call', id, name: 'group_decision_context_get', arguments: '{}' }] } }, { surfaceOp: 'append' })
+    session.append('tool/result', { turn: 1, step: 1, message: { ...createToolResultMessage({ callId: id, isError: false, content: [{ type: 'text', text: JSON.stringify(result) }] }), id: `result-${id}` } }, { surfaceOp: 'append' })
+  }
+  const args = first.nextCall.arguments, pages = []
+  let page = await tools.get(first.nextCall.name).execute(args), lastOffset = 0
+  assert.equal(page.hasMore, true)
+  while (page.hasMore) {
+    pages.push(page.text)
+    visible(page)
+    lastOffset = page.nextOffset
+    page = await read({ ...args, offset: lastOffset })
+  }
+  pages.push(page.text)
+  assert.ok(JSON.parse(pages.join('')).unsummarized.decisions.some(record => record.decision.reason === '仅接纳核查，不批准实施或部署'))
+  const missing = await submit()
+  assert.deepEqual(missing, contextRequired(lastOffset))
+  await assertPending()
+  visible({ ...page, requestId: 'another-fact-request' })
+  const wrongRequest = await submit()
+  assert.deepEqual(wrongRequest, contextRequired(lastOffset))
+  await assertPending()
+  visible(await tools.get(wrongRequest.nextCall.name).execute(wrongRequest.nextCall.arguments))
+  assert.equal((await submit()).status, 'accepted')
+  assert.deepEqual(await f.query('topic.fact.pending', { groupId: 'group', topicId: f.topicId }), [])
+  assert.equal((await f.query('notification.list')).length, 1)
+  assert.equal(f.resident.getGroup('group').outbox.length, 1)
+  assert.equal(f.resident.getTopic('group', f.topicId).summaryRevision, 2)
+  assert.deepEqual(actions, [])
 })
 
 test('默认事实上下文使用有界 SQL 投影，长执行材料不进入判断', async t => {

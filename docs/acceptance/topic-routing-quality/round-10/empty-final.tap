@@ -1,0 +1,19 @@
+TAP version 13
+# Subtest: 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：empty
+ok 1 - 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：empty
+  ---
+  duration_ms: 9187.6622
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":824,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":8198,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":163,"aborted":false}
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9908.7366

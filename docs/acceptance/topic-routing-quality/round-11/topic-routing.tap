@@ -1,0 +1,313 @@
+TAP version 13
+# Subtest: 脚本化普通回复目标只选固定输入真人来源
+ok 1 - 脚本化普通回复目标只选固定输入真人来源
+  ---
+  duration_ms: 1.3261
+  type: 'test'
+  ...
+# Subtest: 来源语义戳在首次Topic完成后落账，不等待同群其他判断
+ok 2 - 来源语义戳在首次Topic完成后落账，不等待同群其他判断
+  ---
+  duration_ms: 1292.1379
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":5,"aborted":false}
+# {"metric":"settled-topic-to-source-projection","delayMs":8,"slowTopicStillBlocked":true}
+# {"lifecyclePhase":"business","elapsedMs":1259,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":28,"aborted":false}
+# Subtest: completed task catalogue stays within the tool budget and advances by returned entries without losing tasks
+ok 3 - completed task catalogue stays within the tool budget and advances by returned entries without losing tasks
+  ---
+  duration_ms: 1.3314
+  type: 'test'
+  ...
+# Subtest: task catalogue continuation carries the exact normalized query and current snapshot identity
+ok 4 - task catalogue continuation carries the exact normalized query and current snapshot identity
+  ---
+  duration_ms: 1.0238
+  type: 'test'
+  ...
+# Subtest: native request-bound review and Topic reads accept empty args while routing never guesses a Topic
+ok 5 - native request-bound review and Topic reads accept empty args while routing never guesses a Topic
+  ---
+  duration_ms: 348.7829
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":105,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":218,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":25,"aborted":false}
+# Subtest: native Decision uses a complete single-Task first packet without a serial read
+ok 6 - native Decision uses a complete single-Task first packet without a serial read
+  ---
+  duration_ms: 4152.22
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":102,"aborted":false}
+# {"viewBytes":54073,"firstBodyBytes":58435}
+# {"lifecyclePhase":"business","elapsedMs":3910,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":140,"aborted":false}
+# Subtest: native revised Topic supplies current linked Task reads without rescanning the catalogue
+ok 7 - native revised Topic supplies current linked Task reads without rescanning the catalogue
+  ---
+  duration_ms: 4596.6372
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":506,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":3978,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":112,"aborted":false}
+# Subtest: native task context reports invalid arguments and reads explicit archived identity
+ok 8 - native task context reports invalid arguments and reads explicit archived identity
+  ---
+  duration_ms: 3321.3454
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":431,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2730,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":159,"aborted":false}
+# Subtest: native batch followup reopens each original completed task and session once from one coordination topic
+ok 9 - native batch followup reopens each original completed task and session once from one coordination topic
+  ---
+  duration_ms: 6939.6976
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":501,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":6247,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":191,"aborted":false}
+# Subtest: 普通回复显式多收件人贯穿原生通知格式化 quoted=true
+ok 10 - 普通回复显式多收件人贯穿原生通知格式化 quoted=true
+  ---
+  duration_ms: 1765.6959
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":412,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1246,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":107,"aborted":false}
+# Subtest: 普通回复显式多收件人贯穿原生通知格式化 quoted=false
+ok 11 - 普通回复显式多收件人贯穿原生通知格式化 quoted=false
+  ---
+  duration_ms: 1820.8836
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":461,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1229,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":131,"aborted":false}
+# Subtest: 旧回复冻结恢复 prepared
+ok 12 - 旧回复冻结恢复 prepared
+  ---
+  duration_ms: 1139.8616
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":5,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1064,"aborted":false}
+# 恢复测试结束阶段：assert recovery
+# {"lifecyclePhase":"cleanup","elapsedMs":69,"aborted":false}
+# Subtest: 旧回复冻结恢复 projected
+ok 13 - 旧回复冻结恢复 projected
+  ---
+  duration_ms: 1112.5178
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":3,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1042,"aborted":false}
+# 恢复测试结束阶段：assert recovery
+# {"lifecyclePhase":"cleanup","elapsedMs":68,"aborted":false}
+# Subtest: 旧回复冻结恢复 revision-conflict
+ok 14 - 旧回复冻结恢复 revision-conflict
+  ---
+  duration_ms: 1063.66
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":2,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":949,"aborted":false}
+# 恢复测试结束阶段：assert recovery
+# {"lifecyclePhase":"cleanup","elapsedMs":112,"aborted":false}
+# Subtest: 旧回复冻结恢复 taskIds-conflict
+ok 15 - 旧回复冻结恢复 taskIds-conflict
+  ---
+  duration_ms: 1030.7119
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":3,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":941,"aborted":false}
+# 恢复测试结束阶段：assert recovery
+# {"lifecyclePhase":"cleanup","elapsedMs":86,"aborted":false}
+# Subtest: native task service preserves Topic routing, task association, ignored input and recovery idempotency
+ok 16 - native task service preserves Topic routing, task association, ignored input and recovery idempotency
+  ---
+  duration_ms: 7243.0492
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":5,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":7128,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":109,"aborted":false}
+# Subtest: Topic外发标识在接纳前被拒绝，原轮修改后只创建一项任务且保留业务编号链接
+ok 17 - Topic外发标识在接纳前被拒绝，原轮修改后只创建一项任务且保留业务编号链接
+  ---
+  duration_ms: 2296.555
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":470,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1732,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":94,"aborted":false}
+# Subtest: native Topic handoff keeps the explicit requester as task and completion notification owner
+ok 18 - native Topic handoff keeps the explicit requester as task and completion notification owner
+  ---
+  duration_ms: 3029.2966
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":460,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2447,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":122,"aborted":false}
+# Subtest: replan fences an execution claim before commit
+ok 19 - replan fences an execution claim before commit
+  ---
+  duration_ms: 1530.426
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":3,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1440,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":87,"aborted":false}
+# Subtest: replan fences an execution claim after commit
+ok 20 - replan fences an execution claim after commit
+  ---
+  duration_ms: 1769.8251
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":2,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1632,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":134,"aborted":false}
+# Subtest: concurrent same-topic revision is busy while a different task makes progress
+ok 21 - concurrent same-topic revision is busy while a different task makes progress
+  ---
+  duration_ms: 2300.0947
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":4,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2207,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":88,"aborted":false}
+# Subtest: failed old-drain ends its timing and releases admission for later work
+ok 22 - failed old-drain ends its timing and releases admission for later work
+  ---
+  duration_ms: 1792.7907
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":4,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1693,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":94,"aborted":false}
+# Subtest: Web material failure recovers once and retries the same request without repeating work
+ok 23 - Web material failure recovers once and retries the same request without repeating work
+  ---
+  duration_ms: 1781.0173
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":4,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1696,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":81,"aborted":false}
+# Subtest: Web replan blocks a new Owner while old-generation cancellation is in flight
+ok 24 - Web replan blocks a new Owner while old-generation cancellation is in flight
+  ---
+  duration_ms: 1341.122
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":4,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1238,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":99,"aborted":false}
+# Subtest: Web replan drains the old Owner without waiting for the new Owner
+ok 25 - Web replan drains the old Owner without waiting for the new Owner
+  ---
+  duration_ms: 2813.4169
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":477,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2193,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":142,"aborted":false}
+# Subtest: native Web Topic edits reject stale requirement and control revisions without changing task or topics
+ok 26 - native Web Topic edits reject stale requirement and control revisions without changing task or topics
+  ---
+  duration_ms: 2885.0806
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":412,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2312,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":160,"aborted":false}
+# Subtest: business notices 423–424 and named owners remain in the original Topic without assistant tasks or replies
+ok 27 - business notices 423–424 and named owners remain in the original Topic without assistant tasks or replies
+  ---
+  duration_ms: 3780.1876
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":502,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":3168,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":109,"aborted":false}
+# Subtest: scripted native aggregation keeps list requirements, screenshot delivery and later acceptance in one Topic and Task
+ok 28 - scripted native aggregation keeps list requirements, screenshot delivery and later acceptance in one Topic and Task
+  ---
+  duration_ms: 6095.6695
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":444,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":5515,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":136,"aborted":false}
+# Subtest: scripted native routing checks scope before reusing an old Topic and reconsiders a new technical matter
+ok 29 - scripted native routing checks scope before reusing an old Topic and reconsiders a new technical matter
+  ---
+  duration_ms: 2070.7107
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":491,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":1476,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":103,"aborted":false}
+# Subtest: scripted native routing permits distinct delivery goals on the same page
+ok 30 - scripted native routing permits distinct delivery goals on the same page
+  ---
+  duration_ms: 1442.0585
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":502,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":838,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":101,"aborted":false}
+# Subtest: native Topic context accepts a requirement that only mentions notification recipients
+ok 31 - native Topic context accepts a requirement that only mentions notification recipients
+  ---
+  duration_ms: 2726.3227
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":485,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2107,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":134,"aborted":false}
+# Subtest: native proposal prompt preserves original authorization and asks without claiming task execution
+ok 32 - native proposal prompt preserves original authorization and asks without claiming task execution
+  ---
+  duration_ms: 1310.0565
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":452,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":748,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":110,"aborted":false}
+# Subtest: native Web reopen preserves task identity and rejects stale input; HTTP retry is idempotent
+ok 33 - native Web reopen preserves task identity and rejects stale input; HTTP retry is idempotent
+  ---
+  duration_ms: 3019.0035
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":1,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2865,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":152,"aborted":false}
+# Subtest: 协调暂停时混合消息拒绝协调来源，普通话题Host重试仍按原版本完成
+ok 34 - 协调暂停时混合消息拒绝协调来源，普通话题Host重试仍按原版本完成
+  ---
+  duration_ms: 2149.3298
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":4,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":2035,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":110,"aborted":false}
+1..34
+# tests 34
+# suites 0
+# pass 34
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 80698.4254

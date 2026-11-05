@@ -23,9 +23,16 @@ export const coordinationRole = request => request.kind && ['checkpoint', 'compl
   ? 'review' : /^coord-(route|title|summary)-/.test(request.requestId) ? 'route'
     : request.requestId.startsWith('coord-decision-') ? 'decision' : 'review'
 
-export function coordinationTools(role) {
-  const reads = ['read', 'glob', 'grep', 'skill', 'group_task_context_get', 'group_task_list', 'group_topic_list', 'group_topic_context_get', 'group_message_get', 'group_resource_get']
-  const submits = role === 'route' ? ['group_topic_route_context_get', 'group_topic_route_submit', 'group_topic_title_submit', 'group_topic_summary_submit']
+export function triageRole(request) {
+  if (request?.kind && ['checkpoint', 'completion', 'waiting'].includes(request.kind)) return null
+  if (request?.requestId?.startsWith('coord-route-')) return 'route'
+  if (request?.requestId?.startsWith('coord-decision-') && request.trigger !== 'task-facts') return 'decision'
+  return null
+}
+
+export function coordinationTools(role, request) {
+  const reads = [...(triageRole(request) ? [] : ['read', 'glob', 'grep', 'skill']), 'group_task_context_get', 'group_task_list', 'group_topic_list', 'group_topic_context_get', 'group_message_get', 'group_resource_get']
+  const submits = role === 'route' ? ['group_topic_route_context_get', 'group_topic_route_submit', ...(triageRole(request) ? [] : ['group_topic_title_submit', 'group_topic_summary_submit'])]
     : role === 'decision' ? ['group_decision_context_get', 'group_task_prompt_get', 'group_decision_submit', 'group_reply_review_get', 'group_topic_route_review']
       : ['group_reply_review_get', 'group_task_review_context_get', 'group_task_prompt_get', 'group_reply_submit', 'group_task_review_submit']
   return [...reads, ...submits]

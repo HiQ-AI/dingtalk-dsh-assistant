@@ -1,0 +1,29 @@
+TAP version 13
+# Subtest: 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：topic
+not ok 1 - 群业务成员完整答复经只读复核解除，发起人无关消息不解除且不空转：topic
+  ---
+  duration_ms: 42554.3699
+  type: 'test'
+  location: 'D:\\project\\dingtalk-dsh-assistant\\.claude\\worktrees\\topic-routing-quality\\test\\task-session-human-native.test.js:71:65'
+  failureType: 'testCodeFailure'
+  error: 'lifecycle business exceeded 30000ms'
+  code: 'TEST_STAGE_TIMEOUT'
+  stack: |-
+    expired (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/test/fixtures/lifecycle-stages.js:24:41)
+    Timeout.<anonymous> (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/test/fixtures/lifecycle-stages.js:28:50)
+    listOnTimeout (node:internal/timers:635:17)
+    process.processTimers (node:internal/timers:571:7)
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":867,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":30056,"aborted":true}
+# {"privateEvidence":"docs\\\\tmp\\\\semantic-latency\\\\native-human-1793795934903-50956.json.gz","requests":673,"toolResults":679}
+# {"lifecyclePhase":"cleanup","elapsedMs":11629,"aborted":false}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 43457.8806

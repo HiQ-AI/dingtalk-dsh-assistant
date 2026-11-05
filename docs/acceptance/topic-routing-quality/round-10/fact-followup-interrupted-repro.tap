@@ -1,0 +1,29 @@
+TAP version 13
+# Subtest: 待实施批准期间事实追问保留来源并明确通知，内部证据不外发且不恢复旧执行
+not ok 1 - 待实施批准期间事实追问保留来源并明确通知，内部证据不外发且不恢复旧执行
+  ---
+  duration_ms: 46138.5715
+  type: 'test'
+  location: 'D:\\project\\dingtalk-dsh-assistant\\.claude\\worktrees\\topic-routing-quality\\test\\task-session-human-native.test.js:177:1'
+  failureType: 'testCodeFailure'
+  error: 'lifecycle business exceeded 30000ms'
+  code: 'TEST_STAGE_TIMEOUT'
+  stack: |-
+    expired (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/test/fixtures/lifecycle-stages.js:24:41)
+    Timeout.<anonymous> (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/test/fixtures/lifecycle-stages.js:28:50)
+    listOnTimeout (node:internal/timers:635:17)
+    process.processTimers (node:internal/timers:571:7)
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":844,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":30067,"aborted":true}
+# {"privateEvidence":"docs\\\\tmp\\\\semantic-latency\\\\native-human-1793795978473-6396.json.gz","requests":726,"toolResults":740}
+# {"lifecyclePhase":"cleanup","elapsedMs":15225,"aborted":false}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 47090.6058

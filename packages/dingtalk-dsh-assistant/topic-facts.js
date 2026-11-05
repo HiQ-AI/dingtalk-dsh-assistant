@@ -299,7 +299,7 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
           queryResultBytes, contextBytes: Buffer.byteLength(JSON.stringify(input), 'utf8'), queryAndContextMs: performance.now() - started } }
     },
     read: eventIds => Promise.all(eventIds.map(factId => query('topic.fact.get', { factId }))),
-    async submit(request, submission) {
+    async submit(request, submission, { preflight } = {}) {
       const context = request.factContext
       submission = factDecisionSchema.parse(submission)
       let reply, sourceId
@@ -324,6 +324,8 @@ export function createTopicFactHandler({ residentStore, query, commit, signature
       }
       const result = await residentStore.commitTopicFactDecision({ groupId: request.groupId, topicId: request.topicId,
         revision: request.revision, expectedSummary: context.expectedSummary, commit: async () => {
+          // 排队期间可见材料可能变化；在群锁内复验后才接受事实及通知意图。
+          if (preflight && preflight() !== true) return { status: 'topic-stale' }
           const receipt = await commit('topic.fact.accept', { groupId: request.groupId, topicId: request.topicId,
             taskIds: context.taskIds, taskSnapshot: context.taskSnapshot, replySnapshot: context.replySnapshot,
             factIds: context.eventIds, expectedSummary: context.expectedSummary, submission, ...(reply ? { reply, ...(sourceId ? { sourceId } : {}) } : {}) }, `fact-decision:${request.requestId}`)

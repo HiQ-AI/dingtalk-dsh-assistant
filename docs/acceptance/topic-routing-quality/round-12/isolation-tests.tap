@@ -1,0 +1,49 @@
+TAP version 13
+# Subtest: 历史提取限定指定请求，排除同会话后续工具结果与流
+ok 1 - 历史提取限定指定请求，排除同会话后续工具结果与流
+  ---
+  duration_ms: 65.2926
+  type: 'test'
+  ...
+# Subtest: 隔离 guard 仅接受同一可信请求实际可见的目标短引用
+ok 2 - 隔离 guard 仅接受同一可信请求实际可见的目标短引用
+  ---
+  duration_ms: 1.4473
+  type: 'test'
+  ...
+# Subtest: 首次回复评测拒绝文件与执行工具并隔离业务副作用
+ok 3 - 首次回复评测拒绝文件与执行工具并隔离业务副作用
+  ---
+  duration_ms: 1528.6028
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":1095,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":395,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":36,"aborted":false}
+# Subtest: 显式模型适配器直接处理协调请求，不自动代读
+ok 4 - 显式模型适配器直接处理协调请求，不自动代读
+  ---
+  duration_ms: 274.4214
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":134,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":118,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":21,"aborted":false}
+# Subtest: 隔离 Host 将规范任务动作和通知接纳到真实账本
+ok 5 - 隔离 Host 将规范任务动作和通知接纳到真实账本
+  ---
+  duration_ms: 454.9882
+  type: 'test'
+  ...
+# {"lifecyclePhase":"prepare","elapsedMs":111,"aborted":false}
+# {"lifecyclePhase":"business","elapsedMs":319,"aborted":false}
+# {"lifecyclePhase":"cleanup","elapsedMs":25,"aborted":false}
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3150.9299

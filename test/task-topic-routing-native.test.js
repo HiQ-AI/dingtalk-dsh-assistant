@@ -16,6 +16,13 @@ import { projectTaskNotification } from '../packages/dingtalk-dsh-assistant/task
 import { available, reason, nativeTaskHost, latestInput, waitUntil, modelToolValues, topicTaskCalls } from './fixtures/task-session-native-host.js'
 
 const call = (name, args) => ({ name, args: name === 'group_decision_submit' ? { ...args, decision: { ...args.decision, topicUpdate: { summary: '围绕原始事项持续核对，当前结论以任务真实进展为准。' } } } : args })
+function decisionSummaryRead(request, input) {
+  if (input.summaryContext?.section !== 'summary') return
+  const pages = modelToolValues(request).filter(value => value.requestId === input.requestId && value.section === 'summary')
+  const last = pages.at(-1)
+  if (last && !last.hasMore) return
+  return call('group_decision_context_get', { requestId: input.requestId, section: 'summary', offset: last?.nextOffset ?? 0 })
+}
 function envelope(request, prefix) {
   for (const message of request.messages.toReversed()) for (const part of message.content ?? []) {
     if (part.type !== 'text' || !part.text.startsWith(prefix)) continue
@@ -189,14 +196,114 @@ testRunner('native request-bound review and Topic reads accept empty args while 
     assert.equal(h.sent.length, 0)
   }))
 
+testRunner('native Decision uses a complete single-Task first packet without a serial read',
+  { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+    const objective = '只核对资料，不执行部署。' + '范围约束'.repeat(1100)
+    let topicId, taskId, decisions = 0, drift = false, apply = false, staleSeen = false, rereadSeen = false, changedTask, originalGetTask, firstBodyBytes, viewBytes
+    const h = await extraHost(t, 'inline-task-context-', async request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request)
+      if (names.includes('group_topic_route_submit')) {
+        const last = modelToolValues(request).at(-1)
+        if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
+        return [call('group_topic_route_submit', { requestId: input.requestId,
+          routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ topicId, reason: '原事项的后续讨论' }] })) })]
+      }
+      if (names.includes('group_decision_submit')) {
+        const summaryRead = decisionSummaryRead(request, input)
+        if (summaryRead) return [summaryRead]
+        const inline = input.inlineDecisionContext
+        assert.equal(inline.task.taskId, taskId)
+        assert.equal(inline.task.objective, objective)
+        assert.ok(inline.task.request.includes(objective))
+        if (!drift && !apply) {
+          firstBodyBytes = Buffer.byteLength(request.messages.flatMap(message => message.content ?? []).find(part => part.type === 'text' && part.text.startsWith('[GROUP_TOPIC_DECISION]')).text, 'utf8')
+          viewBytes = Buffer.byteLength(JSON.stringify(inline.task), 'utf8')
+          assert.ok(viewBytes >= 26083, `完整任务视图不足历史量级: ${viewBytes}`)
+          assert.ok(firstBodyBytes >= viewBytes && firstBodyBytes <= 64 * 1024, `首包预算异常: ${firstBodyBytes}`)
+        }
+        if (!drift && !apply) assert.equal(inline.replyReview.candidateCount, 0)
+        const values = modelToolValues(request)
+        if (drift && !changedTask) {
+          originalGetTask = h.residentStore.getTask
+          const original = originalGetTask.bind(h.residentStore)
+          const current = original(taskId)
+          changedTask = { ...current, contextRevision: (current.contextRevision ?? 0) + 1, request: current.request + '\n补充限制：不得发送通知' }
+          h.residentStore.getTask = id => id === taskId ? changedTask : original(id)
+        }
+        if (drift && values.some(value => value.status === 'task-stale')) {
+          staleSeen = true
+          const read = values.find(value => value.tasks?.some(task => task.taskId === taskId && task.request.includes('不得发送通知')))
+          if (!read) return [call('group_task_context_get', { taskIds: [taskId], includeReplyReview: true })]
+          rereadSeen = true
+        }
+        if (!drift) assert.equal(values.some(value => value.tasks?.some(task => task.taskId === taskId)), false)
+        decisions++
+        return [call('group_decision_submit', { revision: input.revision,
+          decision: { basisMessageIds: input.messages.map(item => item.messageId), basisUnitRefs: input.messages.map(item => item.unitShortRef),
+            actions: apply ? [{ kind: 'task-context', taskId, inputVersion: inline.task.inputVersion, runSequence: inline.task.runSequence,
+              context: '补充只检查名称，不发送通知', progressImpact: 'preserve', authorizationChange: 'none',
+              topicRefs: [{ topicId, revision: input.revision }], basisUnitRefs: input.messages.map(item => item.unitShortRef) }] : [],
+            ...(drift ? { reason: '仅记录讨论，不执行新动作' } : { reply: '已记录资料核对范围，不执行部署。', replyToMessageId: input.messages[0].messageId, atOpenDingTalkIds: ['native-user'], replyReview: { kind: apply ? 'confirmation' : 'substantive', sameMatterOutboundIds: [], replaceOutboundIds: [] } }) } })]
+      }
+      return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续资料', evidence: [], limitations: [] } })]
+    })
+    t.onCancel(() => t.diagnostic(JSON.stringify({ decisions, drift, staleSeen, rereadSeen, results: h.toolResults.slice(-4), alerts: h.service.listAlerts() })))
+    await t.beginBusiness()
+    const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'inline-original', title: '资料核对', objective }))
+    await t.step(async () => h.service.whenIdle())
+    const task = await t.step(async () => h.query('task.get', { taskId: created.taskId }))
+    taskId = task.taskId; topicId = task.topicRefs[0].topicId
+    await t.step(async () => h.service.ingest(message('inline-follow', '补充原事项讨论，不要求执行新动作。')))
+    await t.step(async () => h.service.whenIdle())
+    assert.equal(decisions, 1)
+    assert.equal(h.toolResults.filter(item => ['group_task_context_get', 'group_reply_review_get'].includes(item.name)).length, 0)
+    assert.equal(h.residentStore.getTopic('native-group', topicId).processedRevision, 2)
+    assert.equal(h.residentStore.getTopic('native-group', topicId).decisions.at(-1).status, 'completed')
+    assert.deepEqual(h.residentStore.getTopic('native-group', topicId).decisions.at(-1).decision.replyReview.reviewedOutboundIds, [])
+    assert.equal(h.sent.length, 1)
+    drift = true
+    await t.step(async () => h.service.ingest(message('inline-stale-follow', '继续讨论原事项，不要求执行新动作。')))
+    await t.step(async () => h.service.whenIdle())
+    assert.ok(staleSeen, 'Task 上下文版本变化须拒绝旧视图')
+    assert.ok(rereadSeen, '当前完整 Task 补读进入模型后才能重试')
+    assert.equal(h.toolResults.filter(item => item.name === 'group_task_context_get').length, 1)
+    assert.equal(h.residentStore.getTopic('native-group', topicId).processedRevision, 3)
+    assert.equal(h.residentStore.getTopic('native-group', topicId).decisions.at(-1).status, 'completed')
+    assert.equal(h.sent.length, 1)
+    h.residentStore.getTask = originalGetTask
+    drift = false; apply = true
+    await t.step(async () => h.service.ingest(message('inline-apply-follow', '请补充原任务：只检查名称，不发送通知。')))
+    await t.step(async () => h.service.whenIdle())
+    const updated = await t.step(async () => h.query('task.get', { taskId }))
+    const record = h.residentStore.getTopic('native-group', topicId).decisions.at(-1)
+    assert.equal(record.status, 'completed')
+    assert.equal(record.decision.actions[0].kind, 'task-context')
+    assert.equal(record.operations[0].taskId, taskId)
+    assert.equal(updated.requirementRevision, task.requirementRevision)
+    assert.equal(updated.contextRevision, (task.contextRevision ?? 0) + 1)
+    assert.match(updated.request, /只检查名称，不发送通知/)
+    assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+    assert.equal(h.residentStore.getTopic('native-group', topicId).processedRevision, 4)
+    assert.ok((await t.step(async () => h.query('source.list'))).find(source => source.messageId === 'inline-apply-follow').processingCompleted)
+    assert.equal(h.sent.length, 2)
+    t.diagnostic(JSON.stringify({ viewBytes, firstBodyBytes }))
+  }))
+
 testRunner('native revised Topic supplies current linked Task reads without rescanning the catalogue',
   { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
     let topicId, taskId, contextReads = 0, decisions = 0
     const h = await extraHost(t, 'linked-task-reads-', async request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
-      if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId,
-        routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ topicId, reason: '原事项的后续讨论' }] })) })]
+      if (names.includes('group_topic_route_submit')) {
+        const last = modelToolValues(request).at(-1)
+        if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
+        return [call('group_topic_route_submit', { requestId: input.requestId,
+          routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ topicId, reason: '原事项的后续讨论' }] })) })]
+      }
       if (names.includes('group_decision_submit')) {
+        const summaryRead = decisionSummaryRead(request, input)
+        if (summaryRead) return [summaryRead]
+        assert.equal(input.inlineDecisionContext, undefined, '超预算合同不能部分装入首包')
         assert.equal(input.linkedTasks.total, 1)
         assert.equal(input.linkedTasks.reads[0].taskId, taskId)
         assert.equal(input.linkedTasks.snapshots[0].summary, '等待后续资料')
@@ -204,12 +311,15 @@ testRunner('native revised Topic supplies current linked Task reads without resc
         const full = modelToolValues(request).flatMap(value => value.tasks ?? []).find(task => task.taskId === taskId && task.objective)
         if (!full) { contextReads++; return [call(input.linkedTasks.reads[0].readCall.name, input.linkedTasks.reads[0].readCall.arguments)] }
         assert.equal(full.objective, '必须完整核验的原目标'.repeat(800))
+        assert.ok(Buffer.byteLength(JSON.stringify(full), 'utf8') > 64 * 1024, '大合同必须实际超过首包预算')
         decisions++
-        return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-          decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reason: '只核对讨论上下文，不执行新动作' } })]
+        return [call('group_decision_submit', { revision: input.revision,
+          decision: { basisMessageIds: input.messages.map(item => item.messageId), basisUnitRefs: input.messages.map(item => item.unitShortRef), actions: [], reason: '只核对讨论上下文，不执行新动作' } })]
       }
       return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续资料', evidence: [], limitations: [] } })]
     })
+    t.onCancel(() => t.diagnostic(JSON.stringify({ decisions, contextReads, results: h.toolResults.slice(-4).map(item => ({ name: item.name, value: item.result.value?.status ?? item.result.value?.error ?? item.result.value?.section ?? item.result.content?.[0]?.text?.slice(0, 1000) })),
+      inputs: h.requests.slice(-2).map(request => { const input = latestInput(request); return { names: request.tools.map(tool => tool.name), linkedTasks: input.linkedTasks, messages: Array.isArray(input.messages), summary: input.summaryContext } }), alerts: h.service.listAlerts() })))
     await t.beginBusiness()
 
     const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'linked-original', title: '关联原任务', objective: '必须完整核验的原目标'.repeat(800) }))
@@ -239,8 +349,12 @@ testRunner('native task context reports invalid arguments and reads explicit arc
   let taskId, foreignTaskId, requestedInvalid = false, requestedArchive = false, requestedForeign = false, checked = false
   const h = await extraHost(t, 'archived-context-contract-', async (request, host) => {
     const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
-    if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId,
-      routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'archive-read', title: '归档身份核验', reason: '独立核验归档任务身份', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '身份核验独立于已有事项' })) }] })) })]
+    if (names.includes('group_topic_route_submit')) {
+      const last = values.at(-1)
+      if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
+      return [call('group_topic_route_submit', { requestId: input.requestId,
+        routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'archive-read', title: '归档身份核验', reason: '独立核验归档任务身份', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '身份核验独立于已有事项' })) }] })) })]
+    }
     if (names.includes('group_decision_submit')) {
       if (!requestedInvalid) { requestedInvalid = true; return invalid.map(args => call('group_task_context_get', args)) }
       if (!requestedArchive) {
@@ -267,6 +381,7 @@ testRunner('native task context reports invalid arguments and reads explicit arc
     }
     return [call('task_session_submit', { decision: { action: 'complete', summary: '已完成', evidence: [], limitations: [] } })]
   })
+  t.onCancel(() => t.diagnostic(JSON.stringify({ requestedInvalid, requestedArchive, requestedForeign, checked, results: h.toolResults.slice(-4).map(item => ({ name: item.name, value: item.result.value ?? item.result.error })) })))
   await t.beginBusiness()
 
   const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'archive-contract-create', title: '归档测试', objective: '敏感原目标不应出现在归档上下文' }))
@@ -293,6 +408,8 @@ testRunner('native batch followup reopens each original completed task and sessi
     if (input.trigger === 'task-facts') return topicTaskCalls(request)
     if (names.includes('group_topic_route_submit')) {
       assert.ok(JSON.stringify(request).includes('批量跟进可查询group_task_list及group_task_context_get核对目标'))
+      const last = values.at(-1)
+      if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
       if (!values.some(value => Array.isArray(value.tasks))) return [call('group_task_list', { limit: 100 })]
       return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
         messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'batch-review', title: '原交付审查续办', reason: '集中核验原交付审查事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '批量审查涉及多个原任务，不只归属单个已有事项' })) }],
@@ -325,6 +442,7 @@ testRunner('native batch followup reopens each original completed task and sessi
     return [call('task_session_submit', { decision: { action: 'complete', summary: followup ? '已核查，无新增适用评论，不修改或提测。' : '原 PR 与 UAT 交付证据。',
       evidence: ['隔离测试完成收据'], limitations: [] } })]
   })
+  t.onCancel(() => t.diagnostic(JSON.stringify({ followup, results: h.toolResults.slice(-4).map(item => ({ name: item.name, value: item.result.value ?? item.result.error })) })))
   await t.beginBusiness()
 
   for (const title of ['dataset 名称校验', 'dataset 关联校验', '无关通知文案']) {
@@ -1080,15 +1198,18 @@ testRunner('business notices 423–424 and named owners remain in the original T
     if (names.includes('group_topic_route_submit')) {
       assert.ok(prompt.includes('不创建或唤醒任务'))
       assert.ok(prompt.includes('不能把“未交给本助手”当成“职责外”'))
+      const last = modelToolValues(request).at(-1)
+      if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
       return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
         units: [{ unitKey: 'lci', summary: 'LCI 单位修复的讨论和处理记录', sourceRefs: [{ wholeMessage: true }], topics: [topicId ? { topicId, reason: '原单位修复事项的讨论' } : { newTopicKey: 'lci', title: 'LCI 单位修复', reason: '独立的单位修复事项' }] }] })) })]
     }
     assert.ok(names.includes('group_decision_submit'))
-    assert.ok(prompt.includes('不唤醒已有任务'))
+    assert.ok(prompt.includes('不唤醒任务'))
     return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
       decision: { basisMessageIds: [...new Set(input.messages.map(item => item.messageId))], actions: [], reason: '同一业务事项由同事负责，保留完整上下文，不承接、不追问、不回复',
         topicUpdate: { summary: [input.summary, ...input.messages.map(item => item.text)].filter(Boolean).join('；') } } } }]
   })
+  t.onCancel(() => t.diagnostic(JSON.stringify({ topicId, results: h.toolResults.slice(-4).map(item => ({ name: item.name, value: item.result.value ?? item.result.error })) })))
   await t.beginBusiness()
 
   await t.step(async () => h.residentStore.updateGroup({ groupId: 'native-group', personAliases: [{ alias: '小甲', name: '测试成员甲' }] }))
@@ -1321,7 +1442,7 @@ testRunner('native proposal prompt preserves original authorization and asks wit
     if (names.includes('group_topic_route_submit')) return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'proposal', title: '描述框位置调整', reason: '独立处理描述框位置调整' }] })) })]
     assert.ok(names.includes('group_decision_submit'))
     const prompt = JSON.stringify(request)
-    for (const rule of ['结合需求原文、引用、已有任务及前后分工判断', '不能把最后一个 @ 当作事项负责人', '不因当前只 @ 同事或省略助手称呼而重复索要确认', '才选择 task-proposal', '这个事项是否需要我处理？', '暂不创建任务', '不承诺', '没你的事', '不是找你', 'topicUpdate.summary 记录承接或静默的判断及分工依据', '测试助手', '不追加未经授权的业务验收']) assert.ok(prompt.includes(rule), rule)
+    for (const rule of ['结合需求原文、引用、已有任务及前后分工判断', '不能把最后一个 @ 当作事项负责人', '不因当前只 @ 同事或省略助手称呼而重复索要确认', '才选择 task-proposal', '这个事项是否需要我处理？', '暂不创建任务', '不承诺', '没你的事', '不是找你', '承接或静默的判断及分工依据写入规范决策', '测试助手', '不追加未经授权的业务验收']) assert.ok(prompt.includes(rule), rule)
     for (const rule of ['不能只因 @ 别人就硬过滤', '已有任务的新事实仍归原业务 Topic', '仅提到人名不等于指定负责人']) assert.ok(prompt.includes(rule), rule)
     assert.ok(prompt.includes('仍保留对应业务 Topic 的完整上下文'))
     assert.ok(!prompt.includes('未指向 Agent 时必须忽略'))

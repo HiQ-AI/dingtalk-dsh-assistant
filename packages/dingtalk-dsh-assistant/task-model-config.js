@@ -10,6 +10,14 @@ export function taskModelConfig(value = {}) {
   return { provider: value.provider?.trim() || 'openai-codex', model: value.model?.trim() || 'gpt-6-astra',
     reasoningMode, reasoningEffort: reasoningMode === 'explicit' ? effort.trim() : null }
 }
+export function topicModelConfig(value) {
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || typeof value.provider !== 'string' || !value.provider.trim()
+    || typeof value.model !== 'string' || !value.model.trim()
+    || !['inherit', 'model-default', 'explicit'].includes(value.reasoningMode)) fail('TOPIC_MODEL_INVALID')
+  return taskModelConfig(value)
+}
 export function taskModelSelection(selection, config) {
   const value = taskModelConfig(config)
   const { reasoningEffort: inherited, ...rest } = selection

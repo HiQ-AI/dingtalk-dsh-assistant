@@ -1,0 +1,1520 @@
+TAP version 13
+# Subtest: 仅普通两级分诊收紧通用工具并排除迁移提交
+ok 1 - 仅普通两级分诊收紧通用工具并排除迁移提交
+  ---
+  duration_ms: 4.0472
+  type: 'test'
+  ...
+# Subtest: 仅未获得句柄的创建错误标记为启动失败，steer 失败不可自动重放
+ok 2 - 仅未获得句柄的创建错误标记为启动失败，steer 失败不可自动重放
+  ---
+  duration_ms: 7.6615
+  type: 'test'
+  ...
+# Subtest: 请求句柄按群和请求隔离，重复提醒复用；失效请求拒绝工具并释放一次
+ok 3 - 请求句柄按群和请求隔离，重复提醒复用；失效请求拒绝工具并释放一次
+  ---
+  duration_ms: 10.4692
+  type: 'test'
+  ...
+# Subtest: 同群模型串行，入站路由抢占当前审阅并先于排队审阅，不增加模型并发
+ok 4 - 同群模型串行，入站路由抢占当前审阅并先于排队审阅，不增加模型并发
+  ---
+  duration_ms: 2.0295
+  type: 'test'
+  ...
+# Subtest: 同request耗尽后立即恢复等待旧句柄释放，创建新日志且旧agent永远失效
+ok 5 - 同request耗尽后立即恢复等待旧句柄释放，创建新日志且旧agent永远失效
+  ---
+  duration_ms: 1.7189
+  type: 'test'
+  ...
+# Subtest: 路由量子续行排到决策之后仍能选中路由，不在队首反复让位空转
+ok 6 - 路由量子续行排到决策之后仍能选中路由，不在队首反复让位空转
+  ---
+  duration_ms: 3.2853
+  type: 'test'
+  ...
+# Subtest: 角色工具集合不给工程写工具，三种角色只允许对应业务提交
+ok 7 - 角色工具集合不给工程写工具，三种角色只允许对应业务提交
+  ---
+  duration_ms: 0.2647
+  type: 'test'
+  ...
+# Subtest: 连续两批路由后最老审阅获得公平轮，新增路由不能立即让它 yield
+ok 8 - 连续两批路由后最老审阅获得公平轮，新增路由不能立即让它 yield
+  ---
+  duration_ms: 1.5863
+  type: 'test'
+  ...
+# Subtest: 过期公平轮不运行模型，最老有效请求接续；保护公平轮仍受版本门禁约束
+ok 9 - 过期公平轮不运行模型，最老有效请求接续；保护公平轮仍受版本门禁约束
+  ---
+  duration_ms: 1.4208
+  type: 'test'
+  ...
+# Subtest: 显式取消排队请求不创建会话，公平轮中取消仍结束正在执行的会话
+ok 10 - 显式取消排队请求不创建会话，公平轮中取消仍结束正在执行的会话
+  ---
+  duration_ms: 2.5378
+  type: 'test'
+  ...
+# Subtest: 两群路由计数和模型槽互相独立
+ok 11 - 两群路由计数和模型槽互相独立
+  ---
+  duration_ms: 0.77
+  type: 'test'
+  ...
+# Subtest: 决策短事务连续三步完成而非每次读取重新排队，超时和路由抢占仍在边界让出
+ok 12 - 决策短事务连续三步完成而非每次读取重新排队，超时和路由抢占仍在边界让出
+  ---
+  duration_ms: 0.3519
+  type: 'test'
+  ...
+# Subtest: eventPrefix null still observes real queue intervals with no prompt and unchanged dispatch count
+ok 13 - eventPrefix null still observes real queue intervals with no prompt and unchanged dispatch count
+  ---
+  duration_ms: 0.6287
+  type: 'test'
+  ...
+# Subtest: shared review wire format preserves every fact and distinguishes same identity with changed content
+ok 14 - shared review wire format preserves every fact and distinguishes same identity with changed content
+  ---
+  duration_ms: 1.9639
+  type: 'test'
+  ...
+# Subtest: Task decision view retains full authorization and history without internal dispatch state
+ok 15 - Task decision view retains full authorization and history without internal dispatch state
+  ---
+  duration_ms: 0.8715
+  type: 'test'
+  ...
+# Subtest: combined Task/review read is opt-in and validates source/group before exposing review
+ok 16 - combined Task/review read is opt-in and validates source/group before exposing review
+  ---
+  duration_ms: 7.473
+  type: 'test'
+  ...
+# Subtest: Task read registers the exact returned view only after the request remains current
+ok 17 - Task read registers the exact returned view only after the request remains current
+  ---
+  duration_ms: 0.7556
+  type: 'test'
+  ...
+# Subtest: pending archived Task read cannot mark review after request ended
+ok 18 - pending archived Task read cannot mark review after request ended
+  ---
+  duration_ms: 0.3935
+  type: 'test'
+  ...
+# Subtest: pending archived Task read cannot mark review after request revision
+ok 19 - pending archived Task read cannot mark review after request revision
+  ---
+  duration_ms: 0.2451
+  type: 'test'
+  ...
+# Subtest: pending archived Task read cannot mark review after request versionRequestId
+ok 20 - pending archived Task read cannot mark review after request versionRequestId
+  ---
+  duration_ms: 0.2289
+  type: 'test'
+  ...
+# Subtest: Route Task read does not advertise or accept Decision review option
+ok 21 - Route Task read does not advertise or accept Decision review option
+  ---
+  duration_ms: 0.1888
+  type: 'test'
+  ...
+# Subtest: 路由原生结构允许显式共享定义并要求逐来源理由
+ok 22 - 路由原生结构允许显式共享定义并要求逐来源理由
+  ---
+  duration_ms: 4.1441
+  type: 'test'
+  ...
+# Subtest: 精简决策合同可被原生工具使用且要求逐动作来源
+ok 23 - 精简决策合同可被原生工具使用且要求逐动作来源
+  ---
+  duration_ms: 7.9408
+  type: 'test'
+  ...
+# Subtest: task-context requires explicit semantics in both Zod and actual native tool JSON schema
+ok 24 - task-context requires explicit semantics in both Zod and actual native tool JSON schema
+  ---
+  duration_ms: 4.0233
+  type: 'test'
+  ...
+# Subtest: 决策公开契约保留 reply / reason 互斥，原生 DSH 与 Zod 均接受三条合法路径
+ok 25 - 决策公开契约保留 reply / reason 互斥，原生 DSH 与 Zod 均接受三条合法路径
+  ---
+  duration_ms: 9.3917
+  type: 'test'
+  ...
+# Subtest: 真实重试形态 reply + reason 在原生 DSH 和 Zod 都被拒绝，不静默删字段
+ok 26 - 真实重试形态 reply + reason 在原生 DSH 和 Zod 都被拒绝，不静默删字段
+  ---
+  duration_ms: 0.9838
+  type: 'test'
+  ...
+# Subtest: 分支字段和动作判别均严格拒绝错误输入
+ok 27 - 分支字段和动作判别均严格拒绝错误输入
+  ---
+  duration_ms: 2.0498
+  type: 'test'
+  ...
+# Subtest: DSH 不支持的长度关系仍由 Zod 严格执行并指明空回复问题
+ok 28 - DSH 不支持的长度关系仍由 Zod 严格执行并指明空回复问题
+  ---
+  duration_ms: 0.814
+  type: 'test'
+  ...
+# Subtest: 原生JSON schema的reply和reason指引同时允许受限纯事实静默回流
+ok 29 - 原生JSON schema的reply和reason指引同时允许受限纯事实静默回流
+  ---
+  duration_ms: 1.6288
+  type: 'test'
+  ...
+# Subtest: ordinary Topic final result shares the whole-group contract and persists it across recovery
+ok 30 - ordinary Topic final result shares the whole-group contract and persists it across recovery
+  ---
+  duration_ms: 100.9999
+  type: 'test'
+  ...
+# Subtest: 最终文字与附件同批冻结，逐件有序发送，重启只核对未知项且不重发已送项
+ok 31 - 最终文字与附件同批冻结，逐件有序发送，重启只核对未知项且不重发已送项
+  ---
+  duration_ms: 85.0271
+  type: 'test'
+  ...
+# Subtest: 完成与事实同事务，回复失败不影响完成；重启复用结论、沉默也消费事件
+ok 32 - 完成与事实同事务，回复失败不影响完成；重启复用结论、沉默也消费事件
+  ---
+  duration_ms: 131.5955
+  type: 'test'
+  ...
+# Subtest: 事实回复保留多人原生提及并在冻结时消除引用叠加 contextReference=true
+ok 33 - 事实回复保留多人原生提及并在冻结时消除引用叠加 contextReference=true
+  ---
+  duration_ms: 101.5835
+  type: 'test'
+  ...
+# Subtest: 事实回复保留多人原生提及并在冻结时消除引用叠加 contextReference=false
+ok 34 - 事实回复保留多人原生提及并在冻结时消除引用叠加 contextReference=false
+  ---
+  duration_ms: 76.7727
+  type: 'test'
+  ...
+# Subtest: 旧事实请求不能覆盖已到达补充或任务新版本，新结论允许再回复
+ok 35 - 旧事实请求不能覆盖已到达补充或任务新版本，新结论允许再回复
+  ---
+  duration_ms: 59.3138
+  type: 'test'
+  ...
+# Subtest: 事实提交在群锁内复验材料，过期或未读不消费事实及通知
+ok 36 - 事实提交在群锁内复验材料，过期或未读不消费事实及通知
+  ---
+  duration_ms: 45.7966
+  type: 'test'
+  ...
+# Subtest: 事实轮拒绝任何任务动作，引用已送达回复能反查 Topic
+ok 37 - 事实轮拒绝任何任务动作，引用已送达回复能反查 Topic
+  ---
+  duration_ms: 61.6765
+  type: 'test'
+  ...
+# Subtest: 事实轮旧摘要必须读完当前表面的未汇总材料后才能消费
+ok 38 - 事实轮旧摘要必须读完当前表面的未汇总材料后才能消费
+  ---
+  duration_ms: 104.4925
+  type: 'test'
+  ...
+# Subtest: 默认事实上下文使用有界 SQL 投影，长执行材料不进入判断
+ok 39 - 默认事实上下文使用有界 SQL 投影，长执行材料不进入判断
+  ---
+  duration_ms: 1266.3954
+  type: 'test'
+  ...
+# {"trigger":"task-facts","queryCount":4,"factCount":2,"sourceCount":2,"recentCount":1,"taskCount":3,"replyCount":0,"queryResultBytes":16403,"contextBytes":16774,"queryAndContextMs":77.93330000000014,"sourceBytes":2400000,"measuredStatements":4}
+# Subtest: 历史归属只取有效来源，移除与合并记录不广播历史 topicRefs
+ok 40 - 历史归属只取有效来源，移除与合并记录不广播历史 topicRefs
+  ---
+  duration_ms: 0.3457
+  type: 'test'
+  ...
+# Subtest: 旧问题失效不会吞掉混合完成事实：接纳前答复=true
+ok 41 - 旧问题失效不会吞掉混合完成事实：接纳前答复=true
+  ---
+  duration_ms: 64.8994
+  type: 'test'
+  ...
+# Subtest: 旧问题失效不会吞掉混合完成事实：接纳前答复=false
+ok 42 - 旧问题失效不会吞掉混合完成事实：接纳前答复=false
+  ---
+  duration_ms: 95.9396
+  type: 'test'
+  ...
+# Subtest: 待处理事实阻止取消订阅，单条投影故障不阻断其余恢复
+ok 43 - 待处理事实阻止取消订阅，单条投影故障不阻断其余恢复
+  ---
+  duration_ms: 56.4873
+  type: 'test'
+  ...
+# Subtest: 归档后仍以有界投影提供待处理任务状态和已送达回复
+ok 44 - 归档后仍以有界投影提供待处理任务状态和已送达回复
+  ---
+  duration_ms: 85.0717
+  type: 'test'
+  ...
+# Subtest: Topic coordination freezes its selected responsible participant, not the requester, and correlates the pending question
+ok 45 - Topic coordination freezes its selected responsible participant, not the requester, and correlates the pending question
+  ---
+  duration_ms: 79.6474
+  type: 'test'
+  ...
+# Subtest: role prompt retains semantic boundaries and isolates executable decision details: route
+ok 46 - role prompt retains semantic boundaries and isolates executable decision details: route
+  ---
+  duration_ms: 1.1194
+  type: 'test'
+  ...
+# Subtest: role prompt retains semantic boundaries and isolates executable decision details: decision
+ok 47 - role prompt retains semantic boundaries and isolates executable decision details: decision
+  ---
+  duration_ms: 0.2208
+  type: 'test'
+  ...
+# Subtest: 任务事实通知不注入消息事实回流职责
+ok 48 - 任务事实通知不注入消息事实回流职责
+  ---
+  duration_ms: 0.1729
+  type: 'test'
+  ...
+# Subtest: 启动失败持久退避，预设未恢复不派发，到期沿原请求恢复并清除故障
+ok 49 - 启动失败持久退避，预设未恢复不派发，到期沿原请求恢复并清除故障
+  ---
+  duration_ms: 28.7593
+  type: 'test'
+  ...
+# Subtest: 重启保留启动退避，校验异常保留原故障，历史零输入失败可恢复
+ok 50 - 重启保留启动退避，校验异常保留原故障，历史零输入失败可恢复
+  ---
+  duration_ms: 7.3562
+  type: 'test'
+  ...
+# Subtest: 普通协议耗尽与已派发后失败均不被启动补偿重放
+ok 51 - 普通协议耗尽与已派发后失败均不被启动补偿重放
+  ---
+  duration_ms: 2.9673
+  type: 'test'
+  ...
+# Subtest: 连续启动失败增加独立退避次数，并发恢复只派发一次
+ok 52 - 连续启动失败增加独立退避次数，并发恢复只派发一次
+  ---
+  duration_ms: 4.8964
+  type: 'test'
+  ...
+# Subtest: manual request recovery fences message version, units and request token and coalesces repeated clicks
+ok 53 - manual request recovery fences message version, units and request token and coalesces repeated clicks
+  ---
+  duration_ms: 6.4144
+  type: 'test'
+  ...
+# Subtest: messageProcessingRequests preserves startup compensation and exposes only detached read-only fields
+ok 54 - messageProcessingRequests preserves startup compensation and exposes only detached read-only fields
+  ---
+  duration_ms: 2.5459
+  type: 'test'
+  ...
+# Subtest: messageProcessingRequests classifies legacy zero-input exhaustion by the existing startup recovery rule
+ok 55 - messageProcessingRequests classifies legacy zero-input exhaustion by the existing startup recovery rule
+  ---
+  duration_ms: 2.5552
+  type: 'test'
+  ...
+# Subtest: messageProcessingRequests route scope requires current unrouted message versions and live status
+ok 56 - messageProcessingRequests route scope requires current unrouted message versions and live status
+  ---
+  duration_ms: 5.2553
+  type: 'test'
+  ...
+# Subtest: messageProcessingRequests decision scope includes only current unprocessed delta units
+ok 57 - messageProcessingRequests decision scope includes only current unprocessed delta units
+  ---
+  duration_ms: 24.2522
+  type: 'test'
+  ...
+# Subtest: messageProcessingRequests excludes replaced Topic revisions and removed Unit ownership before rescheduling
+ok 58 - messageProcessingRequests excludes replaced Topic revisions and removed Unit ownership before rescheduling
+  ---
+  duration_ms: 5.5912
+  type: 'test'
+  ...
+# Subtest: messageProcessingRequests rebuilds route scope for legacy exhausted state without replay
+ok 59 - messageProcessingRequests rebuilds route scope for legacy exhausted state without replay
+  ---
+  duration_ms: 3.3084
+  type: 'test'
+  ...
+# Subtest: messageProcessingRequests rebuilds decision scope for legacy exhausted state without replay
+ok 60 - messageProcessingRequests rebuilds decision scope for legacy exhausted state without replay
+  ---
+  duration_ms: 6.8157
+  type: 'test'
+  ...
+# Subtest: Topic 固定版本投影在摘要缺失时仍是无损 JSON
+ok 61 - Topic 固定版本投影在摘要缺失时仍是无损 JSON
+  ---
+  duration_ms: 0.3802
+  type: 'test'
+  ...
+# Subtest: Topic 工具统一返回 lossless JSON
+ok 62 - Topic 工具统一返回 lossless JSON
+  ---
+  duration_ms: 4.6622
+  type: 'test'
+  ...
+# Subtest: 工具参数错误返回精简字段问题且不产生副作用
+ok 63 - 工具参数错误返回精简字段问题且不产生副作用
+  ---
+  duration_ms: 1.986
+  type: 'test'
+  ...
+# Subtest: 联合分支错误返回具体多余字段和动作路径，不只返回 Invalid input
+ok 64 - 联合分支错误返回具体多余字段和动作路径，不只返回 Invalid input
+  ---
+  duration_ms: 2.2803
+  type: 'test'
+  ...
+# Subtest: 归类期间消息版本变化返回刷新后的当前请求
+ok 65 - 归类期间消息版本变化返回刷新后的当前请求
+  ---
+  duration_ms: 2.4623
+  type: 'test'
+  ...
+# Subtest: 超长引用元数据完整续读后才能路由
+ok 66 - 超长引用元数据完整续读后才能路由
+  ---
+  duration_ms: 4.0181
+  type: 'test'
+  ...
+# Subtest: 路由首包按 JSON 实际长度预算并可续读转义原文
+ok 67 - 路由首包按 JSON 实际长度预算并可续读转义原文
+  ---
+  duration_ms: 4.3723
+  type: 'test'
+  ...
+# Subtest: 大澄清候选走只读分页且未读完不能提交澄清
+ok 68 - 大澄清候选走只读分页且未读完不能提交澄清
+  ---
+  duration_ms: 4.2345
+  type: 'test'
+  ...
+# Subtest: 路由短引用仅绑定本请求并持久化完整身份
+ok 69 - 路由短引用仅绑定本请求并持久化完整身份
+  ---
+  duration_ms: 5.2744
+  type: 'test'
+  ...
+# Subtest: 路由复用旧摘要话题前读取固定未汇总记录
+ok 70 - 路由复用旧摘要话题前读取固定未汇总记录
+  ---
+  duration_ms: 13.3134
+  type: 'test'
+  ...
+# Subtest: 未汇总历史读取后摘要变化使路由快照失效
+ok 71 - 未汇总历史读取后摘要变化使路由快照失效
+  ---
+  duration_ms: 10.4825
+  type: 'test'
+  ...
+# Subtest: 固定决策短引用展开来源并拒绝伪造
+ok 72 - 固定决策短引用展开来源并拒绝伪造
+  ---
+  duration_ms: 4.9302
+  type: 'test'
+  ...
+# Subtest: 未进入当前surface的决策短引用不授权来源
+ok 73 - 未进入当前surface的决策短引用不授权来源
+  ---
+  duration_ms: 4.5164
+  type: 'test'
+  ...
+# Subtest: 固定Topic原文只有末页可见时不能冒充完整来源
+ok 74 - 固定Topic原文只有末页可见时不能冒充完整来源
+  ---
+  duration_ms: 12.5226
+  type: 'test'
+  ...
+# Subtest: 精简回复只在审阅候选后展开完整身份
+ok 75 - 精简回复只在审阅候选后展开完整身份
+  ---
+  duration_ms: 6.8675
+  type: 'test'
+  ...
+# Subtest: 活跃路由审计已见候选及新建理由，拒绝猜造候选
+ok 76 - 活跃路由审计已见候选及新建理由，拒绝猜造候选
+  ---
+  duration_ms: 6.0879
+  type: 'test'
+  ...
+# Subtest: 共享新话题定义要求显式引用并保留逐来源审计
+ok 77 - 共享新话题定义要求显式引用并保留逐来源审计
+  ---
+  duration_ms: 11.8885
+  type: 'test'
+  ...
+# Subtest: 共享定义使用的候选摘要同版本变化时不能提交旧比较
+ok 78 - 共享定义使用的候选摘要同版本变化时不能提交旧比较
+  ---
+  duration_ms: 5.118
+  type: 'test'
+  ...
+# Subtest: 候选全文补读后同版本摘要尾部变化拒绝旧比较
+ok 79 - 候选全文补读后同版本摘要尾部变化拒绝旧比较
+  ---
+  duration_ms: 6.2701
+  type: 'test'
+  ...
+# Subtest: 候选全文补读后同版本摘要尾部变化须重读后接纳
+ok 80 - 候选全文补读后同版本摘要尾部变化须重读后接纳
+  ---
+  duration_ms: 5.5408
+  type: 'test'
+  ...
+# Subtest: 首包以外的当前候选可经 context 补读并参与比较
+ok 81 - 首包以外的当前候选可经 context 补读并参与比较
+  ---
+  duration_ms: 96.1074
+  type: 'test'
+  ...
+# Subtest: 读取历史版本不能替代当前候选版本
+ok 82 - 读取历史版本不能替代当前候选版本
+  ---
+  duration_ms: 10.2318
+  type: 'test'
+  ...
+# Subtest: 多依据普通回复应指向语义接收人而非最后解释者
+ok 83 - 多依据普通回复应指向语义接收人而非最后解释者
+  ---
+  duration_ms: 6.2603
+  type: 'test'
+  ...
+# Subtest: 普通回复只接受固定Topic真人来源及受信参与者收件人
+    # Subtest: 缺少目标
+    ok 1 - 缺少目标
+      ---
+      duration_ms: 3.3569
+      type: 'test'
+      ...
+    # Subtest: 目标不在话题
+    ok 2 - 目标不在话题
+      ---
+      duration_ms: 2.5487
+      type: 'test'
+      ...
+    # Subtest: 收件人不在话题
+    ok 3 - 收件人不在话题
+      ---
+      duration_ms: 2.0459
+      type: 'test'
+      ...
+    # Subtest: 引用作者不在收件集合
+    ok 4 - 引用作者不在收件集合
+      ---
+      duration_ms: 2.3262
+      type: 'test'
+      ...
+    1..4
+ok 84 - 普通回复只接受固定Topic真人来源及受信参与者收件人
+  ---
+  duration_ms: 11.0061
+  type: 'test'
+  ...
+# Subtest: 引用默认通知作者、重复身份去重，明确空收件人仅普通消息可用
+    # Subtest: 省略
+    ok 1 - 省略
+      ---
+      duration_ms: 3.8267
+      type: 'test'
+      ...
+    # Subtest: 重复身份
+    ok 2 - 重复身份
+      ---
+      duration_ms: 5.7788
+      type: 'test'
+      ...
+    # Subtest: 空数组普通消息
+    ok 3 - 空数组普通消息
+      ---
+      duration_ms: 3.9182
+      type: 'test'
+      ...
+    1..3
+ok 85 - 引用默认通知作者、重复身份去重，明确空收件人仅普通消息可用
+  ---
+  duration_ms: 13.9326
+  type: 'test'
+  ...
+# Subtest: 引用其他人消息或外群助手消息不取得本群回复归属
+ok 86 - 引用其他人消息或外群助手消息不取得本群回复归属
+  ---
+  duration_ms: 3.8501
+  type: 'test'
+  ...
+# Subtest: 同批混合来源并发推进，跨Topic同源只确认一次，各自来源仍能回复
+ok 87 - 同批混合来源并发推进，跨Topic同源只确认一次，各自来源仍能回复
+  ---
+  duration_ms: 12.0501
+  type: 'test'
+  ...
+# Subtest: Topic 决策信封受字符预算约束，缺失增量读完后才可提交
+ok 88 - Topic 决策信封受字符预算约束，缺失增量读完后才可提交
+  ---
+  duration_ms: 475.5129
+  type: 'test'
+  ...
+# Subtest: 超长直接引用保持当前事项可见，引用续读前拒绝决策
+ok 89 - 超长直接引用保持当前事项可见，引用续读前拒绝决策
+  ---
+  duration_ms: 18.2216
+  type: 'test'
+  ...
+# Subtest: 长历史不进入新决策首屏，路由回执保持精简
+ok 90 - 长历史不进入新决策首屏，路由回执保持精简
+  ---
+  duration_ms: 914.3362
+  type: 'test'
+  ...
+# Subtest: 同消息多事项的引用与原始点名只发送一次
+ok 91 - 同消息多事项的引用与原始点名只发送一次
+  ---
+  duration_ms: 3.5398
+  type: 'test'
+  ...
+# Subtest: 拆分确认和条件后，各话题仍能读取完整同条原文且不取得其他事项效果所有权
+ok 92 - 拆分确认和条件后，各话题仍能读取完整同条原文且不取得其他事项效果所有权
+  ---
+  duration_ms: 4.1062
+  type: 'test'
+  ...
+# Subtest: 压缩移除已见决策正文后需重新取得必要增量
+ok 93 - 压缩移除已见决策正文后需重新取得必要增量
+  ---
+  duration_ms: 3.5421
+  type: 'test'
+  ...
+# Subtest: 超长单消息必须按连续文本片段读完后才允许决策
+ok 94 - 超长单消息必须按连续文本片段读完后才允许决策
+  ---
+  duration_ms: 12.8376
+  type: 'test'
+  ...
+# Subtest: 归类协议区分 Topic 归属与历史资料查询
+ok 95 - 归类协议区分 Topic 归属与历史资料查询
+  ---
+  duration_ms: 1.4696
+  type: 'test'
+  ...
+# Subtest: 消息仅在全部关联 Topic 完成后收口为已投递
+ok 96 - 消息仅在全部关联 Topic 完成后收口为已投递
+  ---
+  duration_ms: 4.9103
+  type: 'test'
+  ...
+# Subtest: 明确无需进入 Topic 的消息在归类完成后直接收口
+ok 97 - 明确无需进入 Topic 的消息在归类完成后直接收口
+  ---
+  duration_ms: 1.646
+  type: 'test'
+  ...
+# Subtest: 引用已送达助手回复的对象纠正可以沟通而不变更任务
+ok 98 - 引用已送达助手回复的对象纠正可以沟通而不变更任务
+  ---
+  duration_ms: 11.8525
+  type: 'test'
+  ...
+# Subtest: 连续话题版本刷新关联Task状态摘要，保留未答来源并拒绝旧决策
+ok 99 - 连续话题版本刷新关联Task状态摘要，保留未答来源并拒绝旧决策
+  ---
+  duration_ms: 12.8692
+  type: 'test'
+  ...
+# Subtest: 关联Task默认摘要有界，正文按需读取，跨群不泄露，超量显式续查
+ok 100 - 关联Task默认摘要有界，正文按需读取，跨群不泄露，超量显式续查
+  ---
+  duration_ms: 9.7439
+  type: 'test'
+  ...
+# Subtest: 关联Task内联后发生版本变化，旧快照不能放行Task动作
+ok 101 - 关联Task内联后发生版本变化，旧快照不能放行Task动作
+  ---
+  duration_ms: 12.264
+  type: 'test'
+  ...
+# Subtest: 归类 exact batch 零副作用拒绝漏项，新增消息进入下一批
+ok 102 - 归类 exact batch 零副作用拒绝漏项，新增消息进入下一批
+  ---
+  duration_ms: 3.9477
+  type: 'test'
+  ...
+# Subtest: A/B 独立提交不要求覆盖其他 Topic，先完成 B 不消费 A
+ok 103 - A/B 独立提交不要求覆盖其他 Topic，先完成 B 不消费 A
+  ---
+  duration_ms: 4.693
+  type: 'test'
+  ...
+# Subtest: 超长消息路由必须按冻结原文坐标连续读完，未读完不能原子接受
+ok 104 - 超长消息路由必须按冻结原文坐标连续读完，未读完不能原子接受
+  ---
+  duration_ms: 13.622
+  type: 'test'
+  ...
+# Subtest: \#1066 单消息拆成三个事项，各自建 Task 且已完成事项不等待兄弟事项反馈
+ok 105 - \#1066 单消息拆成三个事项，各自建 Task 且已完成事项不等待兄弟事项反馈
+  ---
+  duration_ms: 20.7915
+  type: 'test'
+  ...
+# Subtest: 同消息复核不能改 unitKey 重授执行权，显式拆分保留旧固定版本
+ok 106 - 同消息复核不能改 unitKey 重授执行权，显式拆分保留旧固定版本
+  ---
+  duration_ms: 8.6987
+  type: 'test'
+  ...
+# Subtest: 未知输入返回 routing-required，归到 B 后原 A 草稿自动重验提交
+ok 107 - 未知输入返回 routing-required，归到 B 后原 A 草稿自动重验提交
+  ---
+  duration_ms: 16.076
+  type: 'test'
+  ...
+# Subtest: 待归类输入不阻止已准备的其他 Topic 决策进入公平队列
+ok 108 - 待归类输入不阻止已准备的其他 Topic 决策进入公平队列
+  ---
+  duration_ms: 11.1631
+  type: 'test'
+  ...
+# Subtest: 待路由的新建任务草稿遇同话题撤销时失效，不能自动补建
+ok 109 - 待路由的新建任务草稿遇同话题撤销时失效，不能自动补建
+  ---
+  duration_ms: 7.0315
+  type: 'test'
+  ...
+# Subtest: 路由等待期间回复候选变化，缓存草稿仍须重新审阅
+ok 110 - 路由等待期间回复候选变化，缓存草稿仍须重新审阅
+  ---
+  duration_ms: 7.8991
+  type: 'test'
+  ...
+# Subtest: 异步决策预处理期间来了新消息，原请求仍仅派发一次且提交受保护
+ok 111 - 异步决策预处理期间来了新消息，原请求仍仅派发一次且提交受保护
+  ---
+  duration_ms: 8.0627
+  type: 'test'
+  ...
+# Subtest: 新消息等待归类时决策协议提醒不消耗重试次数
+ok 112 - 新消息等待归类时决策协议提醒不消耗重试次数
+  ---
+  duration_ms: 8.9746
+  type: 'test'
+  ...
+# Subtest: 同 Topic 新增输入使旧决策失效且新依据必须覆盖本次增量
+ok 113 - 同 Topic 新增输入使旧决策失效且新依据必须覆盖本次增量
+  ---
+  duration_ms: 7.2312
+  type: 'test'
+  ...
+# Subtest: Topic 上下文已交办时，仅同步同事或省略助手称呼仍可创建任务
+    # Subtest: notify-peers
+    ok 1 - notify-peers
+      ---
+      duration_ms: 9.2487
+      type: 'test'
+      ...
+    # Subtest: agent-before-peer
+    ok 2 - agent-before-peer
+      ---
+      duration_ms: 7.511
+      type: 'test'
+      ...
+    # Subtest: quoted-assignment
+    ok 3 - quoted-assignment
+      ---
+      duration_ms: 6.7232
+      type: 'test'
+      ...
+    1..3
+ok 114 - Topic 上下文已交办时，仅同步同事或省略助手称呼仍可创建任务
+  ---
+  duration_ms: 24.0151
+  type: 'test'
+  ...
+# Subtest: 事项正文剥离称呼后仍提供完整来源供语义判断
+    # Subtest: agent
+    ok 1 - agent
+      ---
+      duration_ms: 4.8129
+      type: 'test'
+      ...
+    # Subtest: colleague
+    ok 2 - colleague
+      ---
+      duration_ms: 3.2467
+      type: 'test'
+      ...
+    1..2
+ok 115 - 事项正文剥离称呼后仍提供完整来源供语义判断
+  ---
+  duration_ms: 8.4145
+  type: 'test'
+  ...
+# Subtest: 同一消息多个事项保留分工原文并按语义选择动作
+    # Subtest: other-b
+    ok 1 - other-b
+      ---
+      duration_ms: 4.7002
+      type: 'test'
+      ...
+    # Subtest: shared-agent
+    ok 2 - shared-agent
+      ---
+      duration_ms: 5.2284
+      type: 'test'
+      ...
+    # Subtest: other-after-agent
+    ok 3 - other-after-agent
+      ---
+      duration_ms: 10.9561
+      type: 'test'
+      ...
+    # Subtest: agent-after-other
+    ok 4 - agent-after-other
+      ---
+      duration_ms: 5.674
+      type: 'test'
+      ...
+    # Subtest: other-despite-agent-in-decision
+    ok 5 - other-despite-agent-in-decision
+      ---
+      duration_ms: 3.3497
+      type: 'test'
+      ...
+    1..5
+ok 116 - 同一消息多个事项保留分工原文并按语义选择动作
+  ---
+  duration_ms: 30.6047
+  type: 'test'
+  ...
+# Subtest: 明确他人负责、纠正误介入和多人身份不确定都可在原 Topic 静默留痕
+    # Subtest: assigned-away
+    ok 1 - assigned-away
+      ---
+      duration_ms: 8.2635
+      type: 'test'
+      ...
+    # Subtest: dismissed-agent
+    ok 2 - dismissed-agent
+      ---
+      duration_ms: 7.1531
+      type: 'test'
+      ...
+    # Subtest: uncertain-alias
+    ok 3 - uncertain-alias
+      ---
+      duration_ms: 6.4299
+      type: 'test'
+      ...
+    1..3
+ok 117 - 明确他人负责、纠正误介入和多人身份不确定都可在原 Topic 静默留痕
+  ---
+  duration_ms: 22.4267
+  type: 'test'
+  ...
+# Subtest: 引用消息正文不能作为当前消息的 contextRefs
+ok 118 - 引用消息正文不能作为当前消息的 contextRefs
+  ---
+  duration_ms: 4.7305
+  type: 'test'
+  ...
+# Subtest: 引用中助手的另一事项不自动承接当前需求
+ok 119 - 引用中助手的另一事项不自动承接当前需求
+  ---
+  duration_ms: 3.7806
+  type: 'test'
+  ...
+# Subtest: 已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox
+ok 120 - 已建 Task 后故障，重启恢复只保留一个 Task 与 Outbox
+  ---
+  duration_ms: 6.0795
+  type: 'test'
+  ...
+# Subtest: 旧决定已应用取消动作后恢复不重复取消且缺路由时不发回复
+ok 121 - 旧决定已应用取消动作后恢复不重复取消且缺路由时不发回复
+  ---
+  duration_ms: 8.9463
+  type: 'test'
+  ...
+# Subtest: 任务动作拒绝时零回复；动作全部落账后才发送承接回复
+ok 122 - 任务动作拒绝时零回复；动作全部落账后才发送承接回复
+  ---
+  duration_ms: 6.0592
+  type: 'test'
+  ...
+# Subtest: 同revision拒绝后新请求跨重启稳定，共享消息不转授权且已发回复不重放
+ok 123 - 同revision拒绝后新请求跨重启稳定，共享消息不转授权且已发回复不重放
+  ---
+  duration_ms: 17.1541
+  type: 'test'
+  ...
+# Subtest: 审阅工具同源契约通过真实 DSH 校验，并按请求种类限制字段
+ok 124 - 审阅工具同源契约通过真实 DSH 校验，并按请求种类限制字段
+  ---
+  duration_ms: 4.3885
+  type: 'test'
+  ...
+# Subtest: Host 审阅拒绝跨种类决策及原生投影未执行的空文本约束
+ok 125 - Host 审阅拒绝跨种类决策及原生投影未执行的空文本约束
+  ---
+  duration_ms: 11.6834
+  type: 'test'
+  ...
+# Subtest: 内部审阅按请求绑定 Task 版本，拒绝错种类和版本变更
+ok 126 - 内部审阅按请求绑定 Task 版本，拒绝错种类和版本变更
+  ---
+  duration_ms: 4.9074
+  type: 'test'
+  ...
+# Subtest: 完成审阅一次提交通知草稿，Task 落盘后才写入 Outbox
+ok 127 - 完成审阅一次提交通知草稿，Task 落盘后才写入 Outbox
+  ---
+  duration_ms: 8.0846
+  type: 'test'
+  ...
+# Subtest: 完成审阅后新增历史候选使通知草稿失效
+ok 128 - 完成审阅后新增历史候选使通知草稿失效
+  ---
+  duration_ms: 5.2512
+  type: 'test'
+  ...
+# Subtest: 完成审阅只内联受限的近期 Topic 消息
+ok 129 - 完成审阅只内联受限的近期 Topic 消息
+  ---
+  duration_ms: 9360.678
+  type: 'test'
+  ...
+# Subtest: 内部检查点必须结构化确认，不能携带相互矛盾的 guidance
+ok 130 - 内部检查点必须结构化确认，不能携带相互矛盾的 guidance
+  ---
+  duration_ms: 24.9335
+  type: 'test'
+  ...
+# Subtest: 话题上下文剩余预算连一个字符也装不下时保留已装入消息
+ok 131 - 话题上下文剩余预算连一个字符也装不下时保留已装入消息
+  ---
+  duration_ms: 1.3945
+  type: 'test'
+  ...
+# Subtest: 单条超长消息保持 12k 硬预算并可完整续读
+ok 132 - 单条超长消息保持 12k 硬预算并可完整续读
+  ---
+  duration_ms: 136.2446
+  type: 'test'
+  ...
+# Subtest: 超长目标及审阅结果分页保留原文，越序读取不能绕过完整读取门禁
+ok 133 - 超长目标及审阅结果分页保留原文，越序读取不能绕过完整读取门禁
+  ---
+  duration_ms: 103.9266
+  type: 'test'
+  ...
+# Subtest: 无专用流程时审阅者仍可见目录和选择依据并读取未选候选
+ok 134 - 无专用流程时审阅者仍可见目录和选择依据并读取未选候选
+  ---
+  duration_ms: 32.4727
+  type: 'test'
+  ...
+# Subtest: 审阅读取后已选或未选候选改版、禁用、删除都使旧请求失效，无关配置不影响
+ok 135 - 审阅读取后已选或未选候选改版、禁用、删除都使旧请求失效，无关配置不影响
+  ---
+  duration_ms: 140.8998
+  type: 'test'
+  ...
+# Subtest: 多流程组合一次批量读取，后续检查点会使原审阅失效
+ok 136 - 多流程组合一次批量读取，后续检查点会使原审阅失效
+  ---
+  duration_ms: 26.0684
+  type: 'test'
+  ...
+# Subtest: 诊断检查点可在旧流程删除后不读取流程获得协调意见
+ok 137 - 诊断检查点可在旧流程删除后不读取流程获得协调意见
+  ---
+  duration_ms: 37.1538
+  type: 'test'
+  ...
+# Subtest: 通知回退同样限制整体预算并须读完超长目标结果后才允许入队
+ok 138 - 通知回退同样限制整体预算并须读完超长目标结果后才允许入队
+  ---
+  duration_ms: 86.2463
+  type: 'test'
+  ...
+# Subtest: 协调方使指定 Task 审阅失效后拒绝迟到结果
+ok 139 - 协调方使指定 Task 审阅失效后拒绝迟到结果
+  ---
+  duration_ms: 23.4714
+  type: 'test'
+  ...
+# Subtest: Topic 按需搜索分页及固定版本读回，跨群与越界拒绝
+ok 140 - Topic 按需搜索分页及固定版本读回，跨群与越界拒绝
+  ---
+  duration_ms: 21.2626
+  type: 'test'
+  ...
+# Subtest: 普通已处理话题补齐空摘要，不重做任务动作，之后不重复补齐
+ok 141 - 普通已处理话题补齐空摘要，不重做任务动作，之后不重复补齐
+  ---
+  duration_ms: 20.8112
+  type: 'test'
+  ...
+# Subtest: 历史 Topic 先根据引用消息补 summary，再据此重生成 title
+ok 142 - 历史 Topic 先根据引用消息补 summary，再据此重生成 title
+  ---
+  duration_ms: 25.9518
+  type: 'test'
+  ...
+# Subtest: Task 通知要求真实 Topic 引用及参与人，并拒绝旧 Task 输入
+ok 143 - Task 通知要求真实 Topic 引用及参与人，并拒绝旧 Task 输入
+  ---
+  duration_ms: 52.0607
+  type: 'test'
+  ...
+# Subtest: 同Topic新版本保留尚未接纳的同轮请求与持久协调账
+ok 144 - 同Topic新版本保留尚未接纳的同轮请求与持久协调账
+  ---
+  duration_ms: 12.3728
+  type: 'test'
+  ...
+# Subtest: 普通Task通知与完成通知一致：引用消息时省略at默认关联发送人
+ok 145 - 普通Task通知与完成通知一致：引用消息时省略at默认关联发送人
+  ---
+  duration_ms: 24.2268
+  type: 'test'
+  ...
+# Subtest: 审阅后历史候选变化必须重新读取，不能用旧快照发新回复
+ok 146 - 审阅后历史候选变化必须重新读取，不能用旧快照发新回复
+  ---
+  duration_ms: 32.7732
+  type: 'test'
+  ...
+# Subtest: 审阅后的Task瞬态运行状态不使候选事实失效，正文来源和归属仍须重读
+ok 147 - 审阅后的Task瞬态运行状态不使候选事实失效，正文来源和归属仍须重读
+  ---
+  duration_ms: 89.1876
+  type: 'test'
+  ...
+# Subtest: 无关 B 的新历史回复不使 A 的候选审阅失效
+ok 148 - 无关 B 的新历史回复不使 A 的候选审阅失效
+  ---
+  duration_ms: 16.9309
+  type: 'test'
+  ...
+# Subtest: 决策进入 Store 队列后候选变化仍在原子提交点拦截
+ok 149 - 决策进入 Store 队列后候选变化仍在原子提交点拦截
+  ---
+  duration_ms: 15.3886
+  type: 'test'
+  ...
+# Subtest: Task 通知在 Outbox 落盘前再次核对输入版本
+ok 150 - Task 通知在 Outbox 落盘前再次核对输入版本
+  ---
+  duration_ms: 26.6452
+  type: 'test'
+  ...
+# Subtest: Task 通知读取最新相关候选后可提交，重试不产生第二条 Outbox
+ok 151 - Task 通知读取最新相关候选后可提交，重试不产生第二条 Outbox
+  ---
+  duration_ms: 25.0313
+  type: 'test'
+  ...
+# Subtest: 未知回复请求不可用且不产生 Outbox
+ok 152 - 未知回复请求不可用且不产生 Outbox
+  ---
+  duration_ms: 4.0356
+  type: 'test'
+  ...
+# Subtest: 本地已知瞬时错误最多三次，跨重启保存预算并保持冲突保留
+ok 153 - 本地已知瞬时错误最多三次，跨重启保存预算并保持冲突保留
+  ---
+  duration_ms: 28.0234
+  type: 'test'
+  ...
+# Subtest: 未知错误停住，普通消息重试不解锁；显式原操作对账恢复
+ok 154 - 未知错误停住，普通消息重试不解锁；显式原操作对账恢复
+  ---
+  duration_ms: 26.6103
+  type: 'test'
+  ...
+# Subtest: 取消控制可越过已阻塞保留，普通上下文和进行中保留仍拒绝
+ok 155 - 取消控制可越过已阻塞保留，普通上下文和进行中保留仍拒绝
+  ---
+  duration_ms: 22.4615
+  type: 'test'
+  ...
+# Subtest: 部分成功时不能用已应用动作或Outbox的对账解锁另一未知操作
+ok 156 - 部分成功时不能用已应用动作或Outbox的对账解锁另一未知操作
+  ---
+  duration_ms: 25.3532
+  type: 'test'
+  ...
+# Subtest: 已接受决策已落盘后到期对账完成，不重复执行动作
+ok 157 - 已接受决策已落盘后到期对账完成，不重复执行动作
+  ---
+  duration_ms: 38.9493
+  type: 'test'
+  ...
+# Subtest: 共享消息由主 Topic 统一回复，其他 Topic 不重复确认或实质回答
+ok 158 - 共享消息由主 Topic 统一回复，其他 Topic 不重复确认或实质回答
+  ---
+  duration_ms: 41.2749
+  type: 'test'
+  ...
+# Subtest: 非空回复必须声明 kind，不能用省略审阅绕过共享确认门禁
+ok 159 - 非空回复必须声明 kind，不能用省略审阅绕过共享确认门禁
+  ---
+  duration_ms: 10.2803
+  type: 'test'
+  ...
+# Subtest: 改归属后空 Topic 可以用 removedMessageIds 静默完成，但不能创建任务
+ok 160 - 改归属后空 Topic 可以用 removedMessageIds 静默完成，但不能创建任务
+  ---
+  duration_ms: 25.103
+  type: 'test'
+  ...
+# Subtest: 同事报告影响原任务路线或时间时可静默回流，保留授权且恢复不重放
+    # Subtest: route-fact
+    ok 1 - route-fact
+      ---
+      duration_ms: 34.4427
+      type: 'test'
+      ...
+    # Subtest: handoff-fact
+    ok 2 - handoff-fact
+      ---
+      duration_ms: 40.5514
+      type: 'test'
+      ...
+    1..2
+ok 161 - 同事报告影响原任务路线或时间时可静默回流，保留授权且恢复不重放
+  ---
+  duration_ms: 76.3717
+  type: 'test'
+  ...
+# Subtest: 静默事实声明不能放行变更合同、混合动作或无效来源，正常回复仍可用
+ok 162 - 静默事实声明不能放行变更合同、混合动作或无效来源，正常回复仍可用
+  ---
+  duration_ms: 50.7823
+  type: 'test'
+  ...
+# Subtest: 已有任务中的他人分工静默保留，后续助手补充不受同步提及阻挡
+    # Subtest: running
+    ok 1 - running
+      ---
+      duration_ms: 61.075
+      type: 'test'
+      ...
+    # Subtest: completed
+    ok 2 - completed
+      ---
+      duration_ms: 55.4637
+      type: 'test'
+      ...
+    1..2
+ok 163 - 已有任务中的他人分工静默保留，后续助手补充不受同步提及阻挡
+  ---
+  duration_ms: 117.8107
+  type: 'test'
+  ...
+# Subtest: 显式归属复核冻结已处理消息，修订后原 Task 仍可读取旧 Topic 版本
+ok 164 - 显式归属复核冻结已处理消息，修订后原 Task 仍可读取旧 Topic 版本
+  ---
+  duration_ms: 34.491
+  type: 'test'
+  ...
+# Subtest: 精确消息重试清除失败等待且不重放已完成动作
+ok 165 - 精确消息重试清除失败等待且不重放已完成动作
+  ---
+  duration_ms: 17.1322
+  type: 'test'
+  ...
+# Subtest: 嵌套暂停需全部释放且 release 幂等，关闭后拒绝所有工具新意图
+ok 166 - 嵌套暂停需全部释放且 release 幂等，关闭后拒绝所有工具新意图
+  ---
+  duration_ms: 7.9978
+  type: 'test'
+  ...
+# Subtest: 归类快照只携带当前事实，失败决策按需查询可见精简进度
+ok 167 - 归类快照只携带当前事实，失败决策按需查询可见精简进度
+  ---
+  duration_ms: 23.5457
+  type: 'test'
+  ...
+# Subtest: 动作仍要求确认草稿，Outbox 拒绝保留已应用动作且恢复不重复执行
+ok 168 - 动作仍要求确认草稿，Outbox 拒绝保留已应用动作且恢复不重复执行
+  ---
+  duration_ms: 26.1919
+  type: 'test'
+  ...
+# Subtest: 模型停稳后仅有限次提醒，同一归类请求仍可提交
+ok 169 - 模型停稳后仅有限次提醒，同一归类请求仍可提交
+  ---
+  duration_ms: 41.7141
+  type: 'test'
+  ...
+# Subtest: 材料清单从当前surface分页形成，跨请求与压缩摘要不冒充正文
+ok 170 - 材料清单从当前surface分页形成，跨请求与压缩摘要不冒充正文
+  ---
+  duration_ms: 36.1472
+  type: 'test'
+  ...
+# Subtest: 审阅先落Task执行事件，重启同报告换提交时间仍恢复原response且不再次注入
+ok 171 - 审阅先落Task执行事件，重启同报告换提交时间仍恢复原response且不再次注入
+  ---
+  duration_ms: 33.1618
+  type: 'test'
+  ...
+# Subtest: 审阅持久化失败不得resolve，重提相同判断后只保存一份
+ok 172 - 审阅持久化失败不得resolve，重提相同判断后只保存一份
+  ---
+  duration_ms: 11.645
+  type: 'test'
+  ...
+# Subtest: 耗尽审阅不自动reset，显式reset只清账与旧Promise不创建新审阅
+ok 173 - 耗尽审阅不自动reset，显式reset只清账与旧Promise不创建新审阅
+  ---
+  duration_ms: 32.1645
+  type: 'test'
+  ...
+# Subtest: 完成审阅重启恢复时重建preparedNotification，保持原审批且不新增模型请求
+ok 174 - 完成审阅重启恢复时重建preparedNotification，保持原审批且不新增模型请求
+  ---
+  duration_ms: 35.2886
+  type: 'test'
+  ...
+# Subtest: 审阅身份忽略提交时间，但流程引用、最后检查点和Topic修订变化会换身份
+ok 175 - 审阅身份忽略提交时间，但流程引用、最后检查点和Topic修订变化会换身份
+  ---
+  duration_ms: 23.9143
+  type: 'test'
+  ...
+# Subtest: 原生 surface 流程正文与连续页跨请求复用，压缩后历史日志不能冒充可见
+ok 176 - 原生 surface 流程正文与连续页跨请求复用，压缩后历史日志不能冒充可见
+  ---
+  duration_ms: 8.1218
+  type: 'test'
+  ...
+# Subtest: 审阅复用当前流程正文，压缩或禁用后重新门禁而不是沿用已读标记
+ok 177 - 审阅复用当前流程正文，压缩或禁用后重新门禁而不是沿用已读标记
+  ---
+  duration_ms: 34.3142
+  type: 'test'
+  ...
+# Subtest: 稳定请求跨重启识别已消费消息，原文可见时恢复只发送短提醒
+ok 178 - 稳定请求跨重启识别已消费消息，原文可见时恢复只发送短提醒
+  ---
+  duration_ms: 20.5182
+  type: 'test'
+  ...
+# Subtest: 协议提醒到上限后持久停住，新增输入仍能形成新请求
+ok 179 - 协议提醒到上限后持久停住，新增输入仍能形成新请求
+  ---
+  duration_ms: 33.8763
+  type: 'test'
+  ...
+# Subtest: 只读快路径共享决策门禁，成功时不向常驻再注入请求
+ok 180 - 只读快路径共享决策门禁，成功时不向常驻再注入请求
+  ---
+  duration_ms: 16.7298
+  type: 'test'
+  ...
+# Subtest: 只读快路径拒绝动作和候选变化，Task事实在真实提交临界点变更时零Outbox
+ok 181 - 只读快路径拒绝动作和候选变化，Task事实在真实提交临界点变更时零Outbox
+  ---
+  duration_ms: 20.6124
+  type: 'test'
+  ...
+# Subtest: 原生 Inbox 仍停放原请求时，恢复提醒不会再排入第二份正文
+ok 182 - 原生 Inbox 仍停放原请求时，恢复提醒不会再排入第二份正文
+  ---
+  duration_ms: 103.1043
+  type: 'test'
+  ...
+# Subtest: 显式恢复递增持久epoch，不会被此前已消费提醒身份吞掉
+ok 183 - 显式恢复递增持久epoch，不会被此前已消费提醒身份吞掉
+  ---
+  duration_ms: 42.0113
+  type: 'test'
+  ...
+# Subtest: 同请求材料只保留一份正文，跨请求或内容变化不复用
+ok 184 - 同请求材料只保留一份正文，跨请求或内容变化不复用
+  ---
+  duration_ms: 1.6411
+  type: 'test'
+  ...
+# Subtest: 结构校验一次返回全部引用歧义及字段位置，整批零副作用
+ok 185 - 结构校验一次返回全部引用歧义及字段位置，整批零副作用
+  ---
+  duration_ms: 9.0917
+  type: 'test'
+  ...
+# Subtest: 精确引用提醒首屏省略34个无关话题，A设置B不改变收件人且完整目录仍可读取
+ok 186 - 精确引用提醒首屏省略34个无关话题，A设置B不改变收件人且完整目录仍可读取
+  ---
+  duration_ms: 281.879
+  type: 'test'
+  ...
+# Subtest: 引用提醒内的新业务仍可按需查目录并拆成独立事项，不被强制归入原提醒
+ok 187 - 引用提醒内的新业务仍可按需查目录并拆成独立事项，不被强制归入原提醒
+  ---
+  duration_ms: 396.9735
+  type: 'test'
+  ...
+# Subtest: 精确关联未通过时保留普通话题目录，路由不自行猜测关联
+ok 188 - 精确关联未通过时保留普通话题目录，路由不自行猜测关联
+  ---
+  duration_ms: 190.5561
+  type: 'test'
+  ...
+# Subtest: 普通新事项不调用提醒关联，混合批次保留原目录
+ok 189 - 普通新事项不调用提醒关联，混合批次保留原目录
+  ---
+  duration_ms: 187.3566
+  type: 'test'
+  ...
+# Subtest: 精确引用查询异常显式报告并释放未派发路由请求，恢复后沿原路径重试
+ok 190 - 精确引用查询异常显式报告并释放未派发路由请求，恢复后沿原路径重试
+  ---
+  duration_ms: 212.1501
+  type: 'test'
+  ...
+# Subtest: 引用关联等待期间版本变化只重建原批次，新增消息不丢失也不混入旧请求
+ok 191 - 引用关联等待期间版本变化只重建原批次，新增消息不丢失也不混入旧请求
+  ---
+  duration_ms: 353.7802
+  type: 'test'
+  ...
+# Subtest: 引用关联等待期间关闭不会派发尚未准备的路由
+ok 192 - 引用关联等待期间关闭不会派发尚未准备的路由
+  ---
+  duration_ms: 11.1626
+  type: 'test'
+  ...
+# Subtest: 紧凑目录连续分页无漏项，引用同消息全部旧事项保留摘要
+ok 193 - 紧凑目录连续分页无漏项，引用同消息全部旧事项保留摘要
+  ---
+  duration_ms: 1116.4532
+  type: 'test'
+  ...
+# Subtest: 路由关联摘要包含引用命中Task的其他固定Topic，不只保留被引用单项
+ok 194 - 路由关联摘要包含引用命中Task的其他固定Topic，不只保留被引用单项
+  ---
+  duration_ms: 3.5738
+  type: 'test'
+  ...
+# Subtest: 决策一次报告独立动作的版本和归属问题，不写Task或Outbox
+ok 195 - 决策一次报告独立动作的版本和归属问题，不写Task或Outbox
+  ---
+  duration_ms: 3.7565
+  type: 'test'
+  ...
+# Subtest: 决策首包提供固定流程索引、合法 section 与批量正文读取，并拒绝跨请求
+ok 196 - 决策首包提供固定流程索引、合法 section 与批量正文读取，并拒绝跨请求
+  ---
+  duration_ms: 4.4477
+  type: 'test'
+  ...
+# Subtest: 固定请求绑定审阅身份与当前Topic，路由缺Topic明确拒绝且不猜测其他事项
+ok 197 - 固定请求绑定审阅身份与当前Topic，路由缺Topic明确拒绝且不猜测其他事项
+  ---
+  duration_ms: 4.1387
+  type: 'test'
+  ...
+# Subtest: 超长流程索引通过声明的 promptIndex 分页完整读取且保持决策首包预算
+ok 198 - 超长流程索引通过声明的 promptIndex 分页完整读取且保持决策首包预算
+  ---
+  duration_ms: 5.9929
+  type: 'test'
+  ...
+# Subtest: 读取流程后更新或禁用，new-task 提交拒绝旧版本且不写 Task 或 Outbox
+    # Subtest: revision
+    ok 1 - revision
+      ---
+      duration_ms: 3.5456
+      type: 'test'
+      ...
+    # Subtest: disabled
+    ok 2 - disabled
+      ---
+      duration_ms: 2.8175
+      type: 'test'
+      ...
+    1..2
+ok 199 - 读取流程后更新或禁用，new-task 提交拒绝旧版本且不写 Task 或 Outbox
+  ---
+  duration_ms: 6.9009
+  type: 'test'
+  ...
+# Subtest: 无动作且从未入 Outbox 的 blocked 决策可并发安全重判，保留失败证据与原输入
+ok 200 - 无动作且从未入 Outbox 的 blocked 决策可并发安全重判，保留失败证据与原输入
+  ---
+  duration_ms: 4.859
+  type: 'test'
+  ...
+# Subtest: 重判与旧 not-applied 恢复并发时旧恢复 CAS 不得复活已拒绝草稿
+ok 201 - 重判与旧 not-applied 恢复并发时旧恢复 CAS 不得复活已拒绝草稿
+  ---
+  duration_ms: 3.7788
+  type: 'test'
+  ...
+# Subtest: 纯闲聊完整归类收口但不新建话题或触发业务决策
+ok 202 - 纯闲聊完整归类收口但不新建话题或触发业务决策
+  ---
+  duration_ms: 2.2531
+  type: 'test'
+  ...
+# Subtest: 遗漏范围按 UTF-16 保留 emoji 和多个独立事项的原文
+ok 203 - 遗漏范围按 UTF-16 保留 emoji 和多个独立事项的原文
+  ---
+  duration_ms: 1.3026
+  type: 'test'
+  ...
+# Subtest: 混合消息只为具体事项建话题，闲聊片段保留在忽略范围
+ok 204 - 混合消息只为具体事项建话题，闲聊片段保留在忽略范围
+  ---
+  duration_ms: 4.2126
+  type: 'test'
+  ...
+# Subtest: new messages cannot reopen archived tasks; normal new-task path remains available
+ok 205 - new messages cannot reopen archived tasks; normal new-task path remains available
+  ---
+  duration_ms: 8.7645
+  type: 'test'
+  ...
+# Subtest: workflow instructions respect runtime mode: false
+ok 206 - workflow instructions respect runtime mode: false
+  ---
+  duration_ms: 3.7511
+  type: 'test'
+  ...
+# Subtest: workflow instructions respect runtime mode: true
+ok 207 - workflow instructions respect runtime mode: true
+  ---
+  duration_ms: 3.0187
+  type: 'test'
+  ...
+# Subtest: fixed route categories are offered by active mode and bypass business decisions
+ok 208 - fixed route categories are offered by active mode and bypass business decisions
+  ---
+  duration_ms: 3.2322
+  type: 'test'
+  ...
+# Subtest: Route and Topic receive only referenced group person identities without filtering business requests or existing-topic facts
+ok 209 - Route and Topic receive only referenced group person identities without filtering business requests or existing-topic facts
+  ---
+  duration_ms: 6.5166
+  type: 'test'
+  ...
+# Subtest: changed relevant person identity fences a Topic decision, including the atomic commit: false
+ok 210 - changed relevant person identity fences a Topic decision, including the atomic commit: false
+  ---
+  duration_ms: 4.0366
+  type: 'test'
+  ...
+# Subtest: changed relevant person identity fences a Topic decision, including the atomic commit: true
+ok 211 - changed relevant person identity fences a Topic decision, including the atomic commit: true
+  ---
+  duration_ms: 3.3083
+  type: 'test'
+  ...
+# Subtest: same-round latest input must be consumed; stale and queued submissions cannot commit; restart keeps accepted receipt
+ok 212 - same-round latest input must be consumed; stale and queued submissions cannot commit; restart keeps accepted receipt
+  ---
+  duration_ms: 9.2148
+  type: 'test'
+  ...
+# Subtest: latest revision cannot borrow the old consumption marker while its envelope awaits Task facts
+ok 213 - latest revision cannot borrow the old consumption marker while its envelope awaits Task facts
+  ---
+  duration_ms: 9.8237
+  type: 'test'
+  ...
+# Subtest: request-scoped maintenance tools: route
+ok 214 - request-scoped maintenance tools: route
+  ---
+  duration_ms: 0.8359
+  type: 'test'
+  ...
+# Subtest: request-scoped maintenance tools: title
+ok 215 - request-scoped maintenance tools: title
+  ---
+  duration_ms: 0.5711
+  type: 'test'
+  ...
+# Subtest: request-scoped maintenance tools: summary
+ok 216 - request-scoped maintenance tools: summary
+  ---
+  duration_ms: 0.571
+  type: 'test'
+  ...
+# Subtest: workflow prompt tool follows explicit program capability without narrowing business reads: false
+ok 217 - workflow prompt tool follows explicit program capability without narrowing business reads: false
+  ---
+  duration_ms: 0.5851
+  type: 'test'
+  ...
+# Subtest: workflow prompt tool follows explicit program capability without narrowing business reads: true
+ok 218 - workflow prompt tool follows explicit program capability without narrowing business reads: true
+  ---
+  duration_ms: 0.4786
+  type: 'test'
+  ...
+# Subtest: omitted Topic presentation fields retain values while explicit changes update independently
+ok 219 - omitted Topic presentation fields retain values while explicit changes update independently
+  ---
+  duration_ms: 8.2087
+  type: 'test'
+  ...
+# Subtest: concurrent same-revision summary change fences stale generated update: false
+ok 220 - concurrent same-revision summary change fences stale generated update: false
+  ---
+  duration_ms: 2.9422
+  type: 'test'
+  ...
+# Subtest: concurrent same-revision summary change fences stale generated update: true
+ok 221 - concurrent same-revision summary change fences stale generated update: true
+  ---
+  duration_ms: 2.6466
+  type: 'test'
+  ...
+# Subtest: compact review still marks exact candidate snapshot read and rejects changed candidates before acceptance
+ok 222 - compact review still marks exact candidate snapshot read and rejects changed candidates before acceptance
+  ---
+  duration_ms: 2.3743
+  type: 'test'
+  ...
+# Subtest: accepted presentation cannot overwrite a later concurrent summary while applying Task actions
+ok 223 - accepted presentation cannot overwrite a later concurrent summary while applying Task actions
+  ---
+  duration_ms: 4.2987
+  type: 'test'
+  ...
+# Subtest: historical presentation folds omitted fields and explicit clears across revisions
+ok 224 - historical presentation folds omitted fields and explicit clears across revisions
+  ---
+  duration_ms: 9.7121
+  type: 'test'
+  ...
+1..224
+# tests 250
+# suites 0
+# pass 250
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 17124.6685

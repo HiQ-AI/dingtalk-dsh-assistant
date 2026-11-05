@@ -229,6 +229,8 @@ const schedulerSchema = z.object({
   platformSchedule: platformScheduleSchema.optional(),
   executionBackend: z.enum(['dsh', 'claude-code']).optional(),
   taskSessionModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
+  topicRouteModel: z.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).nullable().optional(),
+  topicDecisionModel: z.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).nullable().optional(),
   coordinationModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
   performanceProjection: performanceProjectionSchema.optional(),
   tasks: z.array(taskSchema), groupConfigurationInitialized: z.boolean().optional(), agentNames: z.array(z.string().min(1)).optional(), replySignature: z.string().max(80).optional(), timezone: z.string().optional(), agentWorkspaceDir: z.string().optional(), taskWorkspaceDir: z.string().optional(), proxyUrl: z.string().optional(),
@@ -678,6 +680,8 @@ export async function openResidentStore(storageDomain) {
     getProxyUrl: () => scheduler.get('runtime')?.proxyUrl,
     getExecutionBackend: () => scheduler.get('runtime')?.executionBackend,
     getTaskSessionModelConfig: () => scheduler.get('runtime')?.taskSessionModel,
+    getTopicRouteModelConfig: () => scheduler.get('runtime')?.topicRouteModel,
+    getTopicDecisionModelConfig: () => scheduler.get('runtime')?.topicDecisionModel,
     getCoordinationModelConfig: () => scheduler.get('runtime')?.coordinationModel,
     setTaskSessionModelConfig: async (taskSessionModel) => {
       await scheduler.update('runtime', current => ({ ...current, taskSessionModel }))
@@ -1100,7 +1104,7 @@ export async function openResidentStore(storageDomain) {
       await groups.update(entry[0], group => ({ ...group, topics: group.topics.map(topic => {
         if (topic.topicId !== topicId || topic.lastFactDecisionId === requestId || topic.revision !== revision
           || topic.summary !== expectedSummary || topic.processedRevision < topic.revision) return topic
-        return { ...topic, ...decision.topicUpdate, summaryRevision: revision, lastFactDecisionId: requestId, updatedAt: new Date().toISOString() }
+        return { ...topic, ...decision.topicUpdate, ...(decision.topicUpdate?.summary !== undefined ? { summaryRevision: revision } : {}), lastFactDecisionId: requestId, updatedAt: new Date().toISOString() }
       }) }))
       return { status: 'projected' }
     }),
