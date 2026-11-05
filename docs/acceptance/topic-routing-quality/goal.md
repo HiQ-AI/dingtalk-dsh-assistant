@@ -2,7 +2,7 @@
 
 > 状态：ACTIVE
 > Goal ID：topic-routing-quality
-> 最近维护：2026-11-05T16:26:02+08:00
+> 最近维护：2026-11-05T17:01:58+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/docs/acceptance/topic-routing-quality/goal.md
 
 ## 总目标
@@ -42,13 +42,13 @@
 | SG4 | A根因修复、C正常恢复与D独立核验 | 当前固定14条经正式处理取得真实业务终态；必要阻断依赖不扩授权 | DONE：原14同版本canonical各唯一、来源完成14/pending0/完成决策覆盖14；842既有静默纠正另计。T1当前req4/control4/lease80完成并排空，input9成功且原分析产物3份经D核验，完成fact对应回复delivered/attempt1；T2当前req1完成并排空，真实用户确认依据及完成fact静默投影已核，不冒认助手修复 | 私有postCorrectionBusiness.finalReadback/D06:56:22.495Z；SHA256 4c7a31c1；round-17.md/matrix.csv已归档，原历史列保留 |
 | SG5 | Lead合并部署、C产物、D核验、E证据 | 合并代码、双包、原生退出、功能及独立回读 | 第15轮部署/fixture交付已完成；本次PR #343双包更新与独立安装/健康核验通过，第16轮证据保留原14条BLOCKED和测试限制，不等同业务处理完成 | PR #342/#343 MERGED；round-15历史、round-16.md、matrix.csv |
 | SG6 | A不明确输入分流、C隔离联调、D独立审查 | 职责外或真实发问闭环；合法scope仅阻断相关Topic；问句精确回链；旧units/效果及错误边界保持 | PAUSED_AT_DEPLOYMENT：产品1ca72d3c经PR #344合并0e52a2ff；runtime210/210、store定向2/2、原生13/13、实际包smoke14/14通过，merge复打双包SHA完全相同。未安装；用户要求先恢复原服务，暂停新版本部署 | round-17仅SG4；SG6候选Assistant eef7295f、Observer84e11494；round-18.md/matrix.csv已集中归档，恢复通过不冒称新规则上线 |
-| SG7 | 一级初诊回复与有界同会话追加 | 一级初步回复、多Topic分开发且精确引用；原会话steer、每批≤15、溢出下批；二级与Task后续事实不冒领/不重复 | IN_PROGRESS：用户已明确新合同，现状与方案取证中；实施前复用现有spec留决策快照，原团队分工，运行服务保持旧版不动 | 本工作树base0e52a2ff；round-18为上阶段结果，不当作SG7已验 |
+| SG7 | 一级初诊回复与有界同会话追加 | 一级初步回复、多Topic分开发且精确引用；原会话steer、每批≤15、溢出下批；二级与Task后续事实不冒领/不重复 | IN_PROGRESS：既有spec快照已推dafcdfdb，A实现route/schema/service及runtime单测；A已明确无在途增量并交权，C单写store.js/topic-model.js及Store单测，同时负责会话更新与Native测试，当前coordination17/17仅施工阶段；D独立审、E README单写。B原ExitPlanMode待审批，coordinator第三参/角色提示未落地，未绕过 | Goal/spec为唯一入口；本工作树base0e52a2ff，产品施工中，不把SG6旧测试套SG7；服务PID28268旧版保持运行 |
 
 ## 当前检查点
 
 - 当前子目标：SG7
 - 当前执行：旧版服务已恢复，保留运行、不再停机。Lead于08:06:38.567592Z仅Start-ScheduledTask启动原已安装38f06195双包2.3.0；bthyqsefs已exit0并完整读回：08:10:12.6184408Z，PID28268（16:06:41.173187+08创建）同时监听3080/18998，health ok、inboundProcessing/bridge healthy、recoveryIssueCount0，任务Running、自启true。profile SHA1f2c3b27...e59f55不变；独立核原声明包Assistant fd7debd7...8d7ae、Observer84e11494...c1f2，与启动前一致。新规则未安装，未伪造signal/退出证明。当前收尾分支worktree-routing-policy-deployment，不续推已合并PR #344分支。
-- 唯一下一步：按用户新要求核对一级已曝光Topic摘要、当前steer/批次追加及二级回复链路，比较现有复用路径后更新既有first-reply spec决策快照；由原团队实施、隔离验证与独立审查。一级最多15条，溢出排下一批，多Topic分别精确引用回复，初步措辞不下结论；不顺手代做B旧confirmation门禁。开发期间保持PID28268旧版服务运行，不做新停机/安装。SG6已合并未部署和原14已完成事实保持，第18轮已独立归档，长期Goal ACTIVE。
+- 唯一下一步：A/C按已确认单写交权持续实施并直接对齐inFlightRouteUpdate与批次修订/已消费协议，D施工审；初始15条选择与C会话更新已有定向施工验证，不当完成；D已证quote富化遗留旧恢复边可形成16条组件且当前throw中断同群wake，C按Store真实关系边界修复，并在既有群恢复/路由入口处理存量旧边；D另证有效16节点链，Lead已明确放弃非用户要求的全组件原子提交，保留硬15，跨批直接依赖以真实已读的版本/epoch/可信关系上下文受CAS校验，溢出source仍pending无副作用，不靠清有效边/throw/skip，不加通用图调度或全库迁移。B按cc-pool原UUID只读核会话末端仍停2026-11-04T15:57:45Z ExitPlanMode且未返回，待批内容核实为旧confirmation门禁方案，已纠正为请用户在routing-recall窗口先拒绝旧方案、恢复接收SG7任务后再审批新窄范围方案；不能让用户盲批旧任务，不让高权限成员代写coordinator或改权限绕过。其余实施/验证继续，真正依赖该透传的Native不得用fixture猴补冒充通过。终态后E集中第19轮/矩阵、Lead绑定源码实跑与PR；本轮只交PR不再停机部署，不触碰运行旧服务。
 - 本次停机事实：D核旧PID10052不存在、双端口/替代web/旧子树均空、计划任务Ready且LastTaskResult=1，当前owner空、未排空任务/执行/群及starting均0，unknown操作3/通知0保持。实际末端栈指向已安装@deepseek-ai/dsh-storage-json 0.2.1-rc.2的writeAtomic rename EPERM（同目录随机临时文件→Resident JSON）；文件非ReadOnly，正常单Domain已有串行，不能推定具体占用方、ACL/安全软件或具体业务调用。此异常发生于旧版；未改上游存储库。原始日志含token，禁止复制全文/入库。退出精确时点和底层触发原因未收敛。
 - SG6验证边界：Native为真实隔离Host/脚本provider与隔离发送适配器，不是真实钉钉或模型语义质量验收；Service恶意proof/错误作者/未送达引用的独立Native负例尚未实跑，store层身份/送达ID/版本/epoch/outbox反例及静态接线已覆盖。组合回归455/456保留既有摘要“第一版”对空串失败，组合启动未捕获最终指纹，仅作诊断；最终定向验证分别绑定实际冻结blob，不据此称全仓全绿。
 - SG4最终独立回读：D于2026-11-05T06:56:22.495Z核原14同基线版本、canonical各唯一、sourceCompleted14/pending0/completedDecisionCovered14，两Task均当前版本completed/drained，pending人类请求0。T1 req4/control4/lease80 input9执行成功且Owner已真实读取结果，3份分析产物符合仅分析不修改/部署要求；本次completed fact已accepted/projected，原同群回复06:54:13.028Z delivered/attempt1、精确receipt且覆盖该fact。T2 req1由真实用户确认收口，完成fact正式静默审阅，不冒认助手修复。T1保留一条回合中到达的execution.result pending wake，终态Task不再调度，不能写全wake acked或人工清账。Lead独立核私有current-processing-14.json/postCorrectionBusiness.finalReadback，整文件SHA256 4c7a31c1547d6f51901c90f19d4610233ee17a4a409c1d82f20d1ec53430aab4；跨账非原子采样、businessFinalVerified仅限固定14和必要两Task，不代表新规则或整体性能完成。
