@@ -23,3 +23,5 @@ docs/acceptance/resource-stage-recovery/acceptance-helpers/*.patch -text whitesp
 docs/acceptance/resource-stage-recovery/scripts/read-registry-manifest.ps1 -text
 # 原始测试失败输出保留字节，诊断器生成的空白不按源码空白错误处理。
 docs/acceptance/resource-stage-recovery/**/*.log -text whitespace=-blank-at-eol,-blank-at-eof
+# 第16轮原始TAP按已核SHA256保留字节，避免Git换行归一化改变证据摘要。
+docs/acceptance/topic-routing-quality/round-16/*.tap -text whitespace=cr-at-eol

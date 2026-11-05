@@ -20,7 +20,7 @@
 
 ## 最终证据
 
-下列 TAP 已逐份读取并核对 SHA256，保留在本轮目录；它们支持各自运行，不覆盖首轮失败或扩大验收范围。
+下列 TAP 已逐份读取并核对 SHA256，保留在本轮目录；它们支持各自运行，不覆盖首轮失败或扩大验收范围。 `.gitattributes` 仅对本轮TAP禁用换行归一化，保留Windows原始字节，使仓库blob与下列摘要一致；不修改测试输出或重跑结果。
 
 - `round-16/release-smoke-native.tap`：SHA256 `d9e266878a3d321621c3db45b65076e5fe9edbbaf11bc2761878712beb591e05`；原生环境 12/14 的首轮结果。
 - `round-16/fixed-topics-native.tap`：SHA256 `914868897a0cfbd25e533cf55a714c7d4f4f0a5ccaf8c3a020ca5c2834d9886b`；fixed-topics-native 12/12。
