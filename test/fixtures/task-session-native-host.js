@@ -295,6 +295,11 @@ export function* topicSummaryResponse(request, audit) {
 // Script model decisions only; routing, validation and durable topic state remain real.
 export function topicTaskCalls(request, { title = '原消息交办', objective } = {}) {
   const input = latestInput(request), names = request.tools.map(tool => tool.name)
+  const latestResult = modelToolValues(request).at(-1)
+  if (latestResult?.status === 'context-required' && latestResult.nextCall?.name === 'group_decision_context_get'
+    && latestResult.nextCall.arguments?.requestId === input.requestId) {
+    return [{ name: latestResult.nextCall.name, args: latestResult.nextCall.arguments }]
+  }
   if (input.trigger === 'task-facts') return [{ name: 'group_decision_submit', args: {
     requestId: input.requestId, topicId: input.topicId, revision: input.revision,
     decision: { actions: [], topicUpdate: { summary: input.facts.map(fact => fact.summary).join('\n') },

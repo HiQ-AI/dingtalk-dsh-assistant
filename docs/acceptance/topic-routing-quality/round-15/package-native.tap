@@ -1,0 +1,46 @@
+✖ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (36174.4146ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":5,"aborted":false}
+ℹ package begin: 0ms
+ℹ package extracted: 246ms
+ℹ package bytes-and-imports-verified: 5376ms
+ℹ package dependency-links-ready: 5882ms
+ℹ package runtime-imports-ready: 6810ms
+ℹ {"lifecyclePhase":"business","elapsedMs":35901,"aborted":true}
+ℹ package host-resources-closed: 35978ms
+ℹ package temporary-files-removed: 36154ms
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":261,"aborted":false}
+✔ actual extracted resident starts and serves health without legacy entrypoints or personal assets (7850.1938ms)
+ℹ {"lifecyclePhase":"prepare","elapsedMs":6,"aborted":false}
+ℹ package begin: 0ms
+ℹ package extracted: 175ms
+ℹ package bytes-and-imports-verified: 4171ms
+ℹ package dependency-links-ready: 4203ms
+ℹ package resident-host-ready: 7259ms
+ℹ package resident-listening: 7760ms
+ℹ package resident-health-verified: 7774ms
+ℹ {"lifecyclePhase":"business","elapsedMs":7774,"aborted":false}
+ℹ package host-resources-closed: 7792ms
+ℹ package temporary-files-removed: 7842ms
+ℹ {"lifecyclePhase":"cleanup","elapsedMs":69,"aborted":false}
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 55344.4896
+
+✖ failing tests:
+
+test at test\task-session-package-native.test.js:18:29
+✖ actual npm tarball has only the generic runtime and runs a personal-skill task from its extracted files (36174.4146ms)
+  Error: lifecycle business exceeded 30000ms
+      at expired (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/test/fixtures/lifecycle-stages.js:24:41)
+      at Timeout.<anonymous> (file:///D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/test/fixtures/lifecycle-stages.js:28:50)
+      at listOnTimeout (node:internal/timers:635:17)
+      at process.processTimers (node:internal/timers:571:7) {
+    code: 'TEST_STAGE_TIMEOUT',
+    phase: 'business',
+    lifecyclePhase: 'business'
+  }

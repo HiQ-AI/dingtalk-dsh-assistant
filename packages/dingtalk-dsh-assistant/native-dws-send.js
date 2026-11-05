@@ -124,7 +124,7 @@ export function nativeDwsObservation(event, commands) {
 }
 
 /** Original native operations are the authority; the existing outbox stores exact self IDs. */
-export function createNativeDwsObserver({ operations, residentStore, notificationCache = new Map(), querySendStatus, warn = () => {}, ingressWaitMs = 1500, probeWaitMs = 3000 }) {
+export function createNativeDwsObserver({ operations, residentStore, notificationCache = new Map(), querySendStatus, warn = () => {}, onIdentified = () => {}, ingressWaitMs = 1500, probeWaitMs = 3000 }) {
   const pending = new Map(), probes = new Map()
   let closed = false
   const stopped = Promise.withResolvers()
@@ -145,6 +145,7 @@ export function createNativeDwsObserver({ operations, residentStore, notificatio
       deliveredMessageId: proof.messageId, deliveredAt: new Date().toISOString(),
       sendReceipt: { openTaskId: proof.openTaskId, conversationId: proof.conversationId, messageId: proof.messageId },
     } })
+    onIdentified(send.conversationId)
   }
   async function probeStatus(key, openTaskId, conversationId, options, save) {
     if (closed || !querySendStatus) return
@@ -171,6 +172,7 @@ export function createNativeDwsObserver({ operations, residentStore, notificatio
       await residentStore.projectTaskNotification({ groupId, outbound: {
         ...taskNotificationOutbound(current), deliveredMessageId: proof.messageId, sendReceipt: proof,
       } })
+      onIdentified(groupId)
     })
   }
   async function observeStatuses(operation) {

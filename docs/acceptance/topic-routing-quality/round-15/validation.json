@@ -1,0 +1,59 @@
+{
+  "mergedCommit": "960ddadc1aae64877355a344aa36cf8aa6f410b8",
+  "scope": "本机双包部署及隔离产物验证；未重放业务或发送真实测试消息",
+  "packages": {
+    "assistant": { "version": "2.3.0", "sha256": "b8066ac306213ab161cfdc97d7919473807ae72e63e701b8404348bee1958ae8", "verifiedFiles": 95 },
+    "observer": { "version": "2.3.0", "sha256": "84e114942dab9b4ef60f1b6cf9f40fae889181a5c9d52296bd778aa84d24c1f2", "verifiedFiles": 4 },
+    "independentReadback": "D核对持久缓存及打包、源码、安装文件一致"
+  },
+  "artifactTests": {
+    "fixtureGitBlob": "0e4f8ce62072d226eb16f2518d57819b91c502b8",
+    "testGitBlob": "e123bcf71a0d6de357657265f3acb63362894d56",
+    "initialRun": "1/2通过：resident启动健康通过；个人技能任务30秒超时，未到host-ready",
+    "firstRerun": "个人技能任务超时：任务和3个执行均完成，但同一协调请求循环；诊断确认context-required未消费",
+    "fixedRerun": "个人技能任务1/1通过，business 27559ms，原30秒时限和断言不变",
+    "scope": "提取的实际Assistant包；测试fixture不属于生产包"
+  },
+  "deployment": {
+    "precheck": { "writes": 0, "signals": 0, "candidateOnly": true, "drained": true, "pendingTasks": 0, "pendingExecutions": 0, "pendingGroups": 0 },
+    "shutdown": { "method": "SIGINT", "oldPid": 47836, "oldOwnerProcessExited": true, "ownerReleasedField": false, "staleOwnerField": true, "remainingDescendants": 0, "runtimePortClosed": true, "unknownOperations": 3, "unknownNotifications": 0 },
+    "newPid": 60180,
+    "newProcessCreatedAt": "2026-11-05T09:55:55.397759+08:00",
+    "portsShareNewPid": true,
+    "scheduledTaskEnabled": true,
+    "backupCreated": false,
+    "cordisPatchSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+    "identityReadback": "D只读核对数据库与初始化标记的instanceId、initToken、ingressEpoch一致，phase initialized、schema 3，当前owner为新PID；无部署前marker摘要基线，不能证明前后逐字一致",
+    "modelConfiguration": "只读回读topicRouteModel与topicDecisionModel均为null，未修改模型配置"
+  },
+  "health": {
+    "initialScriptReadback": { "status": "ok", "inboundProcessing": true, "dwsBridgeHealthy": true, "recoveryIssueCount": 0 },
+    "laterIndependentReadback": { "status": "degraded", "inboundProcessing": false, "dwsBridgeHealthy": false, "recoveryIssueCount": 0, "observed": "02:03及02:05 UTC", "reason": "一群历史回补DYNAMIC_SOURCE_CONFLICT，监听仍ready" },
+    "recoveredReadback": { "observedAt": "2026-11-05T02:10:05.213Z", "status": "ok", "inboundProcessing": true, "dwsBridgeHealthy": true, "backfill": "两群成功，自然恢复，无重启或业务重放" },
+    "leadIndependentReadback": { "observedAt": "2026-11-05T02:12:32.8539010Z", "status": "ok", "inboundProcessing": true, "dwsBridgeHealthy": true, "recoveryIssueCount": 0, "listenersReady": 2, "backfillsOk": 2, "portsSharePid": 60180 },
+    "finalAcceptance": "该时点传输已恢复；冲突具体分支未收敛，不能保证不再复发"
+  },
+  "fixedMessageComparison": {
+    "baselineObservedAt": "2026-11-05T01:19:00.242Z",
+    "afterObservedAt": "2026-11-05T02:11:35.078Z",
+    "scope": "同群固定20条，sequence 814–833；精确ID和版本匹配基线",
+    "states": { "processing": 11, "needs_clarification": 5, "processed": 4 },
+    "changes": [],
+    "changesScope": "仅比较消息ID、version和processingState；不代表hold字段或完整投影不变",
+    "holds": "5条均无scope或clarification，epoch分别为0、0、0、0、2",
+    "topics": { "T1": { "revision": 56, "processedRevision": 49, "summaryRevision": 49, "latestDecisionRevision": 49 }, "T2": { "revision": 11, "processedRevision": 4, "summaryRevision": 4, "latestDecisionRevision": 4 } },
+    "newAcceptedDecisions": 0,
+    "directlyAssociatedNotificationsAndOutbox": "current与archived notification及Resident outbox均为空",
+    "notes": "833 v2的hold epoch从基线1变为2，变化于01:20:53部署前自然发生；部署及健康恢复不代表本批消息已恢复处理"
+  },
+  "backfillInvestigation": {
+    "scope": "sequence 841，独立于固定20条统计",
+    "mget": "同profile一次精确查询complete、found 1且ID匹配；与canonical v1相比actor和quote相同，text长度137/92、时间及稳定资源身份1/2不同",
+    "limitation": "mget不是实际回补range接口的入参，缺少异常栈及实际输入，不能据此确定失败分支"
+  },
+  "limitations": [
+    "固定20条消息未观察到状态进展；回补冲突的具体原因及复发风险未收敛",
+    "未验证真实钉钉发送、Owner业务完成或性能目标",
+    "confirmation替换类型门禁未随本次部署完成"
+  ]
+}

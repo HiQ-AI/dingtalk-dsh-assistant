@@ -79,6 +79,7 @@ const messageFactFields = {
 }
 const inboundSchema = z.object({
   ...messageFactFields, facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed', 'needs-context']).default('pending'), routingError: z.string().optional(), routingHold: routingHoldSchema.optional(), routingEpoch: z.number().int().nonnegative().optional(), routingRecoveryMessageId: z.string().min(1).optional(),
+  ownNotificationRetirement: z.object({ outboundId: z.string().min(1), at: z.string().min(1) }).optional(),
   messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]),
   messageAiSendFlag: z.literal('DWS').optional(),
   senderName: z.string().min(1).optional(), senderOpenDingTalkId: z.string().min(1).optional(), quotedMessage: quotedMessageSchema.optional(),
@@ -732,6 +733,7 @@ export async function openResidentStore(storageDomain) {
       await scheduler.update('runtime', (current) => ({ ...current, groupConfigurationInitialized: true }))
     },
     setTaskSessionReader: reader => { taskSessionReader = reader },
+    isOwnNotification: message => taskSessionReader?.isOwnNotification?.(message) === true,
     getTopicTasksPage: async options => {
       if(taskSessionReader?.listTaskPage)return taskSessionReader.listTaskPage(options)
       if(taskSessionReader)throw Object.assign(new Error('topic_task_pagination_provider_required'),{code:'OBSERVER_PAGE_PROVIDER_REQUIRED'})
@@ -823,7 +825,7 @@ export async function openResidentStore(storageDomain) {
           next.routingEpoch = (previous.routingEpoch ?? 0) + 1
           const now = new Date().toISOString()
           const quotedHold = next.sourceKind === 'dingtalk' && next.senderOpenDingTalkId && next.messageAiSendFlag !== 'DWS' && next.quotedMessage?.messageId !== messageId
-            ? latest.messages.find(item => item.messageId === next.quotedMessage?.messageId && item.routingStatus === 'needs-context') : undefined
+            ? latest.messages.find(item => item.messageId === next.quotedMessage?.messageId && !item.ownNotificationRetirement && item.routingStatus === 'needs-context') : undefined
           return { ...latest, ...(quotedHold ? { routingRevision: latest.routingRevision + 1 } : {}), messages: latest.messages.map((item) => item.messageId === messageId ? next : item.messageId === quotedHold?.messageId
             ? { ...item, routingStatus: 'pending', routingHold: undefined, routingEpoch: (item.routingEpoch ?? 0) + 1, routingRecoveryMessageId: messageId } : item),
             topics: latest.topics.map((topic) => {
@@ -838,7 +840,7 @@ export async function openResidentStore(storageDomain) {
         const accepted = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage,
           imageRefs, mediaUnavailable, resourceRefs, sourceKind, messageVersion: messageVersion ?? 1, facts: [], routingStatus: 'pending', agentDeliveryStatus: 'pending' })
         const quotedHold = sourceKind === 'dingtalk' && senderOpenDingTalkId && messageAiSendFlag !== 'DWS' && quotedMessage?.messageId
-          ? latest.messages.find(item => item.messageId === quotedMessage.messageId && item.routingStatus === 'needs-context') : undefined
+          ? latest.messages.find(item => item.messageId === quotedMessage.messageId && !item.ownNotificationRetirement && item.routingStatus === 'needs-context') : undefined
         const messages = quotedHold ? latest.messages.map(item => item.messageId !== quotedHold.messageId ? item : {
           ...item, routingStatus: 'pending', routingHold: undefined, routingEpoch: (item.routingEpoch ?? 0) + 1, routingRecoveryMessageId: messageId,
         }) : latest.messages
@@ -897,6 +899,41 @@ export async function openResidentStore(storageDomain) {
       })
       return receipt
     }),
+    retireOwnNotification: ({ groupId, messageId, outboundId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) return undefined
+      let retired
+      await groups.update(entry[0], latest => {
+        const message = latest.messages.find(item => item.messageId === messageId)
+        if (!message || message.ownNotificationRetirement) { retired = message; return latest }
+        const at = new Date().toISOString()
+        retired = { ...message, ownNotificationRetirement: { outboundId, at }, routingEpoch: (message.routingEpoch ?? 0) + 1,
+          routingHold: undefined, routingRecoveryMessageId: undefined, activeUnitRefs: [] }
+        const retiredDecisionIds = new Set()
+        const unitIds = new Set(latest.topics.flatMap(topic => topic.entries.filter(item => item.messageId === messageId).map(item => item.unitId).filter(Boolean)))
+        const topics = latest.topics.map(topic => {
+          const active = new Map()
+          for (const item of topic.entries) if (item.messageId === messageId) active.set(item.unitId ?? `legacy:${messageId}`, item)
+          const removals = [...active.values()].filter(item => item.action === 'add')
+          const decisions = topic.decisions.map(record => {
+            const refs = [...(record.decision.basisUnitRefs ?? []), ...(record.decision.actions ?? []).flatMap(action => action.basisUnitRefs ?? [])]
+            if (!isPendingDecision(record) || !(record.decision.basisMessageIds ?? []).includes(messageId) && !refs.some(ref => unitIds.has(ref.unitId))) return record
+            retiredDecisionIds.add(record.decisionId)
+            return { ...record, status: 'rejected', error: 'own-notification-retired', nextRetryAt: undefined, updatedAt: at }
+          })
+          if (!removals.length && decisions.every((record, index) => record === topic.decisions[index])) return topic
+          let revision = topic.revision
+          const entries = [...topic.entries, ...removals.map(item => ({ messageId, messageVersion: item.messageVersion,
+            unitId: item.unitId, unitRevision: item.unitRevision, action: 'remove', reason: 'own-notification', revision: ++revision }))]
+          return { ...topic, entries, decisions, revision, updatedAt: at }
+        })
+        return { ...latest, routingRevision: latest.routingRevision + 1, topics,
+          taskReservations: latest.taskReservations.filter(item => !retiredDecisionIds.has(item.decisionId)),
+          messages: latest.messages.map(item => item.messageId === messageId ? retired
+            : item.routingRecoveryMessageId === messageId ? { ...item, routingRecoveryMessageId: undefined } : item) }
+      })
+      return retired
+    }),
     routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes, expectedRoutingEpochs = [], preflight, audit }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
@@ -912,6 +949,8 @@ export async function openResidentStore(storageDomain) {
         if (routes.some(route => route.units?.some(unit => unit.dispatchOwner === 'coordination'))) throw new Error('INDEPENDENT_COORDINATION_RETIRED')
         if (latest.routingRevision !== routingRevision) throw new Error('topic_routing_stale')
         preflight?.(latest)
+        if (routes.some(route => latest.messages.find(message => message.messageId === route.messageId)?.ownNotificationRetirement
+          || taskSessionReader?.isOwnNotification?.({ groupId, messageId: route.messageId }))) throw new Error('topic_routing_stale')
         if (routes.some(route => latest.messages.find(message => message.messageId === route.messageId)?.routingStatus === 'needs-context')) throw new Error('topic_routing_stale')
         if (routes.some(route => {
           const message = latest.messages.find(item => item.messageId === route.messageId)
@@ -936,7 +975,7 @@ export async function openResidentStore(storageDomain) {
         }
         // Host 直达入口必须在提交时覆盖全部待路由来源，包含新入站和旧消息富化产生的 pending。
         if (requireAllPending === true) {
-          const pending = latest.messages.filter(message => message.routingStatus !== 'routed')
+          const pending = latest.messages.filter(message => !message.ownNotificationRetirement && message.routingStatus !== 'routed')
           if (pending.length !== routes.length || pending.some(message => !routes.some(route => route.messageId === message.messageId
             && route.messageVersion === message.messageVersion))) throw new Error('topic_routing_stale')
         }
@@ -1008,6 +1047,16 @@ export async function openResidentStore(storageDomain) {
           messages: settleCompletedMessageDeliveries(routedMessages, topics, sourceDispatchOwnership) }
       })
       return { status: 'routed', group, topics: group.topics, ...receipt }
+    }),
+    withNotificationSource: ({ groupId, messageIds, commit }) => serialize(groupId, async () => {
+      const own = messageIds.some(messageId => taskSessionReader?.isOwnNotification?.({ groupId, messageId }) === true
+        || !!findGroupEntry(groupId)?.[1].messages.find(message => message.messageId === messageId)?.ownNotificationRetirement)
+      return commit(own)
+    }),
+    withOwnSourceFence: ({ groupId, messageIds, commit }) => serialize(groupId, async () => {
+      if (messageIds.some(messageId => taskSessionReader?.isOwnNotification?.({ groupId, messageId })
+        || findGroupEntry(groupId)?.[1].messages.some(message => message.messageId === messageId && message.ownNotificationRetirement))) throw new Error('DYNAMIC_SOURCE_RETIRED')
+      return commit()
     }),
     withRoutingHold: ({ groupId, messageId, messageVersion, epoch, commit }) => serialize(groupId, async () => {
       const message = findGroupEntry(groupId)?.[1].messages.find(item => item.messageId === messageId)

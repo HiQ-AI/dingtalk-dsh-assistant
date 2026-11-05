@@ -189,6 +189,69 @@ test('native DWS observer binds send and status operations, filters early echoes
   assert.equal(h.residentStore.getGroup('native-group').outbox.length, 1)
 }))
 
+test('迟回读的精确自身回复自动收束已入账来源，同账号人工消息仍处理', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const fixture = await nativeCase(t, 'late-own-notification-')
+  const readbackStarted = Promise.withResolvers(), allowReadback = Promise.withResolvers()
+  const routeStarted = Promise.withResolvers(), allowRoute = Promise.withResolvers()
+  let sends = 0, queried = false, submitted = false
+  t.onCancel(() => { allowReadback.resolve(); allowRoute.resolve() })
+  await t.beginBusiness()
+  const h = await t.step(async () => fixture.host(async request => {
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit')) {
+      if (input.messages.some(item => item.messageId === 'late-echo')) {
+        routeStarted.resolve()
+        await allowRoute.promise
+      }
+      return [call('group_topic_route_submit', { requestId: input.requestId, routes: input.messages.map(item => ({
+        messageId: item.messageId, messageVersion: item.messageVersion,
+        ...(item.messageId === 'fixed-request' ? { units: [{ unitKey: 'fixed', summary: '固定类别问询', sourceRefs: [{ quote: item.text }],
+          topics: [], fixedTopic: 'agent-platform', reason: '按事项归入固定类别' }] }
+          : { units: [], ignoredRefs: [{ quote: item.text, reason: '无业务交办' }] }),
+      })) })]
+    }
+    if (names.includes('platform_task_query') && !queried) { queried = true; return [call('platform_task_query', { state: 'completed' })] }
+    if (names.includes('platform_reply_submit') && !submitted) { submitted = true; return [call('platform_reply_submit', { atOpenDingTalkIds: ['native-user'], text: '当前范围没有已完成任务。' })] }
+    return []
+  }, { config: { assistantActorId: 'native-user' }, notifications: {
+    async send() { sends++; return { openTaskId: 'late-send' } },
+    async readback(notification) { assert.equal(notification.ack.openTaskId, 'late-send'); readbackStarted.resolve(); await allowReadback.promise; return { messageId: 'late-echo' } },
+  } }))
+  const original = { groupId: 'native-group', messageId: 'fixed-request', senderOpenDingTalkId: 'native-user', text: '测试助手，请说明工作成果', occurredAt: '2026-10-28T00:00:00Z', mentionedAgent: true }
+  await t.step(async () => h.service.ingest(original))
+  t.diagnostic('原始来源已接纳，等待回读开始')
+  await t.step(async () => readbackStarted.promise)
+  t.diagnostic('回读已开始，准备接入迟到自身消息')
+  const [pending] = await t.step(async () => h.query('notification.list'))
+  assert.equal(pending.kind, 'fixed-topic-reply')
+  assert.equal(pending.ack.openTaskId, 'late-send')
+  assert.equal(pending.receipt?.messageId, undefined)
+  const echo = { ...original, messageId: 'late-echo', text: '当前范围没有已完成任务。' }
+  assert.equal((await t.step(async () => h.service.ingest(echo))).accepted, true)
+  await t.step(async () => routeStarted.promise)
+  t.diagnostic('自身消息已进入路由，核验回读前来源')
+  const source = (await t.step(async () => h.query('source.list'))).find(item => item.messageId === echo.messageId)
+  assert.ok(source)
+  assert.notEqual(source.routed, true)
+  assert.equal(h.residentStore.getGroup('native-group').messages.find(item => item.messageId === echo.messageId).routingStatus, 'pending')
+  allowReadback.resolve()
+  await t.step(async () => waitUntil(async () => (await h.query('source.list')).find(item => item.messageId === echo.messageId)?.ownNotificationRetirement?.kind === 'own-notification', 'late echo retired'))
+  allowRoute.resolve()
+  await t.step(async () => h.service.whenIdle())
+  const [delivered] = await t.step(async () => h.query('notification.list'))
+  assert.equal(delivered.id, pending.id)
+  assert.equal(delivered.state, 'delivered')
+  assert.equal(delivered.ack.openTaskId, 'late-send')
+  assert.equal(delivered.receipt.messageId, 'late-echo')
+  assert.equal(sends, 1)
+  assert.equal(h.residentStore.getGroup('native-group').outbox.length, 1)
+  assert.equal((await t.step(async () => h.service.ingest({ ...echo, messageId: 'human-same-account', text: '普通人工消息' }))).accepted, true)
+  await t.step(async () => h.service.whenIdle())
+  const sources = await t.step(async () => h.query('source.list'))
+  assert.ok(sources.some(item => item.messageId === 'human-same-account' && !item.ownNotificationRetirement))
+  assert.equal(sends, 1)
+}))
+
 test('native completion freezes files and resumes remaining delivery after the explanation is archived', { ...({ timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const fixture = await nativeCase(t, 'native-final-files-')
   let delegated = false, step = 0

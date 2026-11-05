@@ -104,7 +104,7 @@ export function createCoordinationResourceTools({ request, assertCurrent, readMe
       const slice = page(message.text, offset, 'message:' + messageId)
       return { ...slice, message: { ...projection, text: slice.text }, resourceRefs: refsFor(message).map(({ attachment, ...ref }) => ref), resourcesRead: false }
     },
-  }, { name: 'group_resource_get', description: '只读本请求消息明确引用的钉钉文档、附件或公网HTTPS文本；钉钉文档经DWS读取，不能读取任意ID/URL。文本按offset分页，图片通过原生附件返回，其他格式明确失败。',
+  }, { name: 'group_resource_get', description: '只读本请求消息明确引用的钉钉文档、附件或公网HTTPS文本；引用消息的资源先用 group_message_get 读取 quotedMessage.messageId，再使用该消息ID及其资源身份读取。钉钉文档经DWS读取，不能读取任意ID/URL。文本按offset分页，图片通过原生附件返回，其他格式明确失败。',
     parameters: { type: 'object', properties: { messageId: { type: 'string' }, type: { type: 'string', enum: ['mediaId', 'fileId', 'dingtalkDoc', 'attachment', 'url'] }, resourceId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }, required: ['messageId', 'type', 'resourceId'], additionalProperties: false }, output,
     async execute({ messageId, type, resourceId, offset = 0 }, exec) {
       const message = await getMessage(messageId, exec)
@@ -115,7 +115,14 @@ export function createCoordinationResourceTools({ request, assertCurrent, readMe
       if (!value) {
         if (type === 'attachment') { if (!readImage) throw new Error('coordination_resource_reader_unavailable'); await readImage(ref.attachment); value = { imageRefs: [ref.attachment] } }
         else if (type === 'url') value = await readUrl(resourceId)
-        else { if (!readResource) throw new Error('coordination_resource_reader_unavailable'); value = await readResource(request.groupId, messageId, ref) }
+        else {
+          if (!readResource) throw new Error('coordination_resource_reader_unavailable')
+          try { value = await readResource(request.groupId, messageId, ref) }
+          catch (error) {
+            if (!message.quotedMessage?.messageId) throw error
+            throw new Error(`${error.message}; 请先用 group_message_get 读取引用消息 ${message.quotedMessage.messageId}，核对资源后使用该消息ID读取`, { cause: error })
+          }
+        }
         assertCurrent(exec)
         if (!value || value.complete === false || value.hasMore === true || value.failures?.length || value.mediaUnavailable?.length || typeof value.text !== 'string' && !value.imageRefs?.length) throw new Error('coordination_resource_read_incomplete')
         loaded.set(key, value)

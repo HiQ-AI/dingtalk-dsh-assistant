@@ -71,7 +71,10 @@ export function messageProcessingProjection(message, topics, source, requests, s
     if (source) return null
     return records.length ? decisionTimes.every(Number.isFinite) ? new Date(Math.max(...decisionTimes)).toISOString() : null : message.agentDeliveryAt ?? null
   }
-  if (message.routingStatus === 'needs-context') {
+  if (message.ownNotificationRetirement && source?.ownNotificationRetirement) {
+    state = 'processed'; basis = 'own-notification-retired'; completedAt = source.ownNotificationRetirement.at
+  }
+  else if (message.routingStatus === 'needs-context') {
     state = 'needs_clarification'; basis = 'routing-hold'; conclusion = message.routingHold?.reason ?? null
   }
   else if (manuallySettled(message)) {
@@ -107,7 +110,7 @@ export function messageProcessingProjection(message, topics, source, requests, s
     processingSentAt: message.occurredAt ?? null, processingCompletedAt: completedAt,
     processingFacts: {
       sourceId: source?.sourceId ?? null, messageVersion: message.messageVersion ?? null,
-      sourceState: !source ? 'unknown' : source.routed === true ? 'settled' : 'unsettled', sourceSettledAt: source?.routedAt ?? null,
+      sourceState: !source ? 'unknown' : source.ownNotificationRetirement ? 'retired' : source.routed === true ? 'settled' : 'unsettled', sourceSettledAt: source?.ownNotificationRetirement?.at ?? source?.routedAt ?? null,
       receivedAt: source?.receivedAt ?? message.receivedAt ?? null,
       notificationState: !notices.length ? 'unknown' : deliveredAt ? 'delivered' : 'unconfirmed', notifications: notices,
       semantic: timing(message.occurredAt, completedAt),
