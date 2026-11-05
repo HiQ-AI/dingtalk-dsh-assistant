@@ -734,6 +734,8 @@ export async function openResidentStore(storageDomain) {
     },
     setTaskSessionReader: reader => { taskSessionReader = reader },
     isOwnNotification: message => taskSessionReader?.isOwnNotification?.(message) === true,
+    clarificationDirected: (groupId, message) => taskSessionReader?.clarificationDirected?.(groupId, message) ?? false,
+    clarificationPolicyEligible: (groupId, message) => taskSessionReader?.clarificationPolicyEligible?.(groupId, message) === true,
     getTopicTasksPage: async options => {
       if(taskSessionReader?.listTaskPage)return taskSessionReader.listTaskPage(options)
       if(taskSessionReader)throw Object.assign(new Error('topic_task_pagination_provider_required'),{code:'OBSERVER_PAGE_PROVIDER_REQUIRED'})
@@ -794,11 +796,21 @@ export async function openResidentStore(storageDomain) {
       await groups.delete(entry[0])
       return { removed: true, groupId }
     }),
-    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
+    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, clarificationRecovery, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       let duplicate = false, enriched = false, sequence
       const group = await groups.update(entry[0], (latest) => {
+        const quotedHoldFor = message => {
+          if (message.sourceKind !== 'dingtalk' || !message.senderOpenDingTalkId || message.messageAiSendFlag === 'DWS' || !message.quotedMessage?.messageId) return undefined
+          const direct = latest.messages.find(item => item.messageId === message.quotedMessage.messageId && !item.ownNotificationRetirement && item.routingStatus === 'needs-context')
+          if (direct) return direct
+          if (!clarificationRecovery || clarificationRecovery.deliveredMessageId !== message.quotedMessage.messageId
+            || !latest.outbox.some(item => item.outboundId === clarificationRecovery.notificationId && item.deliveredMessageId === clarificationRecovery.deliveredMessageId)) return undefined
+          return latest.messages.find(item => item.messageId === clarificationRecovery.messageId && item.messageVersion === clarificationRecovery.messageVersion
+            && item.senderOpenDingTalkId === message.senderOpenDingTalkId && item.routingStatus === 'needs-context' && !item.ownNotificationRetirement
+            && item.routingHold?.clarification?.epoch === clarificationRecovery.epoch)
+        }
         const previous = latest.messages.find((item) => item.messageId === messageId)
         if (previous) {
           duplicate = true; sequence = previous.sequence
@@ -824,8 +836,7 @@ export async function openResidentStore(storageDomain) {
           next.routingHold = undefined
           next.routingEpoch = (previous.routingEpoch ?? 0) + 1
           const now = new Date().toISOString()
-          const quotedHold = next.sourceKind === 'dingtalk' && next.senderOpenDingTalkId && next.messageAiSendFlag !== 'DWS' && next.quotedMessage?.messageId !== messageId
-            ? latest.messages.find(item => item.messageId === next.quotedMessage?.messageId && !item.ownNotificationRetirement && item.routingStatus === 'needs-context') : undefined
+          const quotedHold = next.quotedMessage?.messageId !== messageId ? quotedHoldFor(next) : undefined
           return { ...latest, ...(quotedHold ? { routingRevision: latest.routingRevision + 1 } : {}), messages: latest.messages.map((item) => item.messageId === messageId ? next : item.messageId === quotedHold?.messageId
             ? { ...item, routingStatus: 'pending', routingHold: undefined, routingEpoch: (item.routingEpoch ?? 0) + 1, routingRecoveryMessageId: messageId } : item),
             topics: latest.topics.map((topic) => {
@@ -839,8 +850,7 @@ export async function openResidentStore(storageDomain) {
         sequence = latest.nextSequence
         const accepted = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage,
           imageRefs, mediaUnavailable, resourceRefs, sourceKind, messageVersion: messageVersion ?? 1, facts: [], routingStatus: 'pending', agentDeliveryStatus: 'pending' })
-        const quotedHold = sourceKind === 'dingtalk' && senderOpenDingTalkId && messageAiSendFlag !== 'DWS' && quotedMessage?.messageId
-          ? latest.messages.find(item => item.messageId === quotedMessage.messageId && !item.ownNotificationRetirement && item.routingStatus === 'needs-context') : undefined
+        const quotedHold = quotedHoldFor({ sourceKind, senderOpenDingTalkId, messageAiSendFlag, quotedMessage })
         const messages = quotedHold ? latest.messages.map(item => item.messageId !== quotedHold.messageId ? item : {
           ...item, routingStatus: 'pending', routingHold: undefined, routingEpoch: (item.routingEpoch ?? 0) + 1, routingRecoveryMessageId: messageId,
         }) : latest.messages
@@ -966,6 +976,8 @@ export async function openResidentStore(storageDomain) {
           const message = latest.messages.find(item => item.messageId === route.messageId)
           if (!message || message.messageVersion !== route.messageVersion) throw new Error('topic_message_version_stale')
           if (!route.deferred.reason?.trim() || route.units || route.topics || route.replyTopic || route.effectOwner || route.ignoredRefs?.length || route.reason) throw new Error('topic_route_deferred_invalid')
+          if (route.deferred.scope && (new Set(route.deferred.scope.map(ref => ref.topicId)).size !== route.deferred.scope.length
+            || route.deferred.scope.some(ref => !latest.topics.some(topic => topic.topicId === ref.topicId && topic.revision === ref.revision && !topic.mergedInto)))) throw new Error('topic_routing_stale')
           if (route.deferred.clarification) {
             const { question, assignmentQuote, replyReview, reviewFingerprint, reviewMessageIds } = route.deferred.clarification
             const offset = typeof assignmentQuote === 'string' ? message.text.indexOf(assignmentQuote) : -1
@@ -1036,7 +1048,7 @@ export async function openResidentStore(storageDomain) {
         const routedMessages = latest.messages.map((message) => {
           const deferred = deferredByMessage.get(message.messageId)
           if (deferred) return { ...message, routingStatus: 'needs-context', routingError: undefined, routingRecoveryMessageId: undefined,
-            routingHold: { messageVersion: message.messageVersion, epoch: message.routingEpoch ?? 0, reason: deferred.reason.trim(), createdAt: new Date().toISOString(), ...(deferred.clarification ? { clarification: { ...deferred.clarification, epoch: message.routingEpoch ?? 0 } } : {}) } }
+            routingHold: { messageVersion: message.messageVersion, epoch: message.routingEpoch ?? 0, reason: deferred.reason.trim(), createdAt: new Date().toISOString(), ...(deferred.scope ? { scope: deferred.scope.map(ref => ref.topicId) } : {}), ...(deferred.clarification ? { clarification: { ...deferred.clarification, epoch: message.routingEpoch ?? 0 } } : {}) } }
           if (!unitsByMessage.has(message.messageId)) return message
           const current = unitsByMessage.get(message.messageId).map(({ topics: _topics, effectOwner: _owner, reason: _reason, ...unit }) => unit)
           const historical = [...(message.units ?? [])]

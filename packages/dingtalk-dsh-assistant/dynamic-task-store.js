@@ -1557,7 +1557,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           || p.replyToMessageId !== source.messageId || p.replyToSenderOpenDingTalkId !== source.actorId
           || p.sourceRef?.messageId !== source.messageId || p.sourceRef?.messageVersion !== source.version || p.sourceRef?.actorId !== source.actorId
           || p.replyKind !== 'substantive' || p.atOpenDingTalkIds?.length !== 1 || p.atOpenDingTalkIds[0] !== source.actorId
-          || fact.agentDirected !== true || start < 0 || source.text.indexOf(quote, start + 1) >= 0
+          || !(fact.agentDirected === true || fact.policyApproved === true) || start < 0 || source.text.indexOf(quote, start + 1) >= 0
           || typeof fact.question !== 'string' || !fact.question.trim() || fact.question.length > 2000
           || typeof fact.reviewFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(fact.reviewFingerprint)
           || id !== expectedId) fail('DYNAMIC_ARGUMENT_INVALID', 'routingClarificationSource')

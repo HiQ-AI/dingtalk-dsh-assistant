@@ -120,6 +120,45 @@ test('待判持久化、受信范围和恢复代次保持接纳屏障', async ()
   await reopened.close()
 })
 
+test('模型澄清范围在群锁内核对话题版本并缩小屏障', async () => {
+  const { store } = await setup()
+  await ingest(store, 'a'); await ingest(store, 'b')
+  const topics = (await route(store, 'scope-topics', [['a', { newTopicKey: 'a', title: 'A' }], ['b', { newTopicKey: 'b', title: 'B' }]])).topicIdsByKey
+  await ingest(store, 'uncertain-scope')
+  const input = { groupId: 'g', routeId: 'scoped-hold', routingRevision: store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'uncertain-scope', messageVersion: 1, deferred: { reason: '范围明确但目标缺失', scope: [{ topicId: topics.a, revision: 0 }] } }] }
+  await assert.rejects(store.routeMessages(input), /topic_routing_stale/)
+  input.routes[0].deferred.scope[0].revision = 1
+  await store.routeMessages(input)
+  assert.deepEqual(store.getGroup('g').messages.find(item => item.messageId === 'uncertain-scope').routingHold.scope, [topics.a])
+  assert.equal((await store.acceptTopicDecision(decision('scope-free', topics.b, 1))).status, 'accepted')
+  assert.equal((await store.acceptTopicDecision(decision('scope-blocked', topics.a, 1))).status, 'routing-required')
+  await store.close()
+})
+
+test('澄清引用仅凭同群精确送达及原来源代次恢复待判', async () => {
+  const { store } = await setup()
+  await ingest(store, 'source')
+  await store.routeMessages({ groupId: 'g', routeId: 'hold-quote', routingRevision: store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'source', messageVersion: 1, deferred: { reason: '需要上下文', clarification: {
+      question: '请补充', assignmentQuote: 'source', replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] },
+      reviewFingerprint: 'proof', reviewMessageIds: ['source'], reviewMessageVersions: [{ messageId: 'source', messageVersion: 1 }] } } }] })
+  await store.appendOutbox({ groupId: 'g', outboundId: 'question', sourceMessageId: 'source', text: '请补充' })
+  await store.acknowledge({ groupId: 'g', outboundId: 'question', deliveredMessageId: 'question-message' })
+  const proof = { notificationId: 'question', deliveredMessageId: 'question-message', messageId: 'source', messageVersion: 1, epoch: 0 }
+  await ingest(store, 'wrong-actor', { senderOpenDingTalkId: 'other', quotedMessage: { messageId: 'question-message', content: '请补充' }, clarificationRecovery: proof })
+  assert.equal(store.getGroup('g').messages.find(item => item.messageId === 'source').routingStatus, 'needs-context')
+  for (const [id, changed] of [['wrong-delivery', { deliveredMessageId: 'other-message' }], ['wrong-version', { messageVersion: 2 }], ['wrong-epoch', { epoch: 1 }], ['wrong-outbound', { notificationId: 'other-outbound' }]]) {
+    await ingest(store, id, { quotedMessage: { messageId: 'question-message', content: '请补充' }, clarificationRecovery: { ...proof, ...changed } })
+    assert.equal(store.getGroup('g').messages.find(item => item.messageId === 'source').routingStatus, 'needs-context')
+  }
+  await ingest(store, 'answer-question', { quotedMessage: { messageId: 'question-message', content: '请补充' }, clarificationRecovery: proof })
+  const group = store.getGroup('g')
+  assert.equal(group.messages.find(item => item.messageId === 'source').routingRecoveryMessageId, 'answer-question')
+  assert.equal(group.messages.find(item => item.messageId === 'answer-question').quotedMessage.messageId, 'question-message')
+  await store.close()
+})
+
 test('引用元数据晚到时恢复原待判并约束答复共同路由', async () => {
   const { store } = await setup()
   await ingest(store, 'original')

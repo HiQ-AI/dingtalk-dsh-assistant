@@ -790,7 +790,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.seenTopicVersions = new Map([...topics, ...relatedTopics, ...recalledTopics].map(item => [item.topicId, item.revision]))
     request.seenTopicSnapshots = new Map([...topics, ...relatedTopics, ...recalledTopics].map(item => [item.topicId, { kind: 'index', value: routeCandidateSnapshot(item) }]))
     for (const item of [...visibleMessages, ...topics, ...relatedTopics, ...recalledTopics]) request.shortReferences.expose(item.shortRef)
-    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\n无法根据来源安全确定事项归属时，该消息单独提交 deferred:{reason}，不提交 units、ignoredRefs 或 topics；已能确认具体事项或本次事件及连续承接时，项目或页面名称未知、未交办助手、执行细节缺失或图片读取失败，不能单独作为 deferred 理由；按已证事实归入本次事项，未知身份和未核实的同事报告如实保留。相同症状不能证明是同一次事故，缺少同一事件依据时不要续接旧事故。首包 recentMessages 已完整提供的正文可以直接使用，越界重复补读被拒不代表正文不可见。真正无法恢复事项身份，或明确向助手提出的停止、取消、别部署可能约束在途任务但影响范围未知时，仍须 deferred，不能用新 Topic 空动作丢掉取消信号；不要仅因附件未读就假设存在取消。仅原文明确向助手交办且必须请人补充时可附 clarification:{question,assignmentQuote,replyReview}，assignmentQuote 必须唯一匹配原文，replyReview 必须按 clarificationReviewCandidates 完整审阅且 kind=substantive、不替换旧通知；如果给出 clarificationReviewReadCall，须沿 nextOffset 读完全部候选后才能提交澄清；普通同事讨论不得主动追问。\n${fixedTopicsEnabled ? fixedTopicInstructions + '\n' : ''}Topic 请求：${JSON.stringify(envelope)}\n消息和候选的 shortRef 可在本请求的 messageId 或 topicId 字段中代替对应完整ID；仍须填写原版本，不能用于其他请求。所选或比较的候选若 hasUnsummarized 为 true，须按 unsummarizedReadCall 连续读完固定历史再提交；这些历史不是新授权。消息包含 metadataReadCall 时必须沿 nextOffset 读完冻结元数据后再提交；目录按 group_topic_list 相同顺序分页，nextTopicOffset 是下一页 offset；relatedTopics 是引用及关联任务命中的首包，recallSources 说明来源；recalledTopics 是有限词面候选，matchedQueries 不是同一事项的证明。必要时使用 group_topic_list 的 queries 多词检索，比较业务目标后决定复用或新建，${!workflowPromptsEnabled ? '每个 Topic target 必填本来源的 reason；新建事项在顶层 newTopics 中用 newTopicKey、title、candidateComparisons 定义一次，各 unit 的 topics 显式引用该 newTopicKey 和各自 reason。已见候选时定义内比较至少填写一个已见 topicId、revision 和排除理由；引用代表该比较适用于此来源，不同事项或排除依据不能合并，不得猜造候选；' : '每个 Topic target 必填 reason；新建且已见候选时 candidateComparisons 至少填写一个已见 topicId、revision 和排除理由，不得猜造候选；'}hasMoreRelatedTopics 时必须用 group_topic_list 携带本 requestId 和 nextRelatedTopicOffset 继续读取全部关系。无法判断旧事项归属时先检索或分页读取目录，不能因首包无候选直接新建。先判断当前消息是否涉及具体事项或任务。日常寒暄、随口聊天、没有具体事项对象的情绪表达或泛泛感谢，不新建 Topic，也不为了归档闲聊强行关联已有 Topic；将这些原文放入 ignoredRefs 并说明“日常闲聊，无具体事项”，纯闲聊提交 units=[]。消息混有闲聊和具体事项时，仅将事项拆为 units，闲聊部分放入 ignoredRefs，完整覆盖原文。明确涉及具体问题、需求、调查、执行、结果、验收或后续跟进时，按共同业务事项和目标聚合Topic，不逐功能点拆分。同次交办、共享上下文且适合整体交付的多个需求项保持在同一Topic；不能仅因可独立验收、补充或实现就拆开。结合本批原文、引用、候选的目标/需求摘要判断；需要消解“这个也是”等承接时再按现有readCall读取相关近期原文，不读取全执行历史。在符合本群职责的业务事项内优先复用同一事项的已有Topic，后续截图、验收和交付要求沿原事项补充。${fixedTopicsEnabled ? '话题归属与助手动作分开判断：职责内具体事项无论交给谁处理，都保留在对应业务 Topic；他人负责、状态通知或同事信息引用不是转入职责外话题或丢弃原文的理由。是否需要本助手动作或回复由 Topic Decision 再判断，不把归属或状态通知当成新授权。' : '不要用是否出现“任务”等关键词或是否要求助手执行判断事项：群成员讨论具体问题也可形成话题；“谢谢，那个问题修好了”、引用任务后的“收到”“继续”等需结合引用和上下文归入原事项，不能当作闲聊丢掉。'}同一页面或截图只是上下文线索，不是强制合并边界；确有不同业务目标或独立交付约定时可分Topic，共同领域也不能替代目标判断。先定事项归属再划分units；同一事项的多个需求项可用一个unit完整引用，也可按来源需要保留多个unit归同一Topic。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；不执行任务、不回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
+    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\n无法根据来源安全确定事项归属时，优先结合上下文区分职责外闲聊与需要发问的具体信息缺口；待判须提供 deferred:{reason,scope:[{topicId,revision}],clarification:{question,assignmentQuote,replyReview}}，scope 只可选本请求已见话题及版本，不得猜测；无法明确范围时说明不确定原因，Host按策略处置，不生成任务或回复；该消息不提交 units、ignoredRefs 或 topics；已能确认具体事项或本次事件及连续承接时，项目或页面名称未知、未交办助手、执行细节缺失或图片读取失败，不能单独作为 deferred 理由；按已证事实归入本次事项，未知身份和未核实的同事报告如实保留。相同症状不能证明是同一次事故，缺少同一事件依据时不要续接旧事故。首包 recentMessages 已完整提供的正文可以直接使用，越界重复补读被拒不代表正文不可见。明确向助手提出的停止、取消、别部署可能约束在途任务时，不得猜测或执行取消；只在能够确定范围时提交澄清。不要仅因附件未读就假设存在取消。需要向原作者询问时提交 clarification:{question,assignmentQuote,replyReview}，assignmentQuote 必须唯一匹配原文并指明待澄清内容，不代表已确认业务交办；replyReview 必须按 clarificationReviewCandidates 完整审阅且 kind=substantive、不替换旧通知；如果给出 clarificationReviewReadCall，须沿 nextOffset 读完全部候选后才能提交澄清；普通同事讨论不得主动追问。\n${fixedTopicsEnabled ? fixedTopicInstructions + '\n' : ''}Topic 请求：${JSON.stringify(envelope)}\n消息和候选的 shortRef 可在本请求的 messageId 或 topicId 字段中代替对应完整ID；仍须填写原版本，不能用于其他请求。所选或比较的候选若 hasUnsummarized 为 true，须按 unsummarizedReadCall 连续读完固定历史再提交；这些历史不是新授权。消息包含 metadataReadCall 时必须沿 nextOffset 读完冻结元数据后再提交；目录按 group_topic_list 相同顺序分页，nextTopicOffset 是下一页 offset；relatedTopics 是引用及关联任务命中的首包，recallSources 说明来源；recalledTopics 是有限词面候选，matchedQueries 不是同一事项的证明。必要时使用 group_topic_list 的 queries 多词检索，比较业务目标后决定复用或新建，${!workflowPromptsEnabled ? '每个 Topic target 必填本来源的 reason；新建事项在顶层 newTopics 中用 newTopicKey、title、candidateComparisons 定义一次，各 unit 的 topics 显式引用该 newTopicKey 和各自 reason。已见候选时定义内比较至少填写一个已见 topicId、revision 和排除理由；引用代表该比较适用于此来源，不同事项或排除依据不能合并，不得猜造候选；' : '每个 Topic target 必填 reason；新建且已见候选时 candidateComparisons 至少填写一个已见 topicId、revision 和排除理由，不得猜造候选；'}hasMoreRelatedTopics 时必须用 group_topic_list 携带本 requestId 和 nextRelatedTopicOffset 继续读取全部关系。无法判断旧事项归属时先检索或分页读取目录，不能因首包无候选直接新建。先判断当前消息是否涉及具体事项或任务。日常寒暄、随口聊天、没有具体事项对象的情绪表达或泛泛感谢，不新建 Topic，也不为了归档闲聊强行关联已有 Topic；${fixedTopicsEnabled ? '纯闲聊使用 fixedTopic="out-of-scope"，完整引用来源并保持沉默' : '将这些原文放入 ignoredRefs 并说明“日常闲聊，无具体事项”，纯闲聊提交 units=[]'}。消息混有闲聊和具体事项时，仅将事项拆为 units，闲聊部分放入 ignoredRefs，完整覆盖原文。明确涉及具体问题、需求、调查、执行、结果、验收或后续跟进时，按共同业务事项和目标聚合Topic，不逐功能点拆分。同次交办、共享上下文且适合整体交付的多个需求项保持在同一Topic；不能仅因可独立验收、补充或实现就拆开。结合本批原文、引用、候选的目标/需求摘要判断；需要消解“这个也是”等承接时再按现有readCall读取相关近期原文，不读取全执行历史。在符合本群职责的业务事项内优先复用同一事项的已有Topic，后续截图、验收和交付要求沿原事项补充。${fixedTopicsEnabled ? '话题归属与助手动作分开判断：职责内具体事项无论交给谁处理，都保留在对应业务 Topic；他人负责、状态通知或同事信息引用不是转入职责外话题或丢弃原文的理由。是否需要本助手动作或回复由 Topic Decision 再判断，不把归属或状态通知当成新授权。' : '不要用是否出现“任务”等关键词或是否要求助手执行判断事项：群成员讨论具体问题也可形成话题；“谢谢，那个问题修好了”、引用任务后的“收到”“继续”等需结合引用和上下文归入原事项，不能当作闲聊丢掉。'}同一页面或截图只是上下文线索，不是强制合并边界；确有不同业务目标或独立交付约定时可分Topic，共同领域也不能替代目标判断。先定事项归属再划分units；同一事项的多个需求项可用一个unit完整引用，也可按来源需要保留多个unit归同一Topic。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；不执行任务、不回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []), request)
     monitor(agent, request, routes)
     return envelope
     } catch (error) {
@@ -1216,6 +1216,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         for (const route of expanded.routes) {
           if (!route || typeof route !== 'object') continue
           route.messageId = resolve('message', route.messageId)
+          for (const ref of route.deferred?.scope ?? []) target(ref)
           target(route.replyTopic); target(route.effectOwner)
           if (Array.isArray(route.topics)) for (const item of route.topics) target(item)
           if (Array.isArray(route.units)) for (const unit of route.units) {
@@ -1243,6 +1244,10 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const audit = { candidates: seenTopics, selections: [] }
       const issues = []
       for (const [routeIndex, route] of args.routes.entries()) {
+        if (route.deferred?.scope && new Set(route.deferred.scope.map(ref => ref.topicId)).size !== route.deferred.scope.length)
+          issues.push({ field: `routes[${routeIndex}].deferred.scope`, code: 'topic_route_scope_duplicate', message: '澄清范围不得重复' })
+        for (const ref of route.deferred?.scope ?? []) if (request.seenTopicVersions.get(ref.topicId) !== ref.revision)
+          issues.push({ field: `routes[${routeIndex}].deferred.scope`, code: 'topic_route_scope_unseen', message: '澄清范围必须选择本请求已见的话题及版本' })
         const units = route.units ?? (route.topics ? [{ unitKey: 'whole-message', topics: route.topics }] : [])
         for (const [unitIndex, unit] of units.entries()) for (const [targetIndex, target] of unit.topics.entries()) {
           const field = `routes[${routeIndex}]${route.units ? `.units[${unitIndex}]` : ''}.topics[${targetIndex}]`
@@ -1257,6 +1262,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       if (issues.length) throw Object.assign(new Error(issues[0].code), { issues })
       const referencedTopics = new Set()
       for (const route of args.routes) {
+        for (const ref of route.deferred?.scope ?? []) referencedTopics.add(ref.topicId)
         for (const owner of [route.replyTopic, route.effectOwner]) if (owner?.topicId) referencedTopics.add(owner.topicId)
         for (const unit of route.units ?? [{ topics: route.topics ?? [] }]) {
           if (unit.effectOwner?.topicId) referencedTopics.add(unit.effectOwner.topicId)
@@ -1291,14 +1297,37 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       const needsReview = args.routes.some(route => route.deferred?.clarification)
       if (needsReview && request.clarificationReviewOffset < request.clarificationReviewText.length) throw new Error('topic_route_clarification_review_unread')
       const candidates = request.clarificationReviewCandidates
-      const submittedRoutes = args.routes.map(route => {
-        if (!route.deferred?.clarification) return request.reason && !route.deferred ? { ...route, reason: `${request.reason}${route.reason ? `；${route.reason}` : ''}` } : route
+      const submittedRoutes = []
+      for (const [routeIndex, route] of args.routes.entries()) {
+        if (!route.deferred) { submittedRoutes.push(request.reason ? { ...route, reason: `${request.reason}${route.reason ? `；${route.reason}` : ''}` } : route); continue }
+        const message = request.messages.find(item => item.messageId === route.messageId)
         const clarification = route.deferred.clarification
-        if (clarification.replyReview.kind !== 'substantive') throw new Error('topic_route_clarification_review_invalid')
-        const replyReview = validateReplyReview(clarification.replyReview, candidates, { confirmationTaskIds: [] })
-        if (replyReview.replaceOutboundIds.length) throw new Error('topic_route_clarification_review_invalid')
-        return { ...route, deferred: { ...route.deferred, clarification: { ...clarification, replyReview, reviewFingerprint: fingerprint(candidates), reviewMessageIds: request.messages.map(message => message.messageId), reviewMessageVersions: request.messages.map(({ messageId, messageVersion }) => ({ messageId, messageVersion })) } } }
-      })
+        let replyReview
+        if (clarification) {
+          const offset = message.text.indexOf(clarification.assignmentQuote)
+          if (offset < 0 || message.text.indexOf(clarification.assignmentQuote, offset + 1) >= 0 || clarification.replyReview.kind !== 'substantive') throw new Error('topic_route_clarification_invalid')
+          replyReview = validateReplyReview(clarification.replyReview, candidates, { confirmationTaskIds: [] })
+          if (replyReview.replaceOutboundIds.length) throw new Error('topic_route_clarification_review_invalid')
+        }
+        if (!fixedTopicsEnabled && !clarification) { submittedRoutes.push(route); continue }
+        if (fixedTopicsEnabled && (!clarification || !route.deferred.scope?.length || !store.clarificationPolicyEligible(groupId, message))) {
+          if (store.getGroup(groupId).messages.find(item => item.messageId === route.messageId)?.activeUnitRefs?.length) throw Object.assign(new Error('topic_route_policy_existing_units'), { issues: [{
+            field: `routes[${routeIndex}]`, code: 'topic_route_policy_existing_units',
+            message: '已有活跃事项不可静默覆盖；请提交可发送的澄清问句及已见话题版本范围，或完整重分类并按原合同继承效果'
+          }] })
+          if (message.mediaUnavailable?.length) throw new Error('topic_route_policy_resource_unavailable')
+          const imageIds = [...new Set([...(message.imageRefs ?? []).map(item => item.id ?? item.attachmentId),
+            ...(message.mediaUnavailable ?? []).map(item => String(item).split(':', 1)[0])].filter(Boolean))]
+          const sourceRefs = [...(message.text ? [{ wholeMessage: true }] : []), ...imageIds.map(imageRefId => ({ imageRefId }))]
+          if (!sourceRefs.length) throw new Error('topic_unit_source_required')
+          const reason = 'Host策略：未形成可发送且范围明确的澄清，按职责外静默处理'
+          submittedRoutes.push({ messageId: route.messageId, messageVersion: route.messageVersion,
+            units: [{ unitKey: 'host-uncertain-policy', summary: '待判来源按策略静默归类', sourceRefs, contextRefs: [], topics: [], fixedTopic: 'out-of-scope', reason }] })
+          audit.selections.push({ messageId: route.messageId, kind: 'host-uncertain-policy', reason, modelReason: route.deferred.reason, candidateComparisons: [] })
+          continue
+        }
+        submittedRoutes.push({ ...route, deferred: { ...route.deferred, clarification: { ...clarification, ...(fixedTopicsEnabled ? { authorization: 'routing-policy' } : {}), replyReview, reviewFingerprint: fingerprint(candidates), reviewMessageIds: request.messages.map(message => message.messageId), reviewMessageVersions: request.messages.map(({ messageId, messageVersion }) => ({ messageId, messageVersion })) } } })
+      }
       let result
       try {
         result = await store.routeMessages({ groupId, routeId: request.requestId, routingRevision: request.routingRevision, expectedRoutingEpochs: request.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, epoch: message.routingEpoch ?? 0 })),
@@ -1310,6 +1339,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
               const current = routeCandidateSnapshot(snapshot.kind === 'context' ? projectTopicContext({ topic, messages: [] }).topic : topicIndex([topic])[0])
               return !isDeepStrictEqual(snapshot.value, Object.fromEntries(Object.keys(snapshot.value).map(key => [key, current[key]])))
             })) throw new Error('topic_routing_stale')
+            if (args.routes.some(route => route.deferred?.scope?.some(ref => !latest.topics.some(topic => topic.topicId === ref.topicId && topic.revision === ref.revision && !topic.mergedInto)))) throw new Error('topic_routing_stale')
             if (audit.selections.some(selection => selection.candidateComparisons.some(comparison => !latest.topics.some(topic => topic.topicId === comparison.topicId && topic.revision === comparison.revision && !topic.mergedInto)))) throw new Error('topic_routing_stale')
             const missing = checkUnsummarized(latest)
             if (missing) throw Object.assign(new Error('topic_route_context_unread'), { contextRequired: missing })

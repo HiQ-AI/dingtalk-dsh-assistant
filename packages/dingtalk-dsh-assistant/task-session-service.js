@@ -281,7 +281,18 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     ...(closeTrace ? { onProgress: queued => closeTrace.sample('service.observation-progress', () => ({ queued })) } : {}),
   })
   const stopObservation = ctx.on?.('session/event', (session, event) => { observationQueue.enqueue(session, event) })
-  residentStore?.setTaskSessionReader?.({ getTask: id => taskCache.get(id), listTasks: () => [...taskCache.values()], isOwnNotification,
+  const clarificationPolicyEligible = (groupId, message) => !!message.senderOpenDingTalkId && !['web', 'internal'].includes(message.sourceKind)
+    && message.messageAiSendFlag !== 'DWS' && !isOwnNotification({ ...message, groupId })
+  const clarificationDirected = async (groupId, message) => {
+    if (!message.senderOpenDingTalkId || ['web', 'internal'].includes(message.sourceKind) || message.messageAiSendFlag === 'DWS'
+      || isOwnNotification({ ...message, groupId })) return false
+    const names = legacy.getAgentConfig().agentNames ?? []
+    const named = names.filter(name => typeof name === 'string' && name.trim()).some(name =>
+      new RegExp(`^\\s*@?${RegExp.escape(name.trim())}(?:[\\s，,：:]+)`, 'u').test(message.text))
+    return named || /^\s*cc\s*:/iu.test(message.text) || message.mentionedAgent === true
+      || message.mentionedAgent === undefined && !!readMentioned && await readMentioned(groupId, message)
+  }
+  residentStore?.setTaskSessionReader?.({ getTask: id => taskCache.get(id), listTasks: () => [...taskCache.values()], isOwnNotification, clarificationDirected, clarificationPolicyEligible,
     hasAppliedOperation: async operationId => !!await query('receipt.get', { id: `topic-operation:${operationId}` }),
     isTaskQuiescent: taskId => [...executionCache.values()].filter(item => item.taskId === taskId).every(item => item.drained && !item.recovering) })
   const models = () => { const { provider, model, reasoningEffort } = legacy.getAgentConfig(); return { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } }
@@ -872,7 +883,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       || message.senderOpenDingTalkId !== payload.actorId || ['web', 'internal'].includes(message.sourceKind)
       || message.messageAiSendFlag === 'DWS' || isOwnNotification({ ...message, groupId: group.groupId })
       || draft.question !== fact.question || draft.assignmentQuote !== fact.assignmentQuote || draft.reviewFingerprint !== fact.reviewFingerprint
-      || fact.agentDirected !== true || draft.replyReview?.kind !== 'substantive' || draft.replyReview.replaceOutboundIds?.length)
+      || !(draft.authorization === 'routing-policy' ? fact.policyApproved === true : fact.agentDirected === true) || draft.replyReview?.kind !== 'substantive' || draft.replyReview.replaceOutboundIds?.length)
       fail('routing_clarification_stale')
     const quoteAt = message.text.indexOf(draft.assignmentQuote)
     if (quoteAt < 0 || message.text.indexOf(draft.assignmentQuote, quoteAt + 1) >= 0) fail('routing_clarification_stale')
@@ -893,16 +904,9 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       const outboundId = stableId('routing-clarification', JSON.stringify([groupId, message.messageId, message.messageVersion, draft.epoch]))
       // 已准备、已发送或未知效果只恢复原账，不能换正文或创建第二个发送身份。
       if (notificationCache.has(outboundId)) continue
-      if (!message.senderOpenDingTalkId || ['web', 'internal'].includes(message.sourceKind) || message.messageAiSendFlag === 'DWS'
-        || isOwnNotification({ ...message, groupId })) continue
-      const names = legacy.getAgentConfig().agentNames ?? []
-      const namedRecipient = names.filter(name => typeof name === 'string' && name.trim()).some(name =>
-        new RegExp(`^\\s*@?${RegExp.escape(name.trim())}(?:[\\s，,：:]+)`, 'u').test(message.text))
-      const directed = namedRecipient || /^\s*cc\s*:/iu.test(message.text) || message.mentionedAgent === true
-        || message.mentionedAgent === undefined && readMentioned && await readMentioned(groupId, message)
-      if (!directed) continue
+      if (draft.authorization === 'routing-policy' ? !clarificationPolicyEligible(groupId, message) : !await clarificationDirected(groupId, message)) continue
       const fact = { messageVersion: message.messageVersion, epoch: draft.epoch, question: draft.question,
-        assignmentQuote: draft.assignmentQuote, reviewFingerprint: draft.reviewFingerprint, agentDirected: true }
+        assignmentQuote: draft.assignmentQuote, reviewFingerprint: draft.reviewFingerprint, ...(draft.authorization === 'routing-policy' ? { policyApproved: true } : { agentDirected: true }) }
       const sourceId = `im:${hash([groupId, message.messageId, message.messageVersion])}`
       const source = await query('source.get', { sourceId })
       if (!source || source.actorId !== message.senderOpenDingTalkId || source.channel !== 'im') continue
@@ -1095,7 +1099,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     }
     // Reuse the existing message model's enrichment/version boundary before recording
     // immutable task-session sources. Replayed transport projections can enrich a quote.
-    await ingestTaskResidentMessage({ ctx, residentStore, message: { ...message, occurredAt: message.occurredAt ?? actualTime }, readResource,
+    const clarification = [...notificationCache.values()].find(item => item.kind === 'routing-clarification' && item.state === 'delivered'
+      && item.payload?.conversationId === message.groupId && item.payload.actorId === actorId
+      && receiptMessageId(item.receipt) === message.quotedMessage?.messageId)
+    const clarificationRecovery = clarification && { notificationId: clarification.id, deliveredMessageId: message.quotedMessage.messageId,
+      messageId: clarification.payload.sourceMessageId, messageVersion: clarification.payload.sourceVersion, epoch: clarification.payload.fact.epoch }
+    await ingestTaskResidentMessage({ ctx, residentStore, message: { ...message, clarificationRecovery, occurredAt: message.occurredAt ?? actualTime }, readResource,
       onPhase: phase => phases.push(phase) })
     const projected = residentStore.getGroup(message.groupId).messages.find(item => item.messageId === message.messageId)
     const version = projected.messageVersion
