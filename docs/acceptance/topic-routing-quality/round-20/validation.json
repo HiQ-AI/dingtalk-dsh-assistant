@@ -1,0 +1,298 @@
+{
+  "recordedAt": "2026-11-05T13:38:09.004404+00:00",
+  "scope": "PR345合并及本机普通双包部署；无schema迁移、真实测试发信、CI或tag",
+  "mergedCommit": "d95a2b288e987f9abbf7bd12b7cf1c9b76b30986",
+  "pullRequest": {
+    "number": 345,
+    "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/345",
+    "state": "MERGED",
+    "mergedAt": "2026-11-05T13:12:17Z",
+    "headCommit": "e44ca763c68a4a3d8edb783202d9b5ff14defcb8"
+  },
+  "worktree": {
+    "branch": "worktree-first-triage-local-deployment",
+    "packageAndTestDiffClean": true,
+    "documentsUncommittedAtValidation": true,
+    "unrelatedStackdumpUntouched": true
+  },
+  "sourceBinding": {
+    "packageFilesVerified": 210,
+    "allSourceSha256EqualRound19": true,
+    "manifest": "../round-19/validation.json",
+    "packageBytesEqualTestedArtifacts": true,
+    "frozenThroughInstalledReadback": true
+  },
+  "artifacts": {
+    "zzusp-dingtalk-dsh-assistant-2.3.0.tgz": {
+      "sha256": "f1c926ecd6cc60d89753c2bec8280455a7deecbdf91c4d03d630d54e518560e9",
+      "bytes": 514932
+    },
+    "zzusp-dingtalk-dsh-observer-2.3.0.tgz": {
+      "sha256": "84e114942dab9b4ef60f1b6cf9f40fae889181a5c9d52296bd778aa84d24c1f2",
+      "bytes": 62390
+    }
+  },
+  "initialCheck": {
+    "ledger": {
+      "scope": "current-control",
+      "quiescent": true,
+      "candidateOnly": true,
+      "drained": true,
+      "pending": {
+        "tasks": 0,
+        "executions": 0,
+        "groups": 0
+      },
+      "ownerReleased": false,
+      "ownerProcessExited": false,
+      "staleOwner": false,
+      "unknownOperations": 3,
+      "unknownNotifications": 0
+    },
+    "writes": 0,
+    "pid": 28268,
+    "checkOnly": true,
+    "console": {
+      "targetPid": 28268,
+      "checkOnly": true,
+      "signals": 0,
+      "consolePids": [
+        82272,
+        28268,
+        38476
+      ]
+    },
+    "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+    "signals": 0,
+    "packageSha256": "f1c926ecd6cc60d89753c2bec8280455a7deecbdf91c4d03d630d54e518560e9"
+  },
+  "initialFailure": {
+    "phase": "native-dispose",
+    "autostartEnabled": false,
+    "error": "DEPLOY_NATIVE_NOT_QUIESCENT",
+    "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55"
+  },
+  "resumeCheck": {
+    "writes": 0,
+    "pid": 28268,
+    "checkOnly": true,
+    "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+    "ledger": {
+      "scope": "current-control",
+      "quiescent": true,
+      "candidateOnly": false,
+      "drained": true,
+      "pending": {
+        "tasks": 0,
+        "executions": 0,
+        "groups": 0
+      },
+      "ownerReleased": false,
+      "ownerProcessExited": true,
+      "staleOwner": true,
+      "unknownOperations": 3,
+      "unknownNotifications": 0
+    },
+    "signals": 0,
+    "console": {
+      "signals": 0,
+      "resumed": true
+    },
+    "packageSha256": "f1c926ecd6cc60d89753c2bec8280455a7deecbdf91c4d03d630d54e518560e9"
+  },
+  "resume": {
+    "observedAt": "2026-11-05T13:27:45.9955442Z",
+    "signals": 0,
+    "priorFailure": {
+      "phase": "native-dispose",
+      "autostartEnabled": false,
+      "error": "DEPLOY_NATIVE_NOT_QUIESCENT",
+      "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55"
+    }
+  },
+  "offlineQuiescent": {
+    "remainingDescendants": 0,
+    "creationDate": "2026-11-05T16:06:41.173187+08:00",
+    "pid": 28268,
+    "shutdown": "SIGINT",
+    "observedAt": "2026-11-05T13:27:46.0056921Z",
+    "runtimePortClosed": true,
+    "ledger": {
+      "scope": "current-control",
+      "quiescent": true,
+      "candidateOnly": false,
+      "drained": true,
+      "pending": {
+        "tasks": 0,
+        "executions": 0,
+        "groups": 0
+      },
+      "ownerReleased": false,
+      "ownerProcessExited": true,
+      "staleOwner": true,
+      "unknownOperations": 3,
+      "unknownNotifications": 0
+    }
+  },
+  "installed": {
+    "assistant": {
+      "verifiedFiles": 95,
+      "sha256": "f1c926ecd6cc60d89753c2bec8280455a7deecbdf91c4d03d630d54e518560e9"
+    },
+    "observer": {
+      "verifiedFiles": 4,
+      "sha256": "84e114942dab9b4ef60f1b6cf9f40fae889181a5c9d52296bd778aa84d24c1f2"
+    },
+    "versions": {
+      "assistant": "2.3.0",
+      "observer": "2.3.0"
+    },
+    "declarationsMatchImmutableCache": true
+  },
+  "observerReadiness": {
+    "ready": true,
+    "pendingTotal": 0,
+    "taskTotal": 16
+  },
+  "independentRuntime": {
+    "verifiedAt": "2026-11-05T13:33:56.2235116Z",
+    "pid": 78868,
+    "creationDate": "2026-11-05T21:28:23.950062+08:00",
+    "ports": [
+      3080,
+      18998
+    ],
+    "samePidBothPorts": true,
+    "health": "ok",
+    "inboundProcessing": true,
+    "bridgeHealthy": true,
+    "recoveryIssueCount": 0,
+    "taskState": "Running",
+    "autostartEnabled": true,
+    "profileSha256": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+    "profileUnchanged": true,
+    "initializedMarkerSha256": "3eece5a8b4ac7dca755a7067148024172a16c81c9a2d4c31c9c44012d9d61364",
+    "initializedMarkerUnchanged": true,
+    "backupCreated": false
+  },
+  "independentReview": {
+    "reviewer": "D",
+    "verifiedAt": "2026-11-05T13:34:17.2489058Z",
+    "packageDigestsVersionsDeclarationsAndRuntimeMatch": true,
+    "installedFeatureModulesMatchRound19": {
+      "passed": 9,
+      "total": 9
+    },
+    "fullInstalledScanNotRepeated": true
+  },
+  "businessReadback": {
+    "reviewer": "C",
+    "tasks": {
+      "total": 16,
+      "drained": 16
+    },
+    "executions": {
+      "total": 30,
+      "drained": 30
+    },
+    "notifications": {
+      "delivered": 317,
+      "failed": 3,
+      "superseded": 3,
+      "starting": 0,
+      "unknown": 0
+    },
+    "operationsUnknownCount": 3,
+    "operationsUnknownIdentityContinuityVerified": false,
+    "groups": {
+      "messageCounts": [
+        817,
+        17
+      ],
+      "messageCountsEqualPredeployment": true,
+      "routingPending": [
+        0,
+        0
+      ],
+      "needsContext": [
+        0,
+        0
+      ],
+      "ownershipUnsettled": [
+        0,
+        0
+      ],
+      "historicalCoordinationPending": [
+        10,
+        1
+      ],
+      "listeners": [
+        "ready",
+        "ready"
+      ],
+      "backfillState": "ok",
+      "backfillInProgress": true
+    },
+    "earlierTaskComparison": {
+      "matchingTaskIdentities": 2,
+      "statusAndDrainedMatch": true,
+      "firstTaskEarlierVersions": [
+        4,
+        4,
+        80
+      ],
+      "firstTaskCurrentVersions": [
+        6,
+        6,
+        100
+      ],
+      "changeTimeUnknown": true,
+      "secondTaskVersions": [
+        1,
+        1,
+        2
+      ],
+      "notificationIdentityStateAttemptCompared": 1,
+      "notificationReceiptPresent": true,
+      "receiptMessageIdContinuityVerified": false,
+      "notAnImmediatePredeploymentIdentityBaseline": true
+    },
+    "noNaturalNewSourcesDetected": true
+  },
+  "boundaries": [
+    "真实新消息初诊、多Topic引用展示、同会话steer、15条生产场景及首回60秒未验",
+    "Store58/59既有摘要FAIL保留；不声明全仓全绿",
+    "旧owner行stale不等于已释放；unknown仅计数未变，不声称逐条身份相同",
+    "首次native-dispose超时保留；后续退出并排空支持Resume，不推定超时具体触发原因",
+    "未手改业务账、重放ingest或补发通知；不证明所有历史记录逐项无变化"
+  ],
+  "originalReceiptSha256": {
+    "captured-descendants.json": "786060a2631d2efefa756cecdf8528fd2c592e6b93e139506b20be23347e088d",
+    "control.json": "a5961a41749186fea09c378b417bf7513f737e7758628e50c4ad498bb5376fe9",
+    "failure.json": "5e4769cb459aec1b7489eb1be4732bfa309d26603b92e0323aed885b90b53ae6",
+    "installed.json": "c42e968682ea109b432d4ff4a7ae29db0ca3087711250cc59574314fc181e7c8",
+    "observer-installed.json": "23fe3773a345995c6ab3632faec61697ca3d6ab4949e88345d202d3d7543ec9f",
+    "observer-readiness.json": "e787912deb841c65f57acf9c6a02ee1d400e2f974f63d8e85181fc7966b7da6b",
+    "quiescent.json": "2f4578e87728283ddc8f779fbf786029bbc5b7db591ec0c9642531b247c1a1ca",
+    "readback.json": "480b4ba4f1fd96418a67e6a90a1d0723a35e372f9f3985f3f737778d86d680c6",
+    "resume-native-dispose.json": "8072bc64e54678059249bf3f0f69f2d88ca140c296fad4c23df18071b29086ec",
+    "signal.json": "f17dd788953c0afd5fde9d2f9b72f332fdf1a275a720d88be30cd245c25e9eca",
+    "signal.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "evidenceRetention": {
+    "cleanupCheckWrites": 0,
+    "exactHashedFilesRemoved": 27,
+    "removalIndependentlyConfirmed": true,
+    "round19LogsRemoved": [
+      "clarification-fence-focused.log",
+      "clarification-native.log",
+      "release-smoke.log",
+      "routing-native.log",
+      "topic-store.log"
+    ],
+    "round19SourceManifestRetained": true,
+    "originalFailureFieldsAndReceiptHashesRetained": true,
+    "immutableCacheAndPrivateBusinessEvidenceUntouched": true,
+    "temporaryPrBodyRetainedUntilRemoteReadback": true
+  }
+}

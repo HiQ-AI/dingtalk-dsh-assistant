@@ -60,3 +60,7 @@ pnpm test:suites
 仅脚本模型/通知适配器及真实隔离Host路径，不证明真实模型语义、真实钉钉收发或生产首回≤60秒；本轮未新增付费评测、未跑全仓、未安装、未合并、未部署、未运行CI或创建tag，旧版服务未触碰。必要材料/候选审阅、版本/来源/权限围栏保持，完整Service恶意恢复证明等逐项负例未全部实跑。
 
 保留最终 `round-19/validation.json` 和五份日志：`routing-native.log`、`clarification-native.log`、`clarification-fence-focused.log`、`topic-store.log`、`release-smoke.log`。SHA256见validation。旧Native/SG6中间日志及SG6旧候选目录在本报告与矩阵核对后按规则清理，原失败和历轮报告/矩阵结果保留，不将已清理路径作为现存证据。未写整体report.md，长期真实语义/性能目标仍未收敛。
+
+## 第20轮证据清理说明
+
+第20轮合并部署及最终脱敏证据归档并独立核对后，本轮5份原始/归档测试日志附件已按保留规则清理；正文中的原附件路径仅作历史出处，不再依赖文件存在。原测试结果、关键失败摘要与日志SHA256继续保留在本报告及 `round-19/validation.json`；该JSON的210源码绑定仍用于证明新部署包与已测包相同。最新部署终态、原生退出超时及接续证据见 `round-20.md` 和 `round-20/validation.json`。
