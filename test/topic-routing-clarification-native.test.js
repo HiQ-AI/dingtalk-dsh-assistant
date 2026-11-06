@@ -14,7 +14,7 @@ function hold(request, clarify = true) {
   if (previous?.status === 'context-required' && previous.nextCall) return [{ name: previous.nextCall.name, args: previous.nextCall.arguments }]
   const scope = [...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].find(topic => topic.title === '独立范围事项')
   assert.ok(request.tools.some(tool => tool.name === 'group_topic_route_submit'))
-  return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes: input.messages.map(item => ({
+  return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, initialReplies: [], initialReplySilences: [], routes: input.messages.map(item => ({
     messageId: item.messageId, messageVersion: item.messageVersion, deferred: { reason: '事项对象不明确', ...(scope && clarify ? { scope: [{ topicId: scope.topicId, revision: scope.revision }] } : {}), ...(clarify ? { clarification: {
       question, assignmentQuote: item.text, replyReview: { kind: 'substantive',
         reviewedOutboundIds: (input.clarificationReviewCandidates ?? []).map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
@@ -236,7 +236,7 @@ test('分诊策略问句真实送达后以精确引用恢复原来源',
       if (result?.status === 'context-required' && result.nextCall) return [{ name: result.nextCall.name, args: result.nextCall.arguments }]
       if (input.messages.some(item => item.messageId === 'answer')) {
         resumed = structuredClone(input)
-        return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes: input.messages.map(item => ({
+        return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, initialReplies: [], initialReplySilences: [], routes: input.messages.map(item => ({
           messageId: item.messageId, messageVersion: item.messageVersion, units: [{ unitKey: 'discussion', summary: '澄清后归档讨论',
             sourceRefs: [{ wholeMessage: true }], contextRefs: [], topics: [], fixedTopic: 'out-of-scope', reason: '讨论无需处理' }] })) } }]
       }

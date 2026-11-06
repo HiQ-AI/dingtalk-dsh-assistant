@@ -19,6 +19,40 @@ import { taskNotificationRecovery } from '../packages/dingtalk-dsh-assistant/not
 import { DatabaseSync } from 'node:sqlite'
 import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task-resident-runtime.js'
 
+testRunner('历史通知投影缓慢时新通知仍可领取许可', { timeout: nativeLifecycleTimeout(10000) }, nativeLifecycle(10000, async t => {
+  assert.ok(available, reason)
+  const root = await mkdtemp(join(tmpdir(), 'notification-scan-'))
+  let host
+  const blocked = Promise.withResolvers(), release = Promise.withResolvers(), sent = Promise.withResolvers()
+  t.onCancel(() => release.resolve())
+  t.after(async () => { release.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
+  host = await t.step(() => nativeTaskHost(root, () => assert.fail('不得调用模型'), { notifications: {
+    async send(notification) { sent.resolve(notification.id); return { messageId: 'new-delivery' } },
+    async readback(notification) { return { messageId: notification.ack.messageId, visible: true } },
+  } }))
+  const command = (kind, args, id) => host.service.store.command({ kind, args, id })
+  const payload = { conversationId: 'native-group', sourceMessageId: 'source', actorId: 'native-user', text: '隔离回复', fact: { topicRefs: [{ topicId: 'fixture-topic', revision: 1 }] }, kind: 'topic-reply' }
+  await command('notification.prepare', { notificationId: 'old-notice', kind: 'topic-reply', requirementRevision: 1, payload }, 'prepare-old-notice')
+  const start = await command('notification.start', { notificationId: 'old-notice' }, 'start-old-notice')
+  await command('notification.delivered', { notificationId: 'old-notice', dispatchToken: start.result.notification.dispatchToken, receipt: { messageId: 'old-delivery' } }, 'deliver-old-notice')
+  await command('notification.prepare', { notificationId: 'new-notice', kind: 'topic-reply', requirementRevision: 1, payload }, 'prepare-new-notice')
+  const project = host.residentStore.projectTaskNotification
+  host.residentStore.projectTaskNotification = async args => {
+    if (args.outbound.outboundId === 'old-notice') { blocked.resolve(); await release.promise }
+    return project(args)
+  }
+  await t.beginBusiness()
+  const recovery = host.service.recover()
+  await t.step(() => blocked.promise)
+  const outcome = await t.step(() => Promise.race([sent.promise, new Promise(resolve => setTimeout(() => resolve('blocked'), 500))]))
+  assert.equal(outcome, 'new-notice')
+  release.resolve()
+  await t.step(() => recovery)
+  await t.step(() => host.service.whenIdle())
+  assert.equal(host.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === 'old-notice')?.notificationState, 'delivered')
+  assert.equal((await t.step(() => host.query('notification.get', { notificationId: 'new-notice' }))).state, 'delivered')
+}))
+
 testRunner('same-host recovery drains the original native process without replaying an unknown operation', { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'native-drain-retry-'))
   const store = await openDynamicTaskStore({ dbPath: join(root, 'dynamic.db'), instanceId: 'native-test', initialize: true })

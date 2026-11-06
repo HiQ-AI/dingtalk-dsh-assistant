@@ -625,6 +625,11 @@ test('一级初诊与路由原子落账并绑定各自来源、单元和真实To
   const duplicate = structuredClone(input); duplicate.initialReplies.push(duplicate.initialReplies[0])
   await assert.rejects(store.routeMessages(duplicate), /topic_initial_reply_duplicate/)
   assert.deepEqual(store.getGroup('g'), before)
+  const missing = { ...input, initialReplies: [input.initialReplies[0]], initialReplySilences: [] }
+  await assert.rejects(store.routeMessages(missing), /topic_initial_disposition_required/)
+  const conflict = { ...input, initialReplySilences: [{ messageId: 'initial-a', messageVersion: 1, unitKey: 'whole-message', target: { newTopicKey: 'a' }, reason: '无需重复回复' }] }
+  await assert.rejects(store.routeMessages(conflict), /topic_initial_disposition_duplicate/)
+  assert.deepEqual(store.getGroup('g'), before)
   const first = await store.routeMessages(input), repeated = await store.routeMessages(input)
   assert.deepEqual(first.initialReplies, repeated.initialReplies)
   assert.equal(new Set(first.initialReplies.map(reply => reply.outboundId)).size, 2)
@@ -639,6 +644,26 @@ test('一级初诊与路由原子落账并绑定各自来源、单元和真实To
   const reopened = await openResidentStore(facility(snapshot))
   try { assert.deepEqual(reopened.getGroup('g').routeHistory.find(item => item.routeId === input.routeId).initialReplies, first.initialReplies) }
   finally { await reopened.close() }
+})
+
+test('一级静默回执冷重开保留来源与理由，变更理由不得重放', async () => {
+  const { store, snapshot } = await setup()
+  await ingest(store, 'silent-source')
+  const input = { groupId: 'g', routeId: 'silent-route', routingRevision: store.getGroup('g').routingRevision,
+    routes: [{ messageId: 'silent-source', messageVersion: 1, topics: [{ newTopicKey: 'work', title: '事项' }] }], initialReplies: [],
+    initialReplySilences: [{ messageId: 'silent-source', messageVersion: 1, unitKey: 'whole-message', target: { newTopicKey: 'work' }, reason: '同事已跟进' }] }
+  const first = await store.routeMessages(input)
+  assert.deepEqual(first.initialReplySilences[0].sourceRef, { messageId: 'silent-source', messageVersion: 1 })
+  assert.ok(first.initialReplySilences[0].unitRef.unitRevision > 0)
+  assert.equal(first.initialReplySilences[0].reason, '同事已跟进')
+  await assert.rejects(store.routeMessages({ ...input, initialReplySilences: [{ ...input.initialReplySilences[0], reason: '改写理由' }] }), /topic_route_identity_conflict/)
+  await store.close()
+  const reopened = await openResidentStore(facility(snapshot))
+  try {
+    assert.deepEqual(reopened.getGroup('g').routeHistory.find(item => item.routeId === input.routeId).initialReplySilences, first.initialReplySilences)
+    assert.equal((await reopened.routeMessages(input)).fingerprint, first.fingerprint)
+    assert.equal(reopened.getGroup('g').outbox.length, 0)
+  } finally { await reopened.close() }
 })
 
 test('路由审计理由变更不能重放已接纳路由或改变业务版本', async () => {

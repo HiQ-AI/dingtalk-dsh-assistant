@@ -16,6 +16,58 @@ import { boundedTopicContext, createTopicCoordinator, projectTopicContext, TASK_
 import { visiblePromptRefs, visibleSectionLength, compactSectionValue } from '../packages/dingtalk-dsh-assistant/coordination-context.js'
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
 
+test('调度等待异步错误处理完成', async () => {
+  let releaseError, errorStarted
+  const errorGate = new Promise(resolve => { releaseError = resolve })
+  const handling = new Promise(resolve => { errorStarted = resolve })
+  const coordinator = createTopicCoordinator({
+    store: { getGroup: () => ({}), async reconcileMessageDeliveries() { throw new Error('wake failed') } },
+    getAgent: () => ({}), isClosing: () => false,
+    async onError() { errorStarted(); await errorGate },
+  })
+  let settled = false
+  const scheduled = coordinator.schedule('g').then(() => { settled = true })
+  try {
+    await handling
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(settled, false, '异步错误处理尚未结束时调度不能完成')
+  } finally {
+    releaseError()
+    await scheduled
+    await coordinator.close()
+  }
+})
+
+test('关闭等待已接纳的调度及其异步错误处理', async () => {
+  let releaseWake, releaseError, wakeStarted, errorStarted
+  const wakeGate = new Promise((resolve, reject) => { releaseWake = () => reject(new Error('wake failed')) })
+  const errorGate = new Promise(resolve => { releaseError = resolve })
+  const waking = new Promise(resolve => { wakeStarted = resolve })
+  const handling = new Promise(resolve => { errorStarted = resolve })
+  const coordinator = createTopicCoordinator({
+    store: { getGroup: () => ({}), reconcileMessageDeliveries() { wakeStarted(); return wakeGate } },
+    getAgent: () => ({}), isClosing: () => false,
+    async onError(groupId, error) { assert.equal(groupId, 'g'); assert.equal(error.message, 'wake failed'); errorStarted(); await errorGate },
+  })
+  const scheduled = coordinator.schedule('g')
+  await waking
+  let closed = false
+  const closing = coordinator.close().then(() => { closed = true })
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(closed, false, 'wake 尚未结束时不能完成关闭')
+    releaseWake()
+    await handling
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(closed, false, '异步错误处理尚未结束时不能完成关闭')
+  } finally {
+    releaseWake()
+    releaseError()
+    await Promise.allSettled([scheduled, closing])
+  }
+  assert.equal(closed, true)
+})
+
 function memoryFacility(snapshot) {
   return new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
     loadAll: async () => structuredClone(snapshot), close: async () => {},
@@ -52,9 +104,23 @@ async function setup(t, options = {}) {
   })
   coordinator.register({ tools: { register(tool) { tools.set(tool.name, tool) } } }, 'g', options.scope)
   t.after(async () => { await coordinator.close(); await store.close() })
+  const routeFixture = (name, args) => {
+    if (name !== 'group_topic_route_submit' || Object.hasOwn(args, 'initialReplies') || Object.hasOwn(args, 'initialReplySilences')) return args
+    const targets = new Map()
+    for (const route of args.routes ?? []) for (const unit of route.units ?? (route.topics ? [{ unitKey: 'whole-message', topics: route.topics }] : [])) {
+      for (const target of unit.topics ?? []) {
+        const key = target.topicId ? `topic:${target.topicId}` : `new:${target.newTopicKey}`
+        if (!targets.has(key)) targets.set(key, { messageId: route.messageId, messageVersion: route.messageVersion, unitKey: unit.unitKey,
+          target: target.topicId ? { topicId: target.topicId } : { newTopicKey: target.newTopicKey }, reason: '测试场景不需要一级回复' })
+      }
+    }
+    return { ...args, initialReplies: [], initialReplySilences: [...targets.values()] }
+  }
   return { store, snapshot, coordinator, sent, errors, applications, tools,
-    rawCall: (name, args, exec = { groupId: 'g' }) => tools.get(name).execute(args, exec),
+    protocolCall: (name, args, exec = { groupId: 'g' }) => tools.get(name).execute(args, exec),
+    rawCall: (name, args, exec = { groupId: 'g' }) => tools.get(name).execute(routeFixture(name, args), exec),
     async call(name, args, exec = { groupId: 'g' }) {
+      args = routeFixture(name, args)
       let result = await tools.get(name).execute(args, exec)
       while (name === 'group_topic_route_submit' && result.status === 'context-required') {
         const scoped = new Map(), scope = { requestId: args.requestId }
@@ -2612,6 +2678,8 @@ test('显式归属复核冻结已处理消息，修订后原 Task 仍可读取�
   await assert.rejects(h.call('group_topic_route_review', { messageIds: ['a1', 'a1'], reason: '修正误归类' }), /topic_route_review_duplicate/)
   const review = await h.call('group_topic_route_review', { messageIds: ['a1'], reason: '该消息实际属于 B' })
   assert.equal(review.messages[0].messageVersion, 1)
+  const incomplete = await h.protocolCall('group_topic_route_submit', { requestId: review.requestId, initialReplies: [], initialReplySilences: [], routes: [{ messageId: 'a1', messageVersion: 1, topics: [{ newTopicKey: 'b', title: 'B' }] }] })
+  assert.ok(incomplete.issues.some(issue => issue.code === 'topic_initial_disposition_required'))
   const routed = await h.call('group_topic_route_submit', { requestId: review.requestId, routes: [{ messageId: 'a1', messageVersion: 1, topics: [{ newTopicKey: 'b', title: 'B' }] }] })
   assert.equal(routed.status, 'accepted')
   const old = routed.pendingDecisions.find((item) => item.topicId === original.topicId)
@@ -3135,7 +3203,7 @@ test('一级初诊按真实来源和话题原子保存，不替换旧回复', as
   const request = h.envelope('[GROUP_TOPIC_ROUTE]')
   const args = { requestId: request.requestId, routes: [{ messageId: 'initial-source', messageVersion: 1,
     units: [{ unitKey: 'work', summary: '排查问题', sourceRefs: [{ wholeMessage: true }], topics: [{ newTopicKey: 'work', title: '问题排查' }] }] }],
-  initialReplies: [{ messageId: 'initial-source', messageVersion: 1, unitKey: 'work', target: { newTopicKey: 'work' }, text: '我会先了解相关情况。',
+  initialReplySilences: [], initialReplies: [{ messageId: 'initial-source', messageVersion: 1, unitKey: 'work', target: { newTopicKey: 'work' }, text: '我会先了解相关情况。',
     replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }] }
   const result = await h.call('group_topic_route_submit', args)
   assert.equal(result.status, 'accepted')
@@ -3158,6 +3226,57 @@ test('一级初诊按真实来源和话题原子保存，不替换旧回复', as
   await h.store.projectTaskNotification({ groupId: 'g', outbound: { ...outbound, notificationState: 'prepared' } })
   await h.coordinator.schedule('g')
   assert.equal(h.envelope('[GROUP_TOPIC_DECISION]').topicId, draft.topicId)
+})
+
+test('一级必须逐话题明确回复或静默，遗漏可修订且静默仅留审计', async t => {
+  const h = await setup(t)
+  await ingest(h, 'disposition-source'); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const args = { requestId: request.requestId, initialReplies: [], initialReplySilences: [], routes: [{ messageId: 'disposition-source', messageVersion: 1,
+    units: [{ unitKey: 'work', summary: '排查问题', sourceRefs: [{ wholeMessage: true }], topics: [{ newTopicKey: 'work', title: '问题排查' }] }] }] }
+  const absent = await h.protocolCall('group_topic_route_submit', { requestId: args.requestId, routes: args.routes })
+  assert.equal(absent.status, 'invalid-arguments')
+  const missing = await h.rawCall('group_topic_route_submit', args)
+  assert.equal(missing.status, 'invalid-arguments')
+  assert.ok(missing.issues.some(issue => issue.code === 'topic_initial_disposition_required'))
+  assert.equal(h.store.getGroup('g').routeHistory.length, 0)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  const silence = { messageId: 'disposition-source', messageVersion: 1, unitKey: 'work', target: { newTopicKey: 'work' }, reason: '同事已负责，本次无需重复回复' }
+  const forged = await h.rawCall('group_topic_route_submit', { ...args, initialReplySilences: [{ ...silence, unitKey: 'other' }] })
+  assert.ok(forged.issues.some(issue => issue.code === 'topic_initial_silence_invalid'))
+  const duplicate = await h.rawCall('group_topic_route_submit', { ...args, initialReplySilences: [silence, silence] })
+  assert.ok(duplicate.issues.some(issue => issue.code === 'topic_initial_disposition_duplicate'))
+  const accepted = await h.call('group_topic_route_submit', { ...args, initialReplySilences: [silence] })
+  assert.equal(accepted.status, 'accepted')
+  const receipt = h.store.getGroup('g').routeHistory.find(item => item.routeId === args.requestId)
+  assert.equal(receipt.initialReplySilences[0].reason, silence.reason)
+  assert.equal(receipt.initialReplies, undefined)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
+  assert.equal(h.envelope('[GROUP_TOPIC_DECISION]').topicId, receipt.initialReplySilences[0].topicId)
+  assert.equal((await h.protocolCall('group_topic_route_submit', { requestId: args.requestId })).status, 'accepted')
+})
+
+test('同批多话题回复与静默分别覆盖，冲突不落账', async t => {
+  const h = await setup(t)
+  await ingest(h, 'multi-disposition'); await h.coordinator.schedule('g')
+  const request = h.envelope('[GROUP_TOPIC_ROUTE]')
+  const source = { messageId: 'multi-disposition', messageVersion: 1, unitKey: 'work' }
+  const args = { requestId: request.requestId, routes: [{ messageId: source.messageId, messageVersion: 1, replyTopic: { newTopicKey: 'one' },
+    units: [{ unitKey: 'work', summary: '两个事项', sourceRefs: [{ wholeMessage: true }], effectOwner: { newTopicKey: 'one' },
+      topics: [{ newTopicKey: 'one', title: '事项一', relationship: 'continuation', reason: '事项一' }, { newTopicKey: 'two', title: '事项二', relationship: 'affected', reason: '事项二' }] }] }],
+  initialReplies: [{ ...source, target: { newTopicKey: 'one' }, text: '我先了解事项一。', replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }],
+  initialReplySilences: [] }
+  const missing = await h.rawCall('group_topic_route_submit', args)
+  assert.ok(missing.issues.some(issue => issue.code === 'topic_initial_disposition_required'))
+  const silence = { ...source, target: { newTopicKey: 'two' }, reason: '事项二已由同事跟进' }
+  const conflict = await h.rawCall('group_topic_route_submit', { ...args, initialReplySilences: [silence, { ...silence, target: { newTopicKey: 'one' } }] })
+  assert.ok(conflict.issues.some(issue => issue.code === 'topic_initial_disposition_duplicate'))
+  assert.equal(h.store.getGroup('g').routeHistory.length, 0)
+  const result = await h.call('group_topic_route_submit', { ...args, initialReplySilences: [silence] })
+  assert.equal(result.status, 'accepted')
+  const receipt = h.store.getGroup('g').routeHistory.find(item => item.routeId === request.requestId)
+  assert.notEqual(receipt.initialReplies[0].topicId, receipt.initialReplySilences[0].topicId)
+  assert.equal(h.store.getGroup('g').outbox.length, 0)
 })
 
 test('显式归属复核超过十五条时拒绝，不截断来源', async t => {
@@ -3348,7 +3467,12 @@ test('引用关联等待期间关闭不会派发尚未准备的路由', async t 
   const h = await quotedReminderRouting(t, async () => { entered.resolve(); await release.promise; return quotedReminder })
   await ingest(h, 'quoted-close', { quotedMessage: { messageId: 'delivered-reminder', content: '17:57提醒' } })
   const scheduled = h.coordinator.schedule('g')
-  await entered.promise; await h.coordinator.close(); release.resolve(); await scheduled
+  await entered.promise
+  let closed = false
+  const closing = h.coordinator.close().then(() => { closed = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(closed, false)
+  release.resolve(); await Promise.all([closing, scheduled])
   assert.equal(h.envelope('[GROUP_TOPIC_ROUTE]'), undefined)
 })
 

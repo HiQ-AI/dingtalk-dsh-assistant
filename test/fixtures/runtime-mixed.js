@@ -113,7 +113,26 @@ async function setup(t, options = {}) {
     const requestId = args.requestId ?? args.requestIds?.[0]
     if (requestId) await until(() => h.owner(requestId, groupId))
     const owner = requestId ? h.owner(requestId, groupId) : h.resident(groupId)
-    const result = await owner.tools.get(name).execute(args, { agent: agent ?? owner.agent })
+    if (name === 'group_topic_route_submit' && !Object.hasOwn(args, 'initialReplies') && !Object.hasOwn(args, 'initialReplySilences')) {
+      const silences = new Map()
+      for (const route of args.routes ?? []) for (const unit of route.units ?? (route.topics ? [{ unitKey: 'whole-message', topics: route.topics }] : [])) {
+        for (const target of unit.topics ?? []) {
+          const key = target.topicId ? `topic:${target.topicId}` : `new:${target.newTopicKey}`
+          if (!silences.has(key)) silences.set(key, { messageId: route.messageId, messageVersion: route.messageVersion, unitKey: unit.unitKey,
+            target: target.topicId ? { topicId: target.topicId } : { newTopicKey: target.newTopicKey }, reason: '测试场景不需要一级回复' })
+        }
+      }
+      args = { ...args, initialReplies: [], initialReplySilences: [...silences.values()] }
+    }
+    let result = await owner.tools.get(name).execute(args, { agent: agent ?? owner.agent })
+    while (name === 'group_topic_route_submit' && result.status === 'context-required' && result.nextCall) {
+      let next = result.nextCall.arguments, page
+      do {
+        page = await owner.tools.get(result.nextCall.name).execute(next, { agent: agent ?? owner.agent })
+        next = { ...next, offset: page.nextOffset }
+      } while (page.hasMore)
+      result = await owner.tools.get(name).execute(args, { agent: agent ?? owner.agent })
+    }
     if (requestId && result.status === 'accepted') owner.completeStep()
     if (name !== 'group_topic_route_submit' || result.status !== 'accepted') return result
     const receipt = store.getGroup(groupId).routeHistory.find((item) => item.routeId === args.requestId)
@@ -157,7 +176,16 @@ async function route(h, topicByMessage = {}, groupId = 'g') {
   })
   const request = h.envelope('[GROUP_TOPIC_ROUTE]', groupId)
   assert.ok(request, 'Runtime 必须先建立归类请求')
-  return h.call('group_topic_route_submit', { requestId: request.requestId, routes: request.messages.map((message) => ({ messageId: message.messageId, messageVersion: message.messageVersion, topics: [topicByMessage[message.messageId] ? { topicId: topicByMessage[message.messageId] } : { newTopicKey: message.messageId, title: message.messageId }] })) }, groupId)
+  const owner = h.owner(request.requestId, groupId)
+  for (const topicId of new Set(Object.values(topicByMessage))) {
+    const candidate = [...(request.topics ?? []), ...(request.relatedTopics ?? []), ...(request.recalledTopics ?? [])].find(topic => topic.topicId === topicId)
+    if (candidate) await owner.tools.get('group_topic_context_get').execute({ topicId, revision: candidate.revision }, { agent: owner.agent })
+  }
+  const routes = request.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion,
+    topics: [topicByMessage[message.messageId] ? { topicId: topicByMessage[message.messageId] } : { newTopicKey: message.messageId, title: message.messageId }] }))
+  const result = await h.call('group_topic_route_submit', { requestId: request.requestId, routes }, groupId)
+  assert.equal(result.status, 'accepted', JSON.stringify(result))
+  return result
 }
 async function decide(h, request, decision = {}, groupId = 'g') {
   const value = { basisMessageIds: [request.messages.at(-1).messageId], actions: [], ...(decision.reply ? { atOpenDingTalkIds: [request.messages.at(-1).senderOpenDingTalkId].filter(Boolean), replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } : {}), ...(decision.reply === undefined ? { reason: '无需回复' } : {}), ...decision }
