@@ -1,8 +1,8 @@
 # 消息路由、常驻 Router 与任务执行
 
-> 状态：ACTIVE
+> 状态：DONE（SG8当前授权的本地实现与PR交付；未合并部署）
 > Goal ID：topic-routing-quality
-> 最近维护：2026-11-07T04:48:55+08:00
+> 最近维护：2026-11-07T04:51:55+08:00
 > 权威目标：D:/project/dingtalk-dsh-assistant/.claude/worktrees/topic-routing-quality/docs/acceptance/topic-routing-quality/goal.md
 
 ## 总目标
@@ -45,13 +45,13 @@ Router 在每轮结束且无排队输入时总结必要连续性，过滤可经�
 | SG5 | Lead合并部署、C产物、D核验、E证据 | 合并代码、双包、原生退出、功能及独立回读 | 第15轮部署/fixture交付已完成；本次PR #343双包更新与独立安装/健康核验通过，第16轮证据保留原14条BLOCKED和测试限制，不等同业务处理完成 | PR #342/#343 MERGED；round-15历史、round-16.md、matrix.csv |
 | SG6 | A不明确输入分流、C隔离联调、D独立审查 | 职责外或真实发问闭环；合法scope仅阻断相关Topic；问句精确回链；旧units/效果及错误边界保持 | LOCAL_DEPLOYED：产品1ca72d3c经PR #344合并0e52a2ff；此前暂停新部署并恢复原安装服务。本轮随PR #345合并双包共同安装，非重做一次SG6部署；隔离验证与真实新消息验收分开 | round-18.md/matrix.csv保留原暂停阶段；round-20.md/validation.json为实际安装与独立回读；无真实新消息语义/发问验收 |
 | SG7 | 一级初诊回复与有界同会话追加 | 一级初步回复、多Topic分开发且精确引用；原会话steer、每批≤15、溢出下批；二级与Task后续事实不冒领/不重复 | 历史LOCAL_DEPLOYED：PR #346修复产品8320096a经PR #346于2026-11-06T03:28:05Z合并c0cdff01并完成本机原生双包部署，独立回读health ok/告警0。新协议要求逐业务Topic显式初诊或理由静默，扫描优先活动通知，并排空已接纳调度/异步错误回调；最终Topic runtime223/223、路由Native44/44、新实际包2/2，既有摘要FAIL及历史短答7FAIL/未收敛保留。本轮LOCAL_VALIDATED / PR_OPEN：四项定向修复已完成；runtime226/226、decision20/20、角色/审阅4/4、sessions19/19、Native45/45、实际包smoke14/14及映射343通过，D未发现可确认阻断；代码7010297e、PR #347 OPEN/MERGEABLE，尚未合并部署。真实新消息语义、引用、steer/15条与60秒仍未验 | round-21.md/round-21/validation.json、matrix.csv；PR https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/346；新修复实际部署见round-22.md/validation.json；历史安装事实仍见round-20.md；本轮实现/失败修订/边界见round-23.md/round-23/validation.json |
-| SG8 | 轻量初筛、常驻 Router 与直接 Task | 当前产品合同、相关本地验证、独立审查及新PR | LOCAL_VERIFIED：ad606完整43/43 + 7dd时钟1/1 + 5d932非锚B1/1，最终Service preserve1/1；历史守恒23/23，映射345/5/0；最终154输入及104包内源码首尾核验，新三包smoke14/14。实现/本地验证/归档完成，待提交与新PR；不合并部署 | round-24.md；round-24/validation.json；matrix.csv |
+| SG8 | 轻量初筛、常驻 Router 与直接 Task | 当前产品合同、相关本地验证、独立审查及新PR | DONE_LOCAL_PR_OPEN：实现442347ff，PR #348已回读OPEN/MERGEABLE；ad606完整43/43+7dd时钟1/1+5d932非锚B1/1，Service preserve1/1；历史守恒23/23、映射345/5/0、新三包smoke14/14、154输入及104包内源码核验完成。未合并部署 | round-24.md；round-24/validation.json；matrix.csv；https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/348 |
 
 ## 当前检查点
 
 - 当前子目标：SG8
-- 最新收口：产品b31/15ea/sessionsf838/fixture9ae、topic-test5d932/service-test7df冻结，最后非锚B负例和新三包14/14已独立核。round-24/matrix已集中归档；旧包与中间JSON已按白名单自检清理，当前仅PR正文临时文件待写GitHub后清理。A/B/C/D/E均不再写或运行Native，保留原五会话。
-- 唯一下一步：Lead提交已测源码与归档，push前回读PR状态，创建新PR并独立回读正文/base/head/远端SHA/mergeable；回填交付状态后结束本轮。原ad606完整43/43和两项增量、Service preserve及新包smoke不重复跑。不合并#347、不部署、不触发CI、不tag、不推main、不真实外发。
+- 最新收口：SG8实现/本地验证/独立审查/归档及新PR完成；实现提交442347ffc1fc311df9bdc6e2da2d2985cc32e2d2，154已测输入与提交逐一核对一致。PR #348实际OPEN/MERGEABLE，main ← worktree-resident-router-direct-tasks；正文、head和远端分支已独立回读。最后仅回填交付与清理文档，不改产品或测试。A/B/C/D/E均已交回写权/Native，原五会话保留。 本任务临时三包/JSON/PR正文已白名单自检并独立确认清理，仅保留round-24最终证据和原历史报告/矩阵；未知stackdump未动。
+- 唯一下一步：当前SG8授权范围已交付，无待执行产品或验证动作。后续合并#347/#348、部署、CI、tag、生产时延/真实模型及真实外发须另行授权；本轮不继续这些动作，历史FAIL不改写。
 
 ### SG8阶段证据（历史过程，不作为当前执行授权）
 

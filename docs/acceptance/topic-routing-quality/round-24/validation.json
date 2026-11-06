@@ -3090,8 +3090,24 @@
     "packageTarballsRemoved": true,
     "obsoleteTemporaryJsonRemoved": true,
     "unknownFilesUntouched": true,
-    "prBodyStillNeeded": true,
+    "prBodyStillNeeded": false,
     "checkModeRun": true,
-    "finalEvidence": "round-24.md; round-24/validation.json; matrix.csv"
-  }
+    "finalEvidence": "round-24.md; round-24/validation.json; matrix.csv",
+    "prBodyRemovedAfterRemoteReadback": true,
+    "temporaryBucketRemoved": true
+  },
+  "testedCodeCommit": "442347ffc1fc311df9bdc6e2da2d2985cc32e2d2",
+  "commitBindingCheckedFiles": 154,
+  "prInitialReadback": {
+    "baseRefName": "main",
+    "headRefName": "worktree-resident-router-direct-tasks",
+    "headRefOid": "442347ffc1fc311df9bdc6e2da2d2985cc32e2d2",
+    "mergeable": "MERGEABLE",
+    "number": 348,
+    "state": "OPEN",
+    "title": "feat(router): 消息直达任务并接入常驻会话 Router",
+    "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/348",
+    "snapshotScope": "Created PR after code commit, before documentation-only closeout; final doc head is reported separately"
+  },
+  "prBodyNormalizedSha256": "9687170976c8ecc6ec4bb055f408b2c4ec5ae09cba016c7ccc43fbaa53eb2e13"
 }

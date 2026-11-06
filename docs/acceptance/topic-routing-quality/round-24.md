@@ -72,3 +72,7 @@ SG8 当前授权范围内的实现、定向验证、独立审查和最终三包 
 ## 证据保留
 
 本报告、matrix.csv及round-24/validation.json集中保存结果、实际版本、失败边界和必要摘要；宿主原日志以任务ID/SHA索引，不复制完整日志、凭据、私有对话或用户绝对目录。最终记录独立回读后只清理本任务docs/tmp中的过期JSON、实际tgz等中间产物；PR正文文件在写GitHub并回读后清理。旧round报告、矩阵历史、其他会话文件及未知stackdump保留。
+
+## Git与PR交付回读
+
+已测字节固定为实现提交 `442347ffc1fc311df9bdc6e2da2d2985cc32e2d2`，154输入的工作树SHA及Git规范化blob均与该提交独立核对一致，未重跑无变动测试。新PR [#348](https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/348) 实际回读为OPEN、MERGEABLE，`main ← worktree-resident-router-direct-tasks`，正文与同一已过门禁body-file规范化后完全相同；初始远端head为上述实现提交。之后只回填本轮交付/清理状态文档，最终文档提交SHA由交付回复报告，不循环回填自身SHA。未合并#347或#348，未部署、未触发CI。
