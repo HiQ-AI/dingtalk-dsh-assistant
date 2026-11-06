@@ -46,7 +46,7 @@ export function registerTopicRoleInstructions(agentCtx, { role, request, store }
       ? '本轮由已绑定Topic处理任务事实。只判断回复或沉默并更新摘要，不能调用任务动作、路由或把事实当新需求。默认输入是有界摘要和证据引用；只有影响决定的缺口才补读。无需重新总结执行会话，不复述内部标识或逐条日志。'
       : role === 'route'
         ? '一级根据已见Topic摘要和来源，为本批最终每个真实业务Topic明确选择初诊或静默，且每个Topic恰好一项。initialReplies与initialReplySilences两个数组都必须提交：初诊填initialReplies，静默填initialReplySilences并给出具体reason；只有无业务Topic时两者才都为空。两类条目均用messageId/messageVersion、unitKey和target绑定本批实际来源及其路由话题；多Topic分别引用各自原消息。同一Topic有多个来源时选择其真实关联来源，不重复提交。初诊只写非结论性的具体判断与限制，不套用泛泛确认，不代表任务已受理、执行或完成；确需助手反馈且已见来源和Topic摘要足以形成有信息量的初诊时应提交草稿，等待二级判断、Task尚未创建或不能给最终结论不能单独作为静默理由；闲聊、明确他人负责且无需助手参与等可说明理由静默，不据此推断任务授权；静默仅供审计，不发送、不阻塞也不约束二级决策。初诊由Host审阅并发送，不直接发群消息。route.replyTopic仍指定二级整条消息的回复归属，不限制一级各Topic初诊。'
-        : '接收与回复使用同一种Topic。跨Topic消息路由时，在route.replyTopic中从本条topics选一个现有/本批业务Topic负责整体回复，不新建回复专用Topic。Decision输入replyOwnership明确谁回复：其他Topic可执行本事项任务动作，使用reason说明由指定Topic统一回复，不各自发送确认。回复Topic结合整条原文说明本次接纳的事项及真实处理进度，不把其他Topic未处理说成已经执行；避免重复已发初诊，后续有真实新事实或实质结果仍可按原权限回复。' })
+        : '接收与回复使用同一种Topic。跨Topic消息路由时，在route.replyTopic中从本条topics选一个现有/本批业务Topic负责整体回复，不新建回复专用Topic。Decision输入replyOwnership明确谁回复：其他Topic可执行本事项任务动作，使用reason说明由指定Topic统一回复，不各自发送确认。回复Topic结合整条原文说明本次接纳的事项及真实处理进度，不把其他Topic未处理说成已经执行；避免重复已发初诊，后续有真实新事实或实质结果仍可按原权限回复。审阅候选的replyPhase为initial表示该回复是一级初诊，缺省表示阶段未知；初诊仅是初步理解，不代表Task已受理、执行或完成。需要后续回复时说明真实新增任务动作或事实，避免重复已有承诺，不因已有初诊省略必要的任务确认。' })
   agentCtx.systemPrompt.section({ name: 'dingtalk-task-continuation', order: 121, text: role === 'route' ? '先区分共同业务目标与独立交付；同一事项追加材料、截图、验收或返工优先关联原Topic，不因Task已完成或负责人变化另拆话题。批量跟进可查询group_task_list及group_task_context_get核对目标；目录仅为摘要，不继承授权。当前请求已读的同版本目录和材料可复用，hasMore按nextCall续读。候选摘要足以排除不同目标时不强读历史；需要原文时复制候选readCall.arguments，不猜topicId。' : `${taskContinuationInstructions}\n同一请求当前上下文中已读的Task目录可直接复用，不重复读同一查询第一页。group_task_list返回query、snapshotFingerprint和nextCall；续页照用nextCall，改变query从offset=0重新查询，当前目录指纹变化后重新核对。目录和本轮linkedTasks.snapshots均只有有界状态摘要；inlineDecisionContext.task 是首包内完整任务视图，可直接核对目标、授权和版本；没有完整视图或Host提示过期时，用group_task_context_get补读，不能把摘要当作完整任务合同。group_reply_review_get在固定决策/审阅会话中由Host绑定本请求，{}即可读取，不能填写别的requestIds。${role === 'decision' ? '本决策会话group_topic_context_get可用{}读取Host绑定的当前固定版本。' : '当前会话没有唯一当前Topic；候选摘要足以排除不同业务目标时直接路由，不因关键词相近强读历史。确需历史时原样复制候选readCall.arguments，不得传空参数，不从标题猜topicId。'}` })
   agentCtx.systemPrompt.section({ name: 'dingtalk-task-boundary', order: 123, text: `${taskBoundaryInstructions}${role === 'decision' ? '\n' + taskMatterInstructions : ''}` })
   if (role === 'decision' && request.trigger !== 'task-facts') agentCtx.systemPrompt.section({ name: 'dingtalk-task-fact-feedback', order: 125, text: taskFactFeedbackInstructions })
@@ -94,6 +94,31 @@ export function createTaskContextReadTool({ request, assert, store, readArchived
 }
 
 // Topic owns routing and decision receipts; this adapter only supplies native request sessions.
+export function validateReplyReview(review, candidates, { confirmationTaskIds = [] } = {}) {
+  if (candidates.length === 0 && review === undefined) return
+  if (review === undefined) throw new Error('group_reply_review_required')
+  const normalized = { ...review, reviewedOutboundIds: review.reviewedOutboundIds ?? [], sameMatterOutboundIds: review.sameMatterOutboundIds ?? [], replaceOutboundIds: review.replaceOutboundIds ?? [] }
+  for (const [field, ids] of Object.entries({ reviewed: normalized.reviewedOutboundIds, same_matter: normalized.sameMatterOutboundIds, replace: normalized.replaceOutboundIds })) {
+    if (new Set(ids).size !== ids.length) throw new Error(`group_reply_review_${field}_duplicate`)
+  }
+  const candidateIds = candidates.map(candidate => candidate.outboundId)
+  if (!sameStringSet(normalized.reviewedOutboundIds, candidateIds)) throw new Error('group_reply_review_stale')
+  const reviewed = new Set(normalized.reviewedOutboundIds)
+  if (normalized.sameMatterOutboundIds.some(outboundId => !reviewed.has(outboundId))) throw new Error('group_reply_review_same_matter_invalid')
+  const sameMatter = new Set(normalized.sameMatterOutboundIds)
+  if (normalized.replaceOutboundIds.some(outboundId => !sameMatter.has(outboundId))) throw new Error('group_reply_review_replace_invalid')
+  if (normalized.kind === 'substantive' && normalized.replaceOutboundIds.length > 0) throw new Error('group_reply_review_substantive_replace_forbidden')
+  if (normalized.kind === 'correction' && normalized.sameMatterOutboundIds.length === 0) throw new Error('group_reply_review_correction_target_required')
+  if (normalized.kind !== 'substantive' && !sameStringSet(normalized.replaceOutboundIds, normalized.sameMatterOutboundIds)) throw new Error('group_reply_review_replacement_incomplete')
+  if (normalized.kind === 'confirmation' && candidates.some(candidate => sameMatter.has(candidate.outboundId) && candidate.replyKind !== 'confirmation')) throw new Error('group_reply_review_confirmation_replace_kind_invalid')
+  if (normalized.kind === 'confirmation' && confirmationTaskIds.length > 0) {
+    const taskIds = new Set(confirmationTaskIds)
+    const required = candidates.filter(candidate => candidate.replyKind === 'confirmation' && candidate.taskIds.some(taskId => taskIds.has(taskId))).map(candidate => candidate.outboundId)
+    if (required.some(outboundId => !sameMatter.has(outboundId))) throw new Error('group_reply_review_same_task_confirmation_missing')
+  }
+  return normalized
+}
+
 export async function openTaskTopicCoordinator({ ctx, store, legacy, root, models, applyAction, appendOutbox, readFrozenReply, readPlatformTasks, readArchivedTask, readMentioned, validateReply, quotedReminderContext, taskFacts, onRouted = async () => {}, onInputSettled, onStage = async () => {}, onError = () => {} }) {
   const fixedTopics = readPlatformTasks ? createFixedTopicHandler({ ctx, store, legacy, root, models, appendOutbox, readTasks: readPlatformTasks, readMentioned, onSettled: groupId => onInputSettled?.(groupId), onError }) : null
   // The original Topic protocol is retained, but retired workflow prompt catalogs
@@ -185,43 +210,20 @@ export async function openTaskTopicCoordinator({ ctx, store, legacy, root, model
     const entry = sessions.identity({ session })
     if (!entry) return
     const key = String(session.id)
-    if (event.type === 'turn/start') turns.set(key, { spanId: `turn:${key}:${event.seq}`, stage: 'turn',
-      requestId: entry.request.requestId, sessionId: key, attempt: entry.request.attempt ?? 0,
-      startedAt: new Date(event.time).toISOString(), completedAt: null })
-    const stage = turns.get(key)
-    if (!stage) return
-    const value = { ...stage, ...(event.type === 'turn/end' ? { completedAt: new Date(event.time).toISOString() } : {}) }
-    timingTail = timingTail.then(() => onStage(entry.request, value)).catch(error => report(entry.request.groupId, error))
+    if (event.type === 'turn/start') {
+      const request = entry.request
+      const snapshot = { groupId: request.groupId, topicId: request.topicId, revision: request.revision,
+        ...(request.sourceSnapshot ? { sourceSnapshot: { ...request.sourceSnapshot } } : request.messages ? { messages: request.messages.map(({ messageId, messageVersion, version }) => ({ messageId, messageVersion, version })) } : {}) }
+      turns.set(key, { request: snapshot, stage: { spanId: `turn:${key}:${event.seq}`, stage: 'turn',
+        requestId: request.requestId, sessionId: key, attempt: request.attempt ?? 0,
+        startedAt: new Date(event.time).toISOString(), completedAt: null } })
+    }
+    const turn = turns.get(key)
+    if (!turn) return
+    const value = { ...turn.stage, ...(event.type === 'turn/end' ? { completedAt: new Date(event.time).toISOString() } : {}) }
+    timingTail = timingTail.then(() => onStage(turn.request, value)).catch(error => report(turn.request.groupId, error))
     if (event.type === 'turn/end') turns.delete(key)
   })
-  function validateReplyReview(review, candidates, { confirmationTaskIds = [] } = {}) {
-    if (candidates.length === 0 && review === undefined) return
-    if (review === undefined) throw new Error('group_reply_review_required')
-    const normalized = {
-      ...review,
-      reviewedOutboundIds: review.reviewedOutboundIds ?? [],
-      sameMatterOutboundIds: review.sameMatterOutboundIds ?? [],
-      replaceOutboundIds: review.replaceOutboundIds ?? [],
-    }
-    for (const [field, ids] of Object.entries({ reviewed: normalized.reviewedOutboundIds, same_matter: normalized.sameMatterOutboundIds, replace: normalized.replaceOutboundIds })) {
-      if (new Set(ids).size !== ids.length) throw new Error(`group_reply_review_${field}_duplicate`)
-    }
-    const candidateIds = candidates.map((candidate) => candidate.outboundId)
-    if (!sameStringSet(normalized.reviewedOutboundIds, candidateIds)) throw new Error('group_reply_review_stale')
-    const reviewed = new Set(normalized.reviewedOutboundIds)
-    if (normalized.sameMatterOutboundIds.some((outboundId) => !reviewed.has(outboundId))) throw new Error('group_reply_review_same_matter_invalid')
-    const sameMatter = new Set(normalized.sameMatterOutboundIds)
-    if (normalized.replaceOutboundIds.some((outboundId) => !sameMatter.has(outboundId))) throw new Error('group_reply_review_replace_invalid')
-    if (normalized.kind === 'substantive' && normalized.replaceOutboundIds.length > 0) throw new Error('group_reply_review_substantive_replace_forbidden')
-    if (normalized.kind === 'correction' && normalized.sameMatterOutboundIds.length === 0) throw new Error('group_reply_review_correction_target_required')
-    if (normalized.kind !== 'substantive' && !sameStringSet(normalized.replaceOutboundIds, normalized.sameMatterOutboundIds)) throw new Error('group_reply_review_replacement_incomplete')
-    if (normalized.kind === 'confirmation' && confirmationTaskIds.length > 0) {
-      const taskIds = new Set(confirmationTaskIds)
-      const required = candidates.filter((candidate) => candidate.replyKind === 'confirmation' && candidate.taskIds.some((taskId) => taskIds.has(taskId))).map((candidate) => candidate.outboundId)
-      if (required.some((outboundId) => !sameMatter.has(outboundId))) throw new Error('group_reply_review_same_task_confirmation_missing')
-    }
-    return normalized
-  }
   topics = createTopicCoordinator({ store, taskDecisionView, workflowPromptsEnabled: false, fixedTopicsEnabled: !!fixedTopics, quotedReminderContext, onInputSettled, taskFacts, readArchivedTask, readFrozenReply,
     getAgent: (groupId, request) => request ? sessions.get(groupId, request) : !closed && store.getGroup(groupId) ? presence : undefined,
     dispatchRequest: (request, message, options) => {

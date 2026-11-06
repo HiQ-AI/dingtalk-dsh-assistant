@@ -53,6 +53,44 @@ function jsonValues(value) {
 const message = (messageId, text) => ({ groupId: 'native-group', messageId, senderOpenDingTalkId: 'native-user', senderName: '真实用户', sourceKind: 'dingtalk', text,
   occurredAt: '2026-10-13T10:00:00Z', timestamp: '2026-10-13T10:00:00Z' })
 
+testRunner('原生确认审阅拒绝替换非确认回复并允许修正', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  let attempts = 0, baseline, checked = 0
+  const invalid = ['seed-substantive', 'seed-correction', 'seed-unknown']
+  const h = await extraHost(t, 'confirmation-kind-gate-', async (request, host) => {
+    const input = latestInput(request), values = modelToolValues(request)
+    if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) return topicTaskCalls(request)
+    if (!request.tools.some(tool => tool.name === 'group_decision_submit')) return topicTaskCalls(request)
+    const review = values.find(value => Array.isArray(value.candidates))
+    if (!review) return [call('group_reply_review_get', {})]
+    const candidates = review.candidates.map(item => item.outboundId)
+    for (const id of [...invalid, 'seed-confirmation']) assert.ok(candidates.includes(id), id)
+    const group = host.residentStore.getGroup('native-group')
+    const state = JSON.stringify({ decisions: group.topics.flatMap(topic => topic.decisions), outbox: group.outbox })
+    if (attempts > 0) {
+      assert.match(JSON.stringify(host.toolResults.at(-1)), /group_reply_review_confirmation_replace_kind_invalid/)
+      assert.equal(state, baseline, '拒绝不能写入决定或改变出箱')
+      checked++
+    } else baseline = state
+    const target = invalid[attempts] ?? 'seed-confirmation'
+    attempts++
+    return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
+      decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reply: '已记录核查请求。', replyToMessageId: input.messages.at(-1).messageId,
+        replyReview: { kind: 'confirmation', reviewedOutboundIds: candidates, sameMatterOutboundIds: [target], replaceOutboundIds: [target] } } })]
+  })
+  t.onCancel(() => t.diagnostic(JSON.stringify({ attempts, checked, requests: h.requests.length,
+    results: h.toolResults.slice(-6).map(item => ({ name: item.name, value: item.result.value ?? item.result.error })) })))
+  await t.beginBusiness()
+  for (const [id, kind] of [['seed-substantive', 'substantive'], ['seed-correction', 'correction'], ['seed-unknown', undefined], ['seed-confirmation', 'confirmation']]) {
+    await t.step(() => h.residentStore.appendOutbox({ groupId: 'native-group', outboundId: id, sourceMessageId: `fixture:${id}`, replyToMessageId: 'confirmation-gate', text: `历史回复 ${id}`, ...(kind ? { replyKind: kind } : {}) }))
+  }
+  await t.step(() => h.service.ingest(message('confirmation-gate', '请核查原事项。')))
+  await t.step(() => h.service.whenIdle())
+  assert.equal(checked, 3)
+  const results = h.toolResults.filter(item => item.name === 'group_decision_submit')
+  assert.equal(results.filter(item => JSON.stringify(item.result).includes('group_reply_review_confirmation_replace_kind_invalid')).length, 3)
+  assert.ok(results.some(item => JSON.stringify(item.result).includes('accepted')))
+}))
+
 testRunner('一级初诊沿原生出箱送达并在冷恢复后不重复发送', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
   assert.ok(available, reason)
   const root = await mkdtemp(join(tmpdir(), 'routing-initial-reply-'))
@@ -269,6 +307,15 @@ testRunner('一级运行中同会话实际消费新来源并拒绝旧批次提�
   assert.ok(results.some(item => JSON.stringify(item.result).includes('route-batch-stale')))
   assert.ok(results.some(item => JSON.stringify(item.result).includes('accepted')))
   for (const id of ['live-first', 'live-second']) assert.equal(host.residentStore.getGroup('native-group').messages.find(item => item.messageId === id).routingStatus, 'routed')
+  const sources = await t.step(() => host.query('source.list', { groupId: 'native-group' }))
+  const firstSource = sources.find(source => source.messageId === 'live-first')
+  const secondSource = sources.find(source => source.messageId === 'live-second')
+  const firstTurn = firstSource.stages.find(stage => stage.stage === 'turn' && stage.sessionId === sessionId)
+  assert.ok(firstTurn?.completedAt)
+  assert.equal(firstTurn.shared, false)
+  assert.ok(!(secondSource.stages ?? []).some(stage => stage.spanId === firstTurn.spanId), '晚到来源不能回填此前已开始的turn')
+  assert.ok((secondSource.stages ?? []).some(stage => stage.stage === 'ingress' && stage.completedAt))
+  assert.equal(host.service.listAlerts().some(item => item.id?.startsWith('timing:')), false)
   assert.equal(host.sent.length, 0)
 }))
 

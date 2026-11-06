@@ -45,6 +45,9 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
     timingTail = timingTail.then(() => onStage(request, stage)).catch(error => onError(Object.assign(error, { coordinationGroupId: request.groupId })))
     return timingTail
   }
+  const timingRequest = request => ({ ...request,
+    ...(request.sourceSnapshot ? { sourceSnapshot: { ...request.sourceSnapshot } } : {}),
+    ...(request.messages ? { messages: request.messages.map(message => ({ ...message })) } : {}) })
   const keyOf = request => `${request.groupId}:${request.requestId}`
   async function obtain(request) {
     const key = keyOf(request)
@@ -125,9 +128,11 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
     const groupId = request.groupId
     const queue = queues.get(groupId) ?? []
     queues.set(groupId, queue)
-    const job = { request, message, resolve, reject, queuedAt, spanId: `queue:${randomUUID()}`, inFlightRouteUpdate }
-    void reportStage(request, { spanId: job.spanId, stage: 'queue', requestId: request.requestId, attempt: request.attempt ?? 0,
-      startedAt: new Date(queuedAt).toISOString(), completedAt: null })
+    const stageRequest = timingRequest(request)
+    const stage = { spanId: `queue:${randomUUID()}`, stage: 'queue', requestId: request.requestId, attempt: request.attempt ?? 0,
+      startedAt: new Date(queuedAt).toISOString(), completedAt: null }
+    const job = { request, message, resolve, reject, queuedAt, stageRequest, stage, inFlightRouteUpdate }
+    void reportStage(stageRequest, stage)
     if (coordinationRole(request) === 'route') {
       const index = queue.findIndex(item => coordinationRole(item.request) !== 'route')
       queue.splice(index < 0 ? queue.length : index, 0, job)
@@ -142,7 +147,7 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
           const fairnessTurn = (routeBursts.get(groupId) ?? 0) >= 2 && nonRouteIndex >= 0
           // 路由的公平续行可能在队尾，不能再假定队首必为路由，否则会反复让位而空转。
           const routeIndex = queue.findIndex(item => coordinationRole(item.request) === 'route')
-          const { request, message, resolve, reject, queuedAt, spanId } = queue.splice(fairnessTurn ? nonRouteIndex : routeIndex < 0 ? 0 : routeIndex, 1)[0]
+          const { request, message, resolve, reject, queuedAt, stageRequest, stage } = queue.splice(fairnessTurn ? nonRouteIndex : routeIndex < 0 ? 0 : routeIndex, 1)[0]
           let entry
           try {
             if (closed || !isCurrent(request)) throw new Error('coordination_request_inactive')
@@ -150,7 +155,7 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
             if (closed || !entry.active || !isCurrent(request)) throw new Error('coordination_request_inactive')
             if (!fairnessTurn && entry.role !== 'route' && queue.some(item => coordinationRole(item.request) === 'route')) {
               const index = queue.findIndex(item => coordinationRole(item.request) !== 'route')
-              queue.splice(index < 0 ? queue.length : index, 0, { request, message, resolve, reject, queuedAt, spanId })
+              queue.splice(index < 0 ? queue.length : index, 0, { request, message, resolve, reject, queuedAt, stageRequest, stage })
               continue
             }
             entry.yieldRequested = false
@@ -166,8 +171,7 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
             const released = new Promise(done => { release = done })
             entry.release = release
             active.set(groupId, entry)
-            await reportStage(request, { spanId, stage: 'queue', requestId: request.requestId,
-              attempt: request.attempt ?? 0, startedAt: new Date(queuedAt).toISOString(), completedAt: new Date().toISOString() })
+            await reportStage(stageRequest, { ...stage, completedAt: new Date().toISOString() })
             const agent = entry.handle.agent
             const exists = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].some(item => item.id === message.id)
               || agent.session.snapshotEvents().some(event => event.type === 'user/message' && event.data?.id === message.id)
@@ -180,8 +184,7 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
               const update = queue[index]
               if (!update.inFlightRouteUpdate || update.request !== request || !entry.active || !isCurrent(request) || entry.yieldRequested || request.routingPaused) { index++; continue }
               queue.splice(index, 1)
-              void reportStage(request, { spanId: update.spanId, stage: 'queue', requestId: request.requestId,
-                attempt: request.attempt ?? 0, startedAt: new Date(update.queuedAt).toISOString(), completedAt: new Date().toISOString() })
+              void reportStage(update.stageRequest, { ...update.stage, completedAt: new Date().toISOString() })
               dispatch(request, update.message, { inFlightRouteUpdate: true }).then(update.resolve, update.reject)
             }
             resolve(agent)
@@ -190,10 +193,11 @@ export function createCoordinationSessions({ create, isCurrent, onError, onStage
             if (entry.sliceYielded && !entry.request.routingPaused && !closed && entry.active && isCurrent(request)
               && !queue.some(item => keyOf(item.request) === keyOf(request))) {
               // 续行仍排队获同群槽；steer 仅在下次获槽后调用，不并发唤醒旧会话。
-              const queuedAt = Date.now(), spanId = `queue:${randomUUID()}`
-              void reportStage(request, { spanId, stage: 'queue', requestId: request.requestId, attempt: request.attempt ?? 0,
-                startedAt: new Date(queuedAt).toISOString(), completedAt: null })
-              queue.push({ request, message: createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '继续当前协调请求，读取已有工具结果并按当前请求约束提交。' }] }), resolve() {}, reject() {}, queuedAt, spanId })
+              const queuedAt = Date.now(), stageRequest = timingRequest(request)
+              const stage = { spanId: `queue:${randomUUID()}`, stage: 'queue', requestId: request.requestId, attempt: request.attempt ?? 0,
+                startedAt: new Date(queuedAt).toISOString(), completedAt: null }
+              void reportStage(stageRequest, stage)
+              queue.push({ request, message: createUserMessage({ source: { kind: 'coordinator' }, content: [{ type: 'text', text: '继续当前协调请求，读取已有工具结果并按当前请求约束提交。' }] }), resolve() {}, reject() {}, queuedAt, stageRequest, stage })
             }
             if (!queue.some(item => keyOf(item.request) === keyOf(request))) settle(entry)
           } catch (error) { settle(entry ?? entries.get(keyOf(request))); reject(error); if (error.message !== 'coordination_request_inactive') onError(Object.assign(error, { coordinationGroupId: groupId })) }

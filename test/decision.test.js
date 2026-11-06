@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { blockTaskDecisionForUnavailableMedia, buildReplyReviewCandidates, isDirectedToOtherParticipants, isExplicitAgentDirection, groupDecisionSchema, REPLY_REVIEW_CANDIDATE_LIMIT, REPLY_REVIEW_MAX_CHARS, TOPIC_TITLE_MAX_CHARS, groupDecisionSubmissionSchema, topicRouteSubmissionSchema, validateTaskDispatchAssessment } from '../packages/dingtalk-dsh-assistant/decision.js'
+import { compactReplyReviewCandidates, blockTaskDecisionForUnavailableMedia, buildReplyReviewCandidates, isDirectedToOtherParticipants, isExplicitAgentDirection, groupDecisionSchema, REPLY_REVIEW_CANDIDATE_LIMIT, REPLY_REVIEW_MAX_CHARS, TOPIC_TITLE_MAX_CHARS, groupDecisionSubmissionSchema, topicRouteSubmissionSchema, validateTaskDispatchAssessment } from '../packages/dingtalk-dsh-assistant/decision.js'
+
+test('审阅候选只按真实路由回执标识初诊阶段并保留紧凑投影', () => {
+  const group = { messages: [], topics: [], routeHistory: [{ initialReplies: [{ outboundId: 'initial' }] }],
+    outbox: [{ outboundId: 'initial', sourceMessageId: 's1', status: 'sent', text: '初步回复' },
+      { outboundId: 'unknown', sourceMessageId: 's2', status: 'sent', text: '初步回复' }] }
+  const candidates = buildReplyReviewCandidates({ group })
+  assert.equal(candidates.find(item => item.outboundId === 'initial').replyPhase, 'initial')
+  assert.equal(Object.hasOwn(candidates.find(item => item.outboundId === 'unknown'), 'replyPhase'), false)
+  assert.deepEqual(compactReplyReviewCandidates(candidates).candidates.map(item => [item.outboundId, item.replyPhase]),
+    candidates.map(item => [item.outboundId, item.replyPhase]))
+})
 
 const topicRefs = [{ topicId: 'topic-a', revision: 2 }]
 const executionVersion = { inputVersion: 1, runSequence: 1 }
@@ -12,7 +23,10 @@ test('派发核对绑定来源事项与当前启用流程版本', () => {
     dispatchAssessment: { businessObject: '流属性', agentDeliverable: '配置与核验', externalFollowup: ['测试同事复测'], sourceUnitRefs: basisUnitRefs,
       workflowRefs: [{ id: 'workflow-uat', revision: 3 }], workflowReason: '涉及 UAT 配置验证' } }
   const prompts = [{ id: 'workflow-uat', revision: 3, enabled: true }]
-  assert.deepEqual(groupDecisionSchema.parse({ basisMessageIds: ['m1'], actions: [action], reply: '开始' }).actions[0], action)
+  const { workflowRefs, workflowReason, ...currentAssessment } = action.dispatchAssessment
+  const currentAction = { ...action, dispatchAssessment: currentAssessment }
+  assert.deepEqual(groupDecisionSchema.parse({ basisMessageIds: ['m1'], actions: [currentAction], reply: '开始' }).actions[0], currentAction)
+  assert.throws(() => groupDecisionSchema.parse({ basisMessageIds: ['m1'], actions: [action], reply: '开始' }))
   assert.doesNotThrow(() => validateTaskDispatchAssessment(action, { requiresAssessment: true, currentPrompts: prompts }))
   assert.throws(() => validateTaskDispatchAssessment({ ...action, dispatchAssessment: { ...action.dispatchAssessment, sourceUnitRefs: [{ unitId: 'unit-method-select', unitRevision: 1 }] } }, { requiresAssessment: true, currentPrompts: prompts }), /task_dispatch_source_units_invalid/)
   assert.throws(() => validateTaskDispatchAssessment(action, { requiresAssessment: true, currentPrompts: [{ ...prompts[0], revision: 4 }] }), /task_dispatch_workflow_refs_invalid/)
@@ -63,14 +77,15 @@ test('归类可新建、追加或多归属，空归属必须有原因', () => {
     { topicId: 'topic-a', relationship: 'continuation', reason: '延续当前讨论目标' },
     { newTopicKey: 'local-b', title: '第二个话题', relationship: 'affected', reason: '同时改变第二事项范围' },
   ], effectOwner: { newTopicKey: 'local-b' } }
-  assert.deepEqual(topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [route] }).routes, [{ ...route, ignoredRefs: [] }])
-  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, effectOwner: undefined }] }))
-  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: route.topics.map(({ relationship: _relationship, reason: _reason, ...topic }) => topic) }] }))
-  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, effectOwner: { topicId: 'topic-other' } }] }))
-  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [] }] }))
-  assert.equal(topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [], effectOwner: undefined, reason: '无可延续讨论的噪声' }] }).routes[0].topics.length, 0)
-  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [{ topicId: 'topic-a', newTopicKey: 'invalid', title: '冲突' }] }] }))
-  assert.throws(() => topicRouteSubmissionSchema.parse({ requestId: 'route-a', routes: [{ ...route, topics: [{ newTopicKey: 'too-long', title: '长'.repeat(TOPIC_TITLE_MAX_CHARS + 1) }] }] }))
+  const submission = { requestId: 'route-a', initialReplies: [], initialReplySilences: [] }
+  assert.deepEqual(topicRouteSubmissionSchema.parse({ ...submission, routes: [route] }).routes, [{ ...route, ignoredRefs: [] }])
+  assert.throws(() => topicRouteSubmissionSchema.parse({ ...submission, routes: [{ ...route, effectOwner: undefined }] }))
+  assert.throws(() => topicRouteSubmissionSchema.parse({ ...submission, routes: [{ ...route, topics: route.topics.map(({ relationship: _relationship, reason: _reason, ...topic }) => topic) }] }))
+  assert.throws(() => topicRouteSubmissionSchema.parse({ ...submission, routes: [{ ...route, effectOwner: { topicId: 'topic-other' } }] }))
+  assert.throws(() => topicRouteSubmissionSchema.parse({ ...submission, routes: [{ ...route, topics: [] }] }))
+  assert.equal(topicRouteSubmissionSchema.parse({ ...submission, routes: [{ ...route, topics: [], effectOwner: undefined, reason: '无可延续讨论的噪声' }] }).routes[0].topics.length, 0)
+  assert.throws(() => topicRouteSubmissionSchema.parse({ ...submission, routes: [{ ...route, topics: [{ topicId: 'topic-a', newTopicKey: 'invalid', title: '冲突' }] }] }))
+  assert.throws(() => topicRouteSubmissionSchema.parse({ ...submission, routes: [{ ...route, topics: [{ newTopicKey: 'too-long', title: '长'.repeat(TOPIC_TITLE_MAX_CHARS + 1) }] }] }))
 })
 
 test('显式任务指向识别配置名称、别名、DWS登录人或cc指令', () => {
