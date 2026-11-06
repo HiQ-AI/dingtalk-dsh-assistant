@@ -995,11 +995,11 @@ export async function openResidentStore(storageDomain) {
       })
       return retired
     }),
-    routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes, expectedRoutingEpochs = [], recoveryBoundary, initialReplies = [], preflight, audit }) => serialize(groupId, async () => {
+    routeMessages: ({ groupId, routeId, routingRevision, requireAllPending, routes, expectedRoutingEpochs = [], recoveryBoundary, initialReplies = [], initialReplySilences, preflight, audit }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       if (!routeId || !Array.isArray(routes) || routes.length === 0) throw new Error('topic_routes_invalid')
-      const requestFingerprint = fingerprint({ routingRevision, routes, ...(recoveryBoundary?.length ? { recoveryBoundary } : {}), ...(initialReplies.length ? { initialReplies } : {}), ...(audit ? { audit } : {}), ...(requireAllPending === true ? { requireAllPending: true } : {}) })
+      const requestFingerprint = fingerprint({ routingRevision, routes, ...(recoveryBoundary?.length ? { recoveryBoundary } : {}), ...(initialReplies.length ? { initialReplies } : {}), ...(initialReplySilences?.length ? { initialReplySilences } : {}), ...(audit ? { audit } : {}), ...(requireAllPending === true ? { requireAllPending: true } : {}) })
       let receipt
       const group = await groups.update(entry[0], (latest) => {
         const previous = latest.routeHistory.find((item) => item.routeId === routeId)
@@ -1111,8 +1111,30 @@ export async function openResidentStore(storageDomain) {
             unitRef: { unitId: unit.unitId, unitRevision: unit.unitRevision }, text: reply.text, replyReview: reply.replyReview,
             reviewFingerprint: reply.reviewFingerprint, reviewMessageIds: reply.reviewMessageIds, reviewMessageVersions: reply.reviewMessageVersions }
         })
+        const resolvedSilences = (initialReplySilences ?? []).map((silence, index) => {
+          const source = latest.messages.find(message => message.messageId === silence.messageId)
+          const route = settledRoutes.find(item => item.messageId === silence.messageId && item.messageVersion === silence.messageVersion)
+          const unit = unitsByMessage.get(silence.messageId)?.find(item => item.unitKey === silence.unitKey)
+          const target = silence.target?.topicId ?? topicIdsByKey[silence.target?.newTopicKey]
+          const topic = topics.find(item => item.topicId === target && !item.mergedInto)
+          if (!source || source.messageVersion !== silence.messageVersion || !route || !unit || unit.fixedTopic || !topic
+            || Boolean(silence.target?.topicId) === Boolean(silence.target?.newTopicKey)
+            || !unit.topics.some(ref => (ref.topicId ?? topicIdsByKey[ref.newTopicKey]) === target) || !silence.reason?.trim()) {
+            throw Object.assign(new Error('topic_initial_silence_invalid'), { issues: [{ field: `initialReplySilences[${index}]`, code: 'topic_initial_silence_invalid', message: '静默必须绑定本批真实来源、事项和话题，并说明理由' }] })
+          }
+          return { topicId: target, sourceRef: { messageId: source.messageId, messageVersion: source.messageVersion },
+            unitRef: { unitId: unit.unitId, unitRevision: unit.unitRevision }, reason: silence.reason.trim() }
+        })
         if (new Set(resolvedReplies.map(reply => reply.topicId)).size !== resolvedReplies.length) throw new Error('topic_initial_reply_duplicate')
-        receipt = { routeId, fingerprint: requestFingerprint, routingRevision: latest.routingRevision + 1, topicIdsByKey, ...(currentBoundary.length ? { recoveryBoundary: currentBoundary } : {}), ...(resolvedReplies.length ? { initialReplies: resolvedReplies } : {}), ...(audit ? { audit } : {}), createdAt: new Date().toISOString() }
+        const dispositions = [...resolvedReplies, ...resolvedSilences]
+        if (new Set(dispositions.map(item => item.topicId)).size !== dispositions.length) throw Object.assign(new Error('topic_initial_disposition_duplicate'), { issues: [{ field: 'initialReplies/initialReplySilences', code: 'topic_initial_disposition_duplicate', message: '每个话题只能选择一次回复或静默' }] })
+        if (initialReplySilences !== undefined) {
+          const expectedTopics = new Set(settledRoutes.flatMap(route => unitsByMessage.get(route.messageId)
+            .filter(unit => unit.dispatchOwner !== 'coordination').flatMap(unit => unit.topics.map(ref => ref.topicId ?? topicIdsByKey[ref.newTopicKey]))))
+          const missing = [...expectedTopics].filter(topicId => !dispositions.some(item => item.topicId === topicId))
+          if (missing.length) throw Object.assign(new Error('topic_initial_disposition_required'), { issues: missing.map(topicId => ({ field: 'initialReplies/initialReplySilences', code: 'topic_initial_disposition_required', message: `话题 ${topicId} 需选择回复或说明静默理由` })) })
+        }
+        receipt = { routeId, fingerprint: requestFingerprint, routingRevision: latest.routingRevision + 1, topicIdsByKey, ...(currentBoundary.length ? { recoveryBoundary: currentBoundary } : {}), ...(resolvedReplies.length ? { initialReplies: resolvedReplies } : {}), ...(resolvedSilences.length ? { initialReplySilences: resolvedSilences } : {}), ...(audit ? { audit } : {}), createdAt: new Date().toISOString() }
         const deferredByMessage = new Map(routes.filter(route => route.deferred).map(route => [route.messageId, route.deferred]))
         const routedMessages = latest.messages.map((message) => {
           const deferred = deferredByMessage.get(message.messageId)

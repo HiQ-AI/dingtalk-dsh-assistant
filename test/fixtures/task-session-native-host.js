@@ -292,6 +292,18 @@ export function* topicSummaryResponse(request, audit) {
   return true
 }
 
+export function scriptedRouteSilences(routes, reason) {
+  const seen = new Set(), silences = []
+  for (const route of routes) for (const unit of route.units ?? (route.topics ? [{ unitKey: 'whole-message', topics: route.topics }] : [])) for (const topic of unit.topics ?? []) {
+    const target = topic.topicId ? { topicId: topic.topicId } : { newTopicKey: topic.newTopicKey }
+    const key = JSON.stringify(target)
+    if (seen.has(key)) continue
+    seen.add(key)
+    silences.push({ messageId: route.messageId, messageVersion: route.messageVersion, unitKey: unit.unitKey, target, reason })
+  }
+  return silences
+}
+
 // Script model decisions only; routing, validation and durable topic state remain real.
 export function topicTaskCalls(request, { title = '原消息交办', objective } = {}) {
   const input = latestInput(request), names = request.tools.map(tool => tool.name)
@@ -309,10 +321,14 @@ export function topicTaskCalls(request, { title = '原消息交办', objective }
   if (input.requestId?.startsWith('coord-summary-')) return [{ name: 'group_topic_summary_submit', args: {
     requestId: input.requestId, topicId: input.topicId, summary: title,
   } }]
-  if (names.includes('group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, ...(input.batchRevision !== undefined ? { batchRevision: input.batchRevision } : {}), routes: input.messages.map(message => ({
-    messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
-    units: [{ unitKey: 'request', summary: title, sourceRefs: [{ quote: message.text }], topics: [{ newTopicKey: message.messageId, title, reason: '当前消息是新的交付事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '当前测试消息是独立交付事项' })) }] }],
-  })) } }]
+  if (names.includes('group_topic_route_submit')) {
+    const routes = input.messages.map(message => ({
+      messageId: message.messageId, messageVersion: message.messageVersion, ignoredRefs: [],
+      units: [{ unitKey: 'request', summary: title, sourceRefs: [{ quote: message.text }], topics: [{ newTopicKey: message.messageId, title, reason: '当前消息是新的交付事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '当前测试消息是独立交付事项' })) }] }],
+    }))
+    return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, ...(input.batchRevision !== undefined ? { batchRevision: input.batchRevision } : {}), routes,
+      initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '测试消息由后续任务决策处理，不额外发送初诊。') } }]
+  }
   if (names.includes('group_decision_submit')) {
     const basisUnitRefs = input.messages.map(({ unitId, unitRevision }) => ({ unitId, unitRevision }))
     const text = objective ?? input.messages.map(message => message.text).join('\n')

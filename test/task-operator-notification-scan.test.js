@@ -11,6 +11,7 @@ for (const scenario of ['stale-snapshot', 'late-readback-error', 'recall-error']
   const root = await mkdtemp(join(tmpdir(), 'notification-delivered-scan-'))
   const entered = Promise.withResolvers(), release = Promise.withResolvers()
   let service, sends = 0, reads = 0, armed = false
+  const group = { outbox: [] }
   const row = { id: 'notice', kind: scenario === 'recall-error' ? 'question' : 'status',
     state: scenario === 'stale-snapshot' ? 'prepared' : scenario === 'recall-error' ? 'delivered' : 'unknown',
     payload: { conversationId: 'group', text: '核查完成', ...(scenario === 'recall-error' ? { audience: 'operator', humanRequestId: 'request' } : {}) },
@@ -43,7 +44,8 @@ for (const scenario of ['stale-snapshot', 'late-readback-error', 'recall-error']
   service = await openTaskSessionService({ ctx: { agents: { get() {} }, sessions: { get() {} } },
     config: { dbPath: join(root, 'unused.sqlite'), workspaceDir: root, instanceId: 'delivered-scan' },
     legacy: { getAgentConfig: () => ({ workspaceDir: root }) }, store,
-    residentStore: { getGroup() {}, listGroups: () => [], async projectTaskNotification({ outbound }) {
+    residentStore: { getGroup() { return scenario === 'late-readback-error' ? group : undefined }, listGroups: () => [], async projectTaskNotification({ outbound }) {
+      if (scenario === 'late-readback-error') group.outbox = [structuredClone(Object.fromEntries(Object.entries(outbound).filter(([, value]) => value !== undefined)))]
       if (armed && outbound.notificationState === 'starting') {
         armed = false; release.resolve()
         await waitUntil(() => row.state === 'delivered', '原发送完成')
@@ -233,7 +235,7 @@ for (const scenario of ['prepared', 'unknown', 'starting', 'send-pending']) test
   const root = await mkdtemp(join(tmpdir(), 'split-notification-'))
   const sendEntered = Promise.withResolvers(), sendRelease = Promise.withResolvers(), entered = Promise.withResolvers(), release = Promise.withResolvers(), sentB = Promise.withResolvers()
   let service
-  const sends = [], reads = []
+  const sends = [], reads = [], debug = []
   const rows = ['a', 'b'].map(id => ({ id, kind: 'status', state: id === 'a' ? initialState : 'prepared', payload: { conversationId: id, text: id } }))
   t.after(async () => { sendRelease.resolve(); release.resolve(); await service?.close(); await rm(root, { recursive: true, force: true }) })
   const store = {
@@ -254,7 +256,7 @@ for (const scenario of ['prepared', 'unknown', 'starting', 'send-pending']) test
     },
   }
   const noop = async () => {}
-  service = await openTaskSessionService({ ctx: { agents: { get() {} }, sessions: { get() {} } },
+  service = await openTaskSessionService({ ctx: { agents: { get() {} }, sessions: { get() {} }, logger: { debug: message => debug.push(message) } },
     config: { dbPath: join(root, 'unused.sqlite'), workspaceDir: root, instanceId: 'split' },
     legacy: { getAgentConfig: () => ({ workspaceDir: root }) }, residentStore: { getGroup() {}, projectTaskNotification: noop, listGroups: () => [] }, store,
     persistence: { register: noop, close: noop }, taskSessions: { close: noop }, executionSessions: { close: noop },
@@ -279,4 +281,7 @@ for (const scenario of ['prepared', 'unknown', 'starting', 'send-pending']) test
   release.resolve()
   await idle; await service.whenIdle()
   assert.ok(rows.every(row => row.state === 'delivered'))
+  assert.ok(debug.some(message => message.startsWith('notification scan ') && JSON.parse(message.slice('notification scan '.length)).notificationId === 'a'))
+  assert.ok(debug.some(message => message.startsWith('notification transport ') && JSON.parse(message.slice('notification transport '.length)).phase === 'readback'))
+  assert.ok(debug.every(message => !message.includes('conversationId') && !message.includes('payload')))
 })

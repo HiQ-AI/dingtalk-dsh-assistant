@@ -862,9 +862,9 @@
         "sha256": "40813b19955082ab93708dfb5ec88703f602c23a2c0601fb1556b0fbdbb032a2",
         "review": {
           "fromSha256": "40813b19955082ab93708dfb5ec88703f602c23a2c0601fb1556b0fbdbb032a2",
-          "sha256": "3c06c6b882e0d9249d753d8df548ffa3892bb72b55c97e25cd2c112a39399511",
+          "sha256": "1a70a4e2d0d67aa65c5733eefab783d9a8b990fe248f46e8913dc8655f7f6584",
           "basisCommit": "fa14be0f5f571d0740081c65da372c5456220545",
-          "reason": "复审共享合成模型decide与statusReply：仅根据本测试声明的依据作者填写显式接收人；原helper的控制、回执、等待及全部断言不变。原fixture摘要与复审前fa14be0继续固定，历史相关路径单独验证。",
+          "reason": "保留此前对共享合成模型decide与statusReply显式接收人的复审；本轮路由提交夹具按本批真实来源及话题填入初诊静默双数组，按已见版本真实读取选定候选，沿Host返回的nextCall真实续读并检查提交结果，原注册、分类和业务断言不变。原fixture摘要与复审前fa14be0继续固定，历史相关路径单独验证。",
           "evidence": [
             "docs/ops/release-230-test-recovery.md",
             "test/runtime.test.js",

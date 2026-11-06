@@ -100,7 +100,11 @@ export const topicRouteSubmissionSchema = z.strictObject({
   initialReplies: z.array(z.strictObject({
     messageId: z.string().min(1), messageVersion: z.number().int().positive(), unitKey: z.string().min(1),
     target: topicRouteOwnerSchema, text: z.string().trim().min(1).max(2000), replyReview: replyReviewSchema,
-  })).optional(),
+  })),
+  initialReplySilences: z.array(z.strictObject({
+    messageId: z.string().min(1), messageVersion: z.number().int().positive(), unitKey: z.string().min(1),
+    target: topicRouteOwnerSchema, reason: z.string().trim().min(1).max(2000),
+  })),
   routes: z.array(z.strictObject({
     messageId: z.string().min(1), messageVersion: z.number().int().positive(),
     replyTopic: topicRouteOwnerSchema.optional(),
@@ -149,7 +153,7 @@ export const topicRouteSubmissionJsonSchema = {
   type: 'object', additionalProperties: false,
   properties: {
     requestId: stringJsonSchema,
-    batchRevision: { type: 'integer', minimum: 0, description: '追加消息后的当前批次版本，必须与最近一次批次更新一致。' },
+    batchRevision: { type: 'integer', description: '追加消息后的当前批次版本，必须与最近一次批次更新一致。' },
     initialReplies: { type: 'array', description: '按真实来源和话题分别提交非结论性初诊草稿；不得执行任务或直接发送。', items: { type: 'object', additionalProperties: false, properties: {
       messageId: stringJsonSchema, messageVersion: { type: 'integer' }, unitKey: stringJsonSchema,
       target: { oneOf: [
@@ -157,11 +161,18 @@ export const topicRouteSubmissionJsonSchema = {
         { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema }, required: ['newTopicKey'] },
       ] }, text: stringJsonSchema, replyReview: replyReviewJsonSchema,
     }, required: ['messageId', 'messageVersion', 'unitKey', 'target', 'text', 'replyReview'] } },
+    initialReplySilences: { type: 'array', description: '逐话题说明本次初诊静默原因。', items: { type: 'object', additionalProperties: false, properties: {
+      messageId: stringJsonSchema, messageVersion: { type: 'integer' }, unitKey: stringJsonSchema,
+      target: { oneOf: [
+        { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
+        { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema }, required: ['newTopicKey'] },
+      ] }, reason: stringJsonSchema,
+    }, required: ['messageId', 'messageVersion', 'unitKey', 'target', 'reason'] } },
     routes: { type: 'array', items: {
       type: 'object', additionalProperties: false,
       properties: {
         messageId: stringJsonSchema, messageVersion: { type: 'integer' },
-        deferred: { type: 'object', additionalProperties: false, properties: { reason: stringJsonSchema, scope: { type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, revision: { type: 'integer', minimum: 0 } }, required: ['topicId', 'revision'] } }, clarification: { type: 'object', additionalProperties: false, properties: { question: stringJsonSchema, assignmentQuote: stringJsonSchema, replyReview: replyReviewJsonSchema }, required: ['question', 'assignmentQuote', 'replyReview'] } }, required: ['reason'] },
+        deferred: { type: 'object', additionalProperties: false, properties: { reason: stringJsonSchema, scope: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema, revision: { type: 'integer' } }, required: ['topicId', 'revision'] } }, clarification: { type: 'object', additionalProperties: false, properties: { question: stringJsonSchema, assignmentQuote: stringJsonSchema, replyReview: replyReviewJsonSchema }, required: ['question', 'assignmentQuote', 'replyReview'] } }, required: ['reason'] },
         replyTopic: { oneOf: [
           { type: 'object', additionalProperties: false, properties: { topicId: stringJsonSchema }, required: ['topicId'] },
           { type: 'object', additionalProperties: false, properties: { newTopicKey: stringJsonSchema }, required: ['newTopicKey'] },
@@ -187,7 +198,7 @@ export const topicRouteSubmissionJsonSchema = {
         }, required: ['unitKey', 'summary', 'replacesUnitIds', 'sourceRefs', 'topics'] } }, reason: stringJsonSchema,
       }, required: ['messageId', 'messageVersion'],
     } },
-  }, required: ['requestId', 'routes'],
+  }, required: ['requestId', 'routes', 'initialReplies', 'initialReplySilences'],
 }
 export const compactTopicRouteSubmissionJsonSchema = structuredClone(topicRouteSubmissionJsonSchema)
 compactTopicRouteSubmissionJsonSchema.properties.newTopics = {

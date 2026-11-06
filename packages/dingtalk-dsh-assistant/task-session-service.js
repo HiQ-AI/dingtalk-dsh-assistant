@@ -10,6 +10,7 @@ import { referencesIsolatedPostgres } from './native-postgres-wrapper.js'
 import { hasRestartIsolation, operationBlocksRecovery, verifyRestartIsolation, readAuditedRestartDrain } from './native-restart-isolation.js'
 import { safeNotificationDetail } from './notification-delivery.js'
 import { createHash, randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { mkdir, open, readFile, lstat, link, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { openDynamicTaskStore, ingressTimestamp, pendingTaskHumanReview, taskHumanWait } from './dynamic-task-store.js'
@@ -28,7 +29,7 @@ import { resolveTaskArtifactScope } from './task-artifact-scope.js'
 import { buildReplyReviewCandidates } from './decision.js'
 import { resolveTopicMessages, topicSourceEntries, stableId, fingerprint, replyTopicForMessage, canonicalReplyTopic, topicDecisionCoversEntry } from './topic-model.js'
 import { createTopicFactHandler } from './topic-facts.js'
-import { ingestTaskResidentMessage, projectTaskNotification, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from './task-message-projections.js'
+import { ingestTaskResidentMessage, projectTaskNotification, taskNotificationOutbound, stableTaskResourceIdentity, mergeTaskResources, taskBoardState, messageProcessingSources } from './task-message-projections.js'
 import { executionSessionTitle, taskWorkspace, taskExecutionWorkspace, taskDirectories, taskFilePath, checkedTaskDirectory, materializeExecutionDocument } from './session-workspaces.js'
 import { installTaskSessionPersistence, taskSessionLogRoot } from './task-session-persistence.js'
 import { prepareGroupNotification } from './group-notification.js'
@@ -107,7 +108,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     return (failures.get(id)?.retryAfter ?? 0) <= Date.now()
   }
   let closed = false, recovering, scheduling, scheduleRequested = false, providerRetryTimer
-  let notificationScan, notificationScanRequested = false, notificationTransportRetryAt = 0
+  let notificationScan, notificationScanRequested = false, notificationScanRequestedAt = 0, notificationTransportRetryAt = 0
   let sourceProcessingRevision = 0
   let observerGroupPage
   const sourceHeldNotifications = new Map()
@@ -171,20 +172,27 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
       if (['fixed-topic-reply', 'topic-reply'].includes(notification?.kind)) groupNotification = notification
     }
     const commit = () => store.command({ id: id ?? `${kind}:${randomUUID()}`, kind, args: clean(args) })
+    let permitStarted, permitEntered
+    const permitCommit = async action => {
+      permitEntered = Date.now()
+      return action()
+    }
+    const permitDone = () => ctx.logger?.debug?.(`notification permit ${JSON.stringify({ notificationId: args.notificationId, lockWaitMs: permitEntered === undefined ? null : permitEntered - permitStarted, totalMs: Date.now() - permitStarted })}`)
     // 发送许可与待判版本在同一群锁内线性化；缓存/出箱投影必须留在锁外。
     let receipt
     if (clarification) {
       const p = clarification, fact = p.fact
+      permitStarted = Date.now()
       receipt = await residentStore.withRoutingHold({ groupId: p.conversationId, messageId: p.sourceMessageId,
-        messageVersion: p.sourceVersion, epoch: residentStore.getGroup(p.conversationId)?.messages.find(message => message.messageId === p.sourceMessageId)?.routingHold?.epoch, commit: () => {
+        messageVersion: p.sourceVersion, epoch: residentStore.getGroup(p.conversationId)?.messages.find(message => message.messageId === p.sourceMessageId)?.routingHold?.epoch, commit: () => permitCommit(() => {
           assertRoutingClarification(p, args.notificationId)
           if (kind === 'notification.start') args = { ...args, routingHold: { messageVersion: fact.messageVersion, epoch: fact.epoch, reviewFingerprint: fact.reviewFingerprint } }
           return commit()
-        } }).catch(error => {
+        }) }).catch(error => {
           if (kind === 'notification.start' && ['topic_routing_hold_stale', 'routing_clarification_stale'].includes(error.code ?? error.message))
             throw Object.assign(error, { code: 'DYNAMIC_NOTIFICATION_SOURCE_PENDING' })
           throw error
-        })
+        }).finally(() => { if (kind === 'notification.start') permitDone() })
     } else if (groupNotification) {
       const p = groupNotification.payload, groupId = p.conversationId, group = residentStore.getGroup(groupId)
       const outbound = group?.outbox.find(item => item.outboundId === (p.deliveryId ?? groupNotification.id))
@@ -194,7 +202,8 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         ...(decision?.decision.basisMessageIds ?? []),
         ...(group?.topics.flatMap(topic => topic.entries.filter(entry => units.has(entry.unitId)).map(entry => entry.messageId)) ?? []),
         ...(['fixed-topic-reply', 'routing-clarification'].includes(groupNotification.kind) ? [p.sourceRef?.messageId ?? p.sourceMessageId] : [])].filter(Boolean))]
-      receipt = await residentStore.withNotificationSource({ groupId, messageIds, commit: own => {
+      permitStarted = Date.now()
+      receipt = await residentStore.withNotificationSource({ groupId, messageIds, commit: own => permitCommit(() => {
         if (p.fact?.initialReply && groupNotification.state === 'prepared') {
           const current = residentStore.getGroup(groupId)
           const route = current.routeHistory.find(item => item.initialReplies?.some(draft => draft.outboundId === groupNotification.id))
@@ -210,7 +219,7 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         if (groupNotification.state === 'prepared') args = { ...args, ownNotificationSources: { groupId, messageIds },
           ...(own ? { ownNotificationEvidence: { groupId, messageIds } } : {}) }
         return commit()
-      } })
+      }) }).finally(permitDone)
     } else if (args.ownSourceFence?.length) {
       const groupId = args.ownSourceFence[0].groupId
       if (args.ownSourceFence.some(ref => ref.groupId !== groupId)) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
@@ -1655,12 +1664,13 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
   }
   function deliverNotifications(attempted = new Set()) {
     if (closed) return Promise.resolve()
+    if (!notificationScanRequested) notificationScanRequestedAt = Date.now()
     notificationScanRequested = true
     if (notificationScan) return notificationScan
     notificationScan = (async () => {
       do {
         notificationScanRequested = false
-        await scanNotifications(attempted)
+        await scanNotifications(attempted, notificationScanRequestedAt)
       } while (!closed && notificationScanRequested)
     })().finally(() => { notificationScan = undefined })
     return notificationScan
@@ -1672,9 +1682,12 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     })
   }
   const notificationRecoveryError = (code, statusCode = 409) => Object.assign(new Error(code), { code, statusCode })
-  const notificationStage = (current, stage) => current.payload.conversationId && Number.isSafeInteger(current.payload.sourceVersion)
-    ? recordMessageStage({ groupId: current.payload.conversationId,
-      messages: [{ messageId: current.payload.sourceRef?.messageId ?? current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined
+  const notificationStage = (current, stage) => {
+    if (stage.completedAt) ctx.logger?.debug?.(`notification transport ${JSON.stringify({ notificationId: current.id, state: current.state, phase: stage.stage, elapsedMs: Date.parse(stage.completedAt) - Date.parse(stage.startedAt) })}`)
+    return current.payload.conversationId && Number.isSafeInteger(current.payload.sourceVersion)
+      ? recordMessageStage({ groupId: current.payload.conversationId,
+        messages: [{ messageId: current.payload.sourceRef?.messageId ?? current.payload.sourceMessageId, messageVersion: current.payload.sourceVersion }] }, stage) : undefined
+  }
   async function notificationDeliveryGate(notification) {
     if (notification.kind === 'coordination' || notification.state === 'superseded') return false
     if (notification.state === 'prepared' && ['fixed-topic-reply', 'routing-clarification'].includes(notification.kind)) {
@@ -1744,9 +1757,25 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
     if (blocked) await projectTaskNotification({ residentStore, notification })
     return !blocked
   }
-  async function scanNotifications(attempted) {
-    for (let notification of await query('notification.list')) {
+  async function scanNotifications(attempted, requestedAt) {
+    const scanStarted = Date.now()
+    const notices = await query('notification.list')
+    const historical = item => item.kind === 'coordination' || item.state === 'superseded'
+      || item.state === 'delivered' && item.payload.audience !== 'operator'
+    for (let notification of [...notices.filter(item => !historical(item)), ...notices.filter(historical)]) {
       if (closed) return
+      if (historical(notification) && notification.payload.audience !== 'operator' && notification.payload.conversationId) {
+        const value = taskNotificationOutbound(notification)
+        const previous = residentStore.getGroup(notification.payload.conversationId)?.outbox.find(item => item.outboundId === value.outboundId)
+        if (previous) {
+          const next = Object.fromEntries(Object.entries({ ...previous, ...value,
+            ...(value.status === 'sent' ? { deliveryPendingReason: undefined, deliveryError: undefined } : {}) }).filter(([, item]) => item !== undefined))
+          if (isDeepStrictEqual(previous, next)) {
+            if (notification.state === 'delivered' && failures.get(notification.id)?.code === 'TASK_NOTIFICATION_INCOMPLETE_READBACK') failures.delete(notification.id)
+            continue
+          }
+        }
+      }
       // 历史协调通知保持原账，不发送、不刷新、不自动重试。
       if (notification.kind === 'coordination') { await projectTaskNotification({ residentStore, notification }); continue }
       // 只释放被新来源暂缓的尝试；未知发送和限流的本轮去重不受影响。
@@ -1766,15 +1795,39 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
         }
       }
 
-      if (!await notificationDeliveryGate(notification)) continue
-      await projectTaskNotification({ residentStore, notification })
+      const itemStarted = Date.now()
+      let gateDone, projectStarted, projectDone
+      try {
+        if (!await notificationDeliveryGate(notification)) {
+          gateDone = Date.now()
+          ctx.logger?.debug?.(`notification wait ${JSON.stringify({ notificationId: notification.id, state: notification.state, reason: 'gate' })}`)
+          continue
+        }
+        gateDone = Date.now()
+        projectStarted = Date.now()
+        await projectTaskNotification({ residentStore, notification })
+        projectDone = Date.now()
+      } finally {
+        if (['prepared', 'failed', 'unknown', 'starting'].includes(notification.state)) ctx.logger?.debug?.(`notification scan ${JSON.stringify({ notificationId: notification.id, state: notification.state, queueMs: scanStarted - requestedAt, itemWaitMs: itemStarted - scanStarted, gateMs: (gateDone ?? Date.now()) - itemStarted, projectMs: projectStarted === undefined ? null : (projectDone ?? Date.now()) - projectStarted })}`)
+      }
       // 投影的 await 期间原投递可能已完成；使用命令更新的当前态，不能再按旧 starting 快照回读。
       notification = notificationCache.get(notification.id) ?? notification
       if (notification.state === 'delivered' && failures.get(notification.id)?.code === 'TASK_NOTIFICATION_INCOMPLETE_READBACK')
         failures.delete(notification.id)
       const readbackOnly = ['unknown', 'starting'].includes(notification.state)
-      if (notification.state === 'delivered' || notification.state === 'failed' && !(notification.deliveryError?.knownNotSent && notification.deliveryError?.retryable)
-        || (readbackOnly ? notificationReadbacks.size > 0 : notificationSends.size > 0 || Date.now() < notificationTransportRetryAt) || !retryReady(notification.id) || Date.parse(notification.nextAttemptAt ?? '') > Date.now() || inflightNotifications.has(notification.id) || attempted?.has(notification.id)) continue
+      const waitReason = notification.state === 'delivered' ? 'delivered'
+        : notification.state === 'failed' && !(notification.deliveryError?.knownNotSent && notification.deliveryError?.retryable) ? 'failed-not-retryable'
+        : readbackOnly && notificationReadbacks.size > 0 ? 'readback-slot'
+        : !readbackOnly && notificationSends.size > 0 ? 'send-slot'
+        : !readbackOnly && Date.now() < notificationTransportRetryAt ? 'transport-backoff'
+        : !retryReady(notification.id) ? 'retry-backoff'
+        : Date.parse(notification.nextAttemptAt ?? '') > Date.now() ? 'not-due'
+        : inflightNotifications.has(notification.id) ? 'inflight'
+        : attempted?.has(notification.id) ? 'attempted' : null
+      if (waitReason) {
+        if (waitReason !== 'delivered') ctx.logger?.debug?.(`notification wait ${JSON.stringify({ notificationId: notification.id, state: notification.state, reason: waitReason })}`)
+        continue
+      }
       attempted?.add(notification.id)
       if (readbackOnly) notificationReadbacks.add(notification.id)
       else notificationSends.add(notification.id)
@@ -1784,8 +1837,10 @@ export async function openTaskSessionService({ ctx, config, legacy, residentStor
           const result = await deliverTaskNotification({ notification, notifications, command,
             onStage: notificationStage, deferReadback: true })
           if (result?.acknowledged) attempted?.delete(notification.id)
-          if (result?.sourcePending) sourceHeldNotifications.set(notification.id, processingRevision)
-          else sourceHeldNotifications.delete(notification.id)
+          if (result?.sourcePending) {
+            sourceHeldNotifications.set(notification.id, processingRevision)
+            ctx.logger?.debug?.(`notification wait ${JSON.stringify({ notificationId: notification.id, state: notification.state, reason: 'source-pending' })}`)
+          } else sourceHeldNotifications.delete(notification.id)
         }
         catch (error) {
           if (error.notificationPhase === 'send' && (error.serverErrorCode === 'RATE_LIMIT_ERROR' || error.code === 'RATE_LIMIT_ERROR' || error.knownNotSent === true)) notificationTransportRetryAt = Math.max(notificationTransportRetryAt, Date.parse(error.notificationRetryAt) || Date.now() + 60000)
