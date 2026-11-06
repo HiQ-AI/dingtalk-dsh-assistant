@@ -105,12 +105,30 @@ export async function apply(ctx, config = {}) {
     runner: dwsRunner,
   })
   const initialEnvironment = await startup.measure('resident.environment', () => inspectEnvironment({ runner: dwsRunner, profile: dwsConfig.profile }))
+  const conversationOf = groupId => {
+    const group = store.getGroup(groupId)
+    if (group?.conversationType !== 'direct') return { conversationType: 'group', conversationId: groupId }
+    if (!group.conversationId || !group.recipientActorId) throw new Error('DIRECT_CONVERSATION_IDENTITY_REQUIRED')
+    return { conversationType: 'direct', conversationId: group.conversationId, recipientActorId: group.recipientActorId }
+  }
+  const canDisclose = notification => {
+    if (dwsConfig.enabled !== true || dwsConfig.writesAuthorized !== true) return false
+    const payload = notification.payload
+    if (payload.audience === 'operator') return true
+    const group = store.getGroup(payload.groupId ?? payload.conversationId)
+    if (!group) return false
+    if (payload.conversationType === 'direct') return group.conversationType === 'direct'
+      && group.conversationId === payload.conversationId && group.recipientActorId === payload.recipientActorId
+    return group.conversationType !== 'direct' && group.groupId === payload.conversationId
+  }
   const readGroupMessage = async (groupId, messageId) => {
-    const message = await dwsAdapter.readMessage(groupId, messageId)
-    return { ...normalizeHistoryMessage(message, groupId), resourceRefs: message.resourceRefs ?? [] }
+    const conversation = conversationOf(groupId)
+    const message = await dwsAdapter.readMessage(conversation.conversationId, messageId)
+    return { ...normalizeHistoryMessage(message, conversation.conversationId, conversation.conversationType),
+      groupId, resourceRefs: message.resourceRefs ?? [] }
   }
   const readGroupResource = async (groupId, messageId, resource) => {
-    const value = await dwsAdapter.readMessageResource(groupId, messageId, resource)
+    const value = await dwsAdapter.readMessageResource(conversationOf(groupId).conversationId, messageId, resource)
     if (!value.image) return value
     const imageRefs = await ctx.attachments.saveImages([value.image])
     return { imageRefs }
@@ -118,18 +136,24 @@ export async function apply(ctx, config = {}) {
   const tasks = await openTaskSessionService({ ctx, config: { ...taskConfig, operatorUserId: initialEnvironment.dws.userId }, legacy: runtime, residentStore: store,
     startupObserver: sample => ctx.logger.info(`startup ${JSON.stringify(sample)}`),
     readMessage: readGroupMessage,
-    readMentioned: (groupId, message) => dwsAdapter.isMessageMentioned(groupId, message.messageId, message.occurredAt),
-    readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(groupId, messageId, resource),
+    readMentioned: (groupId, message) => conversationOf(groupId).conversationType === 'direct' ? false
+      : dwsAdapter.isMessageMentioned(groupId, message.messageId, message.occurredAt),
+    readResource: (groupId, messageId, resource) => dwsAdapter.readMessageResource(conversationOf(groupId).conversationId, messageId, resource),
     notifications: {
-      canDisclose: notification => dwsConfig.enabled === true && dwsConfig.writesAuthorized === true
-        && (notification.payload.audience === 'operator' || !!runtime.getGroup(notification.payload.conversationId)),
+      canDisclose,
       send: notification => notification.payload.audience === 'operator'
         ? dwsAdapter.sendSelfIntent({ userId: notification.payload.recipientUserId, text: notification.payload.text, idempotencyKey: notification.id,
           taskId: notification.taskId, humanRequestId: notification.payload.humanRequestId })
         : sendWorkflowNotification(dwsAdapter, notification),
-      sendFile: (notification, file) => createDwsAdapter({ enabled: dwsConfig.enabled === true, writesAuthorized: dwsConfig.writesAuthorized === true,
-        profile: dwsConfig.profile, runner: createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: file.directory }) })
-        .sendGroupFile({ groupId: notification.payload.conversationId, fileName: file.fileName, idempotencyKey: notification.id }),
+      sendFile: (notification, file) => {
+        const adapter = createDwsAdapter({ enabled: dwsConfig.enabled === true, writesAuthorized: dwsConfig.writesAuthorized === true,
+          profile: dwsConfig.profile, runner: createNodeDwsRunner({ executable: dwsConfig.executable ?? 'dws', cwd: file.directory }) })
+        const payload = notification.payload
+        return payload.conversationType === 'direct'
+          ? adapter.sendDirectFile({ conversationId: payload.conversationId, recipientActorId: payload.recipientActorId,
+            fileName: file.fileName, idempotencyKey: notification.id })
+          : adapter.sendGroupFile({ groupId: payload.conversationId, fileName: file.fileName, idempotencyKey: notification.id })
+      },
       readbackFile: notification => readTaskFileDelivery(dwsAdapter, notification),
       querySendStatus: (openTaskId, original) => original && Object.hasOwn(original, 'profile')
         ? createDwsAdapter({ enabled: dwsConfig.enabled === true, profile: original.profile ?? undefined,
@@ -234,9 +258,13 @@ export async function apply(ctx, config = {}) {
   }
   runtime.backfillGroup = async ({ groupId, start, end }) => {
     if (runtime.getGroup(groupId) === undefined) throw new Error(`group_not_subscribed:${groupId}`)
-    const history = await dwsAdapter.readGroupRange(groupId, { start, end })
-    const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
-    return runtime.backfill(ordered.map((message) => normalizeHistoryMessage(message, groupId)))
+    const conversation = conversationOf(groupId)
+    const messages = conversation.conversationType === 'direct'
+      ? await dwsAdapter.readConversation(conversation.conversationId, { start, end })
+      : (await dwsAdapter.readGroupRange(conversation.conversationId, { start, end })).messages
+    if (messages.some(message => message.conversationId !== conversation.conversationId)) throw new Error('dws_message_identity_mismatch')
+    const ordered = [...messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
+    return runtime.backfill(ordered.map(message => ({ ...normalizeHistoryMessage(message, conversation.conversationId, conversation.conversationType), groupId })))
   }
   server = createServer((request, response) => {
     handleRequest(request, response, runtime, {

@@ -5,7 +5,7 @@ import { installObserverPagination, installObserverArchivePagination, observerPa
 import { executionSessionTitle } from './session-workspaces.js'
 import { createStartupMetrics } from './startup-metrics.js'
 import { operationBlocksRecovery, hasRestartIsolation, isolationBinding, validIsolationReceipt } from './native-restart-isolation.js'
-import { quotedSendRejectionProof } from './group-message.js'
+import { quotedSendRejectionProof, notificationReplyTarget } from './group-message.js'
 import { taskNotificationRecovery } from './notification-delivery.js'
 import { isNativeFilePrecondition } from './dynamic-filesystem-scope.js'
 import { taskExecutionContext } from './execution-context.js'
@@ -170,7 +170,13 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     if (!archivedTask(taskId)) return all(table, `${where} ${suffix || 'ORDER BY rowid'}`, [taskId])
     return db.prepare(`SELECT body,rowid AS sequence FROM ${table} ${where} UNION ALL SELECT body,sequence FROM ${archiveTable(table)} ${where} ORDER BY sequence`).all(taskId, taskId).map(row => JSON.parse(row.body))
   }
-  const saveTask = task => { task.updatedAt = now(); put('dynamic_tasks', task); return task }
+  const saveTask = task => {
+    task.updatedAt = now(); put('dynamic_tasks', task)
+    const refs = JSON.stringify(task.sourceRefs ?? [])
+    db.prepare('DELETE FROM dynamic_task_source_refs WHERE task_id=? AND source_id NOT IN (SELECT value FROM json_each(?))').run(task.taskId, refs)
+    db.prepare("INSERT OR IGNORE INTO dynamic_task_source_refs(source_id,task_id) SELECT value,? FROM json_each(?) WHERE type='text'").run(task.taskId, refs)
+    return task
+  }
   const execs = taskId => taskRows('dynamic_executions', taskId)
   const ops = taskId => taskId ? taskRows('dynamic_operations', taskId) : all('dynamic_operations', 'ORDER BY rowid')
   const wakes = taskId => taskId ? taskRows('dynamic_wakes', taskId) : all('dynamic_wakes', 'ORDER BY rowid')
@@ -467,7 +473,16 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         WHERE coalesce(json_extract(body,'$.routed'),0)=0 AND json_type(body,'$.processingCompleted') IS NULL`)
       // Recovery never authorizes a second send. Tool/process state must first be drained or reconciled.
       installTaskArchive(db, { indexes: !existed || paginationMigrate || migrate })
+      db.exec(`CREATE TABLE IF NOT EXISTS dynamic_task_source_refs(source_id TEXT NOT NULL,task_id TEXT NOT NULL,PRIMARY KEY(source_id,task_id));
+        CREATE INDEX IF NOT EXISTS dynamic_task_source_refs_task ON dynamic_task_source_refs(task_id);`)
+      if (!db.prepare("SELECT 1 FROM dynamic_meta WHERE key='taskSourceRefsIndex'").get()) {
+        for (const table of ['dynamic_tasks', 'dynamic_archived_tasks']) db.exec(`INSERT OR IGNORE INTO dynamic_task_source_refs(source_id,task_id)
+          SELECT ref.value,t.id FROM ${table} t,json_each(t.body,'$.sourceRefs') ref WHERE ref.type='text'`)
+        db.prepare("INSERT INTO dynamic_meta(key,value) VALUES ('taskSourceRefsIndex','1')").run()
+      }
       installTopicFacts(db)
+      db.exec(`CREATE TABLE IF NOT EXISTS dynamic_router_facts(id TEXT PRIMARY KEY,body TEXT NOT NULL CHECK(json_valid(body)));
+        CREATE INDEX IF NOT EXISTS router_fact_pending ON dynamic_router_facts(json_extract(body,'$.state'),json_extract(body,'$.fact.groupId'));`)
       retireIndependentCoordination(db, now())
       const startupOperations = ops(), startupExecutions = all('dynamic_executions')
       for (const operation of startupOperations) if (operation.state === 'starting') { operation.state = 'unknown'; operation.recoveryReason = 'host_restart'; put('dynamic_operations', operation) }
@@ -527,17 +542,126 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     return { events, nextCursor: events.at(-1)?.sequence ?? after, hasMore: rows.length > limit }
   }
   const topicFacts = topicFactLedger({ db, get: (table, id) => get(table, id, true), put })
+  function recordRouterFact(task, kind, result, commandId) {
+    const allSourceIds = [...new Set(task.sourceRefs ?? [])]
+    const sources = allSourceIds.map(sourceId => get('dynamic_sources', sourceId, true))
+    const known = task.groupId && sources.length && sources.every(source => source && source.groupId === task.groupId)
+    if (known && sources.every(source => ['internal', 'web'].includes(source.channel))) return null
+    const imSources = sources.filter(source => source && !['internal', 'web'].includes(source.channel))
+    const valid = known && imSources.length && imSources.every(source => source.actorId && !source.ownNotificationRetirement)
+    const sourceIds = valid ? imSources.map(source => source.sourceId) : allSourceIds
+    const fact = { factId: `router-fact:${digest({ commandId, taskId: task.taskId })}`, factVersion: 1,
+      groupId: task.groupId, taskId: task.taskId, taskVersion: taskVersion(task), sourceIds,
+      kind, result: clone(result), commandId, recordedAt: now() }
+    fact.factDigest = digest(fact)
+    const entry = { id: fact.factId, fact, state: valid ? 'pending' : 'blocked',
+      ...(valid ? {} : { reason: 'ROUTER_FACT_SOURCE_IDENTITY_MISSING' }) }
+    put('dynamic_router_facts', entry)
+    return entry
+  }
   function reduce(kind, a, commandId) {
+    if (kind === 'router.fact.migrateLegacy') {
+      const legacy = get('dynamic_topic_facts', text(a.factId, 'factId'))
+      if (legacy.state !== 'pending' || !legacy.groupId || !legacy.taskId || !legacy.sourceIds?.length) fail('DYNAMIC_ROUTER_LEGACY_FACT_BLOCKED')
+      const task = get('dynamic_tasks', legacy.taskId, true)
+      const row = readReceiptRow(db, legacy.commandId)
+      const decision = row && JSON.parse(row.body).taskDecision
+      const sources = legacy.sourceIds.map(sourceId => get('dynamic_sources', sourceId, true))
+      if (!task || task.groupId !== legacy.groupId || !decision || decision.taskId !== legacy.taskId
+        || decision.requirementRevision !== legacy.requirementRevision || decision.runSequence !== legacy.runSequence
+        || !Number.isSafeInteger(decision.controlRevision) || !Number.isSafeInteger(decision.contextRevision)
+        || sources.some(source => !source || source.groupId !== legacy.groupId || !source.actorId
+          || ['internal', 'web'].includes(source.channel) || source.ownNotificationRetirement)) fail('DYNAMIC_ROUTER_LEGACY_FACT_BLOCKED')
+      const fact = { factId: `legacy-router:${legacy.id}`, factVersion: 1, groupId: legacy.groupId, taskId: legacy.taskId,
+        taskVersion: { requirementRevision: decision.requirementRevision, contextRevision: decision.contextRevision,
+          controlRevision: decision.controlRevision, runSequence: decision.runSequence }, sourceIds: clone(legacy.sourceIds),
+        kind: legacy.kind, result: clone(legacy.result), commandId: legacy.commandId, recordedAt: legacy.recordedAt }
+      fact.factDigest = digest(fact)
+      const previous = get('dynamic_router_facts', fact.factId, true)
+      if (previous && previous.fact.factDigest !== fact.factDigest) fail('DYNAMIC_ROUTER_FACT_IDENTITY_CONFLICT')
+      const entry = previous ?? { id: fact.factId, fact, state: 'pending' }
+      if (!previous) put('dynamic_router_facts', entry)
+      return changed({ fact: entry })
+    }
+    if (kind === 'router.fact.enqueued') {
+      const entry = get('dynamic_router_facts', text(a.factId, 'factId'))
+      const receipt = record(a.enqueueReceipt)
+      if (entry.state === 'blocked' || receipt.factId !== entry.fact.factId || receipt.factDigest !== entry.fact.factDigest
+        || !receipt.enqueueId || a.factDigest !== entry.fact.factDigest) fail('DYNAMIC_ROUTER_FACT_RECEIPT_INVALID')
+      if (entry.enqueueReceipt && canonical(entry.enqueueReceipt) !== canonical(receipt)) fail('DYNAMIC_ROUTER_FACT_RECEIPT_CONFLICT')
+      entry.state = 'enqueued'; entry.enqueueReceipt = clone(receipt); entry.enqueuedAt ??= now()
+      put('dynamic_router_facts', entry)
+      return changed({ fact: entry.fact, enqueueReceipt: entry.enqueueReceipt })
+    }
     if (kind.startsWith('topic.fact.')) {
       const result = topicFacts.reduce(kind, a)
       if (result !== undefined) return changed(result)
     }
     const stamp = now()
+    if (kind === 'router.task.apply') {
+      const groupId = text(a.groupId, 'groupId'), action = record(a.action)
+      const operationId = text(a.operationId, 'operationId')
+      text(a.decisionId, 'decisionId')
+      const refs = array(a.sourceRefs)
+      if (!refs.length || new Set(refs.map(ref => ref.sourceId)).size !== refs.length) fail('TASK_ROUTER_SOURCE_INVALID')
+      const sources = refs.map(ref => {
+        const source = get('dynamic_sources', text(ref.sourceId, 'sourceId'))
+        if (source.groupId !== groupId || source.messageId !== ref.messageId || source.version !== ref.messageVersion
+          || !source.actorId || ['internal', 'web'].includes(source.channel) || source.ownNotificationRetirement) fail('TASK_ROUTER_SOURCE_INVALID')
+        if (db.prepare(`SELECT 1 FROM dynamic_sources WHERE json_extract(body,'$.groupId')=?
+          AND json_extract(body,'$.messageId')=? AND json_extract(body,'$.version')>? LIMIT 1`).get(groupId, source.messageId, source.version)) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
+        return source
+      })
+      const taskId = text(action.taskId, 'taskId')
+      const dependencies = action.dependencies === undefined ? [] : array(action.dependencies)
+      if (new Set(dependencies.map(item => item?.taskId)).size !== dependencies.length) fail('DYNAMIC_ROUTER_DEPENDENCY_INVALID')
+      for (const dependency of dependencies) {
+        record(dependency)
+        const prerequisite = get('dynamic_tasks', text(dependency.taskId, 'taskId'), true)
+        const fields = ['requirementRevision', 'contextRevision', 'controlRevision', 'runSequence']
+        if (!prerequisite || prerequisite.groupId !== groupId || prerequisite.taskId === taskId
+          || fields.some(field => !Number.isSafeInteger(dependency[field]) || dependency[field] !== taskVersion(prerequisite)[field]))
+          fail('DYNAMIC_ROUTER_DEPENDENCY_STALE')
+        if (prerequisite.status !== 'completed' || !prerequisite.drained || prerequisite.recovering
+          || execs(prerequisite.taskId).some(item => !item.drained || !terminalExecutions.has(item.status))
+          || ops(prerequisite.taskId).some(item => !['succeeded', 'failed', 'cancelled'].includes(item.state)))
+          fail('DYNAMIC_ROUTER_DEPENDENCY_UNSETTLED')
+      }
+      const task = action.kind === 'new-task' ? null : get('dynamic_tasks', taskId)
+      if (task && (task.groupId !== groupId || task.archivedAt)) fail('TASK_SESSION_SOURCE_FORBIDDEN')
+      const source = sources.findLast(item => action.kind !== 'task-cancel' || [task.ownerActorId, a.ownerActorId].includes(item.actorId))
+      if (!source) fail('TASK_ROUTER_SOURCE_FORBIDDEN')
+      const ownSourceFence = sources.map(({ sourceId, groupId, messageId }) => ({ sourceId, groupId, messageId }))
+      if (action.kind === 'new-task') return reduce('task.create', { taskId, groupId, ownerActorId: source.actorId,
+        sourceRefs: sources.map(item => item.sourceId), ownSourceFence, operationId, title: action.title, objective: action.objective,
+        request: sources.map(item => item.text).join('\n\n'), requirements: action.acceptanceCriteria ?? [],
+        metadata: { channel: source.channel, authorizationSourceId: source.sourceId, router: true } }, commandId)
+      if (!['task-context', 'task-reopen', 'task-cancel'].includes(action.kind)) fail('TASK_ROUTER_ACTION_INVALID')
+      if (action.inputVersion !== task.requirementRevision || action.runSequence !== task.runSequence
+        || action.expectedControlRevision !== task.controlRevision) fail('DYNAMIC_TASK_REVISION_STALE')
+      if (action.kind === 'task-context') assertTaskContextSemantics(action)
+      if (action.kind === 'task-context' && action.progressImpact === 'preserve' && action.title !== undefined && action.title !== task.title) fail('TASK_CONTEXT_CLASSIFICATION_CONFLICT')
+      const args = { taskId, expectedRequirementRevision: action.inputVersion, expectedControlRevision: task.controlRevision, ownSourceFence, operationId }
+      const adopt = result => {
+        result.result.task.metadata = { ...result.result.task.metadata, router: true }
+        saveTask(result.result.task)
+        return result
+      }
+      if (action.kind === 'task-cancel') return adopt(reduce('task.control', { ...args, control: 'cancelled', reason: action.reason }, commandId))
+      const sourceRefs = [...new Set([...task.sourceRefs, ...sources.map(item => item.sourceId)])]
+      const context = action.context ?? source.text
+      const request = `${task.request}\n\n[补充]\n${context}`
+      if (action.kind === 'task-context' && action.progressImpact === 'preserve')
+        return adopt(reduce('task.supplement', { ...args, messageId: commandId, text: context, request, sourceRefs }, commandId))
+      return adopt(reduce(action.kind === 'task-reopen' ? 'task.reopen' : 'task.revise', { ...args, request, sourceRefs,
+        ...(action.title ? { title: action.title } : {}), ...(action.objective ? { objective: action.objective } : {}),
+        ...(action.acceptanceCriteria ? { requirements: action.acceptanceCriteria } : {}) }, commandId))
+    }
     if (a.ownSourceFence && ['task.create', 'task.control', 'task.supplement', 'task.revise', 'task.reopen'].includes(kind)) {
       for (const ref of array(a.ownSourceFence)) {
         const source = get('dynamic_sources', text(ref.sourceId, 'sourceId'))
         if (source.groupId !== ref.groupId || source.messageId !== ref.messageId) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
-        const own = source.ownNotificationRetirement || all('dynamic_notifications', "WHERE json_extract(body,'$.payload.conversationId')=?", [source.groupId])
+        const own = source.ownNotificationRetirement || all('dynamic_notifications', "WHERE coalesce(json_extract(body,'$.payload.groupId'),json_extract(body,'$.payload.conversationId'))=?", [source.groupId])
           .some(item => [receiptMessageId(item.receipt), receiptMessageId(item.ack)].includes(source.messageId))
         if (own) fail('DYNAMIC_SOURCE_RETIRED')
       }
@@ -798,7 +922,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         const source = get('dynamic_sources', a.humanReply.sourceId)
         if (task.status !== 'active' || task.control !== 'active' || source.groupId !== task.groupId || source.channel !== 'im'
           || !task.sourceRefs.includes(source.sourceId) || !(Date.parse(source.timestamp) >= Date.parse(request.createdAt) && Date.parse(source.timestamp) <= Date.parse(stamp))) fail('DYNAMIC_HUMAN_RESPONSE_FORBIDDEN')
-        const payload = a.topicFacts === true ? null : clone(record(a.humanReply.notification))
+        const payload = a.topicFacts === true || a.routerFacts === true ? null : clone(record(a.humanReply.notification))
         if (payload && (payload.conversationId !== source.groupId || payload.sourceMessageId !== source.messageId || payload.actorId !== source.actorId
           || payload.sourceId !== source.sourceId || payload.sourceVersion !== source.version || payload.replyToMessageId !== source.messageId
           || payload.replyToSenderOpenDingTalkId !== source.actorId || digest(payload.atOpenDingTalkIds ?? []) !== digest([source.actorId]))) fail('DYNAMIC_HUMAN_REVIEW_SOURCE_INVALID')
@@ -1514,12 +1638,81 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       item.resolved = true; item.evidenceRef = a.evidenceRef; item.outcome = a.outcome; item.resolvedAt = stamp
       put('dynamic_legacy_blockers', item); release(item.id); return changed({ blocker: item })
     }
+    if (kind === 'notification.routerRetireUnsent') {
+      const notificationId = text(a.notificationId, 'notificationId'), prepareArgs = record(a.prepareArgs)
+      const prepare = readReceiptRow(db, `prepare-notification:${notificationId}`)
+      if (!prepare || prepare.digest !== digest({ kind: 'notification.prepare', args: prepareArgs })
+        || prepareArgs.notificationId !== notificationId || prepareArgs.kind !== 'router-reply') fail('DYNAMIC_NOTIFICATION_ID_CONFLICT')
+      const ids = [notificationId, ...(prepareArgs.payload.artifactFiles ?? []).map(file => `${notificationId}:file:${file.artifact.artifactId}`)]
+      const notifications = ids.map(id => get('dynamic_notifications', id, true))
+      if (notifications.some(item => !item)) fail('DYNAMIC_NOTIFICATION_RECONCILIATION_REQUIRED')
+      if (notifications.every(item => item.state === 'superseded' && item.reason === 'router_source_stale_before_send'))
+        return changed({ status: 'retired' })
+      if (notifications.some(item => item.state !== 'prepared' || item.sendPermit || item.dispatchToken || item.sendStartedAt
+        || item.sendAttemptCount || item.ack || item.receipt || item.deliveryError || item.lastReadbackError))
+        return changed({ status: 'existing' })
+      for (const item of notifications) {
+        item.state = 'superseded'; item.reason = 'router_source_stale_before_send'; item.updatedAt = stamp
+        put('dynamic_notifications', item)
+      }
+      return changed({ status: 'retired' })
+    }
     if (kind === 'notification.prepare') {
       if (a.kind === 'coordination') fail('INDEPENDENT_COORDINATION_RETIRED')
-      const task = ['topic-reply', 'fixed-topic-reply', 'routing-clarification'].includes(a.kind) ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
-      if (!['question','status','topic-reply','fixed-topic-reply','routing-clarification'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
+      const task = ['topic-reply', 'fixed-topic-reply', 'routing-clarification', 'router-reply'].includes(a.kind) ? null : get('dynamic_tasks', a.taskId), id = text(a.notificationId, 'notificationId')
+      if (!['question','status','topic-reply','fixed-topic-reply','routing-clarification','router-reply'].includes(a.kind)) fail('DYNAMIC_ARGUMENT_INVALID', 'kind')
       integer(a.requirementRevision, 'requirementRevision')
       if (a.kind === 'topic-reply' && (!Array.isArray(a.payload?.fact?.topicRefs) || !a.payload.fact.topicRefs.length)) fail('DYNAMIC_ARGUMENT_INVALID', 'topicRefs')
+      if (a.kind === 'router-reply') {
+        const p = record(a.payload), source = get('dynamic_sources', text(p.sourceId, 'sourceId'))
+        if (a.taskId || source.groupId !== (p.groupId ?? p.conversationId) || source.messageId !== p.sourceMessageId
+          || source.version !== p.sourceVersion || source.actorId !== p.actorId || source.ownNotificationRetirement
+          || ['web', 'internal'].includes(source.channel) || p.sourceRef?.messageId !== source.messageId
+          || p.sourceRef?.messageVersion !== source.version || p.sourceRef?.actorId !== source.actorId
+          || p.conversationType === 'direct' && p.recipientActorId !== source.actorId
+          || p.taskIds?.length || p.topicRefs?.length
+          || all('dynamic_sources', "WHERE json_extract(body,'$.groupId')=? AND json_extract(body,'$.messageId')=?", [source.groupId, source.messageId]).some(item => item.version > source.version))
+          fail('DYNAMIC_ROUTER_REPLY_SOURCE_INVALID')
+        const routing = p.notificationRouting
+        if (routing) {
+          if (!Array.isArray(routing.sourceRefs) || !Array.isArray(routing.atOpenDingTalkIds)
+            || p.replyToMessageId !== routing.replyToMessageId || p.replyToSenderOpenDingTalkId !== routing.replyToSenderOpenDingTalkId
+            || canonical(p.atOpenDingTalkIds) !== canonical(routing.atOpenDingTalkIds) || Boolean(p.atAll) !== Boolean(routing.atAll)
+            || p.conversationType === 'direct' && (routing.atOpenDingTalkIds.length || routing.atAll)
+            || !!routing.replyToMessageId !== !!routing.replyToSenderOpenDingTalkId
+            || routing.replyToMessageId && (!routing.sourceRefs.some(ref => ref.messageId === routing.replyToMessageId && ref.actorId === routing.replyToSenderOpenDingTalkId)
+              || p.conversationType !== 'direct' && !routing.atOpenDingTalkIds.includes(routing.replyToSenderOpenDingTalkId))
+            || routing.atOpenDingTalkIds.some(actorId => !routing.sourceRefs.some(ref => ref.actorId === actorId))
+            || routing.sourceRefs.some(ref => {
+              const item = get('dynamic_sources', ref.sourceId, true)
+              return !item || item.groupId !== source.groupId || item.messageId !== ref.messageId || item.version !== ref.messageVersion
+                || item.actorId !== ref.actorId || item.ownNotificationRetirement || ['web', 'internal'].includes(item.channel)
+            })) fail('DYNAMIC_ROUTER_REPLY_SOURCE_INVALID')
+        } else if (p.replyToMessageId !== source.messageId || p.replyToSenderOpenDingTalkId !== source.actorId
+          || (p.conversationType === 'direct' ? p.atOpenDingTalkIds?.length !== 0
+            : p.atOpenDingTalkIds?.length !== 1 || p.atOpenDingTalkIds[0] !== source.actorId) || p.atAll)
+          fail('DYNAMIC_ROUTER_REPLY_SOURCE_INVALID')
+        if (p.completion || p.artifactFiles?.length) {
+          const completion = record(p.completion), fact = get('dynamic_router_facts', text(completion.factId, 'factId'), true)?.fact
+          const completedTask = fact && get('dynamic_tasks', fact.taskId, true)
+          const files = array(p.artifactFiles)
+          if (!fact || fact.kind !== 'completed' || fact.groupId !== source.groupId || !fact.sourceIds.includes(source.sourceId)
+            || fact.factDigest !== completion.factDigest || fact.taskId !== completion.taskId
+            || !completedTask || completedTask.status !== 'completed'
+            || canonical(taskVersion(completedTask)) !== canonical(fact.taskVersion)
+            || canonical(completion.taskVersion) !== canonical(fact.taskVersion)
+            || !files.length || canonical(files) !== canonical(completion.files)
+            || new Set(files.map(file => file?.artifact?.artifactId)).size !== files.length
+            || files.some(file => !file?.artifact?.artifactId || !fact.result?.artifactFiles?.some(original => canonical(original) === canonical(file))))
+            fail('DYNAMIC_ROUTER_REPLY_COMPLETION_INVALID')
+          for (const file of files) {
+            const existing = all('dynamic_notifications', "WHERE coalesce(json_extract(body,'$.payload.groupId'),json_extract(body,'$.payload.conversationId'))=? AND json_extract(body,'$.payload.artifact.artifactId')=?", [source.groupId, file.artifact.artifactId])
+            if (existing.some(item => item.id !== `${id}:file:${file.artifact.artifactId}`
+              && !(item.state === 'failed' && item.deliveryError?.knownNotSent === true && item.retirement)))
+              fail('DYNAMIC_ROUTER_REPLY_ARTIFACT_CONFLICT')
+          }
+        }
+      }
       if (a.kind === 'fixed-topic-reply') {
         const p = record(a.payload), fact = record(p.fact), source = get('dynamic_sources', text(p.sourceId, 'sourceId'))
         integer(p.sourceVersion, 'sourceVersion'); text(fact.unitId, 'unitId'); integer(fact.unitRevision, 'unitRevision')
@@ -1566,7 +1759,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       }
       const body = { taskId: task?.taskId ?? null, requirementRevision: a.requirementRevision, kind: a.kind, payload: clone(record(a.payload)) }
       if (body.payload.atAll !== undefined && typeof body.payload.atAll !== 'boolean'
-        || body.payload.atAll && (body.payload.atOpenDingTalkIds?.length || body.payload.sourceMessageId)) fail('DYNAMIC_ARGUMENT_INVALID', 'notificationAudience')
+        || body.payload.atAll && (body.payload.atOpenDingTalkIds?.length || notificationReplyTarget(body.payload).replyToMessageId)) fail('DYNAMIC_ARGUMENT_INVALID', 'notificationAudience')
       if (body.payload.artifactFiles?.length) body.payload.deliveryId = id
       const prior = get('dynamic_notifications', id, true)
       if (prior) { if (prior.payloadDigest !== digest(body)) fail('DYNAMIC_NOTIFICATION_ID_CONFLICT'); return changed({ notification: prior }) }
@@ -1578,9 +1771,8 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     if (kind === 'notification.rejectBeforeSend') {
       const notification = get('dynamic_notifications', a.notificationId), error = notification.deliveryError
       const proof = notification.state === 'unknown' && !notification.ack && !notification.receipt && error?.phase === 'send'
-        ? quotedSendRejectionProof(error, { groupId: notification.payload.conversationId, replyToMessageId: notification.payload.sourceMessageId,
-          replyToSenderOpenDingTalkId: notification.payload.actorId, idempotencyKey: notification.id }) : undefined
-      if (!proof) return changed({ notification })
+        ? quotedSendRejectionProof(error, { groupId: notification.payload.conversationId, ...notificationReplyTarget(notification.payload), idempotencyKey: notification.id }) : undefined
+      if (!proof || error.proof && canonical(error.proof) !== canonical(proof)) return changed({ notification })
       notification.sendAttemptCount ??= 1
       notification.state = 'failed'; notification.deliveryError = { ...error, knownNotSent: true, retryable: true, reason: proof.reason, origin: proof.origin, operation: proof.operation, proof }
       notification.nextAttemptAt = new Date(Date.now() + 60000).toISOString(); notification.updatedAt = stamp
@@ -1608,8 +1800,10 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
     }
     if (kind === 'notification.retry') {
       const notification = get('dynamic_notifications', a.notificationId)
-      const proof = notification.deliveryError?.phase === 'send' && quotedSendRejectionProof(notification.deliveryError, { groupId: notification.payload.conversationId, replyToMessageId: notification.payload.sourceMessageId, replyToSenderOpenDingTalkId: notification.payload.actorId, idempotencyKey: notification.id })
-      if (notification.retirement || notification.recall || notification.ack || notification.receipt || !proof || notification.state !== 'failed' || notification.deliveryError?.knownNotSent !== true || notification.deliveryError?.retryable !== true
+      const proof = notification.deliveryError?.phase === 'send' && quotedSendRejectionProof(notification.deliveryError, { groupId: notification.payload.conversationId, ...notificationReplyTarget(notification.payload), idempotencyKey: notification.id })
+      if (notification.retirement || notification.recall || notification.ack || notification.receipt || !proof
+        || notification.deliveryError?.proof && canonical(notification.deliveryError.proof) !== canonical(proof)
+        || notification.state !== 'failed' || notification.deliveryError?.knownNotSent !== true || notification.deliveryError?.retryable !== true
         || Date.parse(notification.nextAttemptAt ?? '') > Date.now()) return changed({ notification })
       notification.state = 'prepared'; notification.updatedAt = stamp
       put('dynamic_notifications', notification); return changed({ notification })
@@ -1660,18 +1854,19 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           notification.state = 'superseded'; notification.reason = 'topic_initial_reply_stale'; notification.updatedAt = stamp
           put('dynamic_notifications', notification); return changed({ notification })
         }
-        if (['fixed-topic-reply', 'topic-reply', 'routing-clarification'].includes(notification.kind)) {
-          const { conversationId, sourceRef, sourceMessageId } = notification.payload
+        if (['fixed-topic-reply', 'topic-reply', 'routing-clarification', 'router-reply'].includes(notification.kind)) {
+          const { sourceRef, sourceMessageId } = notification.payload
+          const groupId = notification.payload.groupId ?? notification.payload.conversationId
           const supplied = a.ownNotificationSources
-          if (supplied && supplied.groupId !== conversationId) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
+          if (supplied && supplied.groupId !== groupId) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
           const messageIds = new Set([...(supplied?.messageIds ?? []),
-            ...(['fixed-topic-reply', 'routing-clarification'].includes(notification.kind) ? [sourceRef?.messageId ?? sourceMessageId] : [])].filter(Boolean))
+            ...(['fixed-topic-reply', 'routing-clarification', 'router-reply'].includes(notification.kind) ? [sourceRef?.messageId ?? sourceMessageId] : [])].filter(Boolean))
           const evidence = a.ownNotificationEvidence
-          if (evidence && (evidence.groupId !== conversationId || evidence.messageIds.some(id => !messageIds.has(id)))) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
+          if (evidence && (evidence.groupId !== groupId || evidence.messageIds.some(id => !messageIds.has(id)))) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
           const own = evidence?.messageIds.length || messageIds.size && (
-            all('dynamic_notifications', "WHERE json_extract(body,'$.payload.conversationId')=?", [conversationId])
+            all('dynamic_notifications', "WHERE coalesce(json_extract(body,'$.payload.groupId'),json_extract(body,'$.payload.conversationId'))=?", [groupId])
               .some(item => [receiptMessageId(item.receipt), receiptMessageId(item.ack)].some(id => messageIds.has(id)))
-            || all('dynamic_sources', "WHERE json_extract(body,'$.groupId')=?", [conversationId])
+            || all('dynamic_sources', "WHERE json_extract(body,'$.groupId')=?", [groupId])
               .some(source => messageIds.has(source.messageId) && source.ownNotificationRetirement))
           if (own) {
             notification.state = 'superseded'; notification.reason = 'own-notification'; notification.updatedAt = stamp
@@ -1692,7 +1887,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
           put('dynamic_notifications', notification)
           return changed({ notification, topicFacts: topicFacts.requeueUnsent(notification) })
         }
-        const task = ['topic-reply','fixed-topic-reply','routing-clarification','coordination'].includes(notification.kind) ? null : get('dynamic_tasks', notification.taskId)
+        const task = ['topic-reply','fixed-topic-reply','routing-clarification','router-reply','coordination'].includes(notification.kind) ? null : get('dynamic_tasks', notification.taskId)
         const request = notification.kind === 'question' && task.humanRequests?.find(item => item.requestId === notification.payload.humanRequestId)
         if (notification.kind === 'question' && (notification.requirementRevision !== task.requirementRevision || task.status !== 'active' || task.control !== 'active'
           || !request || request.status !== 'waiting-reply' || request.requirementRevision !== task.requirementRevision
@@ -1750,7 +1945,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (epochGated && !eventTimestamp) return changed({ ignored: true, reason: 'invalid-ingress-timestamp', source: null })
       if (epochGated && Date.parse(eventTimestamp) < Date.parse(boundIngressEpoch)) return changed({ ignored: true, reason: 'before-ingress-epoch', source: null })
       if (prior) {
-        const { routed: _routed, routedAt: _routedAt, receivedAt: _receivedAt, routeReceipt: _receipt, routeDecision: _decision, routePreparedAt: _prepared, processingCompleted: _processing, processingHistory: _history, processingPending: _pending, activeUnitRefs: _activeRefs, ownNotificationRetirement: _ownRetirement, stages: _stages, ...previous } = prior
+        const { routed: _routed, routedAt: _routedAt, receivedAt: _receivedAt, routeReceipt: _receipt, routeDecision: _decision, routePreparedAt: _prepared, processingCompleted: _processing, directProcessing: _direct, processingHistory: _history, processingPending: _pending, activeUnitRefs: _activeRefs, ownNotificationRetirement: _ownRetirement, stages: _stages, ...previous } = prior
         const { receivedAt: _incomingReceivedAt, ...incoming } = source
         if (digest(previous) !== digest(incoming)) fail('DYNAMIC_SOURCE_CONFLICT')
         return changed({ source: prior })
@@ -1794,6 +1989,24 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
         if (!previous.completedAt && stage.completedAt) Object.assign(previous, stage)
       } else source.stages.push(stage)
       put('dynamic_sources', source); return changed({ sourceId: source.sourceId, stage })
+    }
+    if (kind === 'source.directProcessed') {
+      const source = get('dynamic_sources', text(a.sourceId, 'sourceId'))
+      if (source.groupId !== a.groupId || source.version !== a.messageVersion || source.ownNotificationRetirement) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
+      if (db.prepare(`SELECT 1 FROM dynamic_sources WHERE json_extract(body,'$.groupId')=?
+        AND json_extract(body,'$.messageId')=? AND json_extract(body,'$.version')>? LIMIT 1`).get(source.groupId, source.messageId, source.version)) fail('DYNAMIC_SOURCE_REVISION_CONFLICT')
+      if (!['triage', 'router'].includes(a.phase)) fail('DYNAMIC_ARGUMENT_INVALID', 'phase')
+      const decisionId = text(a.decisionId, 'decisionId')
+      const disposition = { phase: a.phase, decisionId }
+      if (source.directProcessing && digest(source.directProcessing.disposition) !== digest(disposition)) fail('DYNAMIC_SOURCE_PROCESSING_CONFLICT')
+      if (source.processingCompleted && !source.directProcessing) fail('DYNAMIC_SOURCE_PROCESSING_CONFLICT')
+      source.directProcessing ??= { disposition, at: stamp }
+      source.routed = true; source.routedAt ??= stamp
+      source.routeReceipt ??= [disposition]
+      source.processingPending = false
+      source.processingCompleted ??= { at: stamp, mode: 'direct', decisionId }
+      put('dynamic_sources', source)
+      return changed({ source })
     }
     if (kind === 'source.processingStarted') {
       const source = get('dynamic_sources', a.sourceId), refs = array(a.activeUnitRefs)
@@ -1935,6 +2148,14 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
 
           }
         }
+        if (args.routerFacts === true && recordsDecision && ['task.complete', 'task.wait'].includes(kind)) {
+          const task = get('dynamic_tasks', args.binding.taskId)
+          const factKind = kind === 'task.complete' ? 'completed' : args.humanReply ? 'followup' : args.question ? 'needs-input' : args.action === 'blocked' ? 'blocked'
+            : triggers.some(trigger => trigger.kind === 'execution.stage.progress') ? 'progress' : 'wait'
+          value.routerFacts = [recordRouterFact(task, factKind, value.taskDecision.decision, id)].filter(Boolean)
+        }
+        if (kind === 'task.drained' && (value.result.task.metadata?.router || args.routerFacts === true))
+          value.routerFacts = [recordRouterFact(value.result.task, 'drained', { drained: true }, id)].filter(Boolean)
         if (args.topicFacts === true && recordsDecision && (kind === 'task.complete'
           || kind === 'task.wait' && (args.action === 'blocked' || args.humanReply || ['requester', 'topic'].includes(args.audience ?? args.humanRequest?.audience)
             || triggers.some(trigger => trigger.kind === 'execution.stage.progress')))) {
@@ -1960,6 +2181,25 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       if (closed) fail('DYNAMIC_STORE_CLOSED')
       record(q)
       let value
+      if (q.kind === 'router.fact.pending') return clone(all('dynamic_router_facts',
+        `WHERE json_extract(body,'$.state') IN ('pending','blocked')${q.groupId ? " AND json_extract(body,'$.fact.groupId')=?" : ''} ORDER BY rowid`, q.groupId ? [q.groupId] : []))
+      if (q.kind === 'router.fact.get') return clone(get('dynamic_router_facts', q.factId, true))
+      if (q.kind === 'source.taskRefs') {
+        if (!Array.isArray(q.sourceIds) || q.sourceIds.length > 100 || q.sourceIds.some(id => typeof id !== 'string' || !id)) fail('DYNAMIC_ARGUMENT_INVALID')
+        text(q.groupId, 'groupId')
+        return db.prepare(`SELECT refs.source_id sourceId,refs.task_id taskId,
+          json_extract(source.body,'$.messageId') messageId,json_extract(source.body,'$.version') version,
+          json_extract(coalesce(live.body,archived.body),'$.title') title,
+          json_extract(coalesce(live.body,archived.body),'$.status') status,
+          json_extract(coalesce(live.body,archived.body),'$.archivedAt') archivedAt
+          FROM json_each(?) requested JOIN dynamic_task_source_refs refs ON refs.source_id=requested.value
+          JOIN dynamic_sources source ON source.id=refs.source_id
+          LEFT JOIN dynamic_tasks live ON live.id=refs.task_id LEFT JOIN dynamic_archived_tasks archived ON archived.id=refs.task_id
+          WHERE json_extract(source.body,'$.groupId')=? AND json_extract(coalesce(live.body,archived.body),'$.groupId')=? ORDER BY refs.source_id,refs.task_id`)
+          .all(JSON.stringify([...new Set(q.sourceIds)]), q.groupId, q.groupId)
+      }
+      if (q.kind === 'router.fact.legacy-unsettled') return clone(all('dynamic_topic_facts',
+        "WHERE json_extract(body,'$.state')='pending' OR (json_extract(body,'$.state')='accepted' AND json_type(body,'$.decision')='object' AND json_type(body,'$.projectedAt') IS NULL) ORDER BY rowid"))
       if (q.kind.startsWith('topic.fact.')) return clone(topicFacts.query(q))
       if(q.kind==='observer.work-metadata')return observerWorkMetadata(db,q)
       if(q.kind==='observer.revision')return `${incarnation}:${db.prepare('SELECT total_changes() n').get().n}`
@@ -2055,7 +2295,7 @@ export async function openDynamicTaskStore({ dbPath, instanceId, initialize = fa
       else if (q.kind === 'operation.list') value = ops(q.taskId)
       else if (q.kind === 'wake.list') value = wakes(q.taskId).filter(item => !q.state || item.state === q.state)
       else if (q.kind === 'notification.get') value = get('dynamic_notifications', q.notificationId, true)
-      else if (q.kind === 'notification.list') value = (q.taskId ? taskRows('dynamic_notifications', q.taskId) : all('dynamic_notifications')).filter(item => (!q.taskId || item.taskId === q.taskId) && (!q.groupId || item.payload?.conversationId === q.groupId) && (!q.state || item.state === q.state))
+      else if (q.kind === 'notification.list') value = (q.taskId ? taskRows('dynamic_notifications', q.taskId) : all('dynamic_notifications')).filter(item => (!q.taskId || item.taskId === q.taskId) && (!q.groupId || (item.payload?.groupId ?? item.payload?.conversationId) === q.groupId) && (!q.state || item.state === q.state))
       else if (q.kind === 'legacy.list') value = all('dynamic_legacy_blockers')
       else if (q.kind === 'resource.list') value = db.prepare('SELECT resource_key AS resourceKey,holder FROM dynamic_resource_locks ORDER BY resource_key').all()
       else if (q.kind === 'resource.catalog') value = resourceCatalog.snapshot

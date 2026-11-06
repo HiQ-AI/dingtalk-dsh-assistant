@@ -32,6 +32,7 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
     retryDecisionFailedMessage: async (value) => ({ retried: true, ...value }),
     getDwsBridgeHealth: getDwsBridgeHealth ?? (() => ({ healthy: true, groups: [] })),
     listTopics: () => [],
+    sourceTaskRefs: async () => [],
     ...overrides,
   }
   const server = createServer((request, response) => handleRequest(request, response, runtime, {
@@ -42,6 +43,59 @@ async function withServer(testApiEnabled, run, { transport = 'fake-dws', getDwsB
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   try { await run(`http://127.0.0.1:${server.address().port}`) } finally { await new Promise((resolve) => server.close(resolve)) }
 }
+
+test('群与私聊摘要暴露真实会话身份及精简 Router 状态，不泄露内部队列', async () => {
+  const internalId = 'direct:internal-hash'
+  const group = { groupId: internalId, conversationType: 'direct', conversationId: 'conversation-real-id', router: {
+    sessionId: 'native-router-session', generation: 4, queue: [{ kind: 'source', id: 'secret-source' }], active: { inputs: [{ id: 'secret-input' }] }, decisions: [{ decisionId: 'secret-decision' }],
+  } }
+  await withServer(false, async base => {
+    const response = await fetch(`${base}/state/groups?summary=true`)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), [{ groupId: internalId, name: '私聊', responsibility: '', conversationType: 'direct', conversationId: 'conversation-real-id',
+      router: { sessionId: 'native-router-session', generation: 4, queued: 1, activeInputs: 1 } }])
+  }, { overrides: { listObserverGroups: () => [{ groupId: internalId, name: '私聊', responsibility: '' }], getGroup: id => id === internalId ? group : undefined } })
+})
+
+test('群摘要仅把真实 source 输入队列投影为处理中状态', async () => {
+  const sources = ['queued', 'fact-only'].map(sourceId => ({ sourceId, groupId: 'g', messageId: `message-${sourceId}`, version: 1,
+    directProcessing: null, processingPending: false, processingCompleted: null }))
+  const group = { groupId: 'g', conversationType: 'group', conversationId: 'real-group', messages: sources.map(source => ({
+    messageId: source.messageId, messageVersion: source.version, text: source.messageId, occurredAt: '2026-11-06T00:00:00.000Z' })),
+    router: { sessionId: 'router', generation: 2, queue: [
+      { kind: 'source', id: 'queued', sourceRef: { sourceId: 'queued' } }, { kind: 'fact', id: 'fact-only' },
+    ], active: { inputs: [] } } }
+  await withServer(false, async base => {
+    const response = await fetch(`${base}/state/groups?groupId=g`)
+    assert.equal(response.status, 200)
+    const messages = (await response.json()).messages
+    assert.equal(messages.find(item => item.messageId === 'message-queued').processingState, 'processing')
+    assert.notEqual(messages.find(item => item.messageId === 'message-fact-only').processingState, 'processing')
+  }, { overrides: {
+    getGroup: id => id === 'g' ? group : undefined,
+    messageProcessingSources: async () => sources,
+    messageProcessingRequests: async () => [],
+  } })
+})
+
+test('分页消息按当前 sourceId/message/version 精确关联任务并移除旧Topic链接', async () => {
+  let query
+  await withServer(false, async base => {
+    const response = await fetch(`${base}/state/groups/g/messages?limit=10`)
+    assert.equal(response.status, 200)
+    const page = await response.json()
+    assert.equal(page.items[0].topicRefs, undefined)
+    assert.deepEqual(page.items[0].sourceRefs, [{ sourceId: 'source-v2', messageId: 'm', version: 2 }])
+    assert.deepEqual(page.items[0].taskRefs, [{ sourceId: 'source-v2', messageId: 'm', version: 2, taskId: 'task-current', title: '当前任务', status: 'running', archivedAt: null }])
+    assert.deepEqual(query, { groupId: 'g', sourceIds: ['source-v2'] })
+  }, { overrides: {
+    observerGroupPage: async () => ({ items: [{ messageId: 'm', messageVersion: 2, sourceRefs: [{ sourceId: 'source-v2', messageId: 'm', version: 2 }], topicRefs: [{ topicId: 'legacy' }] }], total: 1, offset: 0, limit: 10, revision: 'r1' }),
+    sourceTaskRefs: async value => { query = value; return [
+      { sourceId: 'source-v2', messageId: 'm', version: 2, taskId: 'task-current', title: '当前任务', status: 'running', archivedAt: null },
+      { sourceId: 'source-v2', messageId: 'm', version: 1, taskId: 'task-stale', title: '旧版本任务', status: 'completed', archivedAt: '2026-01-01' },
+    ] },
+  } })
+})
 
 test('silent fixed correction requires local identity and exact bounded source versions', async () => {
   const calls = [], body = { requestId: 'manual-416-422', routingRevision: 5, reason: '用户明确纠正为职责外话题', messages: [{ messageId: 'msg-id', messageVersion: 2 }] }
@@ -388,7 +442,7 @@ test('混合协调与legacy Topic不接受提前语义戳，逐unit最新entry�
     assert.equal((await read()).processingState, 'processed', 'removed b must not erase active a')
     topic.entries.push({ messageId: 'm', messageVersion: 1, unitId: 'a', revision: 9, action: 'add' })
     assert.equal((await read()).processingCompletedAt, new Date(early).toISOString())
-    assert.deepEqual((await read()).topicRefs, [], 'stale-version-only entries must not appear as current topic links')
+    assert.equal((await read()).topicRefs, undefined, 'the current message API does not expose historical Topic links')
     topics.push({ ...topic, topicId: 'merged', mergedInto: 't', processedRevision: 0 })
     assert.equal((await read()).processingState, 'processed')
   }, { overrides: { listGroups: () => [group], listTopics: () => topics, messageProcessingSources: async () => [source] } })
@@ -638,8 +692,9 @@ test('Topic 查询有界分页且群摘要不泄漏内部决策、归类和预�
     const { processingState, processingBasis, processingFacts, ...existing } = projected.messages[0]
     assert.equal(processingState, 'routing'); assert.equal(processingBasis, 'unknown')
     assert.equal(processingFacts.sourceState, 'unknown'); assert.equal(processingFacts.semantic.quality, 'missing')
-    assert.deepEqual(existing, { ...group.messages[0], processingConclusion: null, processingFailureCode: null, processingCompletedAt: null, processingSentAt: null, topicRefs: [{ topicId: 'topic-0', revision: 3, title: '话题 0' }] })
-    assert.deepEqual(projected.topicProgress, { total: 102, pending: 102, pendingRevisions: 204, pendingUnits: 0, unroutedMessages: 1 })
+    assert.deepEqual(existing, { ...group.messages[0], processingConclusion: null, processingFailureCode: null, routingHold: null,
+      processingCompletedAt: null, processingSentAt: null, sourceRefs: [], taskRefs: [] })
+    assert.equal(projected.topicProgress, undefined, 'Topic progress is retained only by historical read endpoints')
     const detail = await (await fetch(`${baseUrl}/state/topics/topic-0?groupId=g&revision=2&offset=1&limit=3`)).json()
     assert.deepEqual(request, { groupId: 'g', topicId: 'topic-0', revision: 2, offset: 1, limit: 3, includeTaskRefs:false })
     assert.equal(detail.topic.decisions, undefined)
@@ -843,7 +898,7 @@ test('新任务只接受目标资料与普通验收要求，拒绝模板运行�
     const post = (value, headers = {}) => fetch(base + '/tasks', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(value) })
     assert.equal((await post(body)).status, 200)
     assert.equal((await post({ ...body, context: '资料不是授权', acceptanceCriteria: ['状态可查'] })).status, 200)
-    for (const extra of [{ workflowId: 'task-general' }, { stages: ['prepare', 'execute'] }, { stageTasks: ['执行'] }, { runSequence: 1 }, { configurationSnapshot: {} }, { sessionId: 'forged' }, { actorId: 'forged' }]) assert.equal((await post({ ...body, ...extra })).status, 400)
+    for (const extra of [{ workflowId: 'task-general' }, { stages: ['prepare', 'execute'] }, { stageTasks: ['执行'] }, { runSequence: 1 }, { configurationSnapshot: {} }, { sessionId: 'forged' }, { actorId: 'forged' }, { topicRefs: [{ topicId: 'legacy-topic', revision: 1 }] }]) assert.equal((await post({ ...body, ...extra })).status, 400)
     for (const headers of [{ origin: 'https://other.example' }, { origin: 'null' }]) assert.equal((await post(body, headers)).status, 403)
     assert.equal((await rawRequest(base + '/tasks', { method: 'POST', headers: { host: 'other.example', 'content-type': 'application/json' }, body: JSON.stringify(body) })).status, 403)
     assert.equal(calls.length, 2)

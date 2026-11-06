@@ -6,8 +6,65 @@ const timing = (start, end) => {
   return { quality: !Number.isFinite(duration) ? 'missing' : duration < 0 ? 'negative' : 'valid', durationMs: Number.isFinite(duration) && duration >= 0 ? duration : null }
 }
 
-// 状态在拥有 Topic/来源账的后端判定，通知及业务 Task 完成不作语义完成门禁。
-export function messageProcessingProjection(message, topics, source, requests, stateOnly=false, details=true) {
+const routerRoles = { routing: 'triage', decision: 'router', host: 'application' }
+function matchingRouterFailures(message, source, requests) {
+  return requests.filter(request => {
+    const ref = request.sourceRef
+    return ref && routerRoles[request.phase] && ref.messageId === message.messageId
+      && ref.messageVersion === message.messageVersion && (!source?.sourceId || ref.sourceId === source.sourceId)
+      && ['failed', 'retrying'].includes(request.status) && typeof request.requestId === 'string'
+  })
+}
+
+// 通知、Router回执和业务Task完成是独立事实；只把已持久的当前来源终态当作完成。
+function directMessageProjection(message, source, stateOnly, details, routerPending, failures) {
+  const completed = source?.directProcessing || (source?.processingCompleted?.mode === 'direct' ? source.processingCompleted : null)
+  const completedAt = completed?.at ?? source?.processingCompleted?.at ?? null
+  const failed = failures.filter(item => item.status === 'failed')
+  const retrying = failures.some(item => item.status === 'retrying')
+  const state = completed ? 'processed' : failed.length || message.routingStatus === 'failed' ? 'failed'
+    : routerPending || source?.processingPending || retrying ? 'processing' : message.routingStatus === 'pending' ? 'routing' : 'unknown'
+  if (stateOnly) return { processingState: state }
+  const phase = completed?.disposition?.phase
+  const latestFailure = failed.at(-1)
+  const retryable = latestFailure?.retryToken ? {
+    sourceId: latestFailure.sourceRef.sourceId, messageId: latestFailure.sourceRef.messageId,
+    messageVersion: latestFailure.sourceRef.messageVersion, phase: latestFailure.phase,
+    role: routerRoles[latestFailure.phase], requestId: latestFailure.requestId, retryToken: latestFailure.retryToken,
+  } : null
+  const base = { processingState: state, processingBasis: completed ? `direct-${phase ?? 'source'}` : latestFailure ? `direct-${routerRoles[latestFailure.phase]}-failure` : 'direct-source',
+    processingConclusion: null, processingFailureCode: null, routingHold: null,
+    processingSentAt: message.occurredAt ?? null, processingCompletedAt: completedAt,
+    processingRecovery: retryable, processingRetrying: retrying }
+  if (!details) return base
+  const notices = source?.notifications ?? []
+  const noticeTimes = notices.map(notice => notice.deliveredAt)
+  const deliveredAt = notices.length && notices.every(notice => notice.versionMatched === true && notice.state === 'delivered') && noticeTimes.every(time => Number.isFinite(instant(time)))
+    ? new Date(Math.max(...noticeTimes.map(instant))).toISOString() : null
+  const issues = failures.map(item => ({ phase: item.phase, role: routerRoles[item.phase], status: item.status,
+    requestId: item.requestId, attempt: item.attempt, code: item.code, failurePhase: item.failurePhase,
+    sourceId: item.sourceRef.sourceId, messageId: item.sourceRef.messageId, messageVersion: item.sourceRef.messageVersion }))
+  return { ...base, processingFacts: {
+    sourceId: source?.sourceId ?? failures.at(-1)?.sourceRef.sourceId ?? null,
+    messageVersion: source?.version ?? failures.at(-1)?.sourceRef.messageVersion ?? message.messageVersion ?? null,
+    sourceState: source?.ownNotificationRetirement ? 'retired' : completed ? 'settled' : routerPending ? 'queued' : 'unsettled',
+    sourceSettledAt: source?.ownNotificationRetirement?.at ?? source?.routedAt ?? completedAt,
+    receivedAt: source?.receivedAt ?? message.receivedAt ?? null,
+    notificationState: !notices.length ? 'unknown' : deliveredAt ? 'delivered' : 'unconfirmed', notifications: notices,
+    semantic: timing(message.occurredAt, completedAt),
+    notificationE2e: timing(source?.receivedAt ?? message.receivedAt, deliveredAt),
+    stages: source?.stages ?? [], issues, recovery: failed.filter(item => item.retryToken).map(item => ({
+      sourceId: item.sourceRef.sourceId, messageId: item.sourceRef.messageId, messageVersion: item.sourceRef.messageVersion,
+      phase: item.phase, role: routerRoles[item.phase], requestId: item.requestId, retryToken: item.retryToken,
+    })),
+  } }
+}
+
+// 新来源使用直接处置与Router失败身份；旧消息继续按历史 Topic 证据只读投影。
+export function messageProcessingProjection(message, topics, source, requests, stateOnly=false, details=true, routerPending=false) {
+  const routerFailures = matchingRouterFailures(message, source, requests)
+  if (source?.directProcessing || source?.processingCompleted?.mode === 'direct' || routerFailures.length || routerPending || source?.processingPending)
+    return directMessageProjection(message, source, stateOnly, details, routerPending, routerFailures)
   const currentUnit = ref => !Array.isArray(message.activeUnitRefs) || message.activeUnitRefs.some(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
   const retired = ref => source?.coordinationRetirement?.units?.some(item => item.unitId === ref.unitId && item.unitRevision === ref.unitRevision)
   const related = topics.flatMap(topic => {

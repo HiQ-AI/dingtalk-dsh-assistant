@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { openResidentStore, residentDomainSpec } from '../packages/dingtalk-dsh-assistant/store.js'
 import { assertCurrentTaskPrompts } from '../packages/dingtalk-dsh-assistant/task-result.js'
@@ -13,6 +14,409 @@ function memoryFacility(seed = new Map()) {
   })
   return { seed, facility: { async open() { return { table, close: async () => undefined } } } }
 }
+
+test('首筛和 Router 模型迁移保留显式 null 并跨重启稳定', async () => {
+  const legacy = { provider: 'provider', model: 'model', reasoningMode: 'inherit', reasoningEffort: null }
+  const seed = new Map([['scheduler:runtime', { tasks: [], topicRouteModel: legacy, topicDecisionModel: legacy, triageModel: null }]])
+  let store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal(store.getTriageModelConfig(), null)
+  assert.deepEqual(store.getRouterModelConfig(), legacy)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal(store.getTriageModelConfig(), null)
+  assert.deepEqual(store.getRouterModelConfig(), legacy)
+  await store.close()
+})
+
+test('Router 回复重放必须保持类型和替代目标', async () => {
+  const { facility } = memoryFacility(), store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'reply-identity-g' })
+  const outbound = { groupId: 'reply-identity-g', outboundId: 'router-reply:op', decisionId: 'd', sourceMessageId: 'm', text: '答复', replyKind: 'substantive' }
+  await store.appendOutbox(outbound)
+  await store.appendOutbox(outbound)
+  await assert.rejects(store.appendOutbox({ ...outbound, replyKind: 'confirmation' }), /outbox_identity_conflict/)
+  await assert.rejects(store.appendOutbox({ ...outbound, replacesOutboundIds: ['old'] }), /outbox_identity_conflict/)
+  await store.close()
+})
+
+test('正常入站标记与消息同次持久化并按版本保留来源时间', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'ingress-g' })
+  const base = { groupId: 'ingress-g', text: '请求', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' }
+  await store.ingestHistory({ ...base, messageId: 'history' })
+  await store.ingest({ ...base, messageId: 'normal', routerIngress: { receivedAt: 'received', timestamp: '' } })
+  await store.ingest({ ...base, messageId: 'normal', routerIngress: { receivedAt: 'later', timestamp: 'different' } })
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal(store.getGroup('ingress-g').messages.find(item => item.messageId === 'history').routerIngress, undefined)
+  assert.deepEqual(store.getGroup('ingress-g').messages.find(item => item.messageId === 'normal').routerIngress, { messageVersion: 1, receivedAt: 'received', timestamp: '' })
+  await store.ingest({ ...base, messageId: 'normal', messageVersion: 2, text: '更新', routerIngress: { receivedAt: 'new', timestamp: 'actual' } })
+  assert.deepEqual(store.getGroup('ingress-g').messages.find(item => item.messageId === 'normal').routerIngress, { messageVersion: 2, receivedAt: 'new', timestamp: 'actual' })
+  await store.close()
+})
+
+test('完成附件必须绑定本批真实事实和冻结文件', async () => {
+  const { facility } = memoryFacility(), store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'file-g' })
+  await store.ingest({ groupId: 'file-g', messageId: 'm', text: '处理', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' })
+  const sourceRef = { sourceId: 's', messageId: 'm', messageVersion: 1 }
+  await store.triageAccept({ groupId: 'file-g', sourceRef, actorId: 'actor', needsProcessing: true, reply: null })
+  const file = { artifact: { artifactId: 'a', requirementRevision: 1, taskId: 'task' }, caption: '结果' }
+  const body = { factId: 'fact', groupId: 'file-g', kind: 'completed', result: { artifactFiles: [file] }, sourceIds: ['s'], taskId: 'task', taskVersion: { requirementRevision: 1 } }
+  const fact = { ...body, factDigest: createHash('sha256').update(JSON.stringify(body)).digest('hex') }
+  await store.routerEnqueueFact({ groupId: 'file-g', fact })
+  const claim = await store.routerClaim({ groupId: 'file-g', sessionId: 'router' })
+  const review = { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }
+  const completion = { factId: 'fact', factDigest: fact.factDigest, taskId: 'task', taskVersion: fact.taskVersion, files: [file] }
+  const app = { kind: 'reply', operationId: 'reply', sourceRef, actorId: 'actor', text: '完成', replyReview: { candidates: [], review }, completion }
+  const commit = { groupId: 'file-g', binding: claim.binding, batchId: claim.batch.batchId, decision: {}, continuity: [], applications: [app] }
+  for (const invalid of [
+    { ...completion, factId: 'other' },
+    { ...completion, factDigest: 'other' },
+    { ...completion, taskId: 'other' },
+    { ...completion, taskVersion: { requirementRevision: 2 } },
+    { ...completion, files: [null] },
+    { ...completion, files: [file, file] },
+    { ...completion, files: [{ ...file, caption: '伪造' }] },
+    { ...completion, files: [{ ...file, artifact: { ...file.artifact, artifactId: 'other' } }] },
+  ]) await assert.rejects(store.routerCommit({ ...commit, applications: [{ ...app, completion: invalid }] }), /router_reply_completion_invalid/)
+  assert.deepEqual((await store.routerCommit(commit)).applications[0].completion, completion)
+  await store.close()
+})
+
+test('Router 回复准备与来源更新、发送许可在群锁内串行', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  const sourceRef = { sourceId: 's', messageId: 'm', messageVersion: 1 }
+  const ingest = (groupId, text) => store.ingest({ groupId, messageId: 'm', messageVersion: text === '初始' ? 1 : 2, text, senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' })
+  const setup = async groupId => {
+    await store.subscribe({ groupId })
+    await ingest(groupId, '初始')
+    const review = { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }
+    const triage = await store.triageAccept({ groupId, sourceRef, actorId: 'actor', needsProcessing: false, reply: '回复', replyReview: { review, candidates: [] } })
+    const intent = { decisionId: triage.triageId, operationId: triage.triageId, sourceRef, text: '回复', replyKind: 'confirmation', replyReview: review, candidates: [] }
+    const outbound = { outboundId: `router-reply:${triage.triageId}`, decisionId: triage.triageId, sourceMessageId: `notification:${groupId}`, sourceRef: { messageId: 'm', messageVersion: 1, actorId: 'actor' }, text: '回复', replyKind: 'confirmation' }
+    return { groupId, intent, outbound }
+  }
+  const inspect = status => async () => ({ status })
+  const preparing = await setup('prepare-lock')
+  assert.deepEqual(await store.withRouterReplyPreparation({ ...preparing, commit: async () => { throw new Error('unexpected') }, inspectNotification: inspect('existing') }), { status: 'existing' })
+  const entered = Promise.withResolvers(), gate = Promise.withResolvers()
+  const prepare = store.withRouterReplyPreparation({ ...preparing, inspectNotification: inspect('absent'), commit: async () => { entered.resolve(); await gate.promise; return 'receipt' } })
+  await entered.promise
+  let updated = false
+  const update = ingest('prepare-lock', '新版本').then(() => { updated = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(updated, false)
+  gate.resolve()
+  assert.deepEqual(await prepare, { status: 'prepared', result: 'receipt' })
+  await update
+  assert.deepEqual(await store.withRouterReplyPreparation({ ...preparing, commit: async () => { throw new Error('unexpected') }, inspectNotification: inspect('existing') }), { status: 'existing' })
+  const retired = await setup('retire-lock')
+  await ingest('retire-lock', '新版本')
+  assert.deepEqual(await store.withRouterReplyPreparation({ ...retired, commit: async () => { throw new Error('unexpected') }, inspectNotification: inspect('absent') }), { status: 'retired' })
+  assert.equal(await store.beginOutboundSend({ groupId: retired.groupId, outboundId: retired.outbound.outboundId }), false)
+  await store.projectTaskNotification({ groupId: retired.groupId, outbound: { ...retired.outbound, status: 'pending', notificationState: 'prepared' } })
+  assert.equal(store.getGroup(retired.groupId).outbox[0].status, 'superseded')
+  const projected = await setup('projected-lock')
+  await store.withRouterReplyPreparation({ ...projected, commit: async () => {}, inspectNotification: inspect('absent') })
+  await store.projectTaskNotification({ groupId: projected.groupId, outbound: { ...projected.outbound, status: 'pending', notificationState: 'prepared' } })
+  await ingest('projected-lock', '新版本')
+  assert.deepEqual(await store.withRouterReplyPreparation({ ...projected, commit: async () => {}, inspectNotification: inspect('retired') }), { status: 'retired' })
+  assert.equal(store.getGroup(projected.groupId).outbox[0].notificationState, 'superseded')
+  const projectedFirst = await setup('projected-first')
+  await store.withRouterReplyPreparation({ ...projectedFirst, commit: async () => {}, inspectNotification: inspect('absent') })
+  await store.projectTaskNotification({ groupId: projectedFirst.groupId, outbound: { ...projectedFirst.outbound, status: 'superseded', notificationState: 'superseded' } })
+  await ingest('projected-first', '新版本')
+  assert.deepEqual(await store.withRouterReplyPreparation({ ...projectedFirst, commit: async () => {}, inspectNotification: inspect('retired') }), { status: 'retired' })
+  assert.equal(store.getGroup(projectedFirst.groupId).outbox[0].supersededReason, 'router-source-stale-before-prepare')
+  const started = await setup('started-lock')
+  await store.withRouterReplyPreparation({ ...started, commit: async () => {}, inspectNotification: inspect('absent') })
+  assert.equal(await store.beginOutboundSend({ groupId: started.groupId, outboundId: started.outbound.outboundId }), true)
+  await ingest('started-lock', '新版本')
+  await assert.rejects(store.withRouterReplyPreparation({ ...started, commit: async () => {}, inspectNotification: inspect('absent') }), /router_reply_preparation_blocked/)
+  await assert.rejects(store.withRouterReplyPreparation({ ...retired, intent: { ...retired.intent, text: '伪造' }, commit: async () => {}, inspectNotification: inspect('absent') }), /identity_invalid/)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.deepEqual(await store.withRouterReplyPreparation({ ...retired, commit: async () => { throw new Error('unexpected') }, inspectNotification: async () => { throw new Error('unexpected') } }), { status: 'retired' })
+  assert.equal(await store.beginOutboundSend({ groupId: retired.groupId, outboundId: retired.outbound.outboundId }), false)
+  await store.close()
+})
+
+test('Router 多人通知固定来源证据并保护已准备的原身份', async () => {
+  const { facility } = memoryFacility(), store = await openResidentStore(facility)
+  const groupId = 'router-audience', sourceRef = { sourceId: 's1', messageId: 'm1', messageVersion: 1 }
+  await store.subscribe({ groupId })
+  for (const [messageId, actor] of [['m1', 'a1'], ['m2', 'a2']]) await store.ingestHistory({ groupId, messageId,
+    text: '请求', senderOpenDingTalkId: actor, occurredAt: '2026-11-06T00:00:00Z' })
+  await store.triageAccept({ groupId, sourceRef, actorId: 'a1', needsProcessing: true, reply: null })
+  const claim = await store.routerClaim({ groupId, sessionId: 'router' })
+  const review = { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }
+  const notificationRouting = { replyToMessageId: 'm2', replyToSenderOpenDingTalkId: 'a2', atOpenDingTalkIds: ['a1', 'a2'], sourceRefs: [
+    { sourceId: 's1', messageId: 'm1', messageVersion: 1, actorId: 'a1' }, { sourceId: 's2', messageId: 'm2', messageVersion: 1, actorId: 'a2' } ] }
+  const application = { kind: 'reply', operationId: 'reply-op', sourceRef, actorId: 'a1', text: '回复', replyReview: { candidates: [], review }, notificationRouting }
+  const decision = await store.routerCommit({ groupId, binding: claim.binding, batchId: claim.batch.batchId, decision: {}, continuity: [], applications: [application] })
+  const intent = { decisionId: decision.decisionId, operationId: application.operationId, sourceRef, text: '回复', replyKind: 'substantive', replyReview: review, candidates: [], notificationRouting }
+  const outbound = { outboundId: 'router-reply:reply-op', decisionId: decision.decisionId, sourceMessageId: 'notification', text: '回复',
+    sourceRef: { messageId: 'm1', messageVersion: 1, actorId: 'a1' }, replyKind: 'substantive', replyToMessageId: 'm2', replyToSenderOpenDingTalkId: 'a2', atOpenDingTalkIds: ['a1', 'a2'] }
+  const prepare = (inspectNotification, overrides = {}) => store.withRouterReplyPreparation({ groupId, intent, outbound, inspectNotification, commit: async () => 'receipt', ...overrides })
+  assert.deepEqual(await prepare(async () => ({ status: 'absent' })), { status: 'prepared', result: 'receipt' })
+  await store.ingest({ groupId, messageId: 'm2', messageVersion: 2, text: '更新', senderOpenDingTalkId: 'a2', occurredAt: '2026-11-06T00:00:01Z' })
+  assert.deepEqual(await prepare(async () => ({ status: 'existing' })), { status: 'existing' })
+  assert.deepEqual(await prepare(async ({ retireIfUnsent }) => { assert.equal(retireIfUnsent, true); return { status: 'absent' } }), { status: 'retired' })
+  assert.equal(await store.beginOutboundSend({ groupId, outboundId: outbound.outboundId }), false)
+  await assert.rejects(prepare(async () => ({ status: 'existing' }), { intent: { ...intent, notificationRouting: { ...notificationRouting, atOpenDingTalkIds: [] } } }), /router_reply_preparation_identity_invalid/)
+  await store.close()
+})
+
+test('Router 失败重试令牌按来源版本和阶段原子失效并跨重启恢复', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'retry-token' })
+  await store.ingest({ groupId: 'retry-token', messageId: 'm', text: '请求', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' })
+  const sourceRef = { sourceId: 's', messageId: 'm', messageVersion: 1 }
+  const failure = await store.routerRecordFailure({ groupId: 'retry-token', sourceRef, phase: 'routing', requestId: 'triage:s', error: 'preset_missing', failurePhase: 'triage' })
+  const request = { groupId: 'retry-token', messageId: 'm', messageVersion: 1, phase: 'routing', requestId: 'triage:s', token: failure.retryToken }
+  for (const patch of [{ messageVersion: 2 }, { phase: 'decision' }, { token: 'wrong' }]) await assert.rejects(store.routerRetryFailure({ ...request, ...patch }), /MESSAGE_RETRY_STALE/)
+  const outcomes = await Promise.allSettled([store.routerRetryFailure(request), store.routerRetryFailure(request)])
+  assert.equal(outcomes.filter(item => item.status === 'fulfilled').length, 1)
+  assert.equal(outcomes.filter(item => item.status === 'rejected').length, 1)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal(store.getRouterState('retry-token').failures[0].status, 'retrying')
+  const next = await store.routerRecordFailure({ groupId: 'retry-token', sourceRef, phase: 'routing', requestId: 'triage:s', error: 'preset_missing', failurePhase: 'triage' })
+  assert.equal(next.attempt, 2)
+  assert.notEqual(next.retryToken, failure.retryToken)
+  await assert.rejects(store.routerRetryFailure(request), /MESSAGE_RETRY_STALE/)
+  await store.routerResolveFailure({ groupId: 'retry-token', sourceId: 's', phase: 'routing', requestId: 'triage:s' })
+  assert.equal(store.getRouterState('retry-token').failures.length, 0)
+  await store.close()
+})
+
+test('Router 回复提交对审阅后出现的候选拒绝落账', async () => {
+  const { facility } = memoryFacility(), store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'reply-router-g' })
+  await store.ingest({ groupId: 'reply-router-g', messageId: 'm', text: '处理', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' })
+  const sourceRef = { sourceId: 's', messageId: 'm', messageVersion: 1 }
+  await store.triageAccept({ groupId: 'reply-router-g', sourceRef, actorId: 'actor', needsProcessing: true, reply: null })
+  const claim = await store.routerClaim({ groupId: 'reply-router-g', sessionId: 'router' })
+  const review = { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }
+  const application = { kind: 'reply', operationId: 'reply-op', sourceRef, actorId: 'actor', text: '回复', replyReview: { candidates: [], review } }
+  await store.appendOutbox({ groupId: 'reply-router-g', outboundId: 'other', sourceMessageId: 'm', text: '另一个答复', replyKind: 'substantive' })
+  await assert.rejects(store.routerCommit({ groupId: 'reply-router-g', binding: claim.binding, batchId: claim.batch.batchId,
+    decision: {}, continuity: [], applications: [application] }), /router_reply_review_stale/)
+  assert.equal(store.getRouterState('reply-router-g').decisions.length, 0)
+  await store.close()
+})
+
+test('回复审阅锁内检查候选和确认替代边界', async () => {
+  const { facility } = memoryFacility(), store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'reply-g' })
+  await store.ingest({ groupId: 'reply-g', messageId: 'm', text: '处理', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' })
+  const triage = { groupId: 'reply-g', sourceRef: { sourceId: 's', messageId: 'm', messageVersion: 1 }, actorId: 'actor', needsProcessing: false, reply: '收到' }
+  const review = { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }
+  await store.appendOutbox({ groupId: 'reply-g', outboundId: 'existing', sourceMessageId: 'm', text: '实质答复', replyKind: 'substantive' })
+  await assert.rejects(store.triageAccept({ ...triage, replyReview: { candidates: [], review } }), /router_reply_review_stale/)
+  const candidates = [{ outboundId: 'existing', status: 'pending', text: '实质答复', replyKind: 'substantive' }]
+  const replace = { kind: 'confirmation', reviewedOutboundIds: ['existing'], sameMatterOutboundIds: ['existing'], replaceOutboundIds: ['existing'] }
+  await assert.rejects(store.triageAccept({ ...triage, replyReview: { candidates, review: replace } }), /router_reply_review_invalid/)
+  const valid = { ...review, reviewedOutboundIds: ['existing'] }
+  const receipt = await store.triageAccept({ ...triage, replyReview: { candidates, review: valid } })
+  assert.equal(receipt.replyStatus, 'pending')
+  assert.deepEqual(await store.triageAccept({ ...triage, replyReview: { candidates, review: valid } }), receipt)
+  await store.close()
+})
+
+test('持久安排跨重启唯一绑定原操作，重复激活被拒绝', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'arrangement-g' })
+  await store.ingest({ groupId: 'arrangement-g', messageId: 'm', text: '先做甲再做乙', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' })
+  const sourceRef = { sourceId: 's', messageId: 'm', messageVersion: 1 }
+  await store.triageAccept({ groupId: 'arrangement-g', sourceRef, actorId: 'actor', needsProcessing: true, reply: null })
+  const claim = await store.routerClaim({ groupId: 'arrangement-g', sessionId: 's1' })
+  const arrangement = { arrangementId: 'a', taskId: 'task-b', sourceRefs: [sourceRef], title: '乙', objective: '完成乙', dependsOnTaskIds: ['task-a'] }
+  await store.routerCommit({ groupId: 'arrangement-g', binding: claim.binding, batchId: claim.batch.batchId, decision: {}, continuity: [], applications: [], arrangements: [arrangement] })
+  const next = await store.routerRotate({ groupId: 'arrangement-g', binding: claim.binding, expectedContinuityRevision: 1, sessionId: 's2' })
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal(store.getRouterState('arrangement-g').arrangements[0].status, 'waiting')
+  const fact = { factId: 'f1', groupId: 'arrangement-g', kind: 'completed', taskId: 'task-a' }
+  await store.routerEnqueueFact({ groupId: 'arrangement-g', fact: { ...fact, factDigest: createHash('sha256').update(JSON.stringify(fact)).digest('hex') } })
+  const activation = await store.routerClaim({ groupId: 'arrangement-g' })
+  const application = { arrangementId: 'a', operationId: 'op-a', sourceRefs: [sourceRef], action: { kind: 'new-task', taskId: 'task-b', title: '乙', objective: '完成乙', dependencies: [{ taskId: 'task-a', requirementRevision: 1, contextRevision: 1, controlRevision: 1, runSequence: 1 }] } }
+  const commit = { groupId: 'arrangement-g', binding: next, batchId: activation.batch.batchId, decision: {}, continuity: [], applications: [application] }
+  const decision = await store.routerCommit(commit)
+  assert.deepEqual(await store.routerCommit(commit), decision)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal(store.getRouterState('arrangement-g').arrangements[0].operationId, 'op-a')
+  assert.equal(store.getRouterState('arrangement-g').decisions.at(-1).applications[0].status, 'pending')
+  const secondFact = { ...fact, factId: 'f2' }
+  await store.routerEnqueueFact({ groupId: 'arrangement-g', fact: { ...secondFact, factDigest: createHash('sha256').update(JSON.stringify(secondFact)).digest('hex') } })
+  const retry = await store.routerClaim({ groupId: 'arrangement-g' })
+  await assert.rejects(store.routerCommit({ ...commit, batchId: retry.batch.batchId, applications: [{ ...application, operationId: 'op-other' }] }), /router_arrangement_conflict/)
+  const receipt = { status: 'known-not-applied', code: 'DYNAMIC_ROUTER_DEPENDENCY_STALE', operationId: 'op-a', commandId: 'router-operation:op-a' }
+  await store.routerRecordRejection({ groupId: 'arrangement-g', decisionId: decision.decisionId, operationId: 'op-a', receipt })
+  assert.equal(store.getRouterState('arrangement-g').arrangements[0].revision, 1)
+  await assert.rejects(store.routerRecordApplication({ groupId: 'arrangement-g', decisionId: decision.decisionId, operationId: 'op-a', receipt: {} }), /router_receipt_conflict/)
+  await store.routerCommit({ ...commit, batchId: retry.batch.batchId, applications: [] })
+  const reconsider = await store.routerClaim({ groupId: 'arrangement-g' })
+  await store.routerCommit({ ...commit, batchId: reconsider.batch.batchId, applications: [{ ...application, operationId: 'op-other', retryOfOperationId: 'op-a' }] })
+  assert.equal(store.getRouterState('arrangement-g').arrangements[0].operationId, 'op-other')
+  await store.close()
+})
+
+test('DWS 标记的人工消息参与切换和新路由', async () => {
+  const { facility } = memoryFacility(), store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'human-dws' })
+  const message = { groupId: 'human-dws', text: '人工输入', senderOpenDingTalkId: 'actor', messageAiSendFlag: 'DWS', occurredAt: '2026-11-06T00:00:00Z' }
+  await store.ingest({ ...message, messageId: 'old' })
+  assert.equal((await store.routerCutover({ groupId: 'human-dws' })).pending[0].messageId, 'old')
+  await store.ingest({ ...message, messageId: 'new' })
+  await store.triageAccept({ groupId: 'human-dws', sourceRef: { sourceId: 'new-source', messageId: 'new', messageVersion: 1 }, actorId: 'actor', needsProcessing: true, reply: null })
+  const claim = await store.routerClaim({ groupId: 'human-dws', sessionId: 'router-1' })
+  await store.routerCommit({ groupId: 'human-dws', binding: claim.binding, batchId: claim.batch.batchId, decision: {}, continuity: [], applications: [] })
+  await store.ingest({ ...message, messageId: 'pending' })
+  await assert.rejects(store.routerRotate({ groupId: 'human-dws', binding: claim.binding, expectedContinuityRevision: 1, sessionId: 'router-2' }), /rotation_busy/)
+  await store.close()
+})
+
+test('切换快照只记录首次切换时待决版本且重启不扩大范围', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'cutover-g' })
+  const base = { groupId: 'cutover-g', text: '请求', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' }
+  await store.ingest({ ...base, messageId: 'old' })
+  const snapshot = await store.routerCutover({ groupId: 'cutover-g' })
+  assert.deepEqual(snapshot.pending, [{ messageId: 'old', messageVersion: 1, routingEpoch: 0 }])
+  await store.ingest({ ...base, messageId: 'new' })
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.deepEqual(await store.routerCutover({ groupId: 'cutover-g' }), snapshot)
+  assert.equal(store.getGroup('cutover-g').messages.find(item => item.messageId === 'old').routingStatus, 'pending')
+  await assert.rejects(store.triageAccept({ groupId: 'cutover-g', sourceRef: { sourceId: 'old-source', messageId: 'old', messageVersion: 1 }, actorId: 'actor', needsProcessing: true, reply: null }), /legacy_pending/)
+  await store.triageAccept({ groupId: 'cutover-g', sourceRef: { sourceId: 'new-source', messageId: 'new', messageVersion: 1 }, actorId: 'actor', needsProcessing: true, reply: null })
+  assert.equal(store.getRouterState('cutover-g').queue.length, 1)
+  await store.close()
+})
+
+test('旧待决来源保留原状态并按版本及 epoch 排除新路由', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'legacy-g' })
+  const base = { groupId: 'legacy-g', text: '请求', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' }
+  await store.ingest({ ...base, messageId: 'new' })
+  await store.triageAccept({ groupId: 'legacy-g', sourceRef: { sourceId: 's', messageId: 'new', messageVersion: 1 }, actorId: 'actor', needsProcessing: true, reply: null })
+  const claim = await store.routerClaim({ groupId: 'legacy-g', sessionId: 'old-session' })
+  await store.routerCommit({ groupId: 'legacy-g', binding: claim.binding, batchId: claim.batch.batchId, decision: {}, continuity: [], applications: [] })
+  await store.ingest({ ...base, messageId: 'old' })
+  const before = structuredClone(store.getGroup('legacy-g').messages.find(item => item.messageId === 'old'))
+  await assert.rejects(store.routerRotate({ groupId: 'legacy-g', binding: claim.binding, expectedContinuityRevision: 1, sessionId: 'next-session' }), /rotation_busy/)
+  await assert.rejects(store.routerMarkLegacyPending({ groupId: 'legacy-g', messageId: 'old', messageVersion: 2, routingEpoch: 0 }), /legacy_stale/)
+  const mark = { groupId: 'legacy-g', messageId: 'old', messageVersion: 1, routingEpoch: 0 }
+  await store.routerMarkLegacyPending(mark)
+  await store.routerMarkLegacyPending(mark)
+  assert.deepEqual(store.getGroup('legacy-g').messages.find(item => item.messageId === 'old'), before)
+  await assert.rejects(store.triageAccept({ groupId: 'legacy-g', sourceRef: { sourceId: 'old-source', messageId: 'old', messageVersion: 1 }, actorId: 'actor', needsProcessing: true, reply: null }), /legacy_pending/)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal(store.getRouterState('legacy-g').legacyPending.length, 1)
+  await store.routerRotate({ groupId: 'legacy-g', binding: claim.binding, expectedContinuityRevision: 1, sessionId: 'next-session' })
+  await store.close()
+})
+
+test('Router 队列、决议与换代在重启和并发入队后保持围栏', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'router-g' })
+  await store.ingest({ groupId: 'router-g', messageId: 'm1', text: '处理', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' })
+  const sourceRef = { sourceId: 's1', messageId: 'm1', messageVersion: 1 }
+  const triage = { groupId: 'router-g', sourceRef, actorId: 'actor', needsProcessing: true, reply: null }
+  await assert.rejects(store.triageAccept({ ...triage, reply: '已收到', replyReview: [] }), /router_reply_review_stale/)
+  assert.equal(store.getRouterState('router-g').triage.length, 0)
+  assert.deepEqual(await store.triageAccept(triage), await store.triageAccept(triage))
+  await assert.rejects(store.triageAccept({ ...triage, needsProcessing: false }), /triage_conflict/)
+  const claim = await store.routerClaim({ groupId: 'router-g', sessionId: 'session-1' })
+  assert.equal(claim.batch.inputs.length, 1)
+  const commit = { groupId: 'router-g', binding: claim.binding, batchId: claim.batch.batchId, decision: { actions: [] }, continuity: [{ after: 'task-a' }], applications: [{ operationId: 'op-1' }] }
+  const decision = await store.routerCommit(commit)
+  assert.deepEqual(await store.routerCommit(commit), decision)
+  await assert.rejects(store.routerRotate({ groupId: 'router-g', binding: claim.binding, expectedContinuityRevision: 1, sessionId: 'session-2' }), /rotation_busy/)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  await store.routerRecordApplication({ groupId: 'router-g', decisionId: decision.decisionId, operationId: 'op-1', receipt: { accepted: true } })
+  await store.ingest({ groupId: 'router-g', messageId: 'm2', text: '随后处理', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:01:00Z' })
+  await assert.rejects(store.routerRotate({ groupId: 'router-g', binding: claim.binding, expectedContinuityRevision: 1, sessionId: 'session-2' }), /rotation_busy/)
+  await store.triageAccept({ ...triage, sourceRef: { sourceId: 's2', messageId: 'm2', messageVersion: 1 } })
+  await assert.rejects(store.routerRotate({ groupId: 'router-g', binding: claim.binding, expectedContinuityRevision: 1, sessionId: 'session-2' }), /rotation_busy/)
+  const nextClaim = await store.routerClaim({ groupId: 'router-g' })
+  assert.deepEqual(nextClaim.continuity, [{ after: 'task-a' }])
+  await store.routerCommit({ groupId: 'router-g', binding: nextClaim.binding, batchId: nextClaim.batch.batchId, decision: {}, continuity: [], applications: [] })
+  const next = await store.routerRotate({ groupId: 'router-g', binding: claim.binding, expectedContinuityRevision: 2, sessionId: 'session-2' })
+  assert.equal(next.generation, 2)
+  assert.equal(residentDomainSpec.tables.groups.valueSchema.parse(store.getGroup('router-g')).router.generation, 2)
+  await assert.rejects(store.routerRotate({ groupId: 'router-g', binding: claim.binding, expectedContinuityRevision: 2, sessionId: 'session-3' }), /binding_stale/)
+  await store.close()
+})
+
+test('Router 来源更新时释放旧批次并保留同批未消费事实', async () => {
+  const { facility } = memoryFacility()
+  const store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'router-stale' })
+  await store.ingest({ groupId: 'router-stale', messageId: 'm', text: '旧内容', senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' })
+  await store.triageAccept({ groupId: 'router-stale', sourceRef: { sourceId: 'same', messageId: 'm', messageVersion: 1 }, actorId: 'actor', needsProcessing: true, reply: null })
+  const body = { factId: 'same', groupId: 'router-stale', kind: 'waiting', taskId: 't' }
+  await store.routerEnqueueFact({ groupId: 'router-stale', fact: { ...body, factDigest: createHash('sha256').update('{"factId":"same","groupId":"router-stale","kind":"waiting","taskId":"t"}').digest('hex') } })
+  const claim = await store.routerClaim({ groupId: 'router-stale', sessionId: 's' })
+  await assert.rejects(store.routerReleaseStale({ groupId: 'router-stale', binding: claim.binding, batchId: claim.batch.batchId }), /not_stale/)
+  await store.ingest({ groupId: 'router-stale', messageId: 'm', text: '新内容', messageVersion: 2, senderOpenDingTalkId: 'actor', occurredAt: '2026-11-06T00:00:00Z' })
+  await assert.rejects(store.routerCommit({ groupId: 'router-stale', binding: claim.binding, batchId: claim.batch.batchId, decision: {}, continuity: [], applications: [] }), /source_stale/)
+  await store.routerReleaseStale({ groupId: 'router-stale', binding: claim.binding, batchId: claim.batch.batchId })
+  assert.deepEqual(store.getRouterState('router-stale').queue.map(item => item.kind), ['fact'])
+  assert.equal(store.getRouterState('router-stale').abandoned[0].inputs[0].sourceRef.messageVersion, 1)
+  await store.close()
+})
+
+test('Router 事实入队回执在并发和重启后稳定且拒绝身份冲突', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  await store.subscribe({ groupId: 'fact-group' })
+  const digest = text => createHash('sha256').update(text).digest('hex')
+  const fact = { factId: 'f1', groupId: 'fact-group', kind: 'completed', taskId: 't1', factDigest: digest('{"factId":"f1","groupId":"fact-group","kind":"completed","taskId":"t1"}') }
+  const [first, duplicate] = await Promise.all([store.routerEnqueueFact({ groupId: 'fact-group', fact }), store.routerEnqueueFact({ groupId: 'fact-group', fact })])
+  assert.deepEqual(first, duplicate)
+  const conflict = { ...fact, kind: 'drained', factDigest: digest('{"factId":"f1","groupId":"fact-group","kind":"drained","taskId":"t1"}') }
+  await assert.rejects(store.routerEnqueueFact({ groupId: 'fact-group', fact: conflict }), /identity_conflict/)
+  await assert.rejects(store.routerEnqueueFact({ groupId: 'fact-group', fact: { ...fact, factDigest: 'incorrect' } }), /digest_invalid/)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.deepEqual(await store.routerEnqueueFact({ groupId: 'fact-group', fact }), first)
+  assert.equal(residentDomainSpec.tables.groups.valueSchema.parse(store.getGroup('fact-group')).routerFacts.length, 1)
+  await store.close()
+})
+
+test('私聊会话固定真实身份并在重启后拒绝对端冲突', async () => {
+  const { facility, seed } = memoryFacility()
+  let store = await openResidentStore(facility)
+  const [first, repeated] = await Promise.all([
+    store.ensureDirectConversation({ conversationId: 'conversation-1', actorId: 'actor-1' }),
+    store.ensureDirectConversation({ conversationId: 'conversation-1', actorId: 'actor-1' }),
+  ])
+  assert.deepEqual(first, repeated)
+  assert.match(first.groupId, /^direct:[0-9a-f]{64}$/)
+  assert.equal(first.conversationId, 'conversation-1')
+  assert.equal(first.recipientActorId, 'actor-1')
+  assert.equal(residentDomainSpec.tables.groups.valueSchema.parse(first).conversationType, 'direct')
+  await assert.rejects(store.ensureDirectConversation({ conversationId: 'conversation-1', actorId: 'actor-2' }), /identity_conflict/)
+  await assert.rejects(store.subscribe({ groupId: first.groupId }), /identity_conflict/)
+  await store.close()
+  store = await openResidentStore(memoryFacility(seed).facility)
+  assert.equal((await store.ensureDirectConversation({ conversationId: 'conversation-1', actorId: 'actor-1' })).groupId, first.groupId)
+  await assert.rejects(store.ensureDirectConversation({ conversationId: 'conversation-1', actorId: 'actor-2' }), /identity_conflict/)
+  await store.close()
+})
 
 test('活动投影滚动500条、并发重复与重启乱序恢复，水位按Session隔离', async () => {
   const { facility, seed } = memoryFacility()

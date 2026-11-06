@@ -37,7 +37,7 @@ function card(task, {runEffects=false} = {}) {
  const actions = [], effects = [], requests = []
  let executionMounts = 0
  const render = runInNewContext(`(()=>{${durationComponent}\n${source.slice(source.indexOf('    function CardExecutionPage('),source.indexOf('    function ObserverContent('))}\n${source.slice(source.indexOf('      const renderTaskCard ='), source.indexOf('      const alertCategories ='))};return renderTaskCard})()`, {
-  expandedTaskId:task.taskId,setExpandedTaskId(){},updatedAt:0,useEffect:fn=>{if(runEffects)effects.push(fn)},useRef:()=>({current:undefined}),AbortController,get:url=>{requests.push(url);return new Promise(()=>{})},useState:initial=>[initial===undefined?{key:`${task.taskId}:0`,executions:(task.executionSessions||[]).slice(0,10),total:task.executionCount??task.executionSessions?.length??0,nextOffset:(task.executionSessions?.length||0)>10?10:null}:initial, value=>actions.push(['page',value])],Button:'button',archivingIds:[],archiveTask:task=>actions.push(['archive',task.taskId]),copyButton:(id,label)=>({type:'button',props:{onClick:()=>actions.push(['copy',id])},children:[`复制${label}`]}),React: {createElement:(type, props,...children)=>typeof type==='function'&&type.name==='CardExecutionPage'?(executionMounts++,type(props||{})):({type,props:props||{},children:children.flat()})}, groupsById:new Map([['g',{name:'运维群'}]]),topicsById:new Map([['g:topic',{title:'服务上线'}]]), taskSession:task=>task.session||{},hoveredTaskId:'',setHoveredTaskId(){},colors:{border:'gray',cardSurface:'white',muted:'gray',accent:'blue',warning:'orange'},pill:()=>({}),taskDisplayTitle:task=>task.title,short:value=>value.slice(0,14),taskStateTone:()=> 'ongoing',taskStateLabel:state=>state,StateDot:'dot',fmt:value=>value,
+  expandedTaskId:task.taskId,setExpandedTaskId(){},updatedAt:0,useEffect:fn=>{if(runEffects)effects.push(fn)},useRef:()=>({current:undefined}),AbortController,get:url=>{requests.push(url);return new Promise(()=>{})},useState:initial=>[initial===undefined?{key:`${task.taskId}:0`,executions:(task.executionSessions||[]).slice(0,10),total:task.executionCount??task.executionSessions?.length??0,nextOffset:(task.executionSessions?.length||0)>10?10:null}:initial, value=>actions.push(['page',value])],Button:'button',archivingIds:[],archiveTask:task=>actions.push(['archive',task.taskId]),copyButton:(id,label)=>({type:'button',props:{onClick:()=>actions.push(['copy',id])},children:[`复制${label}`]}),React: {createElement:(type, props,...children)=>typeof type==='function'&&type.name==='CardExecutionPage'?(executionMounts++,type(props||{})):({type,props:props||{},children:children.flat()})}, groupsById:new Map([['g',{name:'运维群'}]]),topicsById:new Map([['g:topic',{title:'服务上线'}]]), taskSession:task=>task.session||{},cardClock:0,hoveredTaskId:'',setHoveredTaskId(){},colors:{border:'gray',cardSurface:'white',muted:'gray',accent:'blue',warning:'orange'},pill:()=>({}),taskDisplayTitle:task=>task.title,taskCardElapsed:()=>({value:'—',description:''}),short:value=>value.slice(0,14),taskStateTone:()=> 'ongoing',taskStateLabel:state=>state,StateDot:'dot',fmt:value=>value,
   navigatingSessionId:'',navigate:(id,parent)=>actions.push(['session',id,parent]), statusTag:(label)=>({type:'span',props:{},children:[label]}),openTask:task=>actions.push(['task',task.taskId]),setTopicTarget:value=>actions.push(['topic',value.topicId]),setActivePage:value=>actions.push(['page',value])
  });
  const tree=render(task)
@@ -55,15 +55,14 @@ test('只有已结束桶的未归档当前任务显示归档按钮',()=>{
   assert.equal(flatten(card({taskId:'t',title:'任务',state:'completed',...extra}).tree).some(x=>x.props['aria-label']==='归档任务：任务'),false)
  }
 })
-test('原看板紧凑卡片恢复，完整目标及话题仍能通过原有入口查看',()=>{
- const {tree,actions}=card({taskId:'t',title:'核对服务',objective:'长目标'.repeat(50),sourceGroupId:'g',state:'queued',updatedAt:'now',session:{sessionId:'session'},executionCount:7,topicRefs:[{topicId:'topic'}]})
+test('原看板紧凑卡片恢复，任务目标通过原有任务详情入口查看',()=>{
+ const {tree,actions}=card({taskId:'t',title:'核对服务',objective:'长目标'.repeat(50),sourceGroupId:'g',state:'queued',updatedAt:'now',session:{sessionId:'session'},executionCount:7})
  assert.equal(tree.props.style.padding,'11px 13px');assert.equal(tree.props.style.gap,6);assert.equal(tree.props.style.opacity,.72)
  const nodes=flatten(tree);assert.equal(nodes.find(x=>x.type==='strong').props.style.fontSize,13)
  nodes.find(x=>x.type==='button' && x.children.some(y=>y?.type==='strong')).props.onClick()
  nodes.find(x=>x.props['aria-label']==='查看完整任务目标').props.onClick()
- nodes.find(x=>x.props['aria-label']==='话题 服务上线').props.onClick({stopPropagation(){}})
- assert.deepEqual(actions,[['task','t'],['task','t'],['topic','topic'],['page','topics']])
- assert.doesNotMatch(JSON.stringify(tree),/次动态执行|任务会话 session/);assert.equal(nodes.some(x=>x.props['aria-label']?.startsWith('任务状态：')),false);assert.doesNotMatch(JSON.stringify(tree),/progressbar|workflowProgress/)
+ assert.deepEqual(actions,[['task','t'],['task','t']])
+ assert.doesNotMatch(JSON.stringify(tree),/次动态执行|任务会话 session|话题/);assert.equal(nodes.some(x=>x.props['aria-label']?.startsWith('任务状态：')),false);assert.doesNotMatch(JSON.stringify(tree),/progressbar|workflowProgress/)
 })
 test('历史卡片保留只读状态，不恢复旧归档或工作流写入口',()=>{
  const {tree}=card({taskId:'old',title:'历史任务',objective:'历史目标',state:'completed',legacyReadonly:true})
@@ -92,14 +91,26 @@ test('历史卡片不挂载或请求执行会话，仍可打开任务详情；�
   assert.ok(flatten(result.tree).some(node=>node.props['aria-label']==='全部执行会话'),state)
  }
 })
-test('任务卡片优先显示当前页投影名称，多话题与缺名仍保留正确入口',()=>{
+test('任务卡片不再把历史话题作为当前任务导航',()=>{
  const {tree,actions}=card({taskId:'names',title:'任务',groupId:'g',topicRefs:[{topicId:'topic',title:'更新后的事项名'},{groupId:'other',topicId:'topic',title:'另一群事项'},{topicId:'unresolved-id'}]})
- const topics=flatten(tree).filter(node=>node.props['aria-label']?.startsWith('话题 '))
- assert.deepEqual(topics.map(node=>node.children[0]),['更新后的事项名','另一群事项','话题名称未记录'])
- assert.doesNotMatch(JSON.stringify(tree),/话题 unresolved-id/)
- for(const topic of topics)topic.props.onClick({stopPropagation(){}})
- assert.deepEqual(actions.filter(([kind])=>kind==='topic').map(([,id])=>id),['topic','topic','unresolved-id'])
+ assert.doesNotMatch(JSON.stringify(tree),/话题|更新后的事项名|另一群事项|unresolved-id/)
+ assert.deepEqual(actions,[])
 })
+test('任务详情展示精确来源版本与真实会话身份', () => {
+ const component=source.slice(source.indexOf('    function TaskSessionDetail('),source.indexOf('    function FeedbackNotice('))
+ const render=runInNewContext(`(()=>{${component};return TaskSessionDetail})()`,{
+  React:{createElement:(type,props,...children)=>({type,props:props||{},children:children.flat()})},
+  useState:initial=>[initial,()=>{}],Button:'button',taskDetailCss:'',taskDisplayTitle:task=>'任务',taskStateLabel:state=>state,taskStateTone:()=> 'blue',statusTag:label=>label,fmt:()=>'',
+  taskSession:()=>({}),TaskResult:'TaskResult',TaskExecutionTimeline:'TaskExecutionTimeline',TaskExecutions:'TaskExecutions',TaskDialogue:'TaskDialogue',SessionLocation:'SessionLocation',
+  readout:()=>null,traceReason:value=>value,linkedTaskText:value=>[value],HumanRequestContent:'HumanRequestContent'
+ })
+ const tree=render({task:{taskId:'t',title:'任务',state:'running',sourceMessages:[{sourceId:'source-1',groupId:'internal-direct-key',messageId:'message-1',version:3}]},
+  groupsById:new Map([['internal-direct-key',{conversationType:'direct',conversationId:'real-conversation-id'}]]),onOpenSession(){},onBack(){},onOpenHumanRequest(){},onOpenTask(){},updatedAt:0})
+ const text=JSON.stringify(tree)
+ assert.match(text,/私聊 real-conversation-id/);assert.match(text,/消息 message-1 · 版本 3/);assert.match(text,/来源 source-1/)
+ assert.doesNotMatch(text,/internal-direct-key|话题|topicRefs/)
+})
+
 test('原四列局部滚动保留，空列和大量任务分页有界，窄屏仅改变列数',()=>{
  const render = data => runInNewContext(`(()=>{${source.slice(source.indexOf('      const bucketColumns ='),source.indexOf('      const menu ='))};return bucketColumns})()`,{
   React:{createElement:(type,props,...children)=>({type,props:props||{},children:children.flat()})},data,error:undefined,taskBuckets:[{state:'running',label:'执行中',tone:'blue',background:'white'}],taskPages:{running:99},renderTaskCard:task=>({type:'article',props:{taskId:task.taskId},children:[]}),colors:{border:'gray',muted:'gray',cardSurface:'white'},Button:'button',setTaskPages(){}

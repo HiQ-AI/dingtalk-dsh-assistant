@@ -6,11 +6,13 @@ import { join, relative } from 'node:path'
 import { createHash } from 'node:crypto'
 import { executionSessionTitle, sessionWorkspace, sessionPurposes, sessionTitle, nameSession, materializeExecutionDocument, renderExecutionDocument } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 
-test('九种实际会话职责各有独立工作区，未知职责不创建目录', async () => {
+test('实际会话职责各有独立工作区，未知职责不创建目录', async () => {
   const root = await mkdtemp(join(tmpdir(), 'session-purposes-'))
   await writeFile(join(root, 'AGENTS.md'), '当前工作区指引')
   const directories = await Promise.all(Object.keys(sessionPurposes).map(role => sessionWorkspace(root, role)))
-  assert.equal(new Set(directories).size, 9)
+  assert.equal(new Set(directories).size, 11)
+  assert.equal(sessionPurposes.triage, '消息初筛')
+  assert.equal(sessionPurposes.router, '会话路由')
   assert.deepEqual(directories.map(dir => relative(root, dir)), Object.values(sessionPurposes).map(label => join('session-workspaces', label)))
   assert.equal(await readFile(join(root, 'AGENTS.md'), 'utf8'), '当前工作区指引')
   await assert.rejects(sessionWorkspace(root, 'intent'), /SESSION_WORKSPACE_INVALID/)

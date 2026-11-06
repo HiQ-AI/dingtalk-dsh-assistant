@@ -25,6 +25,19 @@ Release六个独立Windows runner执行当前产品、保留兼容保证及未�
 
 共享夹具在 `test/fixtures/*-mixed.js`。保留混测仍加载旧Runtime，不能声称完全移除旧模块加载成本。未新增顶层Git/HTTP/进程；原Runtime两个临时工作区及清理钩子照旧。守恒契约从固定Git blob核对原注册、变体、共享夹具及保留ID，需要完整Git历史；不能只更新hash消除合同变化。
 
+## 常驻 Router 的定点历史归档
+
+新增历史子集独立固定在 `14ad11aa7c7ba2f0c4082ecc65bfd81cfa5b2a2f`，不修改原三组的 `7ca36c2`、202/220、保留 ID 或旧 helper 基线。元数据的 `baselineIds` 只批准明确列出的原注册，不表示原文件整体退役；原文件其他当前、保留兼容和未知覆盖继续进入 Release。
+
+| 原文件 | 固定基线注册 ID | 历史注册/变体 | 历史入口 |
+| --- | --- | --- | --- |
+| task-session-service-native | 12 | 1/3 | `test/task-session-service-history.test.js` |
+| task-topic-routing-native | 6、7、10、11、12 | 5/6 | `test/task-topic-routing-history.test.js` |
+
+历史语句从固定 Git 原文恢复，保留完整循环、断言、超时和清理；旧 helper 单独保留在对应 `test/fixtures/*-history.js`。仅此基线目录计算启用直转发包装识别，避免把 `const test=(...)=>testRunner(...)` helper 算成注册、却遗漏真正的参数循环；默认目录行为与原三组不变。所有受审目的文件仅可导入 `node:test` 或各自固定 fixture，fixture 使用具名同名绑定；历史入口的显式注册别名必须来自该 fixture。整文件、原语句及 helper 的摘要分别核对，只刷新目的文件摘要也不能经 bridge/helper 新增未审注册或重定向导入。
+
+`test/test-suite-contracts.test.js` 独立核对新组的固定源码、原文件 42/53 与 36/45 的注册/变体总数、上述历史子集和旧 helper，原三组守恒检查继续执行。没有退出原进程提醒、完成竞争、四种上下文语义、来源围栏、成功 receipt、同群或通知授权等保留合同。历史入口不重新接回运行时 Topic；本轮仅静态守恒与语法验证，不把未运行的退役协议计为当前功能通过。
+
 ## 手动验证
 
 ```powershell

@@ -5,8 +5,143 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { createCoordinationSessions, createCoordinationStepGate, coordinationTools, triageRole } from '../packages/dingtalk-dsh-assistant/coordination-sessions.js'
+import { createConversationRouterSessions } from '../packages/dingtalk-dsh-assistant/conversation-router-session.js'
+import { assertRouterDependencies, createRouterSourceExposure } from '../packages/dingtalk-dsh-assistant/conversation-router.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
+
+function routerFixture(t) {
+  const handles = new Map()
+  let durable = true
+  let authoritative = { groupId: 'g', conversationType: 'group', conversationId: 'g', generation: 1, lease: 1, sessionId: 'old' }
+  const make = binding => {
+    const handle = { disposed: false, messages: [], agent: {
+      session: { id: binding.sessionId, firstLiveSeq: 0, inheritedEventCount: 0, snapshotEvents: () => [] }, inbox: { nextTurn: [], nextStep: [] },
+      steer(message) { handle.messages.push(message) }, cancel() {}, whenIdle: async () => {},
+      runMaintenance: callback => callback(new AbortController().signal),
+    }, async dispose() { handle.disposed = true } }
+    handles.set(binding.sessionId, handle)
+    return handle
+  }
+  const manager = createConversationRouterSessions({ ctx: { sessions: { flush: async () => durable } },
+    create: async binding => make(binding), resume: async binding => make(binding),
+    isCurrent: binding => JSON.stringify(binding) === JSON.stringify(authoritative),
+  })
+  t.after(() => manager.close())
+  return { manager, handles, get binding() { return authoritative }, setBinding(value) { authoritative = value }, setDurable(value) { durable = value } }
+}
+
+for (const phase of ['create', 'resume']) test(`Router ${phase} 尚未返回句柄时关闭会中止并释放`, async () => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const binding = { groupId: 'g', conversationType: 'group', conversationId: 'g', generation: 1, lease: 1, sessionId: 's' }
+  let observed, disposed = false
+  const open = async (_binding, signal) => {
+    observed = signal
+    entered.resolve()
+    await release.promise
+    return { agent: { session: { id: 's' }, cancel() {}, whenIdle: async () => {} }, async dispose() { disposed = true } }
+  }
+  const manager = createConversationRouterSessions({ ctx: { sessions: { flush: async () => true } }, create: open, resume: open, isCurrent: () => true })
+  const running = phase === 'create' ? manager.prepare({ binding }) : manager.run({ binding, input: {} })
+  const outcome = running.catch(error => error)
+  await entered.promise
+  const reason = new Error('closed')
+  manager.stop(reason)
+  assert.equal(observed.aborted, true)
+  assert.equal(observed.reason, reason)
+  release.resolve()
+  assert.equal(await outcome, reason)
+  await manager.close()
+  assert.equal(disposed, true)
+})
+
+test('Router 依赖必须读取当前 surface 上的精确任务版本', () => {
+  const dependency = { taskId: 'a', requirementRevision: 1, contextRevision: 2, controlRevision: 3, runSequence: 4 }
+  const result = { task: { ...dependency, status: 'completed', drained: true }, executions: [], operations: [] }
+  const reads = new Map([['a', { callId: 'call', result }]])
+  let surface = [{ role: 'tool', toolCallId: 'call', content: [{ type: 'text', text: JSON.stringify(result) }] }]
+  const agent = { session: { deriveMessages: () => surface } }
+  assert.doesNotThrow(() => assertRouterDependencies(agent, reads, [dependency]))
+  assert.throws(() => assertRouterDependencies(agent, reads, [{ ...dependency, runSequence: 5 }]), /dependency_stale/)
+  assert.throws(() => assertRouterDependencies(agent, reads, [dependency, dependency]), /dependency_invalid/)
+  result.operations.push({ state: 'unknown' })
+  surface[0].content[0].text = JSON.stringify(result)
+  assert.throws(() => assertRouterDependencies(agent, reads, [dependency]), /dependency_unsettled/)
+  surface = []
+  assert.throws(() => assertRouterDependencies(agent, reads, [dependency]), /dependency_unread/)
+})
+
+test('Router 授权仅认当前 surface 上完整首包与精确工具分页', async () => {
+  const source = { sourceId: 's', messageId: 'm', version: 1, text: '甲'.repeat(3000) }
+  const exposure = createRouterSourceExposure({ batchId: 'batch', sources: [source] })
+  let surface = []
+  const agent = { session: { deriveMessages: () => surface } }
+  assert.throws(() => exposure.assertVisible(agent, ['s']), /unread/)
+  surface = [exposure.message]
+  exposure.assertContextVisible(agent)
+  surface = [{ ...exposure.message, content: [{ type: 'text', text: '压缩后的内容' }] }]
+  assert.throws(() => exposure.assertContextVisible(agent), /router_context_unread/)
+  surface = []
+  assert.throws(() => exposure.assertContextVisible(agent), /router_context_unread/)
+  surface = [exposure.message]
+  assert.throws(() => exposure.assertVisible(agent, ['s']), /unread/)
+  const page = exposure.read({ sourceId: 's', offset: 1000 })
+  const tool = exposure.tool(async () => {})
+  assert.deepEqual(await tool.execute({ sourceId: 's', offset: 1000 }, { agent, signal: new AbortController().signal }), page)
+  await assert.rejects(exposure.tool(async () => { throw new Error('stale') }).execute({ sourceId: 's', offset: 1000 }, { agent, signal: new AbortController().signal }), /stale/)
+  const call = { role: 'assistant', content: [{ type: 'tool-call', id: 'read', name: 'router_source_read' }] }
+  const output = { role: 'tool', toolCallId: 'read', content: [{ type: 'text', text: JSON.stringify(page) }] }
+  surface = [exposure.message, call, { ...output, isError: true }]
+  assert.throws(() => exposure.assertVisible(agent, ['s']), /unread/)
+  surface = [exposure.message, call, output]
+  exposure.assertVisible(agent, ['s'])
+  surface = [call, output]
+  assert.throws(() => exposure.assertVisible(agent, ['s']), /unread/)
+  assert.throws(() => exposure.assertVisible(agent, ['other']), /unadmitted/)
+})
+
+test('Router 换代失败保留旧会话，成功后围栏旧代并恢复新代', async t => {
+  const h = routerFixture(t), oldBinding = h.binding
+  await h.manager.run({ binding: oldBinding, input: { id: 'one' } })
+  const old = h.handles.get('old')
+  const candidate = { ...oldBinding, generation: 2, lease: undefined, sessionId: 'new' }
+  h.setDurable(false)
+  await assert.rejects(h.manager.prepare({ binding: candidate }), /NOT_DURABLE/)
+  assert.equal(old.disposed, false)
+  assert.equal(h.handles.get('new').disposed, true)
+  h.setDurable(true)
+  await h.manager.prepare({ binding: candidate })
+  await h.manager.withIdle({ binding: oldBinding }, async () => false)
+  await h.manager.abortPrepare({ binding: candidate })
+  assert.equal(old.disposed, false)
+  await h.manager.prepare({ binding: candidate })
+  const newBinding = { ...candidate, lease: 2 }
+  await h.manager.withIdle({ binding: oldBinding }, async () => h.setBinding(newBinding))
+  await h.manager.activate({ oldBinding, newBinding })
+  assert.equal(old.disposed, true)
+  await assert.rejects(h.manager.assert(old.agent, oldBinding), /STALE/)
+  await h.manager.run({ binding: newBinding, input: { id: 'two' } })
+  assert.deepEqual(h.handles.get('new').messages, [{ id: 'two' }])
+})
+
+test('Router 原生 Inbox 未空或会话忙时不能执行换代', async t => {
+  const h = routerFixture(t), binding = h.binding
+  await h.manager.run({ binding, input: { id: 'one' } })
+  const handle = h.handles.get('old')
+  handle.agent.inbox.nextStep.push({ id: 'parked' })
+  let rotated = false
+  await assert.rejects(h.manager.withIdle({ binding }, async () => { rotated = true }), /INBOX_PENDING/)
+  assert.equal(rotated, false)
+  handle.agent.inbox.nextStep.length = 0
+  const started = deferred(), release = deferred()
+  const rotating = h.manager.withIdle({ binding }, async () => { started.resolve(); await release.promise })
+  await started.promise
+  await assert.rejects(h.manager.run({ binding, input: { id: 'late' } }), /BUSY/)
+  release.resolve()
+  await rotating
+  assert.equal(handle.disposed, false)
+})
+
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 
 test('仅普通两级分诊收紧通用工具并排除迁移提交', () => {

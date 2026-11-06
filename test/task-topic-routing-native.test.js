@@ -3,6 +3,7 @@ import testRunner from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdir, readFile, rmdir } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { taskDirectories } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,7 +11,7 @@ import { resolveTopicMessages } from '../packages/dingtalk-dsh-assistant/store.j
 import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 import { groupReplyScopeInstructions } from '../packages/dingtalk-dsh-assistant/group-message.js'
-import { taskIndexPage } from '../packages/dingtalk-dsh-assistant/task-topic-coordinator.js'
+import { groupNotificationRouting } from '../packages/dingtalk-dsh-assistant/group-notification.js'
 import { fingerprint } from '../packages/dingtalk-dsh-assistant/topic-model.js'
 import { buildReplyReviewCandidates } from '../packages/dingtalk-dsh-assistant/decision.js'
 import { projectTaskNotification } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
@@ -23,6 +24,18 @@ function decisionSummaryRead(request, input) {
   const last = pages.at(-1)
   if (last && !last.hasMore) return
   return call('group_decision_context_get', { requestId: input.requestId, section: 'summary', offset: last?.nextOffset ?? 0 })
+}
+function missingSourceRead(request, input) {
+  const values = modelToolValues(request)
+  for (const source of input.sources ?? []) {
+    let offset = 0
+    while (offset < source.totalLength) {
+      const page = values.find(item => item.batchId === input.batchId && item.sourceId === source.sourceId && item.offset === offset && Number.isInteger(item.nextOffset))
+      if (!page) return { sourceId: source.sourceId, offset }
+      offset = page.nextOffset
+    }
+  }
+  return null
 }
 function envelope(request, prefix) {
   for (const message of request.messages.toReversed().filter(item => item.role === 'user')) for (const part of message.content ?? []) {
@@ -53,761 +66,771 @@ function jsonValues(value) {
 const message = (messageId, text) => ({ groupId: 'native-group', messageId, senderOpenDingTalkId: 'native-user', senderName: '真实用户', sourceKind: 'dingtalk', text,
   occurredAt: '2026-10-13T10:00:00Z', timestamp: '2026-10-13T10:00:00Z' })
 
-testRunner('原生确认审阅拒绝替换非确认回复并允许修正', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
-  let attempts = 0, baseline, checked = 0
-  const invalid = ['seed-substantive', 'seed-correction', 'seed-unknown']
-  const h = await extraHost(t, 'confirmation-kind-gate-', async (request, host) => {
-    const input = latestInput(request), values = modelToolValues(request)
-    if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) return topicTaskCalls(request)
-    if (!request.tools.some(tool => tool.name === 'group_decision_submit')) return topicTaskCalls(request)
-    const review = values.find(value => Array.isArray(value.candidates))
-    if (!review) return [call('group_reply_review_get', {})]
-    const candidates = review.candidates.map(item => item.outboundId)
-    for (const id of [...invalid, 'seed-confirmation']) assert.ok(candidates.includes(id), id)
-    const group = host.residentStore.getGroup('native-group')
-    const state = JSON.stringify({ decisions: group.topics.flatMap(topic => topic.decisions), outbox: group.outbox })
-    if (attempts > 0) {
-      assert.match(JSON.stringify(host.toolResults.at(-1)), /group_reply_review_confirmation_replace_kind_invalid/)
-      assert.equal(state, baseline, '拒绝不能写入决定或改变出箱')
-      checked++
-    } else baseline = state
-    const target = invalid[attempts] ?? 'seed-confirmation'
-    attempts++
-    return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-      decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reply: '已记录核查请求。', replyToMessageId: input.messages.at(-1).messageId,
-        replyReview: { kind: 'confirmation', reviewedOutboundIds: candidates, sameMatterOutboundIds: [target], replaceOutboundIds: [target] } } })]
-  })
-  t.onCancel(() => t.diagnostic(JSON.stringify({ attempts, checked, requests: h.requests.length,
-    results: h.toolResults.slice(-6).map(item => ({ name: item.name, value: item.result.value ?? item.result.error })) })))
+testRunner('direct triage rejects confirmation replacement of non-confirmation replies', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const cases = [['substantive', 'substantive'], ['correction', 'correction'], ['unknown', undefined], ['confirmation', 'confirmation']]
+  const attemptedInvalid = new Set()
+  const sourceIds = new Map(cases.map(([id]) => [id, `im:${createHash('sha256').update(JSON.stringify(['native-group', `confirmation-${id}`, 1])).digest('hex')}`]))
+  const h = await t.step(() => extraHost(t, 'confirmation-kind-gate-', async request => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    const missingSource = missingSourceRead(request, input)
+    if (missingSource) return [call('router_source_read', missingSource)]
+    if (!names.includes('triage_submit')) throw new Error(`Unexpected direct triage tools: ${names.join(', ')}`)
+    const sourceId = input.sources?.[0]?.sourceId
+    const review = values.findLast(value => value.sourceId === sourceId && Array.isArray(value.candidates))
+    if (!review) return [call('router_reply_review_get', {})]
+    const sourceCase = cases.find(([id]) => sourceIds.get(id) === sourceId)
+    assert.ok(sourceCase, sourceId)
+    const target = `seed-${sourceCase[0]}`
+    const candidateIds = review.candidates.map(item => item.outboundId)
+    assert.deepEqual(candidateIds, [target])
+    if (attemptedInvalid.has(sourceId)) {
+      assert.ok(h.toolResults.some(item => item.name === 'triage_submit' && JSON.stringify(item.result).includes('router_reply_review_invalid')))
+      assert.equal(h.residentStore.getGroup('native-group').outbox.some(item => item.replyToMessageId === `confirmation-${sourceCase[0]}` && item.outboundId !== target), false)
+      return [call('triage_submit', { needsProcessing: false, reply: `核查${sourceCase[0]}回复。`, review: {
+        kind: 'substantive', reviewedOutboundIds: candidateIds, sameMatterOutboundIds: [], replaceOutboundIds: [] } })]
+    }
+    if (sourceCase[0] !== 'confirmation') attemptedInvalid.add(sourceId)
+    return [call('triage_submit', { needsProcessing: false, reply: `核查${sourceCase[0]}回复替换门禁。`, review: {
+      kind: 'confirmation', reviewedOutboundIds: candidateIds, sameMatterOutboundIds: [target], replaceOutboundIds: [target] } })]
+  }))
   await t.beginBusiness()
-  for (const [id, kind] of [['seed-substantive', 'substantive'], ['seed-correction', 'correction'], ['seed-unknown', undefined], ['seed-confirmation', 'confirmation']]) {
-    await t.step(() => h.residentStore.appendOutbox({ groupId: 'native-group', outboundId: id, sourceMessageId: `fixture:${id}`, replyToMessageId: 'confirmation-gate', text: `历史回复 ${id}`, ...(kind ? { replyKind: kind } : {}) }))
+  for (const [id, kind] of cases) await t.step(() => h.residentStore.appendOutbox({ groupId: 'native-group', outboundId: `seed-${id}`,
+    sourceMessageId: `fixture:seed-${id}`, replyToMessageId: `confirmation-${id}`, text: `历史回复 ${id}`, ...(kind ? { replyKind: kind } : {}) }))
+  for (const [id] of cases) {
+    const source = message(`confirmation-${id}`, `请核查${id}原事项。`)
+    await t.step(() => h.service.ingest(source))
+    await t.step(() => h.service.whenIdle())
+    await t.step(() => waitUntil(() => h.residentStore.getRouterState('native-group').triage
+      .some(item => item.sourceRef.sourceId === sourceIds.get(id) && item.replyStatus === 'applied'), '首筛回复已应用'))
+    const expectedError = id === 'confirmation' ? null : 'router_reply_review_invalid'
+    if (expectedError) assert.ok(h.toolResults.some(item => item.name === 'triage_submit' && JSON.stringify(item.result).includes(expectedError)))
   }
-  await t.step(() => h.service.ingest(message('confirmation-gate', '请核查原事项。')))
-  await t.step(() => h.service.whenIdle())
-  assert.equal(checked, 3)
-  const results = h.toolResults.filter(item => item.name === 'group_decision_submit')
-  assert.equal(results.filter(item => JSON.stringify(item.result).includes('group_reply_review_confirmation_replace_kind_invalid')).length, 3)
-  assert.ok(results.some(item => JSON.stringify(item.result).includes('accepted')))
+  const rejected = h.toolResults.filter(item => item.name === 'triage_submit' && JSON.stringify(item.result).includes('router_reply_review_invalid'))
+  assert.equal(rejected.length, 3)
+  const triage = h.residentStore.getRouterState('native-group').triage
+  assert.equal(triage.length, 4)
+  assert.equal(triage.find(item => item.sourceRef.sourceId === sourceIds.get('confirmation'))?.replyStatus, 'applied')
+  await t.step(() => waitUntil(() => h.sent.length === 4, '四条审阅通过的回复已发送'))
+  assert.equal(h.sent.length, 4)
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
 }))
 
-testRunner('一级初诊沿原生出箱送达并在冷恢复后不重复发送', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+testRunner('direct triage delivers one concise first reply and cold recovery does not resend it', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
   assert.ok(available, reason)
   const root = await mkdtemp(join(tmpdir(), 'routing-initial-reply-'))
   let host
   t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
   const decide = request => {
-    const input = latestInput(request), previous = modelToolValues(request).at(-1)
-    if (previous?.status === 'context-required' && previous.nextCall) return [{ name: previous.nextCall.name, args: previous.nextCall.arguments }]
-    if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) {
-      const item = input.messages[0]
-      return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId,
-        newTopics: [{ newTopicKey: 'initial', title: '单据核查事项', candidateComparisons: [] }, { newTopicKey: 'other', title: '交付核查事项', candidateComparisons: [] }],
-        routes: [{ messageId: item.messageId, messageVersion: item.messageVersion, replyTopic: { newTopicKey: 'initial' }, units: [
-          { unitKey: 'matter', summary: '核查单据', replacesUnitIds: [], sourceRefs: [{ wholeMessage: true }], contextRefs: [], topics: [{ newTopicKey: 'initial', reason: '单据核查事项' }] },
-          { unitKey: 'delivery', summary: '核查交付', replacesUnitIds: [], sourceRefs: [{ wholeMessage: true }], contextRefs: [], topics: [{ newTopicKey: 'other', reason: '交付核查事项' }] },
-        ] }],
-        initialReplySilences: [], initialReplies: [
-          { messageId: item.messageId, messageVersion: item.messageVersion, unitKey: 'matter', target: { newTopicKey: 'initial' }, text: '初步看是单据核查，具体情况还需确认。', replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } },
-          { messageId: item.messageId, messageVersion: item.messageVersion, unitKey: 'delivery', target: { newTopicKey: 'other' }, text: '交付情况也需要进一步确认。', replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } },
-        ] } }]
-    }
-    const calls = topicTaskCalls(request)
-    for (const call of calls ?? []) if (call.name === 'group_decision_submit') {
-      call.args.decision.actions = []; call.args.decision.reason = '不新增任务或重复初诊'
-      delete call.args.decision.reply; delete call.args.decision.replyToMessageId; delete call.args.decision.replyReview
-    }
-    return calls ?? []
+    const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    const missingSource = missingSourceRead(request, input)
+    if (missingSource) return [call('router_source_read', missingSource)]
+    if (!names.includes('triage_submit')) throw new Error(`Unexpected direct triage tools: ${names.join(', ')}`)
+    const sourceId = input.sources?.[0]?.sourceId
+    const review = values.findLast(value => value.sourceId === sourceId && Array.isArray(value.candidates))
+    if (!review) return [call('router_reply_review_get', {})]
+    return [call('triage_submit', { needsProcessing: false, reply: '已收到单据核查请求，后续情况确认后再补充。',
+      review: { kind: 'substantive', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })]
   }
   host = await t.step(() => nativeTaskHost(root, decide))
   await t.beginBusiness()
   await t.step(() => host.service.ingest(message('initial-source', '请核查这张单据。')))
   await t.step(() => host.service.whenIdle())
   const notices = await t.step(() => host.query('notification.list'))
-  const initial = notices.filter(item => item.payload.fact?.initialReply)
-  assert.equal(initial.length, 2, JSON.stringify(host.service.listAlerts()))
-  assert.equal(new Set(initial.map(item => item.id)).size, 2)
-  assert.equal(new Set(initial.map(item => item.payload.replyTopicId)).size, 2)
-  for (const item of initial) {
-    assert.equal(item.kind, 'topic-reply'); assert.equal(item.state, 'delivered')
-    assert.equal(item.payload.replyToMessageId, 'initial-source')
-    assert.equal(item.payload.replyToSenderOpenDingTalkId, 'native-user')
-    assert.ok(item.receipt.messageId)
-  }
-  assert.equal(host.sent.length, 2)
+  const initial = notices.filter(item => item.payload.replyToMessageId === 'initial-source')
+  assert.equal(initial.length, 1, JSON.stringify(host.service.listAlerts()))
+  assert.equal(initial[0].state, 'delivered')
+  assert.equal(initial[0].payload.replyToMessageId, 'initial-source')
+  assert.equal(initial[0].payload.replyToSenderOpenDingTalkId, 'native-user')
+  assert.ok(initial[0].receipt.messageId)
+  assert.equal(host.sent.length, 1)
   assert.equal((await t.step(() => host.query('task.list'))).length, 0)
+  assert.equal(host.residentStore.listTopics('native-group').length, 0)
   await t.step(() => host.close())
   host = await t.step(() => nativeTaskHost(root, () => assert.fail('冷恢复不得重做已完成路由'), { initialize: false }))
   await t.step(() => host.service.recover()); await t.step(() => host.service.whenIdle())
   assert.equal(host.sent.length, 0)
-  assert.deepEqual((await t.step(() => host.query('notification.list'))).filter(item => initial.some(old => old.id === item.id)).map(item => item.id).sort(), initial.map(item => item.id).sort())
+  assert.deepEqual((await t.step(() => host.query('notification.list'))).map(item => item.id), initial.map(item => item.id))
 }))
 
-for (const mode of ['未冻结', '已准备', '发送中', '两来源']) testRunner(`初诊按来源隔离冷恢复：${mode}`, { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'initial-stale-recovery-'))
-  let host
-  t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
-  const decide = request => {
-    const calls = topicTaskCalls(request) ?? []
-    for (const call of calls) if (call.name === 'group_decision_submit') {
-      call.args.decision.actions = []; call.args.decision.reason = '不新增任务或重复初诊'
-      delete call.args.decision.reply; delete call.args.decision.replyToMessageId; delete call.args.decision.replyReview
+for (const mode of ['normal', 'stale', 'prepared', 'starting', 'two']) testRunner(`直接首筛回复在进程退出后沿原身份恢复 mode=${mode}`, { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const stale = !['normal', 'two'].includes(mode)
+  const root = await mkdtemp(join(tmpdir(), 'direct-triage-process-recovery-'))
+  let host, child, childDone
+  const allowOld = Promise.withResolvers()
+  t.onCancel(() => { allowOld.resolve(); if (child?.connected) child.disconnect() })
+  t.after(async () => { allowOld.resolve(); if (child?.connected) child.disconnect(); await childDone?.catch(() => {}); await host?.close(); await rm(root, { recursive: true, force: true }) })
+  const script = `
+    import assert from 'node:assert/strict'
+    process.on('disconnect', () => process.exit(1))
+    import { nativeTaskHost, latestInput, modelToolValues, waitUntil } from './test/fixtures/task-session-native-host.js'
+    const root = process.argv[1], mode = process.argv[2]
+    const call = (name, args) => ({ name, args })
+    const childSent = []
+    let firstReceipt
+    const host = await nativeTaskHost(root, request => {
+      const input = latestInput(request), values = modelToolValues(request)
+      for (const source of input.sources ?? []) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = values.find(item => item.batchId === input.batchId && item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
+      }
+      const review = values.findLast(value => Array.isArray(value.candidates))
+      if (!review) return [call('router_reply_review_get', {})]
+      return [call('triage_submit', { needsProcessing: false, reply: '已收到原始请求。', review: {
+        kind: 'substantive', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })]
+    }, { notifications: { send: async notification => {
+      assert.equal(mode, 'two')
+      childSent.push(structuredClone(notification))
+      return { messageId: 'cold-child-sent' }
+    }, readback: async notification => childSent.some(item => item.id === notification.id) ? { messageId: 'cold-child-sent', visible: true } : undefined } })
+    if (mode === 'two') {
+      await host.service.ingest({ groupId: 'native-group', messageId: 'first-valid', senderOpenDingTalkId: 'native-user',
+        senderName: '真实用户', sourceKind: 'dingtalk', text: '请核查第一条来源。', timestamp: '2026-10-13T10:00:00Z' })
+      firstReceipt = await waitUntil(async () => {
+        const item = (await host.query('notification.list')).find(value => value.state === 'delivered')
+        return item && host.residentStore.getRouterState('native-group').triage.some(entry => entry.replyReceipt?.notificationId === item.id && entry.replyStatus === 'applied') && item
+      }, '第一来源送达并入账')
+      assert.equal(childSent.length, 1)
+      assert.equal(childSent[0].payload.replyToMessageId, 'first-valid')
     }
-    return calls
-  }
-  host = await t.step(() => nativeTaskHost(root, decide))
+    async function checkpoint(triageId, outboundId) {
+      const triage = host.residentStore.getRouterState('native-group').triage.find(item => item.triageId === triageId)
+      assert.equal(triage?.replyStatus, 'pending')
+      assert.equal(outboundId, 'router-reply:' + triageId)
+      assert.equal((host.residentStore.getRouterState('native-group').failures ?? []).length, 0)
+      let notification = await host.query('notification.get', { notificationId: outboundId })
+      if (mode === 'normal' || mode === 'stale' || mode === 'two') {
+        assert.equal(host.residentStore.getGroup('native-group').outbox.some(item => item.outboundId === outboundId), false)
+        assert.equal(notification, null)
+      } else {
+        assert.equal(notification.state, 'prepared')
+        if (mode === 'starting') {
+          const started = await host.service.store.command({ kind: 'notification.start', id: 'cold-start:' + outboundId, args: { notificationId: outboundId } })
+          assert.equal(started.result.notification.state, 'starting')
+        }
+      }
+      process.stdout.write('RECOVERY_MARKER:' + JSON.stringify({ triageId, outboundId, firstReceipt }) + '\\n', () => process.exit(0))
+      await new Promise(() => {})
+    }
+    if (mode === 'normal' || mode === 'stale' || mode === 'two') host.residentStore.withRouterReplyPreparation = async args => {
+      assert.equal(args.intent.decisionId, args.intent.operationId)
+      await checkpoint(args.intent.decisionId, args.outbound.outboundId)
+    }
+    else {
+      host.residentStore.withNotificationSource = async () => new Promise(() => {})
+      host.residentStore.triageRecordReply = async args => checkpoint(args.triageId, args.receipt.notificationId)
+    }
+    await host.service.ingest({ groupId: 'native-group', messageId: 'cold-source', senderOpenDingTalkId: 'native-user',
+      senderName: '真实用户', sourceKind: 'dingtalk', text: '请核查原始请求。', timestamp: '2026-10-13T10:00:00Z' })
+    await new Promise(() => {})
+  `
   await t.beginBusiness()
-  for (const id of ['stale-source', 'valid-source']) {
-    const source = message(id, `核对${id}`)
-    await t.step(() => host.residentStore.ingest(source))
-    const sourceId = `im:${createHash('sha256').update(JSON.stringify([source.groupId, id, 1])).digest('hex')}`
-    await t.step(() => host.service.store.command({ kind: 'source.record', id: `source:${sourceId}`, args: {
-      sourceId, groupId: source.groupId, messageId: id, version: 1, actorId: source.senderOpenDingTalkId,
-      senderName: source.senderName, text: source.text, quote: null, resources: [], timestamp: source.timestamp,
-    } }))
+  child = spawn(process.execPath, ['--input-type=module', '-e', script, root, mode], { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
+  let stdout = '', stderr = ''
+  child.stdout.setEncoding('utf8').on('data', value => { stdout += value })
+  child.stderr.setEncoding('utf8').on('data', value => { stderr += value })
+  childDone = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({ code, signal })) })
+  const exit = await t.step(() => childDone)
+  assert.deepEqual(exit, { code: 0, signal: null }, stderr)
+  const marker = stdout.split('\n').find(line => line.startsWith('RECOVERY_MARKER:'))
+  assert.ok(marker, stderr)
+  const { triageId, outboundId, firstReceipt } = JSON.parse(marker.slice('RECOVERY_MARKER:'.length))
+  const validSourceId = `im:${createHash('sha256').update(JSON.stringify(['native-group', 'valid-source', 1])).digest('hex')}`
+  const sent = [], readbacks = []
+  host = await t.step(() => nativeTaskHost(root, request => {
+    if (!stale) throw new Error('恢复原决议不得重新调用模型')
+    const input = latestInput(request), values = modelToolValues(request)
+    const missing = missingSourceRead(request, input)
+    if (missing) return [call('router_source_read', missing)]
+    const sourceId = input.sources[0].sourceId
+    if (sourceId !== validSourceId) return [call('triage_submit', { needsProcessing: false, reply: null })]
+    const review = values.findLast(value => value.sourceId === sourceId && Array.isArray(value.candidates))
+    if (!review) return [call('router_reply_review_get', {})]
+    return [call('triage_submit', { needsProcessing: false, reply: '有效来源已收到。', review: { kind: 'substantive',
+      reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })]
+  }, { initialize: false, notifications: {
+    async send(notification) { sent.push(structuredClone(notification)); return { messageId: `cold-sent-${sent.length}` } },
+    async readback(notification) {
+      readbacks.push(structuredClone(notification))
+      const index = sent.findIndex(item => item.id === notification.id)
+      return index < 0 ? undefined : { messageId: `cold-sent-${index + 1}`, visible: true }
+    },
+  } }))
+  const prepare = host.residentStore.withRouterReplyPreparation.bind(host.residentStore)
+  if (stale) host.residentStore.withRouterReplyPreparation = async args => {
+    if (args.outbound.outboundId === outboundId) await allowOld.promise
+    return prepare(args)
   }
-  const group = host.residentStore.getGroup('native-group')
-  const review = { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }
-  const initial = ['stale-source', 'valid-source'].map((id, index) => ({ messageId: id, messageVersion: 1, unitKey: 'whole-message',
-    target: { newTopicKey: `topic-${index}` }, text: '初步收到，具体情况还需核对。', replyReview: review,
-    reviewFingerprint: fingerprint(buildReplyReviewCandidates({ group, tasks: [], currentMessages: [group.messages.find(item => item.messageId === id)] })),
-    reviewMessageIds: [id], reviewMessageVersions: [{ messageId: id, messageVersion: 1 }] }))
-  const routed = await t.step(() => host.residentStore.routeMessages({ groupId: 'native-group', routeId: 'initial-recovery', routingRevision: group.routingRevision,
-    routes: initial.map((item, index) => ({ messageId: item.messageId, messageVersion: 1, topics: [{ newTopicKey: `topic-${index}`, title: `核对事项${index}` }] })), initialReplies: initial }))
-  if (mode === '已准备' || mode === '发送中') {
-    const draft = routed.initialReplies[0], topicRefs = [{ topicId: draft.topicId, revision: draft.topicRevision }]
-    const sourceId = `im:${createHash('sha256').update(JSON.stringify(['native-group', 'stale-source', 1])).digest('hex')}`
-    await t.step(() => host.residentStore.appendOutbox({ groupId: 'native-group', outboundId: draft.outboundId, sourceMessageId: `task-notification:${draft.outboundId}`,
-      text: draft.text, sourceRef: draft.sourceRef, topicRefs, matterSourceMessageIds: ['stale-source'], matterUnitRefs: [draft.unitRef],
-      replyToMessageId: 'stale-source', replyToSenderOpenDingTalkId: 'native-user', atOpenDingTalkIds: ['native-user'], replyKind: 'substantive' }))
-    await t.step(() => host.service.store.command({ kind: 'notification.prepare', id: `prepare:${draft.outboundId}`, args: { notificationId: draft.outboundId,
-      taskId: null, requirementRevision: 1, kind: 'topic-reply', payload: { text: draft.text, topicRefs, replyTopicId: draft.topicId, taskIds: [], replyKind: 'substantive',
-        conversationId: 'native-group', sourceId, sourceVersion: 1, sourceMessageId: 'stale-source', actorId: 'native-user', sourceRef: draft.sourceRef,
-        replyToMessageId: 'stale-source', replyToSenderOpenDingTalkId: 'native-user', atOpenDingTalkIds: ['native-user'], fact: { topicRefs, initialReply: true }, kind: 'topic-reply' } } }))
-    if (mode === '发送中') {
-      const started = await t.step(() => host.service.store.command({ kind: 'notification.start', id: `start:${draft.outboundId}`, args: { notificationId: draft.outboundId } }))
-      assert.equal(started.result.notification.state, 'starting')
-    }
-  }
-  if (mode !== '两来源') {
-    await t.step(() => host.residentStore.routeMessages({ groupId: 'native-group', routeId: 'reclassify', routingRevision: host.residentStore.getGroup('native-group').routingRevision,
-      routes: [{ messageId: 'stale-source', messageVersion: 1, topics: [{ newTopicKey: 'moved', title: '迁移后事项' }] }] }))
-    assert.deepEqual(host.residentStore.getGroup('native-group').messages.find(item => item.messageId === 'stale-source').activeUnitRefs, [routed.initialReplies[0].unitRef])
-  }
-  await t.step(() => host.close())
-  host = await t.step(() => nativeTaskHost(root, decide, { initialize: false }))
-  await t.step(() => host.service.recover())
-  await t.step(() => waitUntil(async () => (await host.query('notification.get', { notificationId: routed.initialReplies[1].outboundId }))?.state === 'delivered', '有效初诊送达'))
-  if (mode === '已准备') await t.step(() => waitUntil(async () => (await host.query('notification.get', { notificationId: routed.initialReplies[0].outboundId }))?.state === 'superseded', '失效初诊退役'))
-  if (mode === '发送中') await t.step(() => waitUntil(() => host.readbacks.some(item => item.id === routed.initialReplies[0].outboundId), '发送中初诊只回读'))
-  if (mode === '两来源') await t.step(() => waitUntil(async () => (await host.query('notification.get', { notificationId: routed.initialReplies[0].outboundId }))?.state === 'delivered', '另一来源初诊送达'))
-  const outbox = host.residentStore.getGroup('native-group').outbox
-  const stale = outbox.find(item => item.outboundId === routed.initialReplies[0].outboundId)
-  if (mode === '两来源') {
-    assert.deepEqual(host.sent.map(item => item.payload.replyToMessageId).sort(), ['stale-source', 'valid-source'])
-    assert.equal(stale.status, 'sent')
-  } else if (mode === '发送中') {
-    assert.equal((await t.step(() => host.query('notification.get', { notificationId: stale.outboundId }))).state, 'unknown')
-    assert.notEqual(stale.status, 'superseded')
+  const before = host.residentStore.getRouterState('native-group')
+  assert.equal(before.triage.find(item => item.triageId === triageId)?.replyStatus, 'pending')
+  assert.ok(!(before.failures ?? []).some(item => item.requestId === triageId))
+  const originalOutbox = host.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === outboundId)
+  const originalNotification = await t.step(() => host.query('notification.get', { notificationId: outboundId }))
+  if (mode === 'normal' || mode === 'stale' || mode === 'two') {
+    assert.equal(originalOutbox, undefined)
+    assert.equal(originalNotification, null)
   } else {
-    assert.equal(stale?.status, 'superseded'); assert.equal(stale.supersededReason, 'topic_initial_reply_stale')
+    assert.ok(originalOutbox)
+    assert.equal(originalNotification?.state, mode === 'prepared' ? 'prepared' : 'unknown')
   }
-  const count = mode === '两来源' ? 2 : 1
-  assert.equal(host.sent.length, count)
-  if (mode !== '两来源') assert.equal(host.sent[0].payload.replyToMessageId, 'valid-source')
+  if (stale) {
+    await t.step(() => host.service.ingest({ ...message('cold-source', '已更新的原始请求。'), messageVersion: 2 }))
+    allowOld.resolve()
+    await t.step(() => host.service.ingest(message('valid-source', '请核查另一条有效来源。')))
+  }
   await t.step(() => host.service.recover())
-  assert.equal(host.sent.length, count)
+  if (mode === 'starting') {
+    await t.step(() => waitUntil(async () => (await host.query('notification.get', { notificationId: outboundId }))?.state === 'unknown'
+      && readbacks.some(item => item.id === outboundId), '原发送中回复只回读并保持未知'))
+    assert.notEqual(host.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === outboundId)?.status, 'superseded')
+  } else if (stale) {
+    const original = await t.step(() => waitUntil(() => host.residentStore.getRouterState('native-group').triage
+      .find(entry => entry.triageId === triageId && entry.replyStatus === 'applied'), '原回复退役入账'))
+    assert.equal(original.replyReceipt.notificationId, outboundId)
+    assert.equal(original.replyReceipt.status, 'retired')
+    const retiredNotification = await t.step(() => host.query('notification.get', { notificationId: outboundId }))
+    if (mode === 'prepared') assert.equal(retiredNotification?.state, 'superseded')
+    else assert.equal(retiredNotification, null)
+    assert.equal(host.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === outboundId)?.status, 'superseded')
+  } else {
+    const notification = await t.step(() => waitUntil(async () => {
+      const item = await host.query('notification.get', { notificationId: outboundId })
+      return item?.state === 'delivered' && host.residentStore.getRouterState('native-group').triage
+        .some(entry => entry.triageId === triageId && entry.replyStatus === 'applied') && item
+    }, '原回复沿原身份送达并入账').catch(async error => {
+      const notification = await host.query('notification.get', { notificationId: outboundId })
+      const triage = host.residentStore.getRouterState('native-group').triage.find(item => item.triageId === triageId)
+      throw new Error(`${error.message} ${JSON.stringify({ state: notification?.state, replyStatus: triage?.replyStatus,
+        sent: sent.length, readbacks: readbacks.length, alerts: host.service.listAlerts() })}`)
+    }))
+    assert.equal(notification.id, outboundId)
+    assert.equal(sent[0].id, outboundId)
+  }
+  if (stale) {
+    const valid = await t.step(() => waitUntil(async () => {
+      const item = sent.find(entry => entry.payload.replyToMessageId === 'valid-source')
+      return item && (await host.query('notification.get', { notificationId: item.id }))?.state === 'delivered' && item
+    }, '有效来源送达'))
+    assert.equal(valid.payload.replyToMessageId, 'valid-source')
+    assert.equal(sent.some(item => item.id === outboundId), false)
+  }
+  assert.equal(sent.length, 1)
+  if (mode === 'two') {
+    assert.ok(firstReceipt?.id)
+    assert.notEqual(firstReceipt.id, outboundId)
+    assert.deepEqual(await t.step(() => host.query('notification.get', { notificationId: firstReceipt.id })), firstReceipt)
+    assert.equal(sent[0].payload.replyToMessageId, 'cold-source')
+  }
+  await t.step(() => host.service.recover())
+  await t.step(() => host.service.whenIdle())
+  assert.equal(sent.length, 1)
+  if (mode === 'two') assert.deepEqual(await t.step(() => host.query('notification.get', { notificationId: firstReceipt.id })), firstReceipt)
 }))
 
-testRunner('初诊准备前阻止同版本在途事实提交', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+testRunner('direct Router rejects a stale reply review after the same-version triage reply is delivered', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
   const root = await mkdtemp(join(tmpdir(), 'initial-fact-fence-'))
+  const sendEntered = Promise.withResolvers(), releaseSend = Promise.withResolvers(), reviewEntered = Promise.withResolvers(), releaseReview = Promise.withResolvers()
+  let host, phase = 0, originalId, staleReview
+  const sent = []
+  t.onCancel(() => { releaseSend.resolve(); releaseReview.resolve() })
+  t.after(async () => { releaseSend.resolve(); releaseReview.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
+  host = await t.step(() => nativeTaskHost(root, async request => {
+    const input = latestInput(request), names = request.tools.map(tool => tool.name), values = modelToolValues(request)
+    const missing = missingSourceRead(request, input)
+    if (missing) return [call('router_source_read', missing)]
+    const sourceId = input.sources[0].sourceId
+    const reviews = values.filter(value => value.sourceId === sourceId && Array.isArray(value.candidates))
+    if (names.includes('triage_submit')) {
+      if (!reviews.length) return [call('router_reply_review_get', {})]
+      return [call('triage_submit', { needsProcessing: true, reply: '已收到核查请求。', review: {
+        kind: 'substantive', reviewedOutboundIds: reviews.at(-1).candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } })]
+    }
+    if (!names.includes('router_submit')) throw new Error(`Unexpected tools: ${names.join(', ')}`)
+    if (!reviews.length || phase === 2) { if (phase === 2) phase = 3; return [call('router_reply_review_get', { sourceId })] }
+    if (phase === 0) {
+      await sendEntered.promise
+      staleReview = reviews.at(-1)
+      assert.ok(staleReview.candidates.some(item => item.outboundId === originalId))
+      phase = 1; reviewEntered.resolve(); await releaseReview.promise
+    } else if (phase === 1) {
+      assert.ok(host.toolResults.some(item => item.name === 'router_submit' && JSON.stringify(item.result).includes('router_reply_review_stale')))
+      assert.equal(host.residentStore.getRouterState('native-group').decisions.length, 0)
+      phase = 2
+      return [call('router_reply_review_get', { sourceId })]
+    }
+    const review = phase === 1 ? staleReview : reviews.at(-1)
+    return [call('router_submit', { actions: [], continuity: [], reply: { sourceId, text: '核查请求已记录。', review: {
+      kind: 'substantive', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
+  }, { notifications: { async send(notification) {
+    if (!originalId) { originalId = notification.id; sendEntered.resolve(); await releaseSend.promise }
+    sent.push(structuredClone(notification))
+    return { messageId: `sent-${notification.id}` }
+  }, async readback(notification) {
+    return sent.some(item => item.id === notification.id) ? { messageId: `sent-${notification.id}`, visible: true } : undefined
+  } } }))
+  await t.beginBusiness()
+  await t.step(() => host.service.ingest(message('fact-fence-source', '@测试助手 请核查事实。')))
+  await t.step(() => sendEntered.promise)
+  await t.step(() => reviewEntered.promise)
+  assert.equal(host.residentStore.getGroup('native-group').messages.find(item => item.messageId === 'fact-fence-source').messageVersion, 1)
+  releaseSend.resolve()
+  await t.step(() => waitUntil(async () => (await host.query('notification.get', { notificationId: originalId }))?.state === 'delivered'
+    && host.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === originalId)?.status === 'sent', '原首筛回复送达'))
+  releaseReview.resolve()
+  await t.step(() => waitUntil(() => host.residentStore.getRouterState('native-group').decisions.some(item => item.applications.every(application => application.status === 'applied')), '修正后的 Router 决议已应用'))
+  assert.ok(host.toolResults.some(item => item.name === 'router_submit' && JSON.stringify(item.result).includes('router_reply_review_stale')))
+  assert.equal(host.residentStore.getGroup('native-group').messages.find(item => item.messageId === 'fact-fence-source').messageVersion, 1)
+  assert.equal((await t.step(() => host.query('task.list'))).length, 0)
+  assert.equal(host.residentStore.listTopics('native-group').length, 0)
+}))
+
+testRunner('direct Router keeps a late source out of the active batch and handles it afterward', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'router-late-source-'))
   const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const inputs = []
+  const ids = ['router-first', 'router-second'].map(id => `im:${createHash('sha256').update(JSON.stringify(['native-group', id, 1])).digest('hex')}`)
   let host, held = false
   t.onCancel(() => release.resolve())
   t.after(async () => { release.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
   host = await t.step(() => nativeTaskHost(root, async request => {
-    const input = latestInput(request), calls = topicTaskCalls(request) ?? []
-    if (input.trigger === 'task-facts' && !held) { held = true; entered.resolve(); await release.promise; return calls }
-    if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) {
-      const routes = input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
-        topics: [{ newTopicKey: 'fact-topic', title: '事实核查', reason: '核查该来源事实', candidateComparisons: [] }] }))
-      return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes, initialReplies: [],
-        initialReplySilences: scriptedRouteSilences(routes, '来源仅要求核查事实，未提供可供初诊判断的具体事实') } }]
+    const names = request.tools.map(tool => tool.name), input = latestInput(request)
+    const missing = missingSourceRead(request, input)
+    if (missing) return [call('router_source_read', missing)]
+    if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+    if (!names.includes('router_submit')) throw new Error(`Unexpected tools: ${names.join(', ')}`)
+    inputs.push(structuredClone(input))
+    if (!held) {
+      held = true
+      assert.deepEqual(input.context.newSourceIds, [ids[0]])
+      assert.deepEqual(input.sources.map(source => source.sourceId), [ids[0]])
+      entered.resolve()
+      await release.promise
     }
-    if (request.tools.some(tool => tool.name === 'group_decision_submit') && input.trigger !== 'task-facts') {
-      const decision = calls[0].args.decision
-      decision.actions = [{ kind: 'new-task', title: '事实核查', objective: '核查事实', acceptanceCriteria: ['形成事实'],
-        topicRefs: [{ topicId: input.topicId, revision: input.revision }], basisUnitRefs: decision.basisUnitRefs }]
-      return calls
-    }
-    if (request.tools.some(tool => tool.name === 'task_session_submit')) return [{ name: 'task_session_submit', args: { decision: {
-      action: 'complete', summary: '核查完成。', evidence: ['核查事实'], limitations: [] } } }]
-    return calls
+    return [call('router_submit', { actions: [], continuity: ['继续跟进两条独立来源。'], reply: null })]
   }))
   await t.beginBusiness()
-  await t.step(() => host.service.ingest(message('fact-fence-source', '@测试助手 请核查事实。')))
+  await t.step(() => host.service.ingest(message('router-first', '请记录第一条讨论。')))
   await t.step(() => entered.promise)
-  const group = host.residentStore.getGroup('native-group'), source = group.messages.find(item => item.messageId === 'fact-fence-source')
-  const topic = group.topics.find(item => !item.mergedInto)
-  const review = { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] }
-  const receipt = await t.step(() => host.residentStore.routeMessages({ groupId: 'native-group', routeId: 'fact-fence-initial', routingRevision: group.routingRevision,
-    routes: [{ messageId: source.messageId, messageVersion: source.messageVersion, topics: [{ topicId: topic.topicId }] }],
-    initialReplies: [{ messageId: source.messageId, messageVersion: source.messageVersion, unitKey: 'whole-message', target: { topicId: topic.topicId },
-      text: '初步收到，具体事实仍需核对。', replyReview: review,
-      reviewFingerprint: fingerprint(buildReplyReviewCandidates({ group, tasks: host.residentStore.listTasks().filter(task => task.groupId === group.groupId && !task.archivedAt), currentMessages: [source] })),
-      reviewMessageIds: [source.messageId], reviewMessageVersions: [{ messageId: source.messageId, messageVersion: source.messageVersion }] }] }))
-  assert.equal(host.residentStore.getTopic('native-group', topic.topicId).revision, topic.revision)
+  const active = structuredClone(host.residentStore.getRouterState('native-group').active)
+  await t.step(() => host.service.ingest(message('router-second', '请记录第二条讨论。')))
+  assert.ok(host.residentStore.getGroup('native-group').messages.some(item => item.messageId === 'router-second' && item.messageVersion === 1))
+  assert.deepEqual(host.residentStore.getRouterState('native-group').active, active)
+  assert.equal(inputs.length, 1)
   release.resolve()
-  await t.step(() => waitUntil(() => host.toolResults.some(item => item.name === 'group_decision_submit' && JSON.stringify(item.result).includes('topic-stale')), '旧事实提交被拒'))
-  assert.ok(!(await t.step(() => host.query('topic.fact.replies', { groupId: 'native-group', topicId: topic.topicId }))).some(item => item.outboundId === receipt.initialReplies[0].outboundId))
-  await t.step(() => host.service.recover())
-  await t.step(() => waitUntil(async () => (await host.query('notification.get', { notificationId: receipt.initialReplies[0].outboundId }))?.state === 'delivered', '初诊准备并送达'))
-  assert.ok((await t.step(() => host.query('topic.fact.replies', { groupId: 'native-group', topicId: topic.topicId }))).some(item => item.outboundId === receipt.initialReplies[0].outboundId))
-  await t.step(() => waitUntil(async () => (await host.query('topic.fact.pending', { groupId: 'native-group', topicId: topic.topicId })).length === 0, '事实在初诊准备后完成'))
-  assert.ok(host.requests.some(request => latestInput(request).trigger === 'task-facts' && JSON.stringify(request.messages).includes(receipt.initialReplies[0].outboundId)))
+  await t.step(() => waitUntil(async () => {
+    const state = host.residentStore.getRouterState('native-group')
+    const sources = await host.query('source.list', { groupId: 'native-group' })
+    return !state.active && !state.queue.length && ids.every(sourceId => sources.some(source => source.sourceId === sourceId && source.processingCompleted))
+      && ids.every(sourceId => state.decisions.some(decision => decision.inputs.some(item => item.sourceRef?.sourceId === sourceId) && decision.applications.every(item => item.status === 'applied')))
+  }, '两条来源各自完成 Router 处置'))
+  assert.ok(inputs.some(input => input.context.newSourceIds.includes(ids[1]) && input.context.continuity.includes('继续跟进两条独立来源。')))
+  const state = host.residentStore.getRouterState('native-group')
+  for (const sourceId of ids) assert.equal(state.decisions.filter(decision => decision.inputs.some(item => item.sourceRef?.sourceId === sourceId)).length, 1)
+  assert.equal((await t.step(() => host.query('task.list'))).length, 0)
+  assert.equal(host.sent.length, 0)
 }))
 
-testRunner('一级运行中同会话实际消费新来源并拒绝旧批次提交', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+testRunner('direct triage processes a source arriving during an earlier triage without mixing identities', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
   assert.ok(available, reason)
   const root = await mkdtemp(join(tmpdir(), 'routing-live-update-'))
-  const entered = Promise.withResolvers(), release = Promise.withResolvers(), sessions = [], routeInputs = []
-  let host, first = true
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), sessions = []
+  let host, held = false
   t.onCancel(() => release.resolve())
   t.after(async () => { release.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
   host = await t.step(() => nativeTaskHost(root, async request => {
-    const input = latestInput(request), previous = modelToolValues(request).at(-1)
-    if (previous?.status === 'context-required' && previous.nextCall) return [{ name: previous.nextCall.name, args: previous.nextCall.arguments }]
-    if (!request.tools.some(tool => tool.name === 'group_topic_route_submit')) return topicTaskCalls(request)
-    routeInputs.push(structuredClone(input))
-    if (first) { first = false; entered.resolve(); await release.promise }
-    return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, initialReplies: [], initialReplySilences: [], ...(input.batchRevision !== undefined ? { batchRevision: input.batchRevision } : {}),
-      routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
-        units: [{ unitKey: 'discussion', summary: '讨论记录', sourceRefs: [{ wholeMessage: true }], contextRefs: [], topics: [], fixedTopic: 'out-of-scope', reason: '无需处理' }] })) } }]
+    const input = latestInput(request), names = request.tools.map(tool => tool.name)
+    if (!names.includes('triage_submit')) throw new Error(`Unexpected tools: ${names.join(', ')}`)
+    const missing = missingSourceRead(request, input)
+    if (missing) return [call('router_source_read', missing)]
+    if (!held) { held = true; entered.resolve(); await release.promise }
+    return [call('triage_submit', { needsProcessing: false, reply: null })]
   }))
-  host.ctx.on('session/created', session => { if (session.id.startsWith('session-coordination-')) sessions.push(session) })
+  host.ctx.on('session/created', session => { if (session.id.startsWith('session-triage-')) sessions.push(session.id) })
   await t.beginBusiness()
   const firstIngress = host.service.ingest(message('live-first', '第一条讨论。'))
   await t.step(() => entered.promise)
   assert.equal(sessions.length, 1)
-  const sessionId = sessions[0].id, agent = host.ctx.agents.get(sessionId)
-  assert.ok(agent)
+  const firstSession = sessions[0]
+  assert.equal(host.ctx.agents.get(firstSession)?.status, 'running')
   await t.step(() => host.service.ingest(message('live-second', '第二条讨论。')))
-  await t.step(() => waitUntil(() => agent.inbox.nextStep.some(item => item.id.includes('-batch-1-exposure-')), '在途更新进入同一原生收件箱', 5000).catch(error => {
-    throw new Error(`${error.message} ${JSON.stringify({ nextStep: agent.inbox.nextStep.map(item => item.id), nextTurn: agent.inbox.nextTurn.map(item => item.id), alerts: host.service.listAlerts(), messages: host.residentStore.getGroup('native-group').messages.map(item => ({ id: item.messageId, status: item.routingStatus })), routeInputs })}`)
-  }))
-  assert.equal(agent.status, 'running')
+  assert.equal(host.ctx.agents.get(firstSession)?.status, 'running')
   release.resolve()
   await t.step(() => firstIngress)
-  await t.step(() => host.service.whenIdle())
-  const updated = routeInputs.find(input => input.batchRevision === 1)
-  assert.ok(updated, JSON.stringify(host.service.listAlerts()))
-  assert.deepEqual(updated.messages.map(item => item.messageId), ['live-first', 'live-second'])
-  assert.equal(updated.requestId, routeInputs[0].requestId)
-  const results = host.toolResults.filter(item => item.name === 'group_topic_route_submit' && item.sessionId === sessionId)
-  assert.ok(results.some(item => JSON.stringify(item.result).includes('route-batch-stale')))
-  assert.ok(results.some(item => JSON.stringify(item.result).includes('accepted')))
-  for (const id of ['live-first', 'live-second']) assert.equal(host.residentStore.getGroup('native-group').messages.find(item => item.messageId === id).routingStatus, 'routed')
+  await t.step(() => waitUntil(async () => {
+    const sources = await host.query('source.list', { groupId: 'native-group' })
+    return ['live-first', 'live-second'].every(id => sources.some(source => source.messageId === id && source.processingCompleted))
+  }, '两条来源均完成首筛'))
+  const triage = host.residentStore.getRouterState('native-group').triage
+  assert.equal(triage.length, 2)
+  assert.deepEqual(triage.map(item => item.sourceRef.messageId).sort(), ['live-first', 'live-second'])
+  assert.equal(new Set(triage.map(item => item.triageId)).size, 2)
+  assert.equal(sessions.length, 2)
+  assert.notEqual(sessions[0], sessions[1])
   const sources = await t.step(() => host.query('source.list', { groupId: 'native-group' }))
   const firstSource = sources.find(source => source.messageId === 'live-first')
   const secondSource = sources.find(source => source.messageId === 'live-second')
-  const firstTurn = firstSource.stages.find(stage => stage.stage === 'turn' && stage.sessionId === sessionId)
+  const firstTurn = firstSource.stages.find(stage => stage.stage === 'turn' && stage.sessionId === firstSession)
   assert.ok(firstTurn?.completedAt)
   assert.equal(firstTurn.shared, false)
-  assert.ok(!(secondSource.stages ?? []).some(stage => stage.spanId === firstTurn.spanId), '晚到来源不能回填此前已开始的turn')
+  assert.ok(!(secondSource.stages ?? []).some(stage => stage.spanId === firstTurn.spanId))
   assert.ok((secondSource.stages ?? []).some(stage => stage.stage === 'ingress' && stage.completedAt))
   assert.equal(host.service.listAlerts().some(item => item.id?.startsWith('timing:')), false)
+  assert.equal((await t.step(() => host.query('task.list'))).length, 0)
   assert.equal(host.sent.length, 0)
 }))
 
-testRunner('一级运行中十五条入批且第十六条在下一批处理', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'routing-live-capacity-'))
-  const entered = Promise.withResolvers(), release = Promise.withResolvers(), routeInputs = []
-  let host, first = true
-  t.onCancel(() => release.resolve())
-  t.after(async () => { release.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
-  host = await t.step(() => nativeTaskHost(root, async request => {
-    const input = latestInput(request), previous = modelToolValues(request).at(-1)
-    if (previous?.status === 'context-required' && previous.nextCall) return [{ name: previous.nextCall.name, args: previous.nextCall.arguments }]
-    if (!request.tools.some(tool => tool.name === 'group_topic_route_submit')) return topicTaskCalls(request)
-    routeInputs.push(structuredClone(input))
-    if (first) { first = false; entered.resolve(); await release.promise }
-    return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, initialReplies: [], initialReplySilences: [], ...(input.batchRevision !== undefined ? { batchRevision: input.batchRevision } : {}),
-      routes: input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
-        units: [{ unitKey: 'discussion', summary: '讨论记录', sourceRefs: [{ wholeMessage: true }], contextRefs: [], topics: [], fixedTopic: 'out-of-scope', reason: '无需处理' }] })) } }]
-  }))
-  await t.beginBusiness()
-  await t.step(() => host.service.ingest(message('capacity-0', '独立讨论0。')))
-  await t.step(() => entered.promise)
-  for (let index = 1; index < 16; index++) await t.step(() => host.service.ingest(message(`capacity-${index}`, `独立讨论${index}。`)))
-  release.resolve()
-  await t.step(() => host.service.whenIdle())
-  const group = host.residentStore.getGroup('native-group')
-  const receipts = group.routeHistory.filter(item => item.routeId.startsWith('coord-route-'))
-  const batches = routeInputs.filter(input => input.messages.length > 0)
-  assert.equal(receipts.length, 2)
-  assert.ok(batches.some(input => input.requestId === batches[0].requestId && input.messages.length === 15), JSON.stringify(batches.map(input => ({ id: input.requestId, size: input.messages.length }))))
-  assert.ok(batches.some(input => input.requestId !== batches[0].requestId && input.messages.some(item => item.messageId === 'capacity-15')))
-  assert.ok(batches.every(input => input.messages.length <= 15))
-  const acceptedIds = host.toolResults.filter(item => item.name === 'group_topic_route_submit' && item.result.value?.status === 'accepted')
-    .map(item => item.result.value.requestId)
-  assert.equal(acceptedIds.length, 2)
-  const acceptedMessages = acceptedIds.flatMap(id => batches.findLast(input => input.requestId === id).messages.map(item => item.messageId))
-  assert.equal(acceptedMessages.length, 16)
-  assert.equal(new Set(acceptedMessages).size, 16)
-  for (let index = 0; index < 16; index++) {
-    assert.ok(acceptedMessages.includes(`capacity-${index}`))
-    assert.equal(group.messages.find(item => item.messageId === `capacity-${index}`)?.routingStatus, 'routed')
+
+
+testRunner('notification routing selects only a fixed real human source', () => {
+  const human = { messageId: 'human', senderOpenDingTalkId: 'user-a', sourceKind: 'dingtalk' }
+  const web = { ...human, messageId: 'web', senderOpenDingTalkId: 'web-actor', sourceKind: 'web' }
+  const internal = { ...web, messageId: 'internal', sourceKind: 'internal' }
+  for (const [messages, replyToMessageId, expected] of [[[human], 'human', 'user-a'], [[human, web], 'human', 'user-a'],
+    [[human, internal], 'human', 'user-a'], [[web], undefined, undefined]]) {
+    const result = groupNotificationRouting(messages, { ...(replyToMessageId ? { replyToMessageId } : {}), atOpenDingTalkIds: replyToMessageId ? undefined : [] })
+    assert.equal(result.target?.messageId, replyToMessageId)
+    assert.deepEqual(result.recipients, expected ? [expected] : [])
   }
-  assert.equal(host.sent.length, 0)
-}))
+})
 
-for (const unrelatedCount of [13, 14]) testRunner(`原生路由保持恢复配对完整并遵守十五条上限：其他来源=${unrelatedCount}`,
-  { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
-    assert.ok(available, reason)
-    const root = await mkdtemp(join(tmpdir(), 'routing-pair-capacity-'))
-    const batches = []
-    let host
-    t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
-    host = await t.step(() => nativeTaskHost(root, request => {
-      const input = latestInput(request), previous = modelToolValues(request).at(-1)
-      if (previous?.status === 'context-required' && previous.nextCall) return [{ name: previous.nextCall.name, args: previous.nextCall.arguments }]
-      if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) {
-        batches.push(input.messages.map(item => item.messageId))
-        return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, initialReplies: [], initialReplySilences: [], routes: input.messages.map(item => ({
-          messageId: item.messageId, messageVersion: item.messageVersion,
-          units: [{ unitKey: 'discussion', summary: '讨论记录', sourceRefs: [{ wholeMessage: true }], contextRefs: [], topics: [], fixedTopic: 'out-of-scope', reason: '无需处理' }],
-        })) } }]
-      }
-      return topicTaskCalls(request)
-    }))
-    for (let index = 0; index < unrelatedCount; index++) await t.step(() => host.residentStore.ingest(message(`other-${index}`, `独立讨论${index}`)))
-    await t.step(() => host.residentStore.ingest(message('pair-original', '请说明这个问题。')))
-    await t.step(() => host.residentStore.routeMessages({ groupId: 'native-group', routeId: 'pair-hold', routingRevision: host.residentStore.getGroup('native-group').routingRevision,
-      routes: [{ messageId: 'pair-original', messageVersion: 1, deferred: { reason: '等待补充' } }] }))
+testRunner('direct source completion is durably stamped while its Task Owner is still blocked',
+  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'direct-source-clock-'))
+    const releaseOwner = Promise.withResolvers(), ownerEntered = Promise.withResolvers()
+    let host, ownerBlocked = false
+    t.onCancel(() => releaseOwner.resolve())
+    t.after(async () => { releaseOwner.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
     await t.beginBusiness()
-    await t.step(() => host.service.ingest({ ...message('pair-answer', '这是需要补充的说明。'), quotedMessage: { messageId: 'pair-original', content: '请说明这个问题。' } }))
-    assert.equal(host.residentStore.getGroup('native-group').messages.find(item => item.messageId === 'pair-original').routingRecoveryMessageId, 'pair-answer')
-    await t.step(() => host.service.whenIdle())
-    const expected = [...Array.from({ length: unrelatedCount }, (_, index) => `other-${index}`), 'pair-original', 'pair-answer']
-    assert.ok(batches.every(batch => batch.length <= 15))
-    assert.deepEqual(batches.map(batch => batch.length), unrelatedCount === 13 ? [15] : [14, 2])
-    assert.deepEqual(new Set(batches.flat()), new Set(expected))
-    assert.equal(batches.flat().length, expected.length)
-    assert.equal(batches.findIndex(batch => batch.includes('pair-original')), batches.findIndex(batch => batch.includes('pair-answer')))
-    for (const id of expected) assert.equal(host.residentStore.getGroup('native-group').messages.find(item => item.messageId === id).routingStatus, 'routed', id)
+    host = await t.step(async () => nativeTaskHost(root, async request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+      if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+      if (names.includes('triage_submit') || names.includes('router_submit')) {
+        const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+        for (const source of input.sources ?? []) {
+          let offset = 0
+          while (offset < source.totalLength) {
+            const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+            if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+            offset = page.nextOffset
+          }
+        }
+        if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+        const firstSourceId = `im:${createHash('sha256').update(JSON.stringify(['native-group', 'fast-clock', 1])).digest('hex')}`
+        const sourceIds = (input.context?.newSourceIds ?? []).filter(sourceId => sourceId === firstSourceId)
+        return [call('router_submit', { actions: sourceIds.length ? [{ kind: 'new-task', sourceIds, title: '来源时钟任务', objective: '等待Owner完成只读核验' }] : [], continuity: [], reply: null })]
+      }
+      if (names.includes('task_session_submit')) {
+        ownerBlocked = true; ownerEntered.resolve()
+        await releaseOwner.promise
+        return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续资料', evidence: [], limitations: [] } })]
+      }
+      throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
+    }))
+    const source = message('fast-clock', '@助手，创建只读核验任务并等待资料。')
+    await t.step(async () => host.service.ingest(source))
+    await t.step(async () => ownerEntered.promise)
+    const firstSource = await t.step(async () => waitUntil(async () => {
+      const item = (await host.query('source.list')).find(entry => entry.messageId === source.messageId)
+      return item?.processingCompleted && item
+    }, '原来源在 Owner 阻塞时完成'))
+    const settledAt = firstSource.processingCompleted.at
+    assert.ok(ownerBlocked)
+    const unrelated = message('slow-clock', '测试助手，记录一个独立事项，不要求回复或执行。')
+    await t.step(async () => host.service.ingest(unrelated))
+    await t.step(async () => waitUntil(async () => (await host.query('source.list')).find(item => item.messageId === unrelated.messageId)?.processingCompleted,
+      'independent source processing projection', 5000))
+    assert.equal((await t.step(async () => host.query('source.list'))).find(item => item.messageId === source.messageId).processingCompleted.at, settledAt)
+    assert.ok(ownerBlocked)
+    assert.equal((await t.step(async () => host.query('task.list'))).length, 1)
+    assert.equal(host.sent.length, 0)
+    releaseOwner.resolve()
+    await t.step(async () => host.service.whenIdle())
+    const finalSource = (await t.step(async () => host.query('source.list'))).find(item => item.messageId === source.messageId)
+    assert.equal(finalSource.processingCompleted.at, settledAt)
+    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
+    assert.equal((await t.step(async () => host.query('source.list'))).find(item => item.messageId === source.messageId).processingCompleted.at, settledAt)
+    assert.equal((await t.step(async () => host.query('task.list'))).length, 1)
+    assert.equal(host.residentStore.listTopics('native-group').length, 0)
     assert.equal(host.sent.length, 0)
   }))
 
-testRunner('脚本化普通回复目标只选固定输入真人来源', () => {
-  const human = { messageId: 'human', unitId: 'unit-human', unitRevision: 1, text: '核对', senderOpenDingTalkId: 'user-a', sourceKind: 'dingtalk' }
-  const web = { messageId: 'web', unitId: 'unit-web', unitRevision: 1, text: '补充', senderOpenDingTalkId: 'web-actor', sourceKind: 'web' }
-  const internal = { ...web, messageId: 'internal', sourceKind: 'internal' }
-  for (const [messages, expected] of [[[human], 'human'], [[human, web], 'human'], [[human, internal], 'human'], [[web], undefined]]) {
-    const input = { requestId: 'request', topicId: 'topic', revision: 1, messages }
-    const request = { tools: [{ name: 'group_decision_submit' }], messages: [{ role: 'user', content: [{ type: 'text', text: `Topic 请求：${JSON.stringify(input)}` }] }] }
-    const decision = topicTaskCalls(request)[0].args.decision
-    assert.equal(decision.replyToMessageId, expected)
-  }
-})
 
-testRunner('来源语义戳在首次Topic完成后落账，不等待同群其他判断',
-  { ...({ skip: !available ? reason : false, timeout: 20000 }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
-    const root = await mkdtemp(join(tmpdir(), 'source-clock-immediate-'))
-    let host, firstDecision, completedMessageId, slowBlocked = false
-    const slowEntered = Promise.withResolvers(), releaseSlow = Promise.withResolvers()
-t.onCancel(() => releaseSlow.resolve())
 
-    t.after(async () => { releaseSlow.resolve(); await host?.close(); await rm(root, { recursive: true, force: true }) })
-    await t.beginBusiness()
-    host = await t.step(async () => nativeTaskHost(root, async request => {
-      const input = latestInput(request), names = request.tools.map(tool => tool.name)
-      const calls = topicTaskCalls(request)
-      if (names.includes('group_decision_submit')) {
-        firstDecision ??= input.requestId
-        if (input.requestId === firstDecision) completedMessageId = input.messages[0].messageId
-        else {
-          slowBlocked = true; slowEntered.resolve(); await releaseSlow.promise; slowBlocked = false
-        }
-        for (const item of calls) {
-          item.args.decision.actions = []; item.args.decision.reason = '只记录独立反馈，不开展业务动作'
-          item.args.decision.topicUpdate = { summary: '记录独立反馈，未开展业务动作。' }
-          delete item.args.decision.reply
-          delete item.args.decision.replyToMessageId
-          delete item.args.decision.replyReview
-        }
-      }
-      return calls ?? []
-    }))
-    await t.step(async () => Promise.all([host.service.ingest(message('fast-clock', '测试助手，记录物料名称显示反馈。')),
-      host.service.ingest(message('slow-clock', '测试助手，记录另一个独立事项。'))]))
-    await t.step(async () => slowEntered.promise)
-    try {
-      await t.step(async () => waitUntil(async () => (await host.query('source.list')).find(source => source.messageId === completedMessageId)?.processingCompleted,
-        '已完成Topic的来源独立落戳', 5000))
-    } catch (error) {
-      t.diagnostic(JSON.stringify({ sources: (await t.step(async () => host.query('source.list'))).map(source => ({ messageId: source.messageId, routed: source.routed,
-        processingPending: source.processingPending, processingCompleted: source.processingCompleted })),
-        topics: host.residentStore.listTopics('native-group').map(topic => ({ title: topic.title, revision: topic.revision, processedRevision: topic.processedRevision,
-          decisions: topic.decisions.map(record => ({ status: record.status, error: record.error, completedAt: record.completedAt })) })), tools: host.toolResults, alerts: host.service.listAlerts() }))
-      throw error
-    }
-    assert.equal(slowBlocked, true)
-    const completedTopic = host.residentStore.listTopics('native-group').find(topic => topic.entries.some(entry => entry.messageId === completedMessageId))
-    assert.equal(completedTopic.decisions[0].status, 'completed')
-    assert.equal(completedTopic.summary, '记录独立反馈，未开展业务动作。')
-    const at = (await t.step(async () => host.query('source.list'))).find(source => source.messageId === completedMessageId).processingCompleted.at
-    t.diagnostic(JSON.stringify({ metric: 'settled-topic-to-source-projection', delayMs: Date.parse(at) - Date.parse(completedTopic.decisions[0].completedAt), slowTopicStillBlocked: slowBlocked }))
-    assert.ok(Date.parse(at) >= Date.parse(completedTopic.decisions[0].completedAt), '来源戳不能早于真实决策终态')
-    assert.equal(host.sent.length, 0, '纯讨论无回复决策不产生通知')
-    assert.equal((await t.step(async () => host.query('source.list'))).find(source => source.messageId === completedMessageId).processingCompleted.at, at)
-    releaseSlow.resolve(); await t.step(async () => host.service.whenIdle())
-    await t.step(async () => host.service.recover()); await t.step(async () => host.service.whenIdle())
-    assert.equal((await t.step(async () => host.query('source.list'))).find(source => source.messageId === completedMessageId).processingCompleted.at, at)
-    assert.equal((await t.step(async () => host.query('task.list'))).length, 0)
-  }))
 
-testRunner('completed task catalogue stays within the tool budget and advances by returned entries without losing tasks', () => {
-  const tasks = Array.from({ length: 14 }, (_, index) => ({ taskId: `task-${index}`, title: `原任务${index}`, state: 'completed',
-    inputVersion: index + 1, runSequence: 2, topicRefs: [{ topicId: `topic-${index}`, revision: 3 }],
-    objective: '核对原任务交付。'.repeat(1000), completion: { result: { summary: '已交付原 PR 及 UAT 证据。'.repeat(1000) } },
-    sourceRefs: ['internal-source'], request: '长原文'.repeat(10000), appliedOperations: ['historical-operation'] }))
-  const seen = []
-  for (let offset = 0; offset < tasks.length;) {
-    const page = taskIndexPage(tasks, offset, 100)
-    assert.ok(Buffer.byteLength(JSON.stringify(page), 'utf8') <= 12 * 1024)
-    assert.ok(page.tasks.length > 0 && page.tasks.length < 14)
-    assert.equal(page.total, tasks.length)
-    assert.equal(page.nextOffset, offset + page.tasks.length)
-    assert.equal(page.hasMore, page.nextOffset < tasks.length)
-    for (const item of page.tasks) {
-      assert.equal(item.state, 'completed')
-      assert.equal(item.inputVersion, tasks.find(task => task.taskId === item.taskId).inputVersion)
-      assert.ok(item.objectivePreview && item.resultPreview)
-      assert.equal(item.request, undefined)
-      assert.equal(item.appliedOperations, undefined)
-      seen.push(item.taskId)
-    }
-    offset = page.nextOffset
-  }
-  assert.deepEqual(seen, tasks.map(task => task.taskId))
-  assert.equal(taskIndexPage(tasks, tasks.length, 100).hasMore, false)
-  assert.equal(taskIndexPage([], 0, 100).nextOffset, 0)
-  assert.ok(tasks[0].request.length > 20000, '目录缩减不得改写原任务正文')
-})
-
-testRunner('task catalogue continuation carries the exact normalized query and current snapshot identity', () => {
-  const tasks = Array.from({ length: 18 }, (_, index) => ({ taskId: `task-${index}`, title: `数据集${index}`, state: 'completed',
-    inputVersion: 1, runSequence: 1, objective: '完整目标'.repeat(300), result: { summary: '实际结果'.repeat(300) } }))
-  const first = taskIndexPage(tasks, 0, 50, '数据集')
-  assert.equal(first.hasMore, true); assert.equal(first.query, '数据集')
-  assert.deepEqual(first.nextCall, { name: 'group_task_list', arguments: { query: '数据集', offset: first.nextOffset, limit: 50 } })
-  const next = taskIndexPage(tasks, first.nextCall.arguments.offset, first.nextCall.arguments.limit, first.nextCall.arguments.query)
-  assert.equal(next.snapshotFingerprint, first.snapshotFingerprint)
-  assert.equal(next.tasks[0].taskId, tasks[first.nextOffset].taskId)
-  assert.deepEqual(taskIndexPage(tasks, 0, 50, '数据集'), first)
-  tasks[0].inputVersion++
-  assert.notEqual(taskIndexPage(tasks, 0, 50, '数据集').snapshotFingerprint, first.snapshotFingerprint)
-  assert.equal(taskIndexPage([], 0, 50, '数据集').nextCall, null)
-})
-
-testRunner('native request-bound review and Topic reads accept empty args while routing never guesses a Topic',
-  { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-    let routed = false, reviewed = false, readTopic = false, wrongRequestChecked = false
-    const h = await extraHost(t, 'bound-topic-read-', async request => {
+testRunner('direct Router binds reply review and source reads to explicitly admitted source identity',
+  { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+    const source = message('contract-source', '固定来源读取合同核验，无需办理业务。')
+    const sourceId = `im:${createHash('sha256').update(JSON.stringify([source.groupId, source.messageId, 1])).digest('hex')}`
+    let triaged = false, wrongSourceChecked = false, reviewed = false, sourceRead = false
+    const h = await extraHost(t, 'bound-direct-source-read-', async request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
-      if (names.includes('group_topic_route_submit')) {
-        assert.deepEqual(request.tools.find(tool => tool.name === 'group_topic_context_get').parameters.required, ['topicId'])
-        if (!routed) { routed = true; return [call('group_topic_context_get', {})] }
-        const missing = values.find(value => value.issues?.some(issue => issue.code === 'topic_id_required'))
-        assert.equal(missing?.status, 'invalid-arguments')
-        assert.deepEqual(missing.nextCall, { name: 'group_topic_list', arguments: { offset: 0, limit: 50 } })
-        const routes = input.messages.map(item => ({ messageId: item.messageId,
-          messageVersion: item.messageVersion, topics: [{ newTopicKey: 'bound-read', title: '只读承接合同核验', reason: '独立核验请求绑定读取合同' }] }))
-        return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [],
-          initialReplySilences: scriptedRouteSilences(routes, '本次仅核验读取合同，无需办理业务') })]
+      if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+      const missingSource = missingSourceRead(request, input)
+      if (missingSource) return [call('router_source_read', missingSource)]
+      if (names.includes('triage_submit')) {
+        if (!triaged) {
+          triaged = true
+          return [call('triage_submit', { needsProcessing: true, reply: null })]
+        }
       }
-      if (names.includes('group_decision_submit')) {
-        assert.deepEqual(request.tools.find(tool => tool.name === 'group_reply_review_get').parameters.required, [])
-        assert.deepEqual(request.tools.find(tool => tool.name === 'group_topic_context_get').parameters.required, [])
-        if (!wrongRequestChecked) { wrongRequestChecked = true; return [call('group_reply_review_get', { requestIds: ['cross-request'] })] }
-        if (!reviewed) { reviewed = true; return [call('group_reply_review_get', {})] }
-        const review = values.find(value => Array.isArray(value.requestIds) && Array.isArray(value.candidates))
-        assert.deepEqual(review?.requestIds, [input.requestId])
-        if (!readTopic) { readTopic = true; return [call('group_topic_context_get', {})] }
-        const context = values.find(value => value.topic?.topicId === input.topicId && Array.isArray(value.messages))
-        assert.equal(context?.topic.revision, input.revision)
-        assert.equal(context.messages[0].messageId, 'contract-source')
-        return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-          decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reason: '仅核验固定请求读取合同，无业务交办' } })]
+      if (names.includes('router_submit')) {
+        assert.deepEqual(request.tools.find(tool => tool.name === 'router_reply_review_get').parameters.required, ['sourceId'])
+        assert.deepEqual(request.tools.find(tool => tool.name === 'router_source_read').parameters.required, ['sourceId', 'offset'])
+        if (!wrongSourceChecked) { wrongSourceChecked = true; return [call('router_reply_review_get', { sourceId: 'cross-source' })] }
+        const invalid = values.find(value => value.error === 'router_source_unadmitted' || value.status === 'router_source_unadmitted')
+        assert.ok(invalid || h.toolResults.some(item => item.name === 'router_reply_review_get' && JSON.stringify(item.result).includes('router_source_unadmitted')))
+        const review = values.findLast(value => value.sourceId === sourceId && Array.isArray(value.candidates))
+        if (!reviewed) { reviewed = true; return [call('router_reply_review_get', { sourceId })] }
+        const current = values.findLast(value => value.batchId === input.batchId && value.sourceId === sourceId && Number.isInteger(value.nextOffset))
+        if (!current) return [call('router_source_read', { sourceId, offset: 0 })]
+        assert.equal(current.nextOffset, current.totalLength)
+        sourceRead = true
+        assert.equal(review.sourceId, sourceId)
+        assert.ok(Array.isArray(review.candidates))
+        return [call('router_submit', { actions: [], continuity: [], reply: null })]
       }
-      return topicTaskCalls(request) ?? []
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: false, reply: null })]
+      throw new Error(`Unexpected direct source tools: ${names.join(', ')}`)
     })
     await t.beginBusiness()
-
-    await t.step(async () => h.service.ingest(message('contract-source', '固定请求读取合同核验，无需办理业务。')))
-    await t.step(async () => h.service.whenIdle())
-    await t.step(async () => waitUntil(async () => (await h.query('source.list')).find(source => source.messageId === 'contract-source')?.processingCompleted, '读取合同来源完成'))
-    const group = h.residentStore.getGroup('native-group')
-    assert.equal(group.messages.find(item => item.messageId === 'contract-source').routingStatus, 'routed')
-    assert.ok(group.routeHistory.some(receipt => receipt.routeId.startsWith('coord-route-') && receipt.initialReplySilences?.some(item => item.sourceRef.messageId === 'contract-source')))
-    assert.ok(routed && reviewed && readTopic && wrongRequestChecked)
-    assert.ok(h.toolResults.filter(item => item.name === 'group_reply_review_get').some(item => JSON.stringify(item.result).includes('coordination_tool_wrong_request')))
-    assert.equal(h.residentStore.listTopics('native-group')[0].decisions[0].status, 'completed')
-    assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
+    await t.step(() => h.service.ingest(source))
+    await t.step(() => h.service.whenIdle())
+    const persisted = (await t.step(() => h.query('source.list'))).find(item => item.messageId === source.messageId)
+    assert.ok(persisted?.processingCompleted)
+    assert.equal(persisted.sourceId, sourceId)
+    assert.ok(wrongSourceChecked && reviewed && sourceRead)
+    assert.ok(h.toolResults.some(item => item.name === 'router_reply_review_get' && JSON.stringify(item.result).includes('router_source_unadmitted')))
+    assert.equal(h.residentStore.getRouterState('native-group').decisions.length, 1)
+    assert.equal((await t.step(() => h.query('task.list'))).length, 0)
+    assert.equal(h.residentStore.listTopics('native-group').length, 0)
     assert.equal(h.sent.length, 0)
   }))
 
-testRunner('native Decision uses a complete single-Task first packet without a serial read',
-  { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+testRunner('direct Router reads the current Task before a preserve-only context update',
+  { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
     const objective = '只核对资料，不执行部署。' + '范围约束'.repeat(1100)
-    let topicId, taskId, decisions = 0, drift = false, apply = false, staleSeen = false, rereadSeen = false, changedTask, originalGetTask, firstBodyBytes, viewBytes
-    const h = await extraHost(t, 'inline-task-context-', async request => {
-      const names = request.tools.map(tool => tool.name), input = latestInput(request)
-      if (names.includes('group_topic_route_submit')) {
-        const last = modelToolValues(request).at(-1)
-        if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
-        const routes = input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ topicId, reason: '原事项的后续讨论' }] }))
-        return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [],
-          initialReplySilences: scriptedRouteSilences(routes, '本次是原事项上下文核对，不要求新增处理') })]
+    let taskId, original, h, ownerRunsBefore = 0, taskRead = false
+    h = await t.step(() => extraHost(t, 'direct-task-context-cas-', async request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+      if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+      const missingSource = missingSourceRead(request, input)
+      if (missingSource) return [call('router_source_read', missingSource)]
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+      if (names.includes('router_submit') || names.includes('router_task_list') || names.includes('router_task_get') || names.includes('router_source_read')) {
+        for (const source of input.sources ?? []) {
+          let offset = 0
+          while (offset < source.totalLength) {
+            const page = values.find(item => item.batchId === input.batchId && item.sourceId === source.sourceId && item.offset === offset && Number.isInteger(item.nextOffset))
+            if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+            offset = page.nextOffset
+          }
+        }
+        if (!values.some(value => Array.isArray(value.tasks))) return [call('router_task_list', {})]
+        const summary = values.flatMap(value => value.tasks ?? []).find(item => item.taskId === taskId)
+        assert.ok(summary)
+        const loaded = values.findLast(value => (value.task?.taskId ?? value.taskId) === taskId)
+        if (!loaded) return [call('router_task_get', { taskId })]
+        const task = loaded.task ?? loaded
+        taskRead = true
+        assert.equal(task.taskId, taskId)
+        assert.equal(task.requirementRevision, original.requirementRevision)
+        assert.ok(task.objective.includes(objective))
+        return [call('router_submit', { actions: [{ kind: 'task-context', taskId, inputVersion: task.requirementRevision,
+          runSequence: task.runSequence, expectedControlRevision: task.controlRevision,
+          context: '补充只检查名称，不发送通知。', progressImpact: 'preserve', sourceIds: input.context?.newSourceIds ?? [] }], continuity: [], reply: null })]
       }
-      if (names.includes('group_decision_submit')) {
-        const summaryRead = decisionSummaryRead(request, input)
-        if (summaryRead) return [summaryRead]
-        const inline = input.inlineDecisionContext
-        assert.equal(inline.task.taskId, taskId)
-        assert.equal(inline.task.objective, objective)
-        assert.ok(inline.task.request.includes(objective))
-        if (!drift && !apply) {
-          firstBodyBytes = Buffer.byteLength(request.messages.flatMap(message => message.content ?? []).find(part => part.type === 'text' && part.text.startsWith('[GROUP_TOPIC_DECISION]')).text, 'utf8')
-          viewBytes = Buffer.byteLength(JSON.stringify(inline.task), 'utf8')
-          assert.ok(viewBytes >= 26083, `完整任务视图不足历史量级: ${viewBytes}`)
-          assert.ok(firstBodyBytes >= viewBytes && firstBodyBytes <= 64 * 1024, `首包预算异常: ${firstBodyBytes}`)
-        }
-        if (!drift && !apply) assert.equal(inline.replyReview.candidateCount, 0)
-        const values = modelToolValues(request)
-        if (drift && !changedTask) {
-          originalGetTask = h.residentStore.getTask
-          const original = originalGetTask.bind(h.residentStore)
-          const current = original(taskId)
-          changedTask = { ...current, contextRevision: (current.contextRevision ?? 0) + 1, request: current.request + '\n补充限制：不得发送通知' }
-          h.residentStore.getTask = id => id === taskId ? changedTask : original(id)
-        }
-        if (drift && values.some(value => value.status === 'task-stale')) {
-          staleSeen = true
-          const read = values.find(value => value.tasks?.some(task => task.taskId === taskId && task.request.includes('不得发送通知')))
-          if (!read) return [call('group_task_context_get', { taskIds: [taskId], includeReplyReview: true })]
-          rereadSeen = true
-        }
-        if (!drift) assert.equal(values.some(value => value.tasks?.some(task => task.taskId === taskId)), false)
-        decisions++
-        return [call('group_decision_submit', { revision: input.revision,
-          decision: { basisMessageIds: input.messages.map(item => item.messageId), basisUnitRefs: input.messages.map(item => item.unitShortRef),
-            actions: apply ? [{ kind: 'task-context', taskId, inputVersion: inline.task.inputVersion, runSequence: inline.task.runSequence,
-              context: '补充只检查名称，不发送通知', progressImpact: 'preserve', authorizationChange: 'none',
-              topicRefs: [{ topicId, revision: input.revision }], basisUnitRefs: input.messages.map(item => item.unitShortRef) }] : [],
-            ...(drift ? { reason: '仅记录讨论，不执行新动作' } : { reply: '已记录资料核对范围，不执行部署。', replyToMessageId: input.messages[0].messageId, atOpenDingTalkIds: ['native-user'], replyReview: { kind: apply ? 'confirmation' : 'substantive', sameMatterOutboundIds: [], replaceOutboundIds: [] } }) } })]
-      }
-      return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续资料', evidence: [], limitations: [] } })]
-    })
-    t.onCancel(() => t.diagnostic(JSON.stringify({ decisions, drift, staleSeen, rereadSeen, results: h.toolResults.slice(-4), alerts: h.service.listAlerts() })))
+      if (names.includes('task_session_submit')) return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续资料', evidence: [], limitations: [] } })]
+      throw new Error(`Unexpected direct Task tools: ${names.join(', ')}`)
+    }))
     await t.beginBusiness()
-    const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'inline-original', title: '资料核对', objective }))
-    await t.step(async () => h.service.whenIdle())
-    const task = await t.step(async () => h.query('task.get', { taskId: created.taskId }))
-    taskId = task.taskId; topicId = task.topicRefs[0].topicId
-    await t.step(async () => h.service.ingest(message('inline-follow', '补充原事项讨论，不要求执行新动作。')))
-    await t.step(async () => h.service.whenIdle())
-    assert.equal(decisions, 1)
-    assert.equal(h.toolResults.filter(item => ['group_task_context_get', 'group_reply_review_get'].includes(item.name)).length, 0)
-    assert.equal(h.residentStore.getTopic('native-group', topicId).processedRevision, 2)
-    assert.equal(h.residentStore.getTopic('native-group', topicId).decisions.at(-1).status, 'completed')
-    assert.deepEqual(h.residentStore.getTopic('native-group', topicId).decisions.at(-1).decision.replyReview.reviewedOutboundIds, [])
-    assert.equal(h.sent.length, 1)
-    drift = true
-    await t.step(async () => h.service.ingest(message('inline-stale-follow', '继续讨论原事项，不要求执行新动作。')))
-    await t.step(async () => h.service.whenIdle())
-    assert.ok(staleSeen, 'Task 上下文版本变化须拒绝旧视图')
-    assert.ok(rereadSeen, '当前完整 Task 补读进入模型后才能重试')
-    assert.equal(h.toolResults.filter(item => item.name === 'group_task_context_get').length, 1)
-    assert.equal(h.residentStore.getTopic('native-group', topicId).processedRevision, 3)
-    assert.equal(h.residentStore.getTopic('native-group', topicId).decisions.at(-1).status, 'completed')
-    assert.equal(h.sent.length, 1)
-    h.residentStore.getTask = originalGetTask
-    drift = false; apply = true
-    await t.step(async () => h.service.ingest(message('inline-apply-follow', '请补充原任务：只检查名称，不发送通知。')))
-    await t.step(async () => h.service.whenIdle())
-    const updated = await t.step(async () => h.query('task.get', { taskId }))
-    const record = h.residentStore.getTopic('native-group', topicId).decisions.at(-1)
-    assert.equal(record.status, 'completed')
-    assert.equal(record.decision.actions[0].kind, 'task-context')
-    assert.equal(record.operations[0].taskId, taskId)
-    assert.equal(updated.requirementRevision, task.requirementRevision)
-    assert.equal(updated.contextRevision, (task.contextRevision ?? 0) + 1)
-    assert.match(updated.request, /只检查名称，不发送通知/)
-    assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
-    assert.equal(h.residentStore.getTopic('native-group', topicId).processedRevision, 4)
-    assert.ok((await t.step(async () => h.query('source.list'))).find(source => source.messageId === 'inline-apply-follow').processingCompleted)
-    assert.equal(h.sent.length, 2)
-    t.diagnostic(JSON.stringify({ viewBytes, firstBodyBytes }))
-  }))
-
-testRunner('native revised Topic supplies current linked Task reads without rescanning the catalogue',
-  { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-    let topicId, taskId, contextReads = 0, decisions = 0
-    const h = await extraHost(t, 'linked-task-reads-', async request => {
-      const names = request.tools.map(tool => tool.name), input = latestInput(request)
-      if (names.includes('group_topic_route_submit')) {
-        const last = modelToolValues(request).at(-1)
-        if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
-        const routes = input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ topicId, reason: '原事项的后续讨论' }] }))
-        return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [],
-          initialReplySilences: scriptedRouteSilences(routes, '本次是原事项上下文核对，不要求新增处理') })]
-      }
-      if (names.includes('group_decision_submit')) {
-        const summaryRead = decisionSummaryRead(request, input)
-        if (summaryRead) return [summaryRead]
-        assert.equal(input.inlineDecisionContext, undefined, '超预算合同不能部分装入首包')
-        assert.equal(input.linkedTasks.total, 1)
-        assert.equal(input.linkedTasks.reads[0].taskId, taskId)
-        assert.equal(input.linkedTasks.snapshots[0].summary, '等待后续资料')
-        assert.equal(input.linkedTasks.snapshots[0].objective, undefined, '首包只含状态摘要，完整目标按需读')
-        const full = modelToolValues(request).flatMap(value => value.tasks ?? []).find(task => task.taskId === taskId && task.objective)
-        if (!full) { contextReads++; return [call(input.linkedTasks.reads[0].readCall.name, input.linkedTasks.reads[0].readCall.arguments)] }
-        assert.equal(full.objective, '必须完整核验的原目标'.repeat(800))
-        assert.ok(Buffer.byteLength(JSON.stringify(full), 'utf8') > 64 * 1024, '大合同必须实际超过首包预算')
-        decisions++
-        return [call('group_decision_submit', { revision: input.revision,
-          decision: { basisMessageIds: input.messages.map(item => item.messageId), basisUnitRefs: input.messages.map(item => item.unitShortRef), actions: [], reason: '只核对讨论上下文，不执行新动作' } })]
-      }
-      return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续资料', evidence: [], limitations: [] } })]
-    })
-    t.onCancel(() => t.diagnostic(JSON.stringify({ decisions, contextReads, results: h.toolResults.slice(-4).map(item => ({ name: item.name, value: item.result.value?.status ?? item.result.value?.error ?? item.result.value?.section ?? item.result.content?.[0]?.text?.slice(0, 1000) })),
-      inputs: h.requests.slice(-2).map(request => { const input = latestInput(request); return { names: request.tools.map(tool => tool.name), linkedTasks: input.linkedTasks, messages: Array.isArray(input.messages), summary: input.summaryContext } }), alerts: h.service.listAlerts() })))
-    await t.beginBusiness()
-
-    const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'linked-original', title: '关联原任务', objective: '必须完整核验的原目标'.repeat(800) }))
-    await t.step(async () => h.service.whenIdle())
-    const task = await t.step(async () => h.query('task.get', { taskId: created.taskId }))
-    taskId = task.taskId; topicId = task.topicRefs[0].topicId
-    const ownerRuns = h.toolResults.filter(item => item.name === 'task_session_submit').length
-    for (const [id, text] of [['linked-follow-317', '补充原事项讨论，只核对上下文，不执行新动作。'],
-      ['linked-follow-318', '测试成员乙已处理原事项，后续由测试成员丙验收，未请求本助手推进。']]) {
-      await t.step(async () => h.service.ingest(message(id, text)))
-      await t.step(async () => h.service.whenIdle())
-    }
-    assert.equal(decisions, 2)
-    assert.equal(contextReads, 2, '每个新版本从当前账本核对全文，不沿用旧会话读过的许可')
-    assert.equal(h.toolResults.filter(item => item.name === 'group_task_list').length, 0)
-    assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
-    assert.equal((await t.step(async () => h.query('task.get', { taskId }))).requirementRevision, task.requirementRevision)
-    assert.deepEqual(await t.step(async () => h.query('task.get', { taskId })), task, '他人进展只保留业务上下文，不改任务状态或完成证据')
-    assert.equal(h.toolResults.filter(item => item.name === 'task_session_submit').length, ownerRuns, '只记上下文不能唤醒已有任务')
+    const created = await t.step(() => h.service.createTask({ groupId: 'native-group', requestId: 'context-original', title: '资料核对', objective }))
+    await t.step(() => h.service.whenIdle())
+    original = await t.step(() => h.query('task.get', { taskId: created.taskId }))
+    taskId = original.taskId
+    ownerRunsBefore = h.toolResults.filter(item => item.name === 'task_session_submit').length
+    const follow = message('inline-apply-follow', '请补充原任务：只检查名称，不发送通知。')
+    await t.step(() => h.service.ingest(follow))
+    await t.step(() => h.service.whenIdle())
+    assert.ok(taskRead, JSON.stringify({ tools: h.toolResults.map(item => ({ name: item.name, status: item.result.value?.status, error: item.result.value?.error ?? item.result.error,
+      taskId: item.result.value?.task?.taskId ?? item.result.value?.taskId, hasTasks: Array.isArray(item.result.value?.tasks), objective: typeof (item.result.value?.task?.objective ?? item.result.value?.objective) })) }))
+    const updated = await t.step(() => h.query('task.get', { taskId }))
+    assert.equal(updated.requirementRevision, original.requirementRevision)
+    assert.equal(updated.controlRevision, original.controlRevision)
+    assert.equal(updated.sessionId, original.sessionId)
+    assert.equal(updated.runSequence, original.runSequence)
+    assert.equal(updated.drained, true)
+    assert.equal(updated.lastDecision.action, 'wait')
+    assert.ok(updated.request.includes('只检查名称，不发送通知'), JSON.stringify({ tail: updated.request.slice(-240),
+      tools: h.toolResults.slice(-8).map(item => ({ name: item.name, status: item.result.value?.status, error: item.result.value?.error ?? item.result.error })), alerts: h.service.listAlerts() }))
+    const sourceId = `im:${createHash('sha256').update(JSON.stringify(['native-group', follow.messageId, 1])).digest('hex')}`
+    assert.ok(updated.sourceRefs.includes(sourceId))
+    assert.equal(h.toolResults.filter(item => item.name === 'task_session_submit').length, ownerRunsBefore + 1,
+      'a preserve-only supplement feeds the existing Task Owner without changing its run identity')
+    assert.ok(h.requests.some(request => request.tools.some(tool => tool.name === 'task_session_submit')
+      && JSON.stringify(request.messages).includes('只检查名称，不发送通知')), 'the existing Owner must receive the supplemental context')
+    assert.equal((await t.step(() => h.query('task.list'))).length, 1)
+    assert.ok((await t.step(() => h.query('source.list'))).find(source => source.messageId === follow.messageId)?.processingCompleted)
+    assert.equal(h.residentStore.listTopics('native-group').length, 0)
     assert.equal(h.sent.length, 0)
-    assert.equal(h.residentStore.listTopics('native-group').find(topic => topic.topicId === topicId).processedRevision, 3)
   }))
 
-testRunner('native task context reports invalid arguments and reads explicit archived identity', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-  const invalid = [{}, { taskIds: null }, { taskIds: 'x' }, { taskIds: [null] }, { taskIds: [] },
-    { taskIds: ['same', 'same'] }, { taskIds: Array.from({ length: 9 }, (_, index) => `id-${index}`) }, { taskIds: ['x'], extra: true }]
-  let taskId, foreignTaskId, requestedInvalid = false, requestedArchive = false, requestedForeign = false, checked = false
-  const h = await extraHost(t, 'archived-context-contract-', async (request, host) => {
+testRunner('direct Router explicitly reads an oversized Task before the current decision',
+  { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+    const objective = '必须完整核验的原目标'.repeat(800)
+    let taskId, fullRead = false
+    const h = await t.step(() => extraHost(t, 'direct-linked-task-read-', async request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+      if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+      const missingSource = missingSourceRead(request, input)
+      if (missingSource) return [call('router_source_read', missingSource)]
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+      if (names.includes('router_submit') || names.includes('router_task_list') || names.includes('router_task_get') || names.includes('router_source_read')) {
+        for (const source of input.sources ?? []) {
+          let offset = 0
+          while (offset < source.totalLength) {
+            const page = values.find(item => item.batchId === input.batchId && item.sourceId === source.sourceId && item.offset === offset && Number.isInteger(item.nextOffset))
+            if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+            offset = page.nextOffset
+          }
+        }
+        if (!values.some(value => Array.isArray(value.tasks))) return [call('router_task_list', {})]
+        const summary = values.flatMap(value => value.tasks ?? []).find(task => task.taskId === taskId)
+        assert.ok(summary)
+        const full = values.findLast(value => (value.task?.taskId ?? value.taskId) === taskId && (value.task?.objective ?? value.objective))
+        if (!full) return [call('router_task_get', { taskId })]
+        const task = full.task ?? full
+        assert.equal(task.objective, objective)
+        assert.ok(Buffer.byteLength(JSON.stringify(task), 'utf8') > 64 * 1024, 'the complete Task remains larger than the former inline budget')
+        fullRead = true
+        return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      }
+      if (names.includes('task_session_submit')) return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续资料', evidence: [], limitations: [] } })]
+      throw new Error(`Unexpected direct Task tools: ${names.join(', ')}`)
+    }))
+    await t.beginBusiness()
+    const created = await t.step(() => h.service.createTask({ groupId: 'native-group', requestId: 'linked-original', title: '关联原任务', objective }))
+    await t.step(() => h.service.whenIdle())
+    taskId = created.taskId
+    const original = await t.step(() => h.query('task.get', { taskId }))
+    const ownerRuns = h.toolResults.filter(item => item.name === 'task_session_submit').length
+    await t.step(() => h.service.ingest(message('linked-follow', '补充原事项讨论，只核对上下文，不执行新动作。')))
+    await t.step(() => h.service.whenIdle())
+    assert.ok(fullRead, JSON.stringify({ tools: h.toolResults.slice(-8).map(item => ({ name: item.name,
+      status: item.result.value?.status, error: item.result.value?.error ?? item.result.error })), alerts: h.service.listAlerts() }))
+    assert.deepEqual(await t.step(() => h.query('task.get', { taskId })), original, 'a read-only context lookup must not mutate or wake the Task')
+    assert.equal(h.toolResults.filter(item => item.name === 'task_session_submit').length, ownerRuns)
+    assert.equal(h.toolResults.filter(item => item.name === 'router_task_list').length, 1)
+    assert.equal(h.toolResults.filter(item => item.name === 'router_task_get').length, 1)
+    assert.equal((await t.step(() => h.query('task.list'))).length, 1)
+    assert.ok((await t.step(() => h.query('source.list'))).find(source => source.messageId === 'linked-follow')?.processingCompleted)
+    assert.equal(h.residentStore.listTopics('native-group').length, 0)
+    assert.equal(h.sent.length, 0)
+  }))
+
+testRunner('direct Router reads archived Task identity only within its current group', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  let taskId, foreignTaskId, foreignRequested = false, missingRequested = false, checked = false
+  const h = await extraHost(t, 'direct-archived-task-context-', async request => {
     const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
-    if (names.includes('group_topic_route_submit')) {
-      const last = values.at(-1)
-      if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
-      const routes = input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'archive-read', title: '归档身份核验', reason: '独立核验归档任务身份', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '身份核验独立于已有事项' })) }] }))
-      return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [],
-        initialReplySilences: scriptedRouteSilences(routes, '仅核验归档任务身份，不要求执行其他事项') })]
-    }
-    if (names.includes('group_decision_submit')) {
-      if (!requestedInvalid) { requestedInvalid = true; return invalid.map(args => call('group_task_context_get', args)) }
-      if (!requestedArchive) {
-        assert.equal(values.filter(value => value.status === 'invalid-arguments' && value.issues?.some(issue => issue.code === 'group_task_context_request_invalid')).length, invalid.length)
-        requestedArchive = true
-        return [call('group_task_context_get', { taskIds: [taskId] })]
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      for (const source of input.sources ?? []) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
       }
-      const archived = values.flatMap(value => value.tasks ?? []).find(task => task.taskId === taskId)
-      assert.ok(archived?.archivedAt)
-      assert.deepEqual(archived.allowedActions, [])
-      assert.equal(archived.groupId, 'native-group')
-      assert.equal(archived.objective, undefined)
-      if (!requestedForeign) {
-        requestedForeign = true
-        return [call('group_task_context_get', { taskIds: [foreignTaskId] }), call('group_task_context_get', { taskIds: ['missing-task-id'] })]
-      }
-      const toolResults = JSON.stringify(host.toolResults.filter(item => item.name === 'group_task_context_get'))
-      assert.match(toolResults, /group_task_context_wrong_group/)
-      assert.match(toolResults, /group_task_context_not_found/)
-      assert.doesNotMatch(toolResults, /跨群机密原目标/)
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+      if (!values.some(value => Array.isArray(value.tasks))) return [call('router_task_list', {})]
+      const archived = values.findLast(value => (value.task?.taskId ?? value.taskId) === taskId)
+      if (!archived) return [call('router_task_get', { taskId })]
+      if (!archived) return [call('router_task_get', { taskId })]
+      assert.equal((archived.task ?? archived).taskId, taskId)
+      if (!foreignRequested) { foreignRequested = true; return [call('router_task_get', { taskId: foreignTaskId })] }
+      if (!missingRequested) { missingRequested = true; return [call('router_task_get', { taskId: 'missing-task-id' })] }
+      const errors = h.toolResults.filter(item => item.name === 'router_task_get' && item.result.isError)
+      assert.equal(errors.length, 2)
+      assert.ok(errors.every(item => item.result.error?.message === 'router_task_missing'))
+      assert.doesNotMatch(JSON.stringify(errors), /跨群机密原目标/)
       checked = true
-      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reason: '仅核验归档身份' } })]
+      return [call('router_submit', { actions: [], continuity: [], reply: null })]
     }
-    return [call('task_session_submit', { decision: { action: 'complete', summary: '已完成', evidence: [], limitations: [] } })]
+    if (names.includes('task_session_submit')) return [call('task_session_submit', { decision: {
+      action: 'complete', summary: '归档测试完成。', evidence: ['已完成身份检查'], limitations: [] } })]
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
   })
-  t.onCancel(() => t.diagnostic(JSON.stringify({ requestedInvalid, requestedArchive, requestedForeign, checked, results: h.toolResults.slice(-4).map(item => ({ name: item.name, value: item.result.value ?? item.result.error })) })))
   await t.beginBusiness()
 
   const created = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'archive-contract-create', title: '归档测试', objective: '敏感原目标不应出现在归档上下文' }))
   taskId = created.taskId
-  await t.step(async () => h.service.whenIdle())
+  await t.step(async () => waitUntil(async () => {
+    const task = await h.query('task.get', { taskId })
+    return task?.status === 'completed' && task.drained
+  }, '原群任务完成并排空'))
   await t.step(async () => h.service.archiveTask({ taskId }))
   await t.step(async () => h.residentStore.subscribe({ groupId: 'foreign-group', name: '隔离测试群', responsibility: '测试群边界' }))
   const foreign = await t.step(async () => h.service.createTask({ groupId: 'foreign-group', requestId: 'foreign-archive-create', title: '外群测试', objective: '跨群机密原目标' }))
   foreignTaskId = foreign.taskId
-  await t.step(async () => h.service.whenIdle())
+  await t.step(async () => waitUntil(async () => {
+    const task = await h.query('task.get', { taskId: foreignTaskId })
+    return task?.status === 'completed' && task.drained
+  }, '外群任务完成并排空'))
   await t.step(async () => h.service.archiveTask({ taskId: foreignTaskId }))
-  assert.equal((await t.step(async () => h.query('task.list'))).some(task => task.taskId === taskId), false)
   await t.step(async () => h.service.ingest(message('archive-contract-source', '只核对归档身份，无需执行。')))
-  await t.step(async () => h.service.whenIdle())
+  await t.step(async () => waitUntil(() => checked, 'Router完成归档身份读取').catch(error => {
+    throw new Error(`${error.message} ${JSON.stringify({ foreignRequested, missingRequested, alerts: h.service.listAlerts(),
+      results: h.toolResults.slice(-8).map(item => ({ name: item.name, error: item.result.error?.message })) })}`)
+  }))
   assert.equal(checked, true)
+  assert.ok(h.toolResults.some(item => item.name === 'router_task_get' && JSON.stringify(item.result).includes('router_task_missing')))
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
   assert.equal(h.sent.length, 0)
 }))
 
-testRunner('native batch followup reopens each original completed task and session once from one coordination topic', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-  let followup = false
+testRunner('native direct Router batch followup reopens each original completed task and session once', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
   const reopenedInputs = []
-  const h = await extraHost(t, 'task-batch-followup-', async (request, host) => {
+  const h = await extraHost(t, 'direct-task-batch-followup-', async request => {
     const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
-    if (input.trigger === 'task-facts') return topicTaskCalls(request)
-    if (names.includes('group_topic_route_submit')) {
-      assert.ok(JSON.stringify(request).includes('批量跟进可查询group_task_list及group_task_context_get核对目标'))
-      const last = values.at(-1)
-      if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
-      if (!values.some(value => Array.isArray(value.tasks))) return [call('group_task_list', { limit: 100 })]
-      const routes = input.messages.map(item => ({
-        messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'batch-review', title: '原交付审查续办', reason: '集中核验原交付审查事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '批量审查涉及多个原任务，不只归属单个已有事项' })) }],
-      }))
-      return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '批量审查涉及多个原任务，不对各自结果作统一推断') })]
-    }
-    if (names.includes('group_decision_submit')) {
-      assert.ok(JSON.stringify(request).includes('批量事项即使由新协调 Topic 承接'))
-      const details = values.find(value => Array.isArray(value.tasks))
-      if (!details) {
-        const ids = (await host.query('task.list')).filter(task => task.title.startsWith('dataset ')).map(task => task.taskId)
-        return [call('group_task_context_get', { taskIds: ids })]
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      for (const source of input.sources ?? []) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
       }
-      const review = values.find(value => Array.isArray(value.candidates))
-      if (!review) return [call('group_reply_review_get', { requestIds: [input.requestId] })]
-      const refs = [{ topicId: input.topicId, revision: input.revision }]
-      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: input.messages.map(item => item.messageId),
-          actions: details.tasks.map(task => {
-            assert.equal(task.state, 'completed')
-            assert.ok(task.request && task.completion.result.summary, '详情仍保留完整原始交付及完成证据')
-            return { kind: 'task-reopen', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
-              context: `仅跟进 ${task.title} 的原 PR；核查新评论，适用时修订、验证并提测原 UAT，无新评论则不重复修改或部署。`, topicRefs: refs }
-          }),
-          reply: '已分别交回两个原任务核查新增审查评论。', replyToMessageId: input.messages.at(-1).messageId,
-          replyReview: { kind: 'confirmation', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
-        } })]
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+      const sourceIds = input.context?.newSourceIds ?? []
+      if (!sourceIds.length) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      const listed = values.findLast(value => Array.isArray(value.tasks) && value.tasks.some(task => task.title?.startsWith('dataset ')))
+      if (!listed) return [call('router_task_list', {})]
+      const targets = listed.tasks.filter(task => task.title.startsWith('dataset '))
+      const loaded = targets.map(target => values.findLast(value => (value.task?.taskId ?? value.taskId) === target.taskId)).filter(Boolean)
+      if (loaded.length !== targets.length) return [call('router_task_get', { taskId: targets.find(target => !loaded.some(value => (value.task?.taskId ?? value.taskId) === target.taskId)).taskId })]
+      const taskStates = loaded.map(value => value.task ?? value)
+      assert.ok(taskStates.every(task => task.status === 'completed' || task.state === 'completed'))
+      return [call('router_submit', { actions: taskStates.map(task => ({ kind: 'task-reopen', taskId: task.taskId,
+        inputVersion: task.requirementRevision, runSequence: task.runSequence, expectedControlRevision: task.controlRevision,
+        context: `仅跟进 ${task.title} 的原 PR；核查新评论，适用时修订、验证并提测原 UAT，无新评论则不重复修改或部署。`, sourceIds })), continuity: [], reply: null })]
     }
-    assert.ok(names.includes('task_session_submit'))
-    if (followup) reopenedInputs.push({ taskId: input.task.taskId, sessionId: input.task.sessionId, request: input.task.request })
-    return [call('task_session_submit', { decision: { action: 'complete', summary: followup ? '已核查，无新增适用评论，不修改或提测。' : '原 PR 与 UAT 交付证据。',
-      evidence: ['隔离测试完成收据'], limitations: [] } })]
+    if (names.includes('task_session_submit')) {
+      const input = latestInput(request)
+      reopenedInputs.push({ taskId: input.task.taskId, sessionId: input.task.sessionId, request: input.task.request })
+      return [call('task_session_submit', { decision: { action: 'complete', summary: '已核查，无新增适用评论，不修改或提测。', evidence: ['原任务上下文已核对'], limitations: [] } })]
+    }
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
   })
-  t.onCancel(() => t.diagnostic(JSON.stringify({ followup, results: h.toolResults.slice(-4).map(item => ({ name: item.name, value: item.result.value ?? item.result.error })) })))
   await t.beginBusiness()
 
   for (const title of ['dataset 名称校验', 'dataset 关联校验', '无关通知文案']) {
@@ -816,7 +839,7 @@ testRunner('native batch followup reopens each original completed task and sessi
   }
   const originals = await t.step(async () => h.query('task.list'))
   assert.ok(originals.every(task => task.status === 'completed'))
-  followup = true
+  reopenedInputs.length = 0
   const source = message('batch-followup', '测试助手，云端对dataset项目当前活跃的PR做了代码审查，并给出了修复方案，你看看你当前已完成的项目中未合并的PR是否有新的评论，如果有，则逐个按照PR中的评论修改，然后重新提测对应UAT环境')
   await t.step(async () => h.service.ingest(source))
   await t.step(async () => h.service.whenIdle())
@@ -829,13 +852,15 @@ testRunner('native batch followup reopens each original completed task and sessi
     assert.equal(current.requirementRevision, original.requirementRevision + Number(selected))
     assert.ok(current.request.startsWith(original.request))
     assert.ok(original.sourceRefs.every(ref => current.sourceRefs.includes(ref)))
-    assert.ok(original.topicRefs.every(ref => current.topicRefs.some(item => item.topicId === ref.topicId)))
+    assert.deepEqual(current.topicRefs, original.topicRefs)
     assert.equal(current.status, 'completed')
   }
   assert.equal(reopenedInputs.length, 2)
-  const decision = h.residentStore.listTopics('native-group').find(topic => topic.title === '原交付审查续办').decisions[0]
-  assert.deepEqual(decision.decision.actions.map(action => action.kind), ['task-reopen', 'task-reopen'])
-  assert.ok(decision.operations.every(operation => operation.status === 'applied'))
+  const router = h.residentStore.getRouterState('native-group')
+  const decision = router.decisions.find(item => item.inputs?.some(input => input.kind === 'source' && input.sourceRef.messageId === source.messageId))
+  assert.ok(decision)
+  assert.deepEqual(decision.applications.map(application => application.action.kind), ['task-reopen', 'task-reopen'])
+  assert.ok(decision.applications.every(application => application.status === 'applied'))
   await t.step(async () => h.service.ingest(source))
   await t.step(async () => h.service.recover())
   await t.step(async () => h.service.whenIdle())
@@ -843,48 +868,182 @@ testRunner('native batch followup reopens each original completed task and sessi
   assert.deepEqual((await t.step(async () => h.query('task.list'))).map(task => [task.taskId, task.requirementRevision, task.runSequence]), after.map(task => [task.taskId, task.requirementRevision, task.runSequence]))
 }))
 
-for (const quoted of [true, false]) testRunner('普通回复显式多收件人贯穿原生通知格式化 quoted=' + quoted, { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+for (const quoted of [true, false]) testRunner('直接来源路由显式多人通知贯穿原生通知格式化 quoted=' + quoted, { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const first = { ...message('recipient-a', '@助手 请核对资料。'), senderOpenDingTalkId: 'user-a' }
+  const second = { ...message('recipient-b', '资料已准备。'), senderOpenDingTalkId: 'user-b' }
+  const sourceIdFor = input => `im:${createHash('sha256').update(JSON.stringify([input.groupId, input.messageId, input.messageVersion ?? 1])).digest('hex')}`
+  const firstSourceId = sourceIdFor(first), secondSourceId = sourceIdFor(second)
   let rejectedQuote = false
-  const h = await extraHost(t, 'topic-recipients-', async request => {
-    const names = request.tools.map(tool => tool.name)
-    if (names.includes('group_topic_route_submit')) {
-      const input = envelope(request, '[GROUP_TOPIC_ROUTE]')
-      const topic = h.residentStore.listTopics('native-group')[0]
-      const routes = input.messages.map(item => ({
-        messageId: item.messageId, messageVersion: item.messageVersion,
-        topics: [topic ? { topicId: topic.topicId, reason: '同一资料核对的后续回复' } : { newTopicKey: 'same', title: '资料核对', reason: '独立的资料核对事项' }],
-      }))
-      return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '当前来源只补充同一资料核对上下文') })]
-    }
-    if (names.includes('group_decision_submit')) {
-      const input = envelope(request, '[GROUP_TOPIC_DECISION]')
-      const current = input.messages.at(-1)
-      const decision = current.messageId === 'recipient-a'
-        ? { basisMessageIds: ['recipient-a'], actions: [], reason: '等待补充' }
-        : { basisMessageIds: ['recipient-a', 'recipient-b'], actions: [], reply: '已收到资料。', ...(quoted ? { replyToMessageId: 'recipient-a' } : {}),
-          atOpenDingTalkIds: ['user-a', 'user-b'], replyReview: { kind: 'substantive', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } }
-      if (!quoted && current.messageId === 'recipient-b' && !rejectedQuote) {
-        rejectedQuote = true
-        decision.replyToMessageId = 'recipient-b'
-        decision.atOpenDingTalkIds = ['user-a']
+  const h = await extraHost(t, 'direct-source-recipients-', async request => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      if (names.includes('triage_submit')) {
+        for (const source of input.sources ?? []) {
+          let offset = 0
+          while (offset < source.totalLength) {
+            const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+            if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+            offset = page.nextOffset
+          }
+        }
+        return [call('triage_submit', { needsProcessing: true, reply: null })]
       }
-      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision })]
+      const sourceIds = input.context?.newSourceIds ?? []
+      if (!sourceIds.includes(secondSourceId)) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      const firstPage = pages.find(item => item.sourceId === firstSourceId && item.offset === 0)
+      if (!firstPage && !input.sources?.some(source => source.sourceId === firstSourceId))
+        return [call('router_source_read', { sourceId: firstSourceId, offset: 0 })]
+      const sources = [...(input.sources ?? [])]
+      if (!sources.some(source => source.sourceId === firstSourceId)) sources.push({ sourceId: firstSourceId, totalLength: firstPage.totalLength })
+      for (const source of sources) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
+      }
+      const review = values.findLast(value => value.sourceId === secondSourceId && Array.isArray(value.candidates))
+      if (!review) return [call('router_reply_review_get', { sourceId: secondSourceId })]
+      if (rejectedQuote) {
+        const error = JSON.stringify(request.messages.filter(item => item.role === 'tool').slice(-2))
+        assert.match(error, /group_reply_quote_author_not_in_recipients/i)
+      }
+      const reply = { sourceId: secondSourceId, text: '已收到资料。', review: { kind: 'substantive',
+        reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] },
+        atOpenDingTalkIds: ['user-a', 'user-b'] }
+      if (!quoted && !rejectedQuote) {
+        rejectedQuote = true
+        reply.replyToMessageId = 'recipient-b'
+        reply.atOpenDingTalkIds = ['user-a']
+      } else if (quoted) reply.replyToMessageId = 'recipient-a'
+      return [call('router_submit', { actions: [], continuity: [], reply })]
     }
-    return []
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
   })
+  t.onCancel(() => t.diagnostic(JSON.stringify({ quoted, sourceIds: [firstSourceId, secondSourceId],
+    requests: h.requests.slice(-4).map(request => ({ tools: request.tools.map(tool => tool.name), newSourceIds: latestInput(request).context?.newSourceIds })),
+    results: h.toolResults.slice(-8).map(item => ({ name: item.name, error: item.result.error ?? item.result.value?.error, status: item.result.value?.status })),
+    decisions: h.residentStore.getRouterState('native-group').decisions.map(item => ({ id: item.decisionId, inputs: item.inputs.map(input => input.sourceRef?.sourceId), applications: item.applications.map(application => ({ kind: application.kind, status: application.status })) })) })))
   await t.beginBusiness()
 
-  await t.step(async () => h.service.ingest({ ...message('recipient-a', '@助手 请核对资料。'), senderOpenDingTalkId: 'user-a' }))
+  await t.step(async () => Promise.all([h.service.ingest(first), h.service.ingest(second)]))
   await t.step(async () => h.service.whenIdle())
-  await t.step(async () => h.service.ingest({ ...message('recipient-b', '资料已准备。'), senderOpenDingTalkId: 'user-b' }))
-  await t.step(async () => h.service.whenIdle())
+  await t.step(async () => waitUntil(async () => {
+    const sources = await h.query('source.list')
+    return sources.some(item => item.messageId === first.messageId && item.processingCompleted)
+      && sources.some(item => item.messageId === second.messageId && item.processingCompleted) && h.sent.length === 1
+  }, 'direct Router multi-recipient reply sent'))
   assert.equal(h.sent.length, 1)
   assert.equal(h.sent[0].payload.replyToMessageId, quoted ? 'recipient-a' : undefined)
   assert.deepEqual(h.sent[0].payload.atOpenDingTalkIds, ['user-a', 'user-b'])
+  assert.equal(h.residentStore.getGroup('native-group').outbox.length, 1)
   assert.equal(h.residentStore.getGroup('native-group').outbox[0].replyToMessageId, quoted ? 'recipient-a' : undefined)
+  assert.deepEqual(h.residentStore.getGroup('native-group').outbox[0].atOpenDingTalkIds, ['user-a', 'user-b'])
   if (!quoted) assert.ok(h.toolResults.some(result => JSON.stringify(result).includes('group_reply_quote_author_not_in_recipients')))
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
   await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
   assert.equal(h.sent.length, 1)
+}))
+
+testRunner('direct Router retires a reply when a non-anchor recipient source changes before first prepare', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'direct-router-recipient-source-revision-'))
+  const anchor = { ...message('recipient-anchor', '@助手 请核对资料。'), senderOpenDingTalkId: 'user-a' }
+  const participant = { ...message('recipient-participant', '资料已准备。'), senderOpenDingTalkId: 'user-b' }
+  const revisedParticipant = { ...participant, messageVersion: 2, text: '资料版本已更新，但仍不需要新回复。' }
+  const sourceIdFor = input => `im:${createHash('sha256').update(JSON.stringify([input.groupId, input.messageId, input.messageVersion ?? 1])).digest('hex')}`
+  const anchorSourceId = sourceIdFor(anchor), participantSourceId = sourceIdFor(participant), revisedSourceId = sourceIdFor(revisedParticipant)
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let host, intercepted, originalPreparation
+  t.onCancel(() => release.resolve())
+  t.after(async () => { release.resolve(); if (host) { if (originalPreparation) host.residentStore.withRouterReplyPreparation = originalPreparation; await host.close() } await rm(root, { recursive: true, force: true }) })
+  await t.beginBusiness()
+  host = await t.step(async () => nativeTaskHost(root, async request => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      if (names.includes('triage_submit')) {
+        for (const source of input.sources ?? []) {
+          let offset = 0
+          while (offset < source.totalLength) {
+            const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+            if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+            offset = page.nextOffset
+          }
+        }
+        const isRevisedParticipant = input.sources?.some(source => source.sourceId === revisedSourceId)
+        return [call('triage_submit', { needsProcessing: !isRevisedParticipant, reply: null })]
+      }
+      const newSourceIds = input.context?.newSourceIds ?? []
+      if (!newSourceIds.includes(participantSourceId)) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      const sources = [...(input.sources ?? [])]
+      const anchorPage = pages.find(item => item.sourceId === anchorSourceId && item.offset === 0)
+      if (!anchorPage && !sources.some(source => source.sourceId === anchorSourceId)) return [call('router_source_read', { sourceId: anchorSourceId, offset: 0 })]
+      if (!sources.some(source => source.sourceId === anchorSourceId)) sources.push({ sourceId: anchorSourceId, totalLength: anchorPage.totalLength })
+      for (const source of sources) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
+      }
+      const review = values.findLast(value => value.sourceId === anchorSourceId && Array.isArray(value.candidates))
+      if (!review) return [call('router_reply_review_get', { sourceId: anchorSourceId })]
+      return [call('router_submit', { actions: [], continuity: [], reply: { sourceId: anchorSourceId, text: '已收到资料，正在核对。',
+        replyToMessageId: participant.messageId, atOpenDingTalkIds: ['user-a', 'user-b'],
+        review: { kind: 'substantive', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
+    }
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
+  }))
+  originalPreparation = host.residentStore.withRouterReplyPreparation.bind(host.residentStore)
+  host.residentStore.withRouterReplyPreparation = async args => {
+    if (!intercepted && args.intent.sourceRef.sourceId === anchorSourceId
+      && args.intent.notificationRouting?.sourceRefs.some(ref => ref.sourceId === participantSourceId && ref.messageVersion === 1)) {
+      intercepted = structuredClone({ decisionId: args.intent.decisionId, operationId: args.intent.operationId,
+        sourceRef: args.intent.sourceRef, notificationRouting: args.intent.notificationRouting })
+      entered.resolve()
+      await release.promise
+    }
+    return originalPreparation(args)
+  }
+
+  await t.step(async () => host.service.ingest(anchor))
+  await t.step(async () => waitUntil(async () => (await host.query('source.list')).some(source => source.sourceId === anchorSourceId && source.processingCompleted), 'anchor source completes'))
+  await t.step(async () => host.service.ingest(participant))
+  await t.step(async () => entered.promise)
+  assert.deepEqual(intercepted.sourceRef, { sourceId: anchorSourceId, messageId: anchor.messageId, messageVersion: 1 })
+  assert.ok(intercepted.notificationRouting.sourceRefs.some(ref => ref.sourceId === participantSourceId && ref.messageVersion === 1))
+  const decision = host.residentStore.getRouterState('native-group').decisions.find(item => item.decisionId === intercepted.decisionId)
+  const application = decision?.applications.find(item => item.operationId === intercepted.operationId && item.kind === 'reply')
+  assert.ok(application)
+  assert.notEqual(application.status, 'applied')
+  const outboundId = `router-reply:${intercepted.operationId}`
+  assert.equal(await t.step(async () => host.query('notification.get', { notificationId: outboundId })), null)
+  assert.equal(host.residentStore.getGroup('native-group').outbox.some(item => item.outboundId === outboundId), false)
+
+  await t.step(async () => host.service.ingest(revisedParticipant))
+  await t.step(async () => waitUntil(async () => (await host.query('source.list')).some(source => source.sourceId === revisedSourceId && source.version === 2), 'revised non-anchor source is durably ingested'))
+  assert.equal(host.residentStore.getGroup('native-group').messages.find(item => item.messageId === participant.messageId).messageVersion, 2)
+  assert.equal((await t.step(async () => host.query('source.get', { sourceId: participantSourceId }))).version, 1)
+  release.resolve()
+  await t.step(async () => host.service.whenIdle())
+  assert.ok((await t.step(async () => host.query('source.list'))).some(source => source.sourceId === revisedSourceId && source.processingCompleted))
+
+  const settledDecision = host.residentStore.getRouterState('native-group').decisions.find(item => item.decisionId === intercepted.decisionId)
+  const settledApplication = settledDecision.applications.find(item => item.operationId === intercepted.operationId && item.kind === 'reply')
+  assert.equal(settledApplication.status, 'applied')
+  const retired = host.residentStore.getGroup('native-group').outbox.find(item => item.outboundId === outboundId)
+  assert.equal(retired.status, 'superseded')
+  assert.equal(retired.supersededReason, 'router-source-stale-before-prepare')
+  assert.equal(await t.step(async () => host.query('notification.get', { notificationId: outboundId })), null)
+  assert.equal(host.sent.length, 0)
+  assert.equal((await t.step(async () => host.query('task.list'))).length, 0)
+  assert.equal(host.residentStore.listTopics('native-group').length, 0)
 }))
 
 for (const mode of ['prepared', 'projected', 'revision-conflict', 'taskIds-conflict']) testRunner(`旧回复冻结恢复 ${mode}`, { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
@@ -918,180 +1077,214 @@ for (const mode of ['prepared', 'projected', 'revision-conflict', 'taskIds-confl
   h = await t.step(async () => nativeTaskHost(root, () => [], { initialize: false }))
   stage = 'recover and service idle'
   await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
-  stage = 'wait decision terminal'
-  await t.step(async () => waitUntil(() => ['blocked', 'completed'].includes(h.residentStore.getTopic('native-group', topicId).decisions.find(item => item.decisionId === 'old-decision').status), '旧决定恢复到终态', 5000))
-  stage = 'assert recovery'
-  const record = h.residentStore.getTopic('native-group', topicId).decisions.find(item => item.decisionId === 'old-decision')
+  stage = 'wait notification outcome'
   if (mode === 'revision-conflict' || mode === 'taskIds-conflict') {
-    assert.notEqual(record.status, 'completed')
-    assert.match(JSON.stringify(record), /group_reply_frozen_identity_conflict/)
+    await t.step(async () => waitUntil(() => h.service.listAlerts().some(item => item.alertId === `failure:${outboundId}` && item.detail === 'group_reply_frozen_identity_conflict'), '冻结身份冲突'))
+    assert.equal((await t.step(() => h.query('notification.get', { notificationId: outboundId }))).state, 'prepared')
     assert.equal(h.sent.length, 0)
   } else {
-    assert.equal(record.status, 'completed', JSON.stringify(record))
-    const outbox = h.residentStore.getGroup('native-group').outbox.filter(item => item.outboundId === outboundId)
-    assert.equal(outbox.length, 1)
-    assert.equal(outbox[0].text, '冻结文本')
-    assert.equal(outbox[0].replyToMessageId, 'frozen-a')
-    assert.equal(outbox[0].replyToSenderOpenDingTalkId, 'native-user')
-    assert.deepEqual(outbox[0].atOpenDingTalkIds, ['native-user'])
-    assert.ok(h.sent.length <= 1)
-    await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
-    assert.ok(h.sent.length <= 1)
+    await t.step(async () => waitUntil(async () => (await h.query('notification.get', { notificationId: outboundId }))?.state === 'delivered', '原冻结通知送达'))
+    assert.equal(h.sent.length, 1)
+    assert.equal(h.sent[0].id, outboundId)
+    assert.equal(h.sent[0].payload.text, '冻结文本')
+    assert.equal(h.sent[0].payload.replyToMessageId, 'frozen-a')
+    assert.equal(h.sent[0].payload.replyToSenderOpenDingTalkId, 'native-user')
+    assert.deepEqual(h.sent[0].payload.atOpenDingTalkIds, ['native-user'])
   }
+  const record = h.residentStore.getTopic('native-group', topicId).decisions.find(item => item.decisionId === 'old-decision')
+  assert.deepEqual(record, accepted.record)
+  assert.ok(h.service.listAlerts().some(item => item.alertId === 'failure:old-decision' && item.detail === 'LEGACY_DECISION_RECONCILIATION_REQUIRED'))
+  const sentBefore = h.sent.length
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+  assert.equal(h.sent.length, sentBefore)
+  assert.deepEqual(h.residentStore.getTopic('native-group', topicId).decisions.find(item => item.decisionId === 'old-decision'), record)
+  if (mode === 'revision-conflict' || mode === 'taskIds-conflict') {
+    assert.equal((await t.step(() => h.query('notification.get', { notificationId: outboundId }))).state, 'prepared')
+    assert.ok(h.service.listAlerts().some(item => item.alertId === `failure:${outboundId}` && item.detail === 'group_reply_frozen_identity_conflict'))
+  } else assert.equal((await t.step(() => h.query('notification.get', { notificationId: outboundId }))).state, 'delivered')
 }))
 
-testRunner('native task service preserves Topic routing, task association, ignored input and recovery idempotency', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'task-topic-native-'))
-  let h, residentStore
-  t.after(async () => { try { await h?.close(); await residentStore?.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  const reviewed = new Set(), ownerInputs = []
-  await t.beginBusiness()
-  h = await t.step(async () => nativeTaskHost(root, async (request, host) => {
-    const names = request.tools.map(tool => tool.name)
-    if (!names.includes('group_topic_route_submit')) assert.ok(JSON.stringify(request.messages.filter(message => message.role === 'system')).includes(groupReplyScopeInstructions),
-      '话题承接及任务结果的原生模型请求都必须携带多事项与部分处理的回复范围规则')
-    if (names.includes('group_topic_route_submit')) {
-      const input = envelope(request, '[GROUP_TOPIC_ROUTE]')
-      const existing = residentStore.listTopics('native-group').find(topic => topic.title === '原生文件检查')
-      const routes = input.messages.map(item => ({
-        messageId: item.messageId, messageVersion: item.messageVersion,
-        topics: item.messageId === 'noise' ? [] : item.messageId === 'discussion' ? [{ newTopicKey: 'discussion', title: '部署时间讨论', reason: '部署时间属于独立讨论', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '部署时间讨论不同于文件检查' })) }]
-          : existing ? [{ topicId: existing.topicId, reason: '原文件检查的补充' }] : [{ newTopicKey: 'native-check', title: '原生文件检查', reason: '独立的文件检查事项' }],
-        ...(item.messageId === 'noise' ? { reason: '同事闲聊，没有交办或持续事项' } : {}),
-      }))
-      const initialReplySilences = scriptedRouteSilences(routes, '当前来源补充原文件检查事项或讨论部署时间，未另行请求初诊')
-      return [call('group_topic_route_submit', { requestId: input.requestId, ...(input.batchRevision !== undefined ? { batchRevision: input.batchRevision } : {}), routes, initialReplies: [], initialReplySilences })]
-    }
-    if (names.includes('group_decision_submit')) {
-      const input = envelope(request, '[GROUP_TOPIC_DECISION]')
-      const current = input.messages.at(-1)
-      if (current.messageId === 'discussion') return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: [current.messageId], actions: [], reason: '只是讨论时间，没有交办' } })]
-      if (!reviewed.has(input.requestId)) {
-        reviewed.add(input.requestId)
-        return [call('group_reply_review_get', { requestIds: [input.requestId] })]
-      }
-      const reviewResult = host.toolResults.findLast(item => item.name === 'group_reply_review_get')
-      const review = jsonValues(reviewResult?.result).find(value => Array.isArray(value.candidates))
-      assert.ok(review, 'Real reply-review tool result must reach the scripted model')
-      const candidateIds = review.candidates.map(value => value.outboundId)
-      const task = residentStore.listTasks().find(value => value.groupId === 'native-group')
-      const refs = [{ topicId: input.topicId, revision: input.revision }]
-      const action = task ? { kind: 'task-context', taskId: task.taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
-        context: current.text, progressImpact: 'preserve', ...(current.messageId === 'fact-feedback' ? { factFeedback: true, authorizationChange: 'none' } : {}), topicRefs: refs }
-        : { kind: 'new-task', title: '原生文件检查', objective: '检查指定文件并等待补充', acceptanceCriteria: ['保留原始交办及后续补充'], topicRefs: refs }
-      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: [current.messageId], actions: [action], ...(current.messageId === 'fact-feedback'
-          ? { reason: '同事报告影响原核验，只交原Owner核对，不重复向群回复' }
-          : { reply: task ? '已收到补充。' : '已承接文件检查。', replyToMessageId: current.messageId,
-            replyReview: { kind: 'confirmation', reviewedOutboundIds: candidateIds, sameMatterOutboundIds: candidateIds, replaceOutboundIds: candidateIds } }) } })]
-    }
-    const input = latestInput(request)
-    assert.ok(names.includes('task_session_submit'), 'Task work must use a real native task session')
-    ownerInputs.push(input)
-    return [call('task_session_submit', { decision: { action: 'wait', summary: '等待用户补充检查资料', evidence: [], limitations: [] } })]
-  }, { agentConfig: { agentPreset: 'native-test', agentNames: ['助手'] }, serviceFactory: async args => {
-    residentStore = args.residentStore
-    await residentStore.setAgentNames(['助手'])
-    await residentStore.subscribe({ groupId: 'native-group', name: '真实话题测试群', responsibility: '助手负责用户明确交办的文件检查' })
-    return openTaskSessionService({ ...args, residentStore })
-  } }))
+testRunner('native direct source routing preserves Task association, follow-up facts and replay idempotency', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'direct-source-task-native-'))
   const first = message('first', '@助手 检查指定文件，先承接并等待我补充资料。')
+  const followup = message('followup', '@助手 再补充一条：只检查文件名称，不执行任何部署。')
+  const factFeedback = message('fact-feedback', '我从原始材料里发现目标文件还有一个定位线索，补充给原检查。')
+  const sourceIdFor = input => `im:${createHash('sha256').update(JSON.stringify([input.groupId, input.messageId, input.messageVersion ?? 1])).digest('hex')}`
+  const firstSourceId = sourceIdFor(first)
+  const followupSourceId = sourceIdFor(followup)
+  const factSourceId = sourceIdFor(factFeedback)
+  let h, triageDecisions = 0
+  const ownerInputs = [], ownerRequests = []
+  t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
+  t.onCancel(() => t.diagnostic(JSON.stringify({ requests: h?.requests.length, results: h?.toolResults.slice(-8).map(item => ({ name: item.name, error: item.result.error,
+    accepted: item.result.value?.accepted, status: item.result.value?.status, sourceId: item.result.value?.sourceId, offset: item.result.value?.offset })) })))
+  await t.beginBusiness()
+  h = await t.step(async () => nativeTaskHost(root, async request => {
+    const names = request.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const input = latestInput(request)
+      const values = modelToolValues(request)
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      for (const source of input.sources ?? []) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
+      }
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: ++triageDecisions !== 2, reply: null })]
+      const newSourceIds = input.context?.newSourceIds ?? []
+      if (!newSourceIds.length) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      if (newSourceIds.includes(firstSourceId)) return [call('router_submit', { actions: [{ kind: 'new-task', sourceIds: newSourceIds,
+        title: '原生文件检查', objective: '检查指定文件并等待补充', acceptanceCriteria: ['保留原始交办及后续补充'] }], continuity: [], reply: null })]
+      const taskList = values.findLast(value => Array.isArray(value.tasks))
+      if (!taskList) return [call('router_task_list', {})]
+      const current = taskList.tasks.find(item => item.sourceRefs?.includes(firstSourceId))
+      assert.ok(current, 'Router task directory must retain the original direct-source Task')
+      const loaded = values.findLast(value => (value.task?.taskId ?? value.taskId) === current.taskId)
+      if (!loaded) return [call('router_task_get', { taskId: current.taskId })]
+      const taskState = loaded.task ?? loaded
+      const sourceId = newSourceIds.find(id => id === followupSourceId || id === factSourceId)
+      assert.ok(sourceId, 'new direct source must be the follow-up or unmentioned fact')
+      const context = sourceId === followupSourceId
+        ? '补充同一文件检查：只检查文件名称，不执行部署。'
+        : '无点名事实补充：从原始材料发现目标文件的定位线索，纳入原检查。'
+      return [call('router_submit', { actions: [{ kind: 'task-context', taskId: current.taskId, inputVersion: taskState.requirementRevision,
+        runSequence: taskState.runSequence, expectedControlRevision: taskState.controlRevision, context, progressImpact: 'preserve', sourceIds: newSourceIds }], continuity: [], reply: null })]
+    }
+    if (names.includes('task_session_submit')) {
+      const ownerInput = latestInput(request)
+      ownerInputs.push(ownerInput)
+      ownerRequests.push(request)
+      const systemText = request.messages.filter(item => item.role === 'system').flatMap(item => item.content ?? []).filter(part => part.type === 'text').map(part => part.text).join('\n')
+      assert.ok(systemText.includes(groupReplyScopeInstructions), 'Task Owner keeps the group reply scope instructions')
+      return [call('task_session_submit', { decision: { action: 'wait', summary: '原检查目标不变，已消费补充事实', evidence: [], limitations: [] } })]
+    }
+    throw new Error(`Unexpected direct Task tools: ${names.join(', ')}`)
+  }))
+
   assert.equal((await t.step(async () => h.service.ingest(first))).accepted, true)
   await t.step(async () => h.service.whenIdle())
-  await t.step(async () => waitUntil(async () => (await h.query('task.list')).length > 0, 'Topic decision creates native task').catch(async error => { throw new Error(error.message + JSON.stringify({ results: h.toolResults, requests: h.requests.length, recovery: await h.service.recover() })) }))
-  await t.step(async () => h.service.whenIdle())
-  const tasks = await t.step(async () => h.query('task.list'))
-  assert.equal(tasks.length, 1)
-  const task = tasks[0]
+  const [task] = await t.step(async () => h.query('task.list'))
+  assert.ok(task)
   assert.equal(task.drained, true)
   assert.equal(task.lastDecision.action, 'wait')
-  assert.equal(ownerInputs.length, 1)
-  const topics = residentStore.listTopics('native-group')
-  assert.equal(topics.length, 1)
-  const topicId = topics[0].topicId
-  assert.ok(task.topicRefs.some(ref => ref.topicId === topicId))
-  const stored = residentStore.getGroup('native-group').messages.find(item => item.messageId === first.messageId)
-  assert.equal(stored.routingStatus, 'routed')
-  assert.ok(resolveTopicMessages(residentStore.getGroup('native-group'), topicId, topics[0].revision).some(item => item.messageId === first.messageId))
-  assert.equal(stored.taskSessionRefs, undefined)
-  assert.equal(residentStore.getGroup('native-group').outbox[0].replyToMessageId, first.messageId)
-  assert.equal(stored.taskIds, undefined)
-  const firstSource = (await t.step(async () => h.query('source.list')))[0]
-  assert.equal(firstSource.routed, true)
+  assert.deepEqual(task.topicRefs, [])
+  const sources = await t.step(async () => h.query('source.list'))
+  assert.equal(sources.length, 1)
+  const firstSource = sources[0]
+  assert.equal(firstSource.messageId, first.messageId)
+  assert.equal(firstSource.version, first.messageVersion ?? 1)
+  assert.equal(firstSource.actorId, first.senderOpenDingTalkId)
   assert.ok(firstSource.processingCompleted)
-  const firstStages = firstSource.stages
-  for (const stage of ['ingress', 'queue', 'turn', 'host', 'send', 'readback']) {
-    assert.ok(firstStages.some(item => item.stage === stage && item.completedAt), `missing observed ${stage}: ${JSON.stringify(firstStages)}`)
-  }
-  assert.ok(firstStages.filter(item => item.stage === 'turn').every(item => item.sessionId && item.spanId.includes(item.sessionId)))
-  const dto = (await t.step(async () => h.service.messageProcessingSources('native-group'))).find(item => item.messageId === first.messageId)
-  assert.equal(dto.version, firstSource.version)
-  assert.deepEqual(dto.stages.map(item => item.spanId), firstStages.map(item => item.spanId))
-  assert.ok(dto.notifications.every(item => item.versionMatched && item.notificationId && item.deliveredAt))
-  assert.equal(dto.text, undefined)
-  assert.equal(h.service.listAlerts().some(item => item.id?.startsWith('timing:')), false)
-  const second = message('second', '@助手 补充同一文件检查：只检查文件名称，不执行部署。')
-  await t.step(async () => h.service.ingest(second))
+  assert.ok(task.sourceRefs.includes(firstSource.sourceId))
+  assert.equal(task.ownerActorId, first.senderOpenDingTalkId)
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
+  assert.equal(ownerInputs.length, 1, 'the original Task Owner consumes the initial Task')
+  const firstOwnerMessages = ownerRequests[0].messages
+  const firstOwnerMessagesSnapshot = structuredClone(firstOwnerMessages)
+
+  const noise = message('noise', '哈哈，今天午饭不错。')
+  await t.step(async () => h.service.ingest(noise))
   await t.step(async () => h.service.whenIdle())
-  const revised = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
+  const allSources = await t.step(async () => h.query('source.list'))
+  const noiseSource = allSources.find(source => source.messageId === noise.messageId)
+  const noiseTriage = h.residentStore.getRouterState('native-group').triage.find(item => item.sourceRef.sourceId === noiseSource.sourceId)
+  assert.equal(noiseTriage.disposition.needsProcessing, false)
   assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
-  assert.equal(revised.requirementRevision, task.requirementRevision, 'preserve补充不推进需求版本')
-  assert.equal(revised.contextRevision, (task.contextRevision ?? 0) + 1, '独立上下文版本唤醒原统筹')
-  assert.equal(residentStore.getTask(task.taskId).inputVersion, revised.requirementRevision)
-  assert.equal(residentStore.getTopic('native-group', topicId).revision, 2)
-  assert.match(revised.request, /只检查文件名称/)
-  assert.ok(ownerInputs.length >= 2, 'Supplement must wake the real task owner session')
-  const firstOwnerSnapshot = JSON.stringify(ownerInputs[0]), ownerTurnsBeforeFact = ownerInputs.length
-  const outboxBeforeFact = residentStore.getGroup('native-group').outbox.length
-  const fact = message('fact-feedback', '@成员甲 刚收到报告，原文件命名依据可能已过期；还未核实，请先保留原件。')
-  await t.step(async () => h.service.ingest(fact))
-  await t.step(async () => h.service.whenIdle())
-  const afterFact = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
-  assert.equal(afterFact.contextRevision, revised.contextRevision + 1, '无点名且无群回复的事实回流真实唤醒原Owner')
-  assert.equal(afterFact.requirementRevision, revised.requirementRevision)
-  assert.equal(afterFact.controlRevision, revised.controlRevision)
-  assert.equal(afterFact.sessionId, revised.sessionId)
-  assert.equal(afterFact.runSequence, revised.runSequence)
-  assert.match(afterFact.request, /还未核实/)
-  assert.ok(ownerInputs.length > ownerTurnsBeforeFact)
-  assert.equal(JSON.stringify(ownerInputs[0]), firstOwnerSnapshot, '已进入Owner的旧输入快照不可原位改写')
-  assert.equal(residentStore.getGroup('native-group').outbox.length, outboxBeforeFact, '内部事实回流不另发群确认')
-  await t.step(async () => h.service.ingest(message('noise', '哈哈，今天午饭不错。')))
-  await t.step(async () => h.service.ingest(message('discussion', '我们讨论明天几点部署，暂时没有交办助手。')))
-  await t.step(async () => h.service.whenIdle())
-  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
-  assert.ok(residentStore.listTopics('native-group').every(topic => !resolveTopicMessages(residentStore.getGroup('native-group'), topic.topicId, topic.revision).some(item => item.messageId === 'noise')))
-  const before = { requests: h.requests.length, tasks: (await t.step(async () => h.query('task.list'))).length, topics: residentStore.listTopics('native-group').length, revision: revised.requirementRevision }
-  const stagesBeforeReplay = (await t.step(async () => h.query('source.list'))).map(source => ({ sourceId: source.sourceId, stages: source.stages }))
+  assert.ok(!(await t.step(async () => h.query('task.get', { taskId: task.taskId }))).sourceRefs.includes(noiseSource.sourceId))
+
+  const beforeReplay = { requests: h.requests.length, sources: structuredClone(allSources), task: await t.step(async () => h.query('task.get', { taskId: task.taskId })) }
   await t.step(async () => h.service.ingest(first))
-  await t.step(async () => h.service.ingest(second))
-  await t.step(async () => h.service.ingest(fact))
   await t.step(async () => h.service.recover())
   await t.step(async () => h.service.whenIdle())
-  assert.equal((await t.step(async () => h.query('task.list'))).length, before.tasks)
-  assert.equal(residentStore.listTopics('native-group').length, before.topics)
-  assert.equal((await t.step(async () => h.query('task.get', { taskId: task.taskId }))).requirementRevision, before.revision)
-  assert.equal(h.requests.length, before.requests)
-  assert.deepEqual((await t.step(async () => h.query('source.list'))).map(source => ({ sourceId: source.sourceId, stages: source.stages })), stagesBeforeReplay)
-  await t.step(async () => waitUntil(async () => (await h.query('source.list')).every(source => source.routed), 'all sources durably marked routed'))
-  assert.ok(h.toolResults.filter(item => ['group_topic_route_submit', 'group_decision_submit'].includes(item.name)).every(item => !item.result.isError))
-  const discussion = residentStore.getGroup('native-group').messages.find(item => item.messageId === 'discussion')
-  const discussionSource = (await t.step(async () => h.query('source.list'))).find(item => item.messageId === discussion.messageId)
-  assert.ok(discussionSource.processingCompleted)
-  assert.equal(discussionSource.routed, true)
-  const discussionTopic = residentStore.listTopics('native-group').find(topic => topic.title === '部署时间讨论')
-  await t.step(async () => residentStore.routeMessages({ groupId: 'native-group', routeId: 'same-version-reclassification',
-    routingRevision: residentStore.getGroup('native-group').routingRevision, routes: [{ messageId: discussion.messageId,
-      messageVersion: discussion.messageVersion, units: [{ unitKey: 'whole-message', summary: '重新核对讨论语义',
-        sourceRefs: [{ quote: discussion.text }], topics: [{ topicId: discussionTopic.topicId }] }] }] }))
-  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
-  const reclassified = await t.step(async () => h.query('source.get', { sourceId: discussionSource.sourceId }))
-  assert.equal(reclassified.version, discussionSource.version)
-  assert.equal(reclassified.routed, true)
-  assert.deepEqual(reclassified.processingHistory, [discussionSource.processingCompleted])
-  assert.ok(reclassified.processingCompleted.activeUnitRefs.every(ref => ref.unitRevision === 2))
-  assert.equal((await t.step(async () => h.query('task.list'))).length, before.tasks)
+  assert.equal(triageDecisions, 2)
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+  assert.deepEqual(await t.step(async () => h.query('source.list')), beforeReplay.sources)
+  assert.deepEqual(await t.step(async () => h.query('task.get', { taskId: task.taskId })), beforeReplay.task)
+  assert.equal(h.requests.length, beforeReplay.requests)
+
+  const beforeFollowup = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
+  await t.step(async () => h.service.ingest(followup))
+  await t.step(async () => h.service.whenIdle())
+  const afterFollowup = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
+  const followupSource = (await t.step(async () => h.query('source.list'))).find(source => source.messageId === followup.messageId)
+  assert.ok(followupSource.processingCompleted)
+  assert.ok(afterFollowup.sourceRefs.includes(followupSource.sourceId))
+  assert.equal(afterFollowup.drained, true)
+  assert.equal(afterFollowup.lastDecision.action, 'wait')
+  assert.equal(afterFollowup.requirementRevision, beforeFollowup.requirementRevision)
+  assert.equal(afterFollowup.contextRevision, (beforeFollowup.contextRevision ?? 0) + 1)
+  assert.equal(afterFollowup.controlRevision, beforeFollowup.controlRevision)
+  assert.equal(afterFollowup.sessionId, beforeFollowup.sessionId)
+  assert.equal(afterFollowup.runSequence, beforeFollowup.runSequence)
+  assert.ok(ownerInputs.some(input => JSON.stringify(input).includes(followup.text)), 'a real Task Owner invocation must consume the follow-up source body')
+  assert.deepEqual(firstOwnerMessages, firstOwnerMessagesSnapshot, 'later context updates do not mutate the original provider request messages')
+
+  const beforeFact = structuredClone(afterFollowup)
+  const sentBeforeFact = h.sent.length
+  await t.step(async () => h.service.ingest(factFeedback))
+  await t.step(async () => h.service.whenIdle())
+  const afterFact = await t.step(async () => h.query('task.get', { taskId: task.taskId }))
+  const factSource = (await t.step(async () => h.query('source.list'))).find(source => source.messageId === factFeedback.messageId)
+  assert.ok(factSource.processingCompleted)
+  assert.ok(afterFact.sourceRefs.includes(factSource.sourceId))
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+  assert.equal(afterFact.drained, true)
+  assert.equal(afterFact.lastDecision.action, 'wait')
+  assert.equal(afterFact.requirementRevision, beforeFact.requirementRevision)
+  assert.equal(afterFact.contextRevision, (beforeFact.contextRevision ?? 0) + 1)
+  assert.equal(afterFact.controlRevision, beforeFact.controlRevision)
+  assert.equal(afterFact.sessionId, beforeFact.sessionId)
+  assert.equal(afterFact.runSequence, beforeFact.runSequence)
+  assert.ok(ownerInputs.some(input => JSON.stringify(input).includes(factFeedback.text)), 'a real Task Owner invocation must consume the unmentioned fact source body')
+  assert.deepEqual(firstOwnerMessages, firstOwnerMessagesSnapshot, 'fact feedback does not mutate the original provider request messages')
+  assert.equal(h.sent.length, sentBeforeFact, 'unmentioned fact feedback does not create an extra group confirmation')
+
+  const settledTaskFacts = await t.step(async () => waitUntil(() => {
+    const group = h.residentStore.getGroup('native-group')
+    const router = h.residentStore.getRouterState('native-group')
+    const facts = (group.routerFacts ?? []).map(item => item.fact).filter(fact => fact.taskId === task.taskId)
+    const sameVersion = fact => ['requirementRevision', 'contextRevision', 'controlRevision', 'runSequence']
+      .every(key => fact.taskVersion?.[key] === afterFact[key])
+    const hasFinalDrain = facts.some(fact => fact.kind === 'drained' && sameVersion(fact))
+    const decided = facts.every(fact => router.decisions.some(decision => decision.inputs?.some(input => input.kind === 'fact'
+      && input.id === fact.factId && input.digest === fact.factDigest) && decision.applications.every(application => application.status === 'applied')))
+    const pendingIds = new Set([...router.queue, ...(router.active?.inputs ?? [])].filter(input => input.kind === 'fact').map(input => input.id))
+    if (!facts.length || !hasFinalDrain || !decided || facts.some(fact => pendingIds.has(fact.factId)) || router.active || router.queue.length) return false
+    return facts.map(({ factId, factDigest }) => ({ factId, factDigest }))
+  }, 'Task Router facts to reach durable decisions'))
+  const beforeSettledReplay = {
+    requests: h.requests.length,
+    sources: structuredClone(await t.step(async () => h.query('source.list'))),
+    task: structuredClone(await t.step(async () => h.query('task.get', { taskId: task.taskId }))),
+    taskFacts: settledTaskFacts,
+    sent: h.sent.length,
+  }
+  for (const replay of [first, followup, factFeedback]) await t.step(async () => h.service.ingest(replay))
+  await t.step(async () => h.service.recover())
+  await t.step(async () => h.service.whenIdle())
+  const settledAfterReplay = await t.step(async () => waitUntil(() => {
+    const group = h.residentStore.getGroup('native-group')
+    const router = h.residentStore.getRouterState('native-group')
+    const facts = (group.routerFacts ?? []).map(item => item.fact).filter(fact => fact.taskId === task.taskId)
+    const decided = facts.every(fact => router.decisions.some(decision => decision.inputs?.some(input => input.kind === 'fact'
+      && input.id === fact.factId && input.digest === fact.factDigest) && decision.applications.every(application => application.status === 'applied')))
+    return facts.length === beforeSettledReplay.taskFacts.length && decided && !router.active && router.queue.length === 0
+      ? facts.map(({ factId, factDigest }) => ({ factId, factDigest })) : false
+  }, 'replayed Task facts to remain durably settled'))
+  const afterReplaySources = await t.step(async () => h.query('source.list'))
+  assert.deepEqual(settledAfterReplay, beforeSettledReplay.taskFacts)
+  assert.deepEqual(afterReplaySources, beforeSettledReplay.sources)
+  assert.deepEqual(afterReplaySources.map(({ sourceId, stages }) => ({ sourceId, stages })),
+    beforeSettledReplay.sources.map(({ sourceId, stages }) => ({ sourceId, stages })))
+  assert.deepEqual(await t.step(async () => h.query('task.get', { taskId: task.taskId })), beforeSettledReplay.task)
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+  assert.equal(h.requests.length, beforeSettledReplay.requests, 'replaying routed sources after Task fact projection creates no new Router work')
+  assert.equal(h.sent.length, beforeSettledReplay.sent)
+  assert.equal(triageDecisions, 4)
 }))
 
 async function extraHost(t, prefix, decide) {
@@ -1102,93 +1295,165 @@ async function extraHost(t, prefix, decide) {
   return host
 }
 
-testRunner('Topic外发标识在接纳前被拒绝，原轮修改后只创建一项任务且保留业务编号链接', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-  let attempts = 0
+testRunner('direct Router rejects internal source IDs before Task/outbox commit and accepts the corrected same-turn reply', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const request = message('business-request-with-identities', '测试助手，核查 PR #253 与订单 SG18 的关联。')
+  const context = message('business-context-with-identities', '订单背景资料仅供核查。')
+  const sourceIdFor = item => `im:${createHash('sha256').update(JSON.stringify([item.groupId, item.messageId, 1])).digest('hex')}`
+  const anchorId = sourceIdFor(request), contextId = sourceIdFor(context)
+  assert.notEqual(anchorId, contextId)
   const publicText = '已安排核查 PR #253 与订单 SG18：https://example.com/orders/SG18'
-  const h = await extraHost(t, 'topic-public-identities-', async (request, host) => {
-    const calls = topicTaskCalls(request), input = latestInput(request)
-    if (request.tools.some(tool => tool.name === 'group_decision_submit')) {
-      assert.equal((await host.query('task.list')).length, 0, '正文校验必须早于业务任务创建')
-      assert.equal(host.residentStore.listTopics('native-group')[0].decisions.length, 0, '无效正文不能持久接纳为待执行决定')
-      const source = (await host.query('source.list'))[0]
-      const ids = [input.requestId, input.topicId, input.messages[0].unitId, input.messages[0].messageId, source.sourceId]
-      calls[0].args.decision.reply = attempts < ids.length ? `已处理：${ids[attempts]}` : publicText
-      attempts++
-      return calls
-    }
-    if (calls) return calls
-    return [call('task_session_submit', { decision: { action: 'wait', summary: '等待实际核验结果', evidence: [], limitations: [] } })]
-  })
+  let host, invalidSubmitted = false, attempts = 0
   await t.beginBusiness()
+  host = await t.step(async () => extraHost(t, 'direct-router-public-identities-', async (modelRequest, h) => {
+    const names = modelRequest.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const input = latestInput(modelRequest)
+      const values = modelToolValues(modelRequest)
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      for (const source of input.sources ?? []) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
+      }
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: input.sources[0].sourceId === anchorId, reply: null })]
+      const sourceIds = input.context?.newSourceIds ?? []
+      if (!sourceIds.length) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      assert.deepEqual(sourceIds, [anchorId])
+      const sourceId = anchorId
+      const contextPage = pages.find(item => item.sourceId === contextId && item.offset === 0)
+      if (!contextPage) return [call('router_source_read', { sourceId: contextId, offset: 0 })]
+      let contextOffset = 0
+      while (contextOffset < contextPage.totalLength) {
+        const page = pages.find(item => item.sourceId === contextId && item.offset === contextOffset)
+        if (!page) return [call('router_source_read', { sourceId: contextId, offset: contextOffset })]
+        contextOffset = page.nextOffset
+      }
+      const read = values.findLast(value => value.sourceId === sourceId && Array.isArray(value.candidates))
+      if (!read) return [call('router_reply_review_get', { sourceId })]
+      const review = { kind: 'confirmation', reviewedOutboundIds: read.candidates.map(item => item.outboundId),
+        sameMatterOutboundIds: read.candidates.map(item => item.outboundId), replaceOutboundIds: read.candidates.map(item => item.outboundId) }
+      if (invalidSubmitted) {
+        const rejected = h.toolResults.filter(item => item.name === 'router_submit').at(-1)
+        assert.ok(rejected?.result.isError || rejected?.result.error, 'the invalid router_submit must fail before the corrected turn')
+        assert.ok(JSON.stringify(rejected.result).includes('GROUP_REPLY_INTERNAL_DETAILS'))
+        assert.equal(h.residentStore.getRouterState('native-group').decisions.length, 0, 'invalid reply must not persist a Router decision')
+        assert.equal((await h.query('task.list')).length, 0, 'invalid reply must not create the candidate Task')
+        assert.equal(h.residentStore.getGroup('native-group').outbox.length, 0, 'invalid reply must not prepare an outbound')
+        assert.equal((await h.query('notification.list')).length, 0, 'invalid reply must not prepare a notification')
+        assert.equal(h.sent.length, 0, 'invalid reply must not send a group message')
+        attempts++
+        return [call('router_submit', { actions: [{ kind: 'new-task', sourceIds, title: 'PR 与订单关联核查', objective: '核查 PR #253 与订单 SG18 的关联' }],
+          continuity: [], reply: { sourceId, text: publicText, review } })]
+      }
+      assert.equal(h.residentStore.getRouterState('native-group').decisions.length, 0)
+      assert.equal((await h.query('task.list')).length, 0)
+      assert.equal(h.residentStore.getGroup('native-group').outbox.length, 0)
+      assert.equal((await h.query('notification.list')).length, 0)
+      assert.equal(h.sent.length, 0)
+      invalidSubmitted = true
+      attempts++
+      return [call('router_submit', { actions: [{ kind: 'new-task', sourceIds, title: 'PR 与订单关联核查', objective: '核查 PR #253 与订单 SG18 的关联' }],
+        continuity: [], reply: { sourceId, text: `已安排核查 ${contextId} 对应事项。`, review } })]
+    }
+    if (names.includes('task_session_submit')) return [call('task_session_submit', { decision: { action: 'wait', summary: '等待实际核验结果', evidence: [], limitations: [] } })]
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
+  }))
 
-  await t.step(async () => h.service.ingest(message('business-request-with-identities', '测试助手，核查 PR #253 与订单 SG18 的关联。')))
-  await t.step(async () => h.service.whenIdle())
-  assert.equal(attempts, 6)
-  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
-  assert.equal(h.residentStore.listTopics('native-group')[0].decisions.length, 1)
-  const rejected = h.toolResults.filter(item => item.name === 'group_decision_submit' && item.result.isError)
-  assert.equal(rejected.length, 5)
-  assert.ok(rejected.every(item => JSON.stringify(item.result).includes('GROUP_REPLY_INTERNAL_DETAILS')))
-  assert.equal(h.sent.length, 1)
-  assert.equal(h.sent[0].payload.text, publicText)
-  assert.equal(h.sent[0].payload.sourceMessageId, 'business-request-with-identities')
+  await t.step(async () => host.service.ingest(context))
+  await t.step(async () => waitUntil(async () => (await host.query('source.list')).some(item => item.sourceId === contextId && item.processingCompleted), '背景来源完成首筛'))
+  await t.step(async () => host.service.ingest(request))
+  await t.step(async () => host.service.whenIdle())
+  await t.step(async () => waitUntil(async () => {
+    const state = host.residentStore.getRouterState('native-group')
+    const source = (await host.query('source.list')).find(item => item.messageId === request.messageId)
+    const decision = state.decisions.find(item => item.inputs?.some(input => input.kind === 'source' && input.sourceRef.messageId === request.messageId))
+    const reply = decision?.applications.find(item => item.kind === 'reply')
+    const notification = reply?.receipt?.notificationId && await host.query('notification.get', { notificationId: reply.receipt.notificationId })
+    return attempts === 2 && reply?.status === 'applied' && notification?.state === 'delivered' && source?.processingCompleted && (await host.query('task.list')).length === 1
+      && host.sent.filter(item => item.id === notification.id && item.payload.text === publicText).length === 1
+  }, 'corrected Router reply and new Task to apply'))
+  const source = (await t.step(async () => host.query('source.list'))).find(item => item.messageId === request.messageId)
+  const task = (await t.step(async () => host.query('task.list')))[0]
+  const decision = host.residentStore.getRouterState('native-group').decisions.find(item => item.inputs?.some(input => input.kind === 'source' && input.sourceRef.messageId === request.messageId))
+  const rejected = host.toolResults.filter(item => item.name === 'router_submit' && JSON.stringify(item.result).includes('GROUP_REPLY_INTERNAL_DETAILS'))
+  assert.equal(attempts, 2)
+  assert.equal(rejected.length, 1)
+  assert.equal(host.residentStore.getRouterState('native-group').decisions.length, 1)
+  assert.equal(decision.applications.filter(item => item.status === 'applied').length, 2)
+  assert.equal(task.sourceRefs.includes(source.sourceId), true)
+  assert.deepEqual(task.topicRefs, [])
+  assert.equal(host.residentStore.listTopics('native-group').length, 0)
+  const sentReply = host.sent.find(item => item.payload.text === publicText)
+  assert.ok(sentReply)
+  assert.equal(sentReply.payload.sourceMessageId, request.messageId)
 }))
 
-testRunner('native Topic handoff keeps the explicit requester as task and completion notification owner', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-  const reviewed = new Set()
-  const h = await extraHost(t, 'task-topic-owner-', async (request, host) => {
-    const names = request.tools.map(tool => tool.name)
-    if (latestInput(request).trigger === 'task-facts') return topicTaskCalls(request)
-    if (names.includes('group_topic_route_submit')) {
-      const input = envelope(request, '[GROUP_TOPIC_ROUTE]')
-      const existing = host.residentStore.listTopics('native-group')[0]
-      const routes = input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
-        topics: [existing ? { topicId: existing.topicId, reason: '原文件检查的交接' } : { newTopicKey: 'handoff', title: '文件检查交接', reason: '独立的文件检查交接事项' }] }))
-      return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '当前来源记录已有文件检查的交接') })]
-    }
-    if (names.includes('group_decision_submit')) {
-      const input = envelope(request, '[GROUP_TOPIC_DECISION]'), current = input.messages.at(-1)
-      if (current.messageId === 'colleague-discussion') return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: [current.messageId], actions: [], reason: '同事只在讨论检查事项，没有交办助手' } })]
-      if (!reviewed.has(input.requestId)) { reviewed.add(input.requestId); return [call('group_reply_review_get', { requestIds: [input.requestId] })] }
-      const review = jsonValues(host.toolResults.findLast(item => item.name === 'group_reply_review_get')?.result).find(value => Array.isArray(value.candidates))
-      assert.ok(review)
-      const ids = review.candidates.map(value => value.outboundId)
-      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: [current.messageId], actions: [{ kind: 'new-task', title: '文件检查交接', objective: '确认文件检查已完成', acceptanceCriteria: ['向明确交办人报告检查结论'],
-          topicRefs: [{ topicId: input.topicId, revision: input.revision }] }], reply: '已承接检查。', replyToMessageId: current.messageId,
-          replyReview: { kind: 'confirmation', reviewedOutboundIds: ids, sameMatterOutboundIds: ids, replaceOutboundIds: ids } } })]
-    }
-    assert.ok(names.includes('task_session_submit'))
-    return [call('task_session_submit', { decision: { action: 'complete', summary: '文件检查已完成，结论已核验。', evidence: ['已核对本轮原始交办'], limitations: [] } })]
-  })
+testRunner('direct Router explicit requester remains the Task and completion-notification owner', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const discussion = message('colleague-discussion', '我们正在讨论文件检查，稍后请负责人确认。')
+  const handoff = message('explicit-handoff', '@测试助手 请完成上述文件检查并告诉我结论。')
+  let h
   await t.beginBusiness()
+  h = await t.step(async () => extraHost(t, 'direct-task-owner-', async request => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      for (const source of input.sources ?? []) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
+      }
+      const sourceTexts = new Map((input.sources ?? []).map(source => [source.sourceId, pages.filter(page => page.sourceId === source.sourceId)
+        .sort((a, b) => a.offset - b.offset).map(page => page.text).join('')]))
+      if (names.includes('triage_submit')) {
+        return [call('triage_submit', { needsProcessing: [...sourceTexts.values()].some(text => text.includes('@测试助手')), reply: null })]
+      }
+      const fact = input.context?.facts?.find(item => item.kind === 'completed')
+      if (fact) {
+        const sourceId = fact.sourceIds[0]
+        const reviewed = values.findLast(value => value.sourceId === sourceId && Array.isArray(value.candidates))
+        if (!reviewed) return [call('router_reply_review_get', { sourceId })]
+        return [call('router_submit', { actions: [], continuity: [], reply: { sourceId, text: '文件检查已完成，结论已核验。',
+          review: { kind: 'substantive', reviewedOutboundIds: reviewed.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
+      }
+      const sourceIds = input.context?.newSourceIds ?? []
+      if (!sourceIds.length) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      assert.ok(sourceIds.some(id => sourceTexts.get(id)?.includes('@测试助手')), 'only explicit handoff source authorizes a Task')
+      return [call('router_submit', { actions: [{ kind: 'new-task', sourceIds, title: '文件检查交接', objective: '确认文件检查已完成并向明确交办人报告结论' }], continuity: [], reply: null })]
+    }
+    if (names.includes('task_session_submit')) return [call('task_session_submit', { decision: { action: 'complete', summary: '文件检查已完成，结论已核验。', evidence: ['已核对本轮原始交办'], limitations: [] } })]
+    throw new Error(`Unexpected direct Task tools: ${names.join(', ')}`)
+  }))
 
-  await t.step(async () => h.service.ingest({ ...message('colleague-discussion', '我们正在讨论文件检查，稍后请负责人确认。'), senderOpenDingTalkId: 'native-colleague', senderName: '同事' }))
+  await t.step(async () => h.service.ingest({ ...discussion, senderOpenDingTalkId: 'native-colleague', senderName: '同事' }))
   await t.step(async () => h.service.whenIdle())
   assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
-  const handoff = await t.step(async () => h.service.ingest(message('explicit-handoff', '@测试助手 请完成上述文件检查并告诉我结论。')))
+  const handoffResult = await t.step(async () => h.service.ingest(handoff))
   await t.step(async () => h.service.whenIdle())
   const tasks = await t.step(async () => h.query('task.list'))
   assert.equal(tasks.length, 1)
   const task = tasks[0]
   assert.equal(task.status, 'completed')
   assert.equal(task.ownerActorId, 'native-user')
-  assert.equal(task.metadata.authorizationSourceId, handoff.sourceId)
-  assert.equal(h.residentStore.listTopics('native-group').length, 1)
-  const completion = (await t.step(async () => h.query('notification.list'))).find(item => item.payload.coveredEventIds?.length)
-  if (!completion) t.diagnostic(JSON.stringify({ alerts: h.service.listAlerts(), binding: task.replyBindings,
-    pending: await t.step(async () => h.query('topic.fact.pending', { groupId: task.groupId, topicId: task.replyBindings?.[0]?.topicId })),
-    errors: h.toolResults.filter(item => item.result?.isError).map(item => ({ name: item.name, result: item.result })) }))
-  assert.ok(completion, 'Topic must consume the completed fact and prepare its reply')
-  assert.equal(completion.payload.sourceMessageId, undefined, 'Context provenance is not a transport quote or implicit recipient')
-  assert.equal(completion.payload.actorId, undefined)
-  assert.equal(completion.payload.replyToMessageId, undefined)
-  assert.equal(completion.payload.replyToSenderOpenDingTalkId, undefined)
+  assert.ok(task.sourceRefs.includes(handoffResult.sourceId))
+  assert.deepEqual(task.topicRefs, [])
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
+  const completion = await t.step(async () => waitUntil(async () => (await h.query('notification.list'))
+    .find(item => item.payload.text === '文件检查已完成，结论已核验。' && item.state === 'delivered'), '完成事实回复已送达'))
+  const decision = h.residentStore.getRouterState('native-group').decisions.find(item => item.inputs.some(input => input.kind === 'fact')
+    && item.applications.some(application => application.kind === 'reply' && application.receipt?.notificationId === completion.id))
+  assert.ok(decision, '完成通知必须来自实际 Task 事实对应的 Router 决议')
+  assert.equal(completion.payload.sourceMessageId, handoff.messageId)
+  assert.equal(completion.payload.replyToMessageId, handoff.messageId)
+  assert.equal(completion.payload.replyToSenderOpenDingTalkId, 'native-user')
   assert.deepEqual(completion.payload.atOpenDingTalkIds, ['native-user'])
-  const fact = await t.step(async () => h.query('topic.fact.get', { factId: completion.payload.coveredEventIds[0] }))
-  assert.equal(fact.decision.decision.replyToMessageId, 'explicit-handoff')
-  assert.ok(fact.sourceIds.includes(handoff.sourceId), 'The authenticated handoff remains linked to the completion fact')
   assert.ok(h.sent.some(item => item.id === completion.id && item.payload.atOpenDingTalkIds.includes('native-user')))
 }))
 
@@ -1246,7 +1511,7 @@ t.onCancel(() => gate.resolve())
   assert.equal(ownerRuns, 2)
 }))
 
-testRunner('concurrent same-topic revision is busy while a different task makes progress', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+testRunner('concurrent same-task revisions honor CAS while another task makes progress', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'task-admission-isolation-'))
   const gate = Promise.withResolvers()
 t.onCancel(() => gate.resolve())
@@ -1283,7 +1548,7 @@ t.onCancel(() => gate.resolve())
   await t.step(async () => pending)
   const result = await t.step(async () => duplicateRevision)
   assert.ok(result.error)
-  assert.equal(result.error.code, 'TASK_TOPIC_WEB_topic-busy')
+  assert.equal(result.error.code, 'DYNAMIC_TASK_REVISION_STALE')
   await t.step(async () => host.service.whenIdle())
   assert.equal((await t.step(async () => host.query('task.get', { taskId: first.taskId }))).requirementRevision, a.requirementRevision + 1)
   assert.equal((await t.step(async () => host.query('task.get', { taskId: second.taskId }))).requirementRevision, b.requirementRevision + 1)
@@ -1291,13 +1556,19 @@ t.onCancel(() => gate.resolve())
   assert.equal(ownerRuns.get(second.taskId), 2)
 }))
 
-testRunner('failed old-drain ends its timing and releases admission for later work', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+testRunner('failed direct Task owner cancellation preserves the Web request for an exact retry before later work', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'old-drain-failure-'))
   let host, cancelAttempts = 0, runs = 0
+  const ownerStarted = Promise.withResolvers(), releaseOwner = Promise.withResolvers()
   const sessions = {
-    async run({ submit }) { runs++; await submit({ action: 'wait', summary: '等待输入', evidence: [], limitations: [] }); return { status: 'submitted' } },
-    async cancel() { if (++cancelAttempts === 1) throw Object.assign(new Error('fixture cancel failed'), { code: 'FIXTURE_CANCEL_FAILED' }) },
-    async close() {},
+    async run({ submit }) {
+      runs++
+      if (runs === 1) { ownerStarted.resolve(); await releaseOwner.promise; return { status: 'cancelled' } }
+      await submit({ action: 'wait', summary: '等待输入', evidence: [], limitations: [] })
+      return { status: 'submitted' }
+    },
+    async cancel() { if (++cancelAttempts === 1) throw Object.assign(new Error('fixture cancel failed'), { code: 'FIXTURE_CANCEL_FAILED' }); releaseOwner.resolve() },
+    async close() { releaseOwner.resolve() },
   }
   t.after(async () => { await host?.close(); await rm(root, { recursive: true, force: true }) })
   await t.beginBusiness()
@@ -1305,54 +1576,46 @@ testRunner('failed old-drain ends its timing and releases admission for later wo
     serviceFactory: args => openTaskSessionService({ ...args, taskSessions: sessions }),
   }))
   const task = await t.step(async () => host.service.createTask({ groupId: 'native-group', requestId: 'drain-create', title: '排空测试', objective: '检查排空' }))
-  await t.step(async () => host.service.whenIdle())
+  await t.step(async () => ownerStarted.promise)
   const before = await t.step(async () => host.query('task.get', { taskId: task.taskId }))
   const request = { taskId: task.taskId, requestId: 'drain-replan', progressImpact: 'replan', expectedRequirementRevision: before.requirementRevision,
     expectedControlRevision: before.controlRevision, context: '排空失败后补充' }
   await t.step(async () => assert.rejects(host.service.appendTaskContext(request), /fixture cancel failed/))
-  const source = (await t.step(async () => host.query('source.list'))).find(item => item.text === request.context)
-  const drain = source?.stages?.find(stage => stage.stage === 'host' && stage.phase === 'old-drain')
-  const overall = source?.stages?.find(stage => stage.stage === 'host' && !stage.phase && stage.requestId === drain?.requestId)
-  assert.ok(drain?.completedAt && overall?.completedAt)
-  assert.ok(Date.parse(drain.completedAt) <= Date.parse(overall.completedAt))
-  const failedTopic = host.residentStore.listTopics('native-group').find(topic => topic.decisions.some(record => record.error === 'fixture cancel failed'))
-  const failedDecision = failedTopic.decisions.find(record => record.error === 'fixture cancel failed')
-  assert.equal(failedDecision.status, 'failed')
-  assert.equal(failedDecision.operations[0].status, 'applied')
-  assert.equal(failedDecision.operations[0].reconciled, true)
-  assert.ok(Date.parse(failedDecision.nextRetryAt) > Date.now())
+  assert.equal(cancelAttempts, 1)
+  const failedSource = (await t.step(async () => host.query('source.list'))).find(item => item.text === request.context)
+  assert.ok(failedSource)
+  assert.equal(failedSource.requestIdentity.request.args.requestId, request.requestId)
+  assert.equal(failedSource.requestIdentity.action.kind, 'task-context')
+  assert.equal(failedSource.requestIdentity.action.taskId, task.taskId)
+  assert.notEqual(failedSource.routed, true)
   await t.step(async () => assert.rejects(host.service.appendTaskContext({ taskId: task.taskId, requestId: 'drain-busy', progressImpact: 'replan',
-    expectedRequirementRevision: before.requirementRevision + 1, expectedControlRevision: before.controlRevision, context: '不得绕过重试' }), { code: 'TASK_TOPIC_WEB_topic-busy' }))
-  await t.step(async () => host.residentStore.updateTopicDecision({ groupId: 'native-group', topicId: failedTopic.topicId, decisionId: failedDecision.decisionId,
-    patch: { nextRetryAt: new Date(0).toISOString() } }))
-  await t.step(async () => host.service.recover())
+    expectedRequirementRevision: before.requirementRevision, expectedControlRevision: before.controlRevision, context: '过期版本不得覆盖原请求' }), { code: 'DYNAMIC_TASK_REVISION_STALE' }))
+  const retried = await t.step(async () => host.service.appendTaskContext(request))
+  assert.equal(retried.taskId, task.taskId)
+  assert.equal(cancelAttempts, 2)
   await t.step(async () => host.service.whenIdle())
+  const recoveredSource = (await t.step(async () => host.query('source.list'))).find(item => item.sourceId === failedSource.sourceId)
+  assert.deepEqual(recoveredSource.requestIdentity, failedSource.requestIdentity)
+  assert.equal(recoveredSource.routed, true)
+  assert.equal((await t.step(async () => host.query('task.get', { taskId: task.taskId }))).requirementRevision, before.requirementRevision + 1)
+  assert.equal(host.residentStore.listTopics('native-group').length, 0)
   const current = await t.step(async () => host.query('task.get', { taskId: task.taskId }))
   const later = await t.step(async () => host.service.appendTaskContext({ taskId: task.taskId, requestId: 'drain-later', progressImpact: 'replan',
     expectedRequirementRevision: current.requirementRevision, expectedControlRevision: current.controlRevision, context: '稍后继续处理' }))
   assert.equal(later.taskId, task.taskId)
   await t.step(async () => host.service.whenIdle())
-  assert.ok(cancelAttempts >= 2)
-  assert.ok(runs >= 2)
+  assert.ok(runs >= 3)
 }))
 
 testRunner('Web material failure recovers once and retries the same request without repeating work', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'web-material-recovery-'))
-  let host, store, target, runs = 0, injected = false, restarting = false, originalSubmission
+  let host, store, target, runs = 0, injected = false, restarting = false
   const sessions = {
     async run({ submit }) { runs++; await submit({ action: 'wait', summary: '等待输入', evidence: [], limitations: [] }); return { status: 'submitted' } },
     async cancel() {}, async close() {},
   }
   t.after(async () => { await host?.close(); await store?.close(); await rm(root, { recursive: true, force: true }) })
   const options = { serviceFactory: async args => {
-    const submitWebTaskInput = args.residentStore.submitWebTaskInput
-    args.residentStore.submitWebTaskInput = input => {
-      if (input.requestId !== 'material-revision' || restarting) return submitWebTaskInput(input)
-      const topicRefs = input.topicRefs.map(ref => Object.fromEntries(Object.entries(ref).reverse()))
-      const action = Object.fromEntries(Object.entries({ ...input.action, topicRefs }).reverse())
-      originalSubmission = structuredClone({ ...input, action, topicRefs })
-      return submitWebTaskInput(originalSubmission)
-    }
     store = await openDynamicTaskStore({ dbPath: args.config.dbPath, instanceId: args.config.instanceId, initialize: !restarting, webActorId: args.config.webActorId })
     const proxy = { ...store, async command(request) {
       const result = await store.command(request)
@@ -1381,16 +1644,14 @@ testRunner('Web material failure recovers once and retries the same request with
   assert.equal(revised.requirementRevision, before.requirementRevision + 1)
   assert.equal(runs, 1)
   const failedSource = (await t.step(async () => host.query('source.list'))).find(source => source.text === request.context)
-  const originalFingerprint = fingerprint({ text: originalSubmission.text, action: originalSubmission.action, topicRefs: originalSubmission.topicRefs })
-  const legacyRecord = host.residentStore.listTopics('native-group').flatMap(topic => topic.decisions).find(record => record.fingerprint === originalFingerprint)
-  assert.ok(legacyRecord && legacyRecord.status !== 'completed')
-  const canonicalAction = failedSource.requestIdentity.action
-  assert.notEqual(fingerprint({ text: originalSubmission.text, action: canonicalAction, topicRefs: canonicalAction.topicRefs }), originalFingerprint)
-  const failedMaterial = failedSource?.stages?.find(stage => stage.stage === 'host' && stage.phase === 'materialize')
-  const failedHost = failedSource?.stages?.find(stage => stage.stage === 'host' && !stage.phase && stage.requestId === failedMaterial?.requestId)
-  assert.ok(failedMaterial?.completedAt && failedHost?.completedAt, '材料失败后阶段与 Host 均须真实落终止时间')
-  assert.ok(Date.parse(failedMaterial.startedAt) <= Date.parse(failedMaterial.completedAt))
-  assert.ok(Date.parse(failedMaterial.completedAt) <= Date.parse(failedHost.completedAt))
+  assert.ok(failedSource.sourceId.startsWith('web:'))
+  assert.equal(failedSource.requestIdentity.request.args.requestId, request.requestId)
+  assert.equal(failedSource.requestIdentity.action.kind, 'task-context')
+  assert.equal(failedSource.requestIdentity.action.taskId, task.taskId)
+  assert.ok(failedSource.requestIdentity.action.sourceRefs.includes(failedSource.sourceId))
+  assert.equal(failedSource.requestIdentity.action.topicRefs, undefined)
+  assert.notEqual(failedSource.routed, true)
+  assert.equal(failedSource.processingCompleted, undefined)
   await t.step(async () => host.close()); await t.step(async () => store.close()); host = undefined; store = undefined
   await t.step(async () => rmdir(target))
   restarting = true
@@ -1402,8 +1663,10 @@ testRunner('Web material failure recovers once and retries the same request with
   assert.equal(JSON.parse(await t.step(async () => readFile(target, 'utf8'))).taskId, task.taskId)
   assert.equal(runs, 2)
   assert.equal((await t.step(async () => host.service.appendTaskContext(reordered))).taskId, task.taskId)
-  const recoveredRecord = host.residentStore.listTopics('native-group').flatMap(topic => topic.decisions).find(record => record.decisionId === legacyRecord.decisionId)
-  assert.equal(recoveredRecord.fingerprint, originalFingerprint)
+  const recoveredSource = (await t.step(async () => host.query('source.list'))).find(source => source.sourceId === failedSource.sourceId)
+  assert.deepEqual(recoveredSource.requestIdentity, failedSource.requestIdentity)
+  assert.equal(recoveredSource.routed, true)
+  assert.equal(host.residentStore.listTopics('native-group').length, 0)
   await t.step(async () => assert.rejects(host.service.appendTaskContext({ ...reordered, context: '不同内容' }), { code: 'DYNAMIC_COMMAND_ID_CONFLICT' }))
   await t.step(async () => host.service.whenIdle())
   assert.equal((await t.step(async () => host.query('task.get', { taskId: task.taskId }))).requirementRevision, revised.requirementRevision)
@@ -1411,18 +1674,17 @@ testRunner('Web material failure recovers once and retries the same request with
 }))
 
 testRunner('Web replan blocks a new Owner while old-generation cancellation is in flight', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-  const releaseQuery = Promise.withResolvers(), releaseNew = Promise.withResolvers()
-t.onCancel(() => releaseNew.resolve())
+  const releaseQuery = Promise.withResolvers(), releaseNew = Promise.withResolvers(), releaseOld = Promise.withResolvers()
+  t.onCancel(() => { releaseQuery.resolve(); releaseNew.resolve(); releaseOld.resolve() })
 
-t.onCancel(() => releaseQuery.resolve())
-
-  let host, store, intercept = false, blocked = false, runs = 0, accepted = false, started = false
+  let host, store, pending, intercept = false, blocked = false, runs = 0, accepted = false, started = false
   const cancellations = []
   const sessions = {
     async run({ submit }) {
       runs++
       if (runs === 1) {
         await submit({ action: 'wait', summary: '等待输入', evidence: [], limitations: [] })
+        await releaseOld.promise
         return { status: 'submitted' }
       }
       started = true
@@ -1430,11 +1692,11 @@ t.onCancel(() => releaseQuery.resolve())
       await submit({ action: 'wait', summary: '等待补充', evidence: [], limitations: [] })
       return { status: 'submitted' }
     },
-    async cancel(taskId) { cancellations.push({ taskId, runs }) },
-    async close() { releaseNew.resolve() },
+    async cancel(taskId) { cancellations.push({ taskId, runs }); releaseOld.resolve() },
+    async close() { releaseOld.resolve(); releaseNew.resolve() },
   }
   const root = await mkdtemp(join(tmpdir(), 'web-replan-query-gate-'))
-  t.after(async () => { releaseQuery.resolve(); releaseNew.resolve(); await host?.close(); await store?.close(); await rm(root, { recursive: true, force: true }) })
+  t.after(async () => { releaseQuery.resolve(); releaseNew.resolve(); releaseOld.resolve(); await pending?.catch(() => {}); await host?.close(); await store?.close(); await rm(root, { recursive: true, force: true }) })
   await t.beginBusiness()
   host = await t.step(async () => nativeTaskHost(root, async () => { throw new Error('Unexpected native model call') }, {
     serviceFactory: async args => {
@@ -1457,9 +1719,9 @@ t.onCancel(() => releaseQuery.resolve())
     },
   }))
   const task = await t.step(async () => host.service.createTask({ groupId: 'native-group', requestId: 'query-gate-create', title: '检查文件', objective: '检查文件' }))
-  await t.step(async () => host.service.whenIdle())
+  await t.step(async () => waitUntil(() => runs === 1, '旧 Owner 已启动', 5000))
   const before = await t.step(async () => host.query('task.get', { taskId: task.taskId }))
-  const pending = host.service.appendTaskContext({ taskId: task.taskId, requestId: 'query-gate-replan', progressImpact: 'replan',
+  pending = host.service.appendTaskContext({ taskId: task.taskId, requestId: 'query-gate-replan', progressImpact: 'replan',
     expectedRequirementRevision: before.requirementRevision, expectedControlRevision: before.controlRevision, context: '新增文件名称检查' }).then(value => { accepted = true; return value })
   await t.step(async () => waitUntil(() => blocked, 'execution.list 门闩已进入', 5000))
   await t.step(async () => new Promise(resolve => setImmediate(resolve)))
@@ -1527,7 +1789,7 @@ t.onCancel(() => releaseNew.resolve())
   await t.step(async () => h.service.whenIdle())
 }))
 
-testRunner('native Web Topic edits reject stale requirement and control revisions without changing task or topics', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
+testRunner('native Web Task edits reject stale requirement and control revisions without changing the Task', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
   const h = await extraHost(t, 'task-topic-web-stale-', async request => {
     assert.ok(request.tools.some(tool => tool.name === 'task_session_submit'))
     return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续补充', evidence: [], limitations: [] } })]
@@ -1542,9 +1804,8 @@ testRunner('native Web Topic edits reject stale requirement and control revision
   await t.step(async () => h.service.whenIdle())
   const revised = await t.step(async () => h.query('task.get', { taskId: created.taskId }))
   assert.equal(revised.requirementRevision, 2)
-  const topics = h.residentStore.listTopics('native-group')
-  assert.equal(topics.length, 1, 'Successful Web supplement retains the original Topic and source identity')
-  const topicSnapshot = JSON.stringify(topics)
+  assert.deepEqual(h.residentStore.listTopics('native-group'), [], 'Web Task edits do not depend on a Topic side record')
+  const topicSnapshot = JSON.stringify(h.residentStore.listTopics('native-group'))
   await t.step(async () => assert.rejects(h.service.appendTaskContext({ taskId: created.taskId, requestId: 'web-stale-append', progressImpact: 'replan', expectedRequirementRevision: 1, expectedControlRevision: original.controlRevision, context: '这条过期补充必须拒绝' }), { code: 'DYNAMIC_TASK_REVISION_STALE' }))
   await t.step(async () => assert.rejects(h.service.cancelTask({ taskId: created.taskId, requestId: 'web-stale-cancel', expectedRequirementRevision: revised.requirementRevision,
     expectedControlRevision: revised.controlRevision - 1, reason: '过期控制版本必须拒绝' }), { code: 'DYNAMIC_TASK_REVISION_STALE' }))
@@ -1557,29 +1818,15 @@ testRunner('native Web Topic edits reject stale requirement and control revision
   assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
 }))
 
-testRunner('business notices 423–424 and named owners remain in the original Topic without assistant tasks or replies', { ...({ timeout: 15000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
-  let topicId
-  const h = await extraHost(t, 'business-topic-context-', async request => {
-    const input = latestInput(request), names = request.tools.map(tool => tool.name)
-    const prompt = JSON.stringify(request)
-    assert.ok(prompt.includes('话题归属与助手动作分开判断'))
-    assert.ok(prompt.includes('不能自动作为本助手任务完成证据'))
-    if (names.includes('group_topic_route_submit')) {
-      assert.ok(prompt.includes('不创建或唤醒任务'))
-      assert.ok(prompt.includes('不能把“未交给本助手”当成“职责外”'))
-      const last = modelToolValues(request).at(-1)
-      if (last?.status === 'context-required' && last.nextCall) return [call(last.nextCall.name, last.nextCall.arguments)]
-      const routes = input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
-        units: [{ unitKey: 'lci', summary: 'LCI 单位修复的讨论和处理记录', sourceRefs: [{ wholeMessage: true }], topics: [topicId ? { topicId, reason: '原单位修复事项的讨论' } : { newTopicKey: 'lci', title: 'LCI 单位修复', reason: '独立的单位修复事项' }] }] }))
-      return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '当前来源仅讨论已有单位修复记录') })]
-    }
-    assert.ok(names.includes('group_decision_submit'))
-    assert.ok(prompt.includes('不唤醒任务'))
-    return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-      decision: { basisMessageIds: [...new Set(input.messages.map(item => item.messageId))], actions: [], reason: '同一业务事项由同事负责，保留完整上下文，不承接、不追问、不回复',
-        topicUpdate: { summary: [input.summary, ...input.messages.map(item => item.text)].filter(Boolean).join('；') } } } }]
+testRunner('direct routing leaves business notices and named colleagues without Task or assistant replies', { ...({ timeout: 15000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async t => {
+  const h = await extraHost(t, 'direct-business-notice-context-', async request => {
+    const names = request.tools.map(tool => tool.name)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    const missing = missingSourceRead(request, latestInput(request))
+    if (missing) return [call('router_source_read', missing)]
+    if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: false, reply: null })]
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
   })
-  t.onCancel(() => t.diagnostic(JSON.stringify({ topicId, results: h.toolResults.slice(-4).map(item => ({ name: item.name, value: item.result.value ?? item.result.error })) })))
   await t.beginBusiness()
 
   await t.step(async () => h.residentStore.updateGroup({ groupId: 'native-group', personAliases: [{ alias: '小甲', name: '测试成员甲' }] }))
@@ -1591,257 +1838,285 @@ testRunner('business notices 423–424 and named owners remain in the original T
     ['named-reference', '看小甲发的应该是这样吧'],
   ]
   for (const [messageId, text] of texts) {
-    await t.step(async () => h.service.ingest({ ...message(messageId, text), ...(topicId ? { quotedMessage: { messageId: 'lci-start', content: texts[0][1] } } : {}) }))
+    await t.step(async () => h.service.ingest(message(messageId, text)))
     await t.step(async () => h.service.whenIdle())
-    topicId ??= h.residentStore.listTopics('native-group')[0].topicId
   }
-  const topics = h.residentStore.listTopics('native-group')
-  assert.equal(topics.length, 1)
-  assert.deepEqual(resolveTopicMessages(h.residentStore.getGroup('native-group'), topicId, topics[0].revision).map(item => [item.messageId, item.text]), texts)
-  assert.ok(topics[0].summary.includes(texts.at(-1)[1]))
-  assert.ok(topics[0].decisions.every(record => record.status === 'completed' && record.decision.actions.length === 0 && !record.decision.reply))
-  assert.equal(topics[0].revision, topics[0].processedRevision)
-  assert.equal((await t.step(async () => h.residentStore.listFixedTopicMessagesPage({ groupId: 'native-group', topicId: 'out-of-scope' }))).total, 0)
-  assert.equal((await t.step(async () => h.query('task.list'))).length, 0); assert.equal(h.sent.length, 0)
-  const before = JSON.stringify(topics)
+  const sources = await t.step(async () => h.query('source.list'))
+  assert.deepEqual(sources.map(source => source.messageId), texts.map(([id]) => id))
+  assert.ok(sources.every(source => source.processingCompleted))
+  assert.equal(h.residentStore.getRouterState('native-group').decisions.length, 0)
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
+  assert.equal(h.sent.length, 0)
+  const before = structuredClone(sources)
   await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
-  assert.equal(JSON.stringify(h.residentStore.listTopics('native-group')), before)
+  assert.deepEqual(await t.step(async () => h.query('source.list')), before)
   assert.equal(h.sent.length, 0)
 }))
 
 // Prompt assertions check the guidance delivered to the model. Scripted choices
 // below verify the real context/action pipeline, not free-running model semantics.
-testRunner('scripted native aggregation keeps list requirements, screenshot delivery and later acceptance in one Topic and Task',
-  { ...({ timeout: 20000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
-    const initial = '测试助手，请把资料列表按更新时间倒序，并增加标题关键字筛选，作为本轮列表优化一起交付。'
-    const inputs = [['list-work', initial], ['screenshot-delivery', '这轮列表优化完成后，请附上验收通过的截图。'], ['acceptance-addition', '再补一项验收：筛选没有匹配项时显示空状态。']]
-    const initialCriteria = ['记录按更新时间倒序', '标题关键字筛选生效']
-    const extraCriteria = { 'screenshot-delivery': '交付验收通过的截图', 'acceptance-addition': '筛选无匹配项时显示空状态' }
-    const summary = '资料列表整体优化，包含最近优先和标题筛选，后续验收与截图仍沿原事项。'
-    let topicId, taskId, rounds = 0
-    const h = await extraHost(t, 'matter-aggregation-', async request => {
-      assert.ok(++rounds < 30)
-      const input = latestInput(request), names = request.tools.map(tool => tool.name), prompt = JSON.stringify(request.messages)
-      if (input.trigger === 'task-facts' || input.requestId?.startsWith('coord-summary-')) return topicTaskCalls(request)
-      if (names.includes('group_topic_route_submit')) {
-        for (const rule of ['按共同业务事项和目标聚合Topic', '不能仅因可独立验收', '同一页面或截图只是上下文线索', '后续截图、验收和交付要求沿原事项补充']) assert.ok(prompt.includes(rule), rule)
-        assert.equal(prompt.includes('才将可独立补充、取消、验收或反馈的事项'), false)
-        if (topicId) {
-          assert.equal(input.relatedTopics[0].topicId, topicId)
-          assert.equal(input.relatedTopics[0].summary, summary)
-          assert.equal(input.messages[0].quotedMessage.messageId, 'list-work')
+testRunner('direct Router aggregates screenshots and acceptance additions into the original Task', { ...({ timeout: 20000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async t => {
+  const initial = '测试助手，请把资料列表按更新时间倒序，并增加标题关键字筛选，作为本轮列表优化一起交付。'
+  const inputs = [['list-work', initial], ['screenshot-delivery', '这轮列表优化完成后，请附上验收通过的截图。'], ['acceptance-addition', '再补一项验收：筛选没有匹配项时显示空状态。']]
+  const initialCriteria = ['记录按更新时间倒序', '标题关键字筛选生效']
+  const extraCriteria = { 'screenshot-delivery': '交付验收通过的截图', 'acceptance-addition': '筛选无匹配项时显示空状态' }
+  const sourceIdFor = input => `im:${createHash('sha256').update(JSON.stringify([input.groupId, input.messageId, input.messageVersion ?? 1])).digest('hex')}`
+  const sourceIds = Object.fromEntries(inputs.map(([id, text]) => [id, sourceIdFor(message(id, text))]))
+  const ownerInputs = []
+  let taskId
+  const h = await extraHost(t, 'direct-matter-aggregation-', async request => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      for (const source of input.sources ?? []) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
         }
-        const routes = input.messages.map(item => ({
-          messageId: item.messageId, messageVersion: item.messageVersion, ignoredRefs: [],
-          units: [{ unitKey: 'list-work', summary: '资料列表整体优化', sourceRefs: [{ quote: item.text }], topics: [topicId ? { topicId, reason: '原列表优化的验收和交付要求' } : { newTopicKey: 'list-work', title: '资料列表优化', reason: '独立的列表优化事项' }] }],
-        }))
-        return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '来源补充已有列表事项的验收和交付要求') })]
       }
-      if (names.includes('group_decision_submit')) {
-        for (const rule of ['不逐功能点创建Task', '优先按任务状态使用task-context/task-reopen', '同一事项的后续截图交付沿原Task补充', '内部并行交给同一Owner的执行会话', 'Unit用于引用来源，不是逐项建Task的指令']) assert.ok(prompt.includes(rule), rule)
-        assert.ok(JSON.stringify(request.tools.find(tool => tool.name === 'group_decision_submit').parameters).includes('不逐功能点创建'))
-        assert.equal(input.messages.length, 1, 'only the current requirement is inline alongside the Topic summary')
-        const current = input.messages[0], values = modelToolValues(request)
-        let task, candidates = []
-        if (taskId) {
-          assert.equal(input.linkedTasks.total, 1); assert.equal(input.linkedTasks.snapshots[0].taskId, taskId)
-          assert.equal(input.linkedTasks.snapshots[0].objective, undefined)
-          task = values.flatMap(value => value.tasks ?? []).find(task => task.taskId === taskId)
-          if (!task) return [call(input.linkedTasks.reads[0].readCall.name, input.linkedTasks.reads[0].readCall.arguments)]
-          const review = values.find(value => Array.isArray(value.candidates))
-          if (!review) return [call('group_reply_review_get', {})]
-          candidates = review.candidates.map(value => value.outboundId)
-        }
-        const topicRefs = [{ topicId: input.topicId, revision: input.revision }]
-        const action = task ? { kind: 'task-context', taskId, inputVersion: task.inputVersion, runSequence: task.runSequence,
-          context: current.text, progressImpact: 'replan', acceptanceCriteria: [...task.acceptanceCriteria, extraCriteria[current.messageId]], topicRefs }
-          : { kind: 'new-task', title: '资料列表优化', objective: initial, acceptanceCriteria: initialCriteria, topicRefs }
-        return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-          decision: { basisMessageIds: [current.messageId], actions: [action], topicUpdate: { summary }, reply: task ? '补充要求已并入原事项。' : '已承接这轮列表优化。', replyToMessageId: current.messageId,
-            replyReview: { kind: 'confirmation', reviewedOutboundIds: candidates, sameMatterOutboundIds: candidates, replaceOutboundIds: candidates } } } }]
-      }
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+      const newSourceIds = input.context?.newSourceIds ?? []
+      if (!newSourceIds.length) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      if (newSourceIds.includes(sourceIds['list-work'])) return [call('router_submit', { actions: [{ kind: 'new-task', sourceIds: newSourceIds,
+        title: '资料列表优化', objective: initial, acceptanceCriteria: initialCriteria }], continuity: [], reply: null })]
+      const list = values.findLast(value => Array.isArray(value.tasks))
+      if (!list) return [call('router_task_list', {})]
+      const taskSummary = list.tasks.find(task => task.sourceRefs?.includes(sourceIds['list-work']))
+      assert.ok(taskSummary)
+      const loaded = values.findLast(value => (value.task?.taskId ?? value.taskId) === taskSummary.taskId)
+      if (!loaded) return [call('router_task_get', { taskId: taskSummary.taskId })]
+      const task = loaded.task ?? loaded
+      const currentSourceId = newSourceIds.at(-1), messageId = inputs.find(([id]) => sourceIds[id] === currentSourceId)?.[0]
+      assert.ok(messageId && extraCriteria[messageId])
+      const acceptanceCriteria = [...new Set([...(task.requirements ?? []), extraCriteria[messageId]])]
+      return [call('router_submit', { actions: [{ kind: 'task-context', taskId: task.taskId, inputVersion: task.requirementRevision,
+        runSequence: task.runSequence, expectedControlRevision: task.controlRevision, context: inputs.find(([id]) => id === messageId)[1],
+        progressImpact: 'replan', acceptanceCriteria, sourceIds: newSourceIds }], continuity: [], reply: null })]
+    }
+    if (names.includes('task_session_submit')) {
+      ownerInputs.push(latestInput(request))
       return [call('task_session_submit', { decision: { action: 'wait', summary: '等待测试资料', evidence: [], limitations: [] } })]
-    })
-    await t.beginBusiness()
-
-    for (const [messageId, text] of inputs) {
-      await t.step(async () => h.service.ingest({ ...message(messageId, text), ...(topicId ? { quotedMessage: { messageId: 'list-work', content: initial } } : {}) }))
-      await t.step(async () => h.service.whenIdle())
-      const topics = h.residentStore.listTopics('native-group'), tasks = await t.step(async () => h.query('task.list'))
-      assert.equal(topics.length, 1); assert.equal(tasks.length, 1)
-      topicId ??= topics[0].topicId; taskId ??= tasks[0].taskId
-      assert.equal(tasks[0].taskId, taskId); assert.equal(tasks[0].topicRefs[0].topicId, topicId)
     }
-    const task = await t.step(async () => h.query('task.get', { taskId })), topic = h.residentStore.getTopic('native-group', topicId)
-    assert.equal(task.requirementRevision, 3)
-    assert.equal(task.objective, initial)
-    assert.deepEqual(task.requirements, [...initialCriteria, ...Object.values(extraCriteria)])
-    assert.deepEqual(topic.decisions.flatMap(record => record.decision.actions.map(action => action.kind)), ['new-task', 'task-context', 'task-context'])
-    assert.equal(h.toolResults.filter(item => item.name === 'group_task_context_get').length, 2)
-    assert.equal(h.toolResults.some(item => ['group_task_list', 'group_topic_context_get'].includes(item.name)), false, 'sufficient summary/quote context does not force catalogue or full history reads')
-    assert.equal((await t.step(async () => h.query('execution.list'))).length, 0)
-  }))
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
+  })
+  await t.beginBusiness()
 
-testRunner('scripted native routing checks scope before reusing an old Topic and reconsiders a new technical matter', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-  let routeTurns = 0, decisionTurns = 0, oldTopicId
+  for (const [messageId, text] of inputs) {
+    await t.step(async () => h.service.ingest(message(messageId, text)))
+    await t.step(async () => h.service.whenIdle())
+    const tasks = await t.step(async () => h.query('task.list'))
+    assert.equal(tasks.length, 1)
+    taskId ??= tasks[0].taskId
+    assert.equal(tasks[0].taskId, taskId)
+  }
+  const [task] = await t.step(async () => h.query('task.list'))
+  assert.equal(task.requirementRevision, 3)
+  assert.equal(task.objective, initial)
+  assert.deepEqual(task.requirements, [...initialCriteria, ...Object.values(extraCriteria)])
+  assert.ok(inputs.every(([id]) => task.sourceRefs.includes(sourceIds[id])))
+  assert.deepEqual(task.topicRefs, [])
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
+  assert.ok(inputs.every(([, text]) => ownerInputs.some(ownerInput => JSON.stringify(ownerInput).includes(text))), 'the same Task Owner consumes each follow-up body')
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 0)
+}))
+
+testRunner('direct Router reevaluates responsibility and does not inherit an old matter classification', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  let technicalDecisions = 0
   const technical = '另外资料列表保存报错，测试成员乙负责排查。'
-  const h = await extraHost(t, 'topic-scope-', async request => {
-    const input = latestInput(request), names = request.tools.map(tool => tool.name)
-    if (names.includes('group_topic_route_submit')) {
-      routeTurns++
-      const prompt = request.messages.flatMap(message => message.content ?? []).filter(part => part.type === 'text').map(part => part.text).join('\n')
-      assert.match(prompt, /复用旧Topic前也必须核对职责范围/)
-      assert.match(prompt, /既往职责外分类不永久继承/)
-      assert.match(prompt, /职责内具体事项无论交给谁处理，都保留在对应业务 Topic/)
-      assert.ok(input.topics.some(topic => topic.topicId === oldTopicId))
-      if (routeTurns === 1) assert.equal(input.relatedTopics[0].topicId, oldTopicId)
-      else assert.ok(input.recentMessages.some(message => message.messageId === 'expense-followup'))
-      assert.ok(JSON.stringify(input.recentMessages).length <= 4_000)
-      const source = input.messages[0], mixed = source.text.includes(technical)
-      const routes = [{ messageId: source.messageId, messageVersion: source.messageVersion,
-        units: [{ unitKey: 'expense', summary: '同事间票据整理', sourceRefs: [{ quote: mixed ? '可以了。' : source.text }],
-          topics: [], fixedTopic: 'out-of-scope', reason: '引用和前序对话表明是报销协作，旧话题不能覆盖技术职责边界' },
-        ...(mixed ? [{ unitKey: 'technical', summary: '资料列表保存报错', sourceRefs: [{ quote: technical }], topics: [{ newTopicKey: 'save-error', title: '资料列表保存故障', reason: '资料保存故障属于独立技术事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '技术故障不同于已有事项' })) }] }] : [])] }]
-      return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '技术问题已明确由同事排查，未要求助手参与') })]
+  const h = await extraHost(t, 'direct-router-scope-', async request => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      for (const source of input.sources ?? []) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
+      }
+      const sourceText = (input.sources ?? []).map(source => pages.filter(page => page.sourceId === source.sourceId)
+        .sort((a, b) => a.offset - b.offset).map(page => page.text).join('')).join('\n')
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: sourceText.includes(technical), reply: null })]
+      technicalDecisions++
+      return [call('router_submit', { actions: [], continuity: [], reply: null })]
     }
-    if (names.includes('group_decision_submit')) {
-      decisionTurns++
-      assert.equal(input.messages.length, 1)
-      assert.equal(input.messages[0].text, technical)
-      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: [input.messages[0].messageId], actions: [], reason: '技术事项保留业务上下文，明确由同事排查，无需助手动作' } })]
-    }
-    throw new Error('unexpected execution session')
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
   })
   await t.beginBusiness()
 
   await t.step(async () => h.residentStore.updateGroup({ groupId: 'native-group', responsibility: '负责业务系统技术问题排查及实现' }))
-  await t.step(async () => h.residentStore.ingest(message('expense-origin', '差旅报销单的电子票据请由同事统一上传。')))
-  await t.step(async () => h.residentStore.routeMessages({ groupId: 'native-group', routeId: 'historical-route', routingRevision: h.residentStore.getGroup('native-group').routingRevision,
-    routes: [{ messageId: 'expense-origin', messageVersion: 1, topics: [{ newTopicKey: 'expense', title: '差旅票据报销协作' }] }] }))
-  oldTopicId = h.residentStore.listTopics('native-group')[0].topicId
-  await t.step(async () => h.residentStore.acceptTopicDecision({ groupId: 'native-group', topicId: oldTopicId, revision: 1, decisionId: 'historical-decision',
-    decision: { actions: [], reason: '历史分类', topicUpdate: { summary: '同事核对电子票据、删除旧附件后统一上传。' } } }))
-  await t.step(async () => h.residentStore.completeTopicDecision({ groupId: 'native-group', topicId: oldTopicId, decisionId: 'historical-decision' }))
-  for (const source of [
+  const sources = [
+    message('expense-origin', '差旅报销单的电子票据请由同事统一上传。'),
     { ...message('expense-followup', '旧附件已删除，请统一上传。'), quotedMessage: { messageId: 'expense-origin', content: '电子票据请统一上传' } },
-    message('expense-short', '试试'), message('mixed-followup', '可以了。' + technical),
-  ]) { await t.step(async () => h.service.ingest(source)); await t.step(async () => h.service.whenIdle()) }
-  assert.equal(routeTurns, 3)
-  assert.equal(decisionTurns, 1, 'only the new technical matter needs a business decision')
-  assert.equal(h.residentStore.getTopic('native-group', oldTopicId).revision, 1)
-  const outside = await t.step(async () => h.residentStore.listFixedTopicMessagesPage({ groupId: 'native-group', topicId: 'out-of-scope' }))
-  assert.equal(outside.total, 3)
-  assert.ok(outside.items.every(item => item.state === 'silent'))
+    message('expense-short', '试试'),
+    message('mixed-followup', '可以了。' + technical),
+  ]
+  for (const source of sources) { await t.step(async () => h.service.ingest(source)); await t.step(async () => h.service.whenIdle()) }
+  await t.step(async () => waitUntil(async () => technicalDecisions === 1
+    && (await h.query('source.list')).filter(source => source.processingCompleted).length === sources.length
+    && h.residentStore.getRouterState('native-group').decisions.length === 1, '技术来源路由完成'))
+  assert.equal(technicalDecisions, 1, 'the technical issue is independently reconsidered, while the colleague assignment requires no assistant action')
+  const processed = await t.step(async () => h.query('source.list'))
+  assert.deepEqual(processed.map(source => source.messageId), sources.map(source => source.messageId))
+  assert.ok(processed.every(source => source.processingCompleted))
+  assert.equal(h.residentStore.getRouterState('native-group').decisions.length, 1)
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
   assert.equal(h.sent.length, 0)
   assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
 }))
 
-testRunner('scripted native routing permits distinct delivery goals on the same page',
-  { ...({ timeout: 15000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
+testRunner('direct Router keeps distinct delivery goals from one message as separate Tasks',
+  { ...({ timeout: 15000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async t => {
     const parts = ['资料列表的检索体验优化单独排期；', '同一资料列表的权限风险另做审计报告。']
-    const h = await extraHost(t, 'independent-page-matters-', async request => {
-      const input = latestInput(request), names = request.tools.map(tool => tool.name)
-      if (names.includes('group_topic_route_submit')) {
-        assert.ok(JSON.stringify(request.messages).includes('确有不同业务目标或独立交付约定时可分Topic'))
-        const routes = input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion,
-          replyTopic: { newTopicKey: 'work-0' }, ignoredRefs: [], units: parts.map((quote, index) => ({ unitKey: 'work-' + index, summary: ['检索体验优化', '权限风险审计'][index],
-            sourceRefs: [{ quote }], topics: [{ newTopicKey: 'work-' + index, title: ['检索体验优化', '权限风险审计'][index], reason: '分别处理不同业务事项', candidateComparisons: [...new Map([...(input.topics ?? []), ...(input.relatedTopics ?? []), ...(input.recalledTopics ?? [])].map(topic => [topic.topicId, topic])).values()].map(topic => ({ topicId: topic.topicId, revision: topic.revision, reason: '当前事项不同于已有事项' })) }] })) }))
-        return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '来源记录两个独立安排，未要求助手参与') })]
+    const source = message('independent-page-work', parts.join(''))
+    const sourceId = `im:${createHash('sha256').update(JSON.stringify([source.groupId, source.messageId, source.messageVersion ?? 1])).digest('hex')}`
+    const h = await extraHost(t, 'direct-independent-page-matters-', async request => {
+      const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+      if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+      if (names.includes('triage_submit') || names.includes('router_submit')) {
+        const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+        for (const item of input.sources ?? []) {
+          let offset = 0
+          while (offset < item.totalLength) {
+            const page = pages.find(value => value.sourceId === item.sourceId && value.offset === offset)
+            if (!page) return [call('router_source_read', { sourceId: item.sourceId, offset })]
+            offset = page.nextOffset
+          }
+        }
+        if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+        const sourceIds = input.context?.newSourceIds ?? []
+        if (!sourceIds.length) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+        assert.ok(sourceIds.includes(sourceId))
+        return [call('router_submit', { actions: [
+          { kind: 'new-task', sourceIds: [sourceId], title: '检索体验优化', objective: '独立排期并交付资料列表检索体验优化' },
+          { kind: 'new-task', sourceIds: [sourceId], title: '权限风险审计', objective: '单独完成资料列表权限风险审计报告' },
+        ], continuity: [], reply: null })]
       }
-      return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [], reason: '保留两个独立交付约定，当前未要求助手执行' } })]
+      if (names.includes('task_session_submit')) return [call('task_session_submit', { decision: { action: 'wait', summary: '等待事项资料', evidence: [], limitations: [] } })]
+      throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
     })
     await t.beginBusiness()
 
-    await t.step(async () => h.service.ingest(message('independent-page-work', parts.join('')))); await t.step(async () => h.service.whenIdle())
-    assert.deepEqual(h.residentStore.listTopics('native-group').map(topic => topic.title), ['检索体验优化', '权限风险审计'])
-    assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
+    await t.step(async () => h.service.ingest(source)); await t.step(async () => h.service.whenIdle())
+    const tasks = await t.step(async () => h.query('task.list'))
+    assert.deepEqual(tasks.map(task => task.title).sort(), ['检索体验优化', '权限风险审计'].sort())
+    assert.deepEqual(tasks.map(task => task.objective).sort(), ['独立排期并交付资料列表检索体验优化', '单独完成资料列表权限风险审计报告'].sort())
+    assert.ok(tasks.every(task => task.sourceRefs.includes(sourceId)))
+    assert.equal(new Set(tasks.map(task => task.taskId)).size, 2)
+    assert.equal(h.residentStore.listTopics('native-group').length, 0)
+    assert.equal(h.sent.length, 0)
   }))
 
-// The model decisions are scripted; this exercises the native context and task pipeline.
-testRunner('native Topic context accepts a requirement that only mentions notification recipients', { ...({ timeout: 20000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
-  let topicId, historyRead = false
+testRunner('direct Router accepts a requirement that only mentions notification recipients', { ...({ timeout: 20000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(20000) }, nativeLifecycle(20000, async (t) => {
   const assignment = '测试助手，列表功能的明确展示需求由你实现，测试成员甲和测试成员乙接收同步。'
-  const summary = '助手负责实现列表需求，两位成员接收同步，等待具体展示要求。'
   const requirement = '@测试成员甲 @测试成员乙 状态列需要显示等待中的记录。'
-  const h = await extraHost(t, 'topic-participation-', async request => {
-    const input = latestInput(request), names = request.tools.map(tool => tool.name)
-    if (names.includes('group_topic_route_submit')) {
-      const routes = input.messages.map(item => ({
-        messageId: item.messageId, messageVersion: item.messageVersion, topics: [topicId ? { topicId, reason: '原列表事项的展示要求' } : { newTopicKey: 'list', title: '列表状态展示', reason: '独立的列表状态展示事项' }],
-      }))
-      return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '来源仅补充原列表事项的展示要求') })]
-    }
-    if (names.includes('group_decision_submit')) {
-      if (input.trigger === 'task-facts') return topicTaskCalls(request)
-      const current = input.messages.at(-1)
-      if (current.messageId === 'assignment') return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: [current.messageId], actions: [], reason: '等待具体需求', topicUpdate: { summary } } } }]
-      assert.equal(current.text, requirement)
-      assert.equal(input.summary, summary)
-      assert.equal(input.historyAvailable, true)
-      assert.equal(input.linkedTasks.total, 0)
-      if (!historyRead) { historyRead = true; return [call('group_topic_context_get', {})] }
-      assert.ok(modelToolValues(request, 'group_topic_context_get').some(value => value.messages?.some(item => item.text === assignment)), '原分工必须可从真实上下文工具读回')
-      return [{ name: 'group_decision_submit', args: { requestId: input.requestId, topicId: input.topicId, revision: input.revision,
-        decision: { basisMessageIds: ['assignment', current.messageId], topicUpdate: { summary: '原分工由助手实现，当前需求明确，同事仅同步，已承接列表状态任务。' },
-          actions: [{ kind: 'new-task', title: '列表状态展示', objective: '在列表状态列显示等待中的记录', acceptanceCriteria: ['等待中的记录可见'], topicRefs: [{ topicId: input.topicId, revision: input.revision }] }],
-          reply: '已承接列表状态展示需求。', replyToMessageId: current.messageId,
-          replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } } }]
+  const sourceId = id => `im:${createHash('sha256').update(JSON.stringify(['native-group', id, 1])).digest('hex')}`
+  const assignmentId = sourceId('assignment'), requirementId = sourceId('requirement')
+  let historyRead = false
+  const h = await extraHost(t, 'direct-participation-', async request => {
+    const input = latestInput(request), names = request.tools.map(tool => tool.name), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const missing = missingSourceRead(request, input)
+      if (missing) return [call('router_source_read', missing)]
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+      const newSourceIds = input.context?.newSourceIds ?? []
+      if (!newSourceIds.includes(requirementId)) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      const pages = values.filter(value => value.batchId === input.batchId && value.sourceId === assignmentId && Number.isInteger(value.nextOffset))
+      let offset = 0, text = ''
+      while (true) {
+        const page = pages.find(value => value.offset === offset)
+        if (!page) return [call('router_source_read', { sourceId: assignmentId, offset })]
+        text += page.text
+        offset = page.nextOffset
+        if (offset >= page.totalLength) break
+      }
+      assert.ok(text.includes(assignment), '原分工必须从真实来源工具完整读回')
+      historyRead = true
+      const review = values.findLast(value => value.sourceId === requirementId && Array.isArray(value.candidates))
+      if (!review) return [call('router_reply_review_get', { sourceId: requirementId })]
+      return [call('router_submit', { actions: [{ kind: 'new-task', sourceIds: [assignmentId, requirementId], title: '列表状态展示',
+        objective: '在列表状态列显示等待中的记录', acceptanceCriteria: ['等待中的记录可见'] }], continuity: [],
+        reply: { sourceId: requirementId, text: '已承接列表状态展示需求。', review: { kind: 'confirmation',
+          reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
     }
     assert.ok(names.includes('task_session_submit'))
     return [call('task_session_submit', { decision: { action: 'wait', summary: '等待后续测试资料', evidence: [], limitations: [] } })]
   })
   await t.beginBusiness()
 
-  await t.step(async () => h.service.ingest(message('assignment', assignment))); await t.step(async () => h.service.whenIdle())
-  topicId = h.residentStore.listTopics('native-group')[0].topicId
+  await t.step(async () => h.service.ingest(message('assignment', assignment)))
+  await t.step(async () => waitUntil(async () => (await h.query('source.list')).some(item => item.sourceId === assignmentId && item.processingCompleted), '原分工处理完成'))
   assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
-  await t.step(async () => h.service.ingest(message('requirement', requirement))); await t.step(async () => h.service.whenIdle())
+  await t.step(async () => h.service.ingest(message('requirement', requirement)))
+  await t.step(async () => waitUntil(async () => (await h.query('task.list')).length === 1 && h.sent.length === 1
+    && h.residentStore.getRouterState('native-group').decisions.some(item => item.applications.some(application => application.action?.kind === 'new-task')
+      && item.applications.every(application => application.status === 'applied')), '需求任务与回复完成').catch(async error => {
+    throw new Error(`${error.message} ${JSON.stringify({ historyRead, taskCount: (await h.query('task.list')).length, sent: h.sent.length,
+      alerts: h.service.listAlerts(), results: h.toolResults.slice(-6).map(item => ({ name: item.name, error: item.result.error })),
+      active: h.residentStore.getRouterState('native-group').active?.batchId })}`)
+  }))
   assert.equal(historyRead, true)
   const tasks = await t.step(async () => h.query('task.list'))
   assert.equal(tasks.length, 1)
-  assert.ok(tasks[0].topicRefs.some(ref => ref.topicId === topicId))
-  const topic = h.residentStore.getTopic('native-group', topicId)
-  const decision = topic.decisions.find(item => item.decision.actions.some(action => action.kind === 'new-task'))
-  assert.equal(decision.status, 'completed')
-  assert.deepEqual(decision.decision.basisMessageIds, ['assignment', 'requirement'])
+  assert.equal(tasks[0].title, '列表状态展示')
+  assert.equal(tasks[0].objective, '在列表状态列显示等待中的记录')
+  assert.deepEqual([...tasks[0].sourceRefs].sort(), [assignmentId, requirementId].sort())
+  const decision = h.residentStore.getRouterState('native-group').decisions.find(item => item.applications.some(application => application.action?.kind === 'new-task'))
+  assert.ok(decision)
+  assert.ok(decision.applications.every(application => application.status === 'applied'))
   assert.equal(h.sent.length, 1)
-  assert.equal(h.residentStore.listTopics('native-group').length, 1)
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
 }))
 
-testRunner('native proposal prompt preserves original authorization and asks without claiming task execution', { ...({ timeout: 15000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
-  let checked = false
-  const h = await extraHost(t, 'task-topic-proposal-', async request => {
-    const names = request.tools.map(tool => tool.name), input = latestInput(request)
-    if (names.includes('group_topic_route_submit')) {
-      const routes = input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, topics: [{ newTopicKey: 'proposal', title: '描述框位置调整', reason: '独立处理描述框位置调整' }] }))
-      return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '来源讨论描述框调整，但尚未明确交办助手') })]
+testRunner('direct Router may ask whether to help without creating or executing a Task', { ...({ timeout: 15000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async t => {
+  const source = message('proposal-only', '合并后描述输入框放在该项文字右侧，和文字顶部对齐。')
+  const sourceId = `im:${createHash('sha256').update(JSON.stringify([source.groupId, source.messageId, source.messageVersion ?? 1])).digest('hex')}`
+  const h = await extraHost(t, 'direct-router-proposal-', async request => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request), values = modelToolValues(request)
+    if (names.includes('group_topic_route_submit') || names.includes('group_decision_submit')) throw new Error('legacy Topic routing must not run')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const pages = values.filter(item => item.batchId === input.batchId && item.sourceId)
+      for (const item of input.sources ?? []) {
+        let offset = 0
+        while (offset < item.totalLength) {
+          const page = pages.find(value => value.sourceId === item.sourceId && value.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: item.sourceId, offset })]
+          offset = page.nextOffset
+        }
+      }
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+      const sourceIds = input.context?.newSourceIds ?? []
+      if (!sourceIds.length) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      const review = values.findLast(value => value.sourceId === sourceId && Array.isArray(value.candidates))
+      if (!review) return [call('router_reply_review_get', { sourceId })]
+      return [call('router_submit', { actions: [], continuity: [], reply: { sourceId, text: '这个事项是否需要我处理？',
+        review: { kind: 'confirmation', reviewedOutboundIds: review.candidates.map(item => item.outboundId), sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
     }
-    assert.ok(names.includes('group_decision_submit'))
-    const prompt = JSON.stringify(request)
-    for (const rule of ['结合需求原文、引用、已有任务及前后分工判断', '不能把最后一个 @ 当作事项负责人', '不因当前只 @ 同事或省略助手称呼而重复索要确认', '才选择 task-proposal', '这个事项是否需要我处理？', '暂不创建任务', '不承诺', '没你的事', '不是找你', '承接或静默的判断及分工依据写入规范决策', '测试助手', '不追加未经授权的业务验收']) assert.ok(prompt.includes(rule), rule)
-    for (const rule of ['不能只因 @ 别人就硬过滤', '已有任务的新事实仍归原业务 Topic', '仅提到人名不等于指定负责人']) assert.ok(prompt.includes(rule), rule)
-    assert.ok(prompt.includes('仍保留对应业务 Topic 的完整上下文'))
-    assert.ok(!prompt.includes('未指向 Agent 时必须忽略'))
-    checked = true
-    return [call('group_decision_submit', { requestId: input.requestId, topicId: input.topicId, revision: input.revision, decision: { basisMessageIds: input.messages.map(item => item.messageId), actions: [{ kind: 'task-proposal', title: '描述框位置调整', objective: '按原图将描述框放在文字右侧并顶部对齐', topicRefs: [{ topicId: input.topicId, revision: input.revision }] }], reply: '这个事项是否需要我处理？', replyToMessageId: input.messages.at(-1).messageId, replyReview: { kind: 'confirmation', reviewedOutboundIds: [], sameMatterOutboundIds: [], replaceOutboundIds: [] } } })]
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
   })
   await t.beginBusiness()
 
-  await t.step(async () => h.service.ingest(message('proposal-only', '合并后描述输入框放在该项文字右侧，和文字顶部对齐。')))
+  await t.step(async () => h.service.ingest(source))
   await t.step(async () => h.service.whenIdle())
-  assert.equal(checked, true)
+  const sources = await t.step(async () => h.query('source.list'))
+  assert.ok(sources.find(item => item.sourceId === sourceId)?.processingCompleted)
   assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
-  const topic = h.residentStore.listTopics('native-group')[0]
-  assert.equal(topic.decisions[0].decision.actions[0].kind, 'task-proposal')
-  assert.equal(topic.decisions[0].status, 'completed')
-  assert.equal(topic.summary, '围绕原始事项持续核对，当前结论以任务真实进展为准。')
+  assert.equal((await t.step(async () => h.query('execution.list'))).length, 0)
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
+  assert.equal(h.residentStore.getRouterState('native-group').decisions.flatMap(item => item.applications).some(item => item.kind === 'new-task'), false)
   assert.equal(h.sent.length, 1)
-  assert.equal(h.sent[0].kind, 'topic-reply')
   assert.ok(h.sent[0].payload.text.includes('这个事项是否需要我处理？'))
-  await t.step(async () => h.service.retryMessage({ groupId: 'native-group', messageId: 'proposal-only' })); await t.step(async () => h.service.whenIdle())
+  const before = structuredClone(sources)
+  await t.step(async () => h.service.ingest(source))
+  await t.step(async () => h.service.recover()); await t.step(async () => h.service.whenIdle())
+  assert.deepEqual(await t.step(async () => h.query('source.list')), before)
   assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
   assert.equal(h.sent.length, 1)
 }))
@@ -1873,49 +2148,76 @@ testRunner('native Web reopen preserves task identity and rejects stale input; H
   assert.equal(reopened.sessionId, original.sessionId)
   assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
   assert.equal(reopened.sourceRefs.length, original.sourceRefs.length + 1)
-  assert.equal(h.residentStore.listTopics('native-group').length, 1)
+  assert.deepEqual(h.residentStore.listTopics('native-group'), [], 'HTTP Task reopen does not create or require Topic state')
 }))
 
-testRunner('协调暂停时混合消息拒绝协调来源，普通话题Host重试仍按原版本完成', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'mixed-semantic-source-'))
-  let host, store, blocked = true, routeAttempts = 0
-  t.after(async () => { try { await host?.close(); await store?.close() } finally { await rm(root, { recursive: true, force: true }) } })
-  await t.beginBusiness()
-  host = await t.step(async () => nativeTaskHost(root, async request => {
-    const names = request.tools.map(tool => tool.name), input = latestInput(request)
-    if (names.includes('group_topic_route_submit')) {
-      const rejectedCandidate = ++routeAttempts === 1
-      const routes = input.messages.map(item => ({ messageId: item.messageId, messageVersion: item.messageVersion, ignoredRefs: [], units: [
-        { unitKey: 'reminder', summary: '查询提醒', sourceRefs: [{ quote: '测试助手，查询提醒；' }],
-          ...(rejectedCandidate ? { dispatchOwner: 'coordination', topics: [], reason: '暂停功能候选必须拒绝' } : { topics: [{ newTopicKey: 'file', title: '文件核查', reason: '两段消息共同指向文件核查' }] }) },
-        { unitKey: 'file', summary: '核查文件', sourceRefs: [{ quote: '测试助手，核查文件。' }], topics: [{ newTopicKey: 'file', title: '文件核查', reason: '两段消息共同指向文件核查' }] },
-      ] }))
-      return [call('group_topic_route_submit', { requestId: input.requestId, routes, initialReplies: [], initialReplySilences: scriptedRouteSilences(routes, '来源中的提醒与文件核查属于同一事项，不重复发送确认') })]
+testRunner('direct Router failure keeps the exact source pending until its durable retry creates one Task', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'direct-router-retry-'))
+  const agentConfig = { agentPreset: 'missing-fixture-preset' }
+  const inputMessage = message('direct-retry', '测试助手，请核对原文件并等待我补充。')
+  const decide = async request => {
+    const names = request.tools.map(tool => tool.name)
+    if (names.includes('coordination_submit') || names.includes('group_topic_route_submit') || names.includes('group_decision_submit'))
+      throw new Error('retired coordination and Topic paths must not handle this source')
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const input = latestInput(request)
+      const pages = modelToolValues(request).filter(item => item.batchId === input.batchId && item.sourceId)
+      for (const source of input.sources ?? []) {
+        let offset = 0
+        while (offset < source.totalLength) {
+          const page = pages.find(item => item.sourceId === source.sourceId && item.offset === offset)
+          if (!page) return [call('router_source_read', { sourceId: source.sourceId, offset })]
+          offset = page.nextOffset
+        }
+      }
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+      const sourceIds = input.context?.newSourceIds ?? []
+      return [call('router_submit', { actions: sourceIds.length ? [{ kind: 'new-task', sourceIds,
+        title: '原文件核对', objective: '核对原文件并等待补充', acceptanceCriteria: ['保持原来源身份'] }] : [], continuity: [], reply: null })]
     }
-    assert.ok(!names.includes('coordination_submit'))
-    return topicTaskCalls(request) ?? [call('task_session_submit', { decision: { action: 'wait', summary: '等待业务核查', evidence: [], limitations: [] } })]
-  }, { config: { coordination: { enabled: true, provider: 'native-task-test', model: 'controlled' } }, serviceFactory: async args => {
-    store = await openDynamicTaskStore(args.config)
-    return openTaskSessionService({ ...args, store: { ...store, async command(input) {
-      if (blocked && input.kind === 'task.create') throw Object.assign(new Error('TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED'), { code: 'TASK_TOPIC_AUTHENTICATED_SOURCE_REQUIRED' })
-      return store.command(input)
-    } } })
-  } }))
-  await t.step(async () => host.service.ingest(message('mixed', '测试助手，查询提醒；测试助手，核查文件。')))
-  await t.step(async () => host.service.whenIdle())
-  const pending = (await t.step(async () => host.query('source.list'))).find(source => source.messageId === 'mixed')
-  assert.equal((await t.step(async () => host.query('task.list'))).length, 0)
-  assert.equal(pending.processingCompleted, undefined)
-  assert.equal(pending.processingPending, true)
-  assert.ok(routeAttempts >= 2)
-  assert.equal((await t.step(async () => host.query('coordination.source.list'))).length, 0)
-  assert.equal(host.residentStore.listTopics('native-group')[0].decisions[0].status, 'blocked')
-  blocked = false
-  await t.step(async () => host.service.retryMessage({ groupId: 'native-group', messageId: 'mixed' }))
-  await t.step(async () => host.service.whenIdle())
-  const completed = (await t.step(async () => host.query('source.list'))).find(source => source.messageId === 'mixed')
-  assert.ok(completed.processingCompleted, JSON.stringify({ completed: completed.processingCompleted, topicStatus: host.residentStore.listTopics('native-group').map(topic => ({ processedRevision: topic.processedRevision, decisions: topic.decisions.map(record => ({ status: record.status, error: record.error })) })), alerts: host.service.listAlerts() }))
-  assert.equal(completed.processingCompleted.activeUnitRefs.length, 2)
-  assert.equal((await t.step(async () => host.query('coordination.source.list'))).length, 0)
-  assert.equal((await t.step(async () => host.query('task.list')))[0].status, 'active')
+    if (names.includes('task_session_submit')) return [call('task_session_submit', { decision: { action: 'wait', summary: '等待用户补充原文件资料', evidence: [], limitations: [] } })]
+    throw new Error(`Unexpected direct Router tools: ${names.join(', ')}`)
+  }
+  let h = await t.step(async () => nativeTaskHost(root, decide, { agentConfig }))
+  await t.after(async () => { await h?.close(); await rm(root, { recursive: true, force: true }) })
+  await t.beginBusiness()
+  await t.step(async () => h.service.ingest(inputMessage))
+  await t.step(async () => h.service.whenIdle())
+  await t.step(async () => waitUntil(() => h.residentStore.getRouterState(inputMessage.groupId).failures?.some(item => item.status === 'failed'), 'durable direct Router failure'))
+  const original = structuredClone(h.residentStore.getGroup(inputMessage.groupId).messages[0])
+  const failure = h.residentStore.getRouterState(inputMessage.groupId).failures.find(item => item.status === 'failed')
+  const retry = { groupId: inputMessage.groupId, messageId: inputMessage.messageId, messageVersion: original.messageVersion,
+    phase: failure.phase, requestId: failure.requestId, token: failure.retryToken }
+  const failedSources = await t.step(async () => h.query('source.list'))
+  assert.equal(failedSources.length, 1)
+  assert.equal(failedSources[0].sourceId, failure.sourceRef.sourceId)
+  assert.equal(failedSources[0].processingCompleted, undefined)
+  assert.notEqual(failedSources[0].routed, true)
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 0)
+  assert.equal((await t.step(async () => h.query('coordination.source.list'))).length, 0)
+  assert.equal(h.residentStore.listTopics(inputMessage.groupId).length, 0)
+  for (const patch of [{ messageVersion: original.messageVersion + 1 }, { phase: 'decision' }, { requestId: 'foreign' }, { token: 'wrong-token' }])
+    await t.step(async () => assert.rejects(h.service.retryMessageProcessing({ ...retry, ...patch }), /MESSAGE_RETRY_STALE/))
+
+  await t.step(async () => h.close())
+  agentConfig.agentPreset = 'native-test'
+  h = await t.step(async () => nativeTaskHost(root, decide, { agentConfig }))
+  const recoveredFailure = h.residentStore.getRouterState(inputMessage.groupId).failures.find(item => item.status === 'failed')
+  assert.equal(recoveredFailure.requestId, retry.requestId)
+  assert.equal(recoveredFailure.retryToken, retry.token)
+  const attempted = await t.step(async () => h.service.retryMessageProcessing(retry))
+  assert.equal(attempted.status, 'attempted')
+  await t.step(async () => h.service.whenIdle())
+  await t.step(async () => waitUntil(async () => (await h.query('source.list'))[0]?.processingCompleted, 'exact original source reaches direct completion'))
+  const sources = await t.step(async () => h.query('source.list'))
+  assert.equal(sources.length, 1)
+  assert.equal(sources[0].sourceId, failure.sourceRef.sourceId)
+  for (const key of ['messageId', 'messageVersion', 'text', 'occurredAt', 'senderOpenDingTalkId']) assert.deepEqual(h.residentStore.getGroup(inputMessage.groupId).messages[0][key], original[key])
+  const [task] = await t.step(async () => h.query('task.list'))
+  assert.equal((await t.step(async () => h.query('task.list'))).length, 1)
+  assert.ok(task.sourceRefs.includes(failure.sourceRef.sourceId))
+  assert.equal(task.topicRefs.length, 0)
+  assert.equal((await t.step(async () => h.query('coordination.source.list'))).length, 0)
+  assert.equal(h.residentStore.listTopics(inputMessage.groupId).length, 0)
+  await t.step(async () => assert.rejects(h.service.retryMessageProcessing(retry), /MESSAGE_RETRY_STALE/))
 }))

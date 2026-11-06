@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { taskNotificationRecovery } from './notification-delivery.js'
+import { notificationReplyTarget } from './group-message.js'
 
 const canonical = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item)
@@ -88,10 +89,15 @@ export function messageProcessingSources(sources, notifications, groupId, coordi
     receivedAt: source.receivedAt ?? null, routed: source.routed === true, routedAt: source.routedAt ?? null,
     routePreparedAt: source.routePreparedAt ?? null,
     coordinationRetirement: source.coordinationRetirement ?? null,
+    directProcessing: source.directProcessing ? { at: source.directProcessing.at,
+      disposition: { phase: source.directProcessing.disposition.phase, decisionId: source.directProcessing.disposition.decisionId } } : null,
+    processingPending: source.processingPending === true,
     processingCompleted: source.processingCompleted ? { at: source.processingCompleted.at,
+      ...(source.processingCompleted.mode ? { mode: source.processingCompleted.mode } : {}),
+      ...(source.processingCompleted.decisionId ? { decisionId: source.processingCompleted.decisionId } : {}),
       routingRevision: source.processingCompleted.routingRevision,
       activeUnitRefs: (source.processingCompleted.activeUnitRefs ?? []).map(({ unitId, unitRevision }) => ({ unitId, unitRevision })) } : null,
-    notifications: notifications.filter(notification => notification.payload?.conversationId === source.groupId
+    notifications: notifications.filter(notification => (notification.payload?.groupId ?? notification.payload?.conversationId) === source.groupId
       && (notification.payload.sourceRef?.messageId ?? notification.payload.sourceMessageId) === source.messageId
       && (!notification.payload.sourceId || notification.payload.sourceId === source.sourceId)
       && (!notification.payload.sourceVersion || notification.payload.sourceVersion === source.version)).map(notification => ({
@@ -148,8 +154,7 @@ export function taskNotificationOutbound(notification) {
     ...(payload.taskIds ? { taskIds: payload.taskIds } : notification.taskId ? { taskIds: [notification.taskId] } : {}),
     ...(payload.coveredEventIds ? { coveredEventIds: payload.coveredEventIds } : {}),
     readbackRequired: true,
-    replyToMessageId: payload.sourceMessageId,
-    replyToSenderOpenDingTalkId: payload.actorId,
+    ...notificationReplyTarget(payload),
     atOpenDingTalkIds: payload.atOpenDingTalkIds ?? [], ...(payload.atAll ? { atAll: true } : {}),
     ...(payload.sourceRef ? { sourceRef: payload.sourceRef } : {}), ...(payload.artifactFiles?.length ? { artifactFiles: payload.artifactFiles } : {}),
     replyKind: payload.replyKind ?? 'substantive',
@@ -166,6 +171,6 @@ export function taskNotificationOutbound(notification) {
 export async function projectTaskNotification({ residentStore, notification }) {
   if (notification?.payload?.audience === 'operator') return undefined
   if (!residentStore || !notification?.payload?.conversationId) return undefined
-  return residentStore.projectTaskNotification({ groupId: notification.payload.conversationId,
+  return residentStore.projectTaskNotification({ groupId: notification.payload.groupId ?? notification.payload.conversationId,
     outbound: taskNotificationOutbound(notification) })
 }

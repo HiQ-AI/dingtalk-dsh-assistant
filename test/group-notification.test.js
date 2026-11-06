@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { groupNotificationRouting, finalNotificationRouting, prepareGroupNotification } from '../packages/dingtalk-dsh-assistant/group-notification.js'
+import { groupNotificationRouting, finalNotificationRouting, prepareGroupNotification, groupNotificationParts } from '../packages/dingtalk-dsh-assistant/group-notification.js'
 import { createPlatformNotifier, platformNotificationContext } from '../packages/dingtalk-dsh-assistant/platform-notification.js'
 import { createTaskArtifactFiles } from '../packages/dingtalk-dsh-assistant/task-artifact-files.js'
 import { sessionWorkspace } from '../packages/dingtalk-dsh-assistant/session-workspaces.js'
@@ -71,4 +71,38 @@ test('platform source admission uses shared files, freezes selected members and 
   await assert.rejects(files.validateManifest([artifact], { platformSource: { ...artifact.platformSource, groupId: 'foreign' } }), /MANIFEST_SCOPE_DENIED/)
   await assert.rejects(files.validateManifest([artifact], { taskId: 'fake-task', requirementRevision: 1 }), /MANIFEST_SCOPE_DENIED/)
   await assert.rejects(notify({ ...input, outboundId: 'other-notice', decision: { text: '文件结果', atOpenDingTalkIds: [], files: [{ path: '../outside.png', caption: '结果' }] } }), /OUTSIDE_SESSION/)
+})
+
+
+test('私聊文件分片保留真实会话和对端身份', () => {
+  const notification = { id: 'reply', kind: 'router-reply', payload: { groupId: 'direct:internal-key',
+    conversationId: 'private-real-id', conversationType: 'direct', recipientActorId: 'peer-id' } }
+  const [, file] = groupNotificationParts(notification, [{ artifact: { artifactId: 'artifact', fileName: 'result.txt' }, caption: '结果' }])
+  assert.equal(file.id, 'reply:file:artifact')
+  assert.equal(file.payload.groupId, 'direct:internal-key')
+  assert.equal(file.payload.conversationId, 'private-real-id')
+  assert.equal(file.payload.conversationType, 'direct')
+  assert.equal(file.payload.recipientActorId, 'peer-id')
+})
+
+test('直接任务通知由真实会话和对端选择私聊传输，引用与普通发送都不使用内部key', async () => {
+  const calls = [], adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { async run(args) {
+    calls.push(args); return { exitCode: 0, stdout: JSON.stringify({ success: true, result: { openTaskId: 'direct-send' } }) }
+  } } })
+  const notification = { id: 'direct-task-notice', payload: { groupId: 'direct:internal-key', conversationType: 'direct',
+    conversationId: 'private-real-id', recipientActorId: 'peer-id', text: '核对完成。' } }
+  await sendWorkflowNotification(adapter, notification)
+  const args = calls[0]
+  assert.equal(args[args.indexOf('--open-dingtalk-id') + 1], 'peer-id')
+  assert.equal(args.includes('--group'), false)
+  assert.equal(args.includes('direct:internal-key'), false)
+  await sendWorkflowNotification(adapter, { ...notification, payload: { ...notification.payload, sourceMessageId: 'source-id', actorId: 'peer-id' } })
+  const quote = calls[1]
+  assert.equal(quote[quote.indexOf('--group') + 1], 'private-real-id')
+  assert.equal(quote[quote.indexOf('--ref-msg-id') + 1], 'source-id')
+  assert.equal(quote[quote.indexOf('--ref-sender') + 1], 'peer-id')
+  for (const patch of [{ atAll: true }, { atOpenDingTalkIds: ['other-id'] }, { recipientActorId: '' }]) {
+    assert.throws(() => sendWorkflowNotification(adapter, { ...notification, payload: { ...notification.payload, ...patch } }), /DWS_DIRECT_NOTIFICATION_TARGET_INVALID/)
+  }
+  assert.equal(calls.length, 2, '错误私聊收件人或群提及意图不得触发发送')
 })

@@ -1,5 +1,6 @@
-import { quotedSendRejectionProof, persistedUuidSendRejectionProof, persistedMentionSendRejectionProof } from './group-message.js'
+import { quotedSendRejectionProof, persistedUuidSendRejectionProof, persistedMentionSendRejectionProof, notificationReplyTarget } from './group-message.js'
 import { createHash, randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 
 // Diagnostics are bounded and scrubbed before they cross the durable/UI boundary.
 export function safeNotificationDetail(value, depth = 0) {
@@ -30,10 +31,13 @@ export function notificationRetryAt(notification, error, phase, now = Date.now()
   return new Date(now + Math.max(delay, serverDelay)).toISOString()
 }
 
-const knownPreSendRejection = (error, notification) => error.knownNotSent === true && !!quotedSendRejectionProof(error, {
-  groupId: notification.payload.conversationId, replyToMessageId: notification.payload.sourceMessageId,
-  replyToSenderOpenDingTalkId: notification.payload.actorId, idempotencyKey: notification.id,
-})
+const quoteRejectionProof = (error, notification) => {
+  const proof = quotedSendRejectionProof(error, {
+    groupId: notification.payload.conversationId, ...notificationReplyTarget(notification.payload), idempotencyKey: notification.id,
+  })
+  return proof && (!error.proof || isDeepStrictEqual(error.proof, proof)) ? proof : undefined
+}
+const knownPreSendRejection = (error, notification) => error.knownNotSent === true && !!quoteRejectionProof(error, notification)
 
 export function taskNotificationRecovery(notification) {
   const expectedToken = createHash('sha256').update(JSON.stringify([
@@ -102,8 +106,7 @@ async function deliverNotification({ notification, notifications, command, onSta
     return
   }
   if (!readbackOnly && notification.state === 'unknown' && !notification.ack && !notification.receipt && notification.deliveryError?.phase === 'send'
-    && quotedSendRejectionProof(notification.deliveryError, { groupId: notification.payload.conversationId, replyToMessageId: notification.payload.sourceMessageId,
-      replyToSenderOpenDingTalkId: notification.payload.actorId, idempotencyKey: notification.id })) {
+    && quoteRejectionProof(notification.deliveryError, notification)) {
     notification = (await command('notification.rejectBeforeSend', { notificationId: notification.id })).result.notification
   }
   if (Date.parse(notification.nextAttemptAt ?? '') > Date.now()) return

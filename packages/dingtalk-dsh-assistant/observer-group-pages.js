@@ -10,6 +10,18 @@ const fields=['messageId','messageVersion','sequence','senderName','senderOpenDi
 const pick=(value,keys)=>Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]))
 const messageInput=message=>pick(message,[...fields,'sourceKind','routingStatus','routingHold','ignoredRanges','agentDeliveryStatus','agentDeliveryAt','units','messageAiSendFlag','quotedMessage','actorId'])
 const fail=code=>{throw Object.assign(new Error(code),{code})}
+const routerPhases=new Set(['routing','decision','host'])
+const requestRefs=request=>{
+ if(Array.isArray(request?.messages))return request.messages
+ const ref=request?.sourceRef
+ if(ref&&typeof ref==='object'){
+  if(typeof ref.sourceId!=='string'||!ref.sourceId||typeof ref.messageId!=='string'||!ref.messageId||!Number.isSafeInteger(ref.messageVersion)
+   ||!routerPhases.has(request.phase)||typeof request.requestId!=='string'||!request.requestId||!['failed','retrying'].includes(request.status)
+   ||request.status==='failed'&&(typeof request.retryToken!=='string'||!request.retryToken))fail('OBSERVER_ROUTER_FAILURE_INVALID')
+  return [ref]
+ }
+ fail('OBSERVER_REQUEST_SHAPE_INVALID')
+}
 
 // Derived, persistent list rows. Startup reconciles resident records once (including
 // an interrupted projection); committed changes update affected IDs. GET never
@@ -41,7 +53,7 @@ export function createObserverGroupPages({readGroup,readSources,readRequests,isO
     topicsByMessage.get(id).push({...topic,entries})
    }
   }
-  for(const request of readRequests(group.groupId))for(const ref of request.messages)if(ids.has(ref.messageId)){
+  for(const request of readRequests(group.groupId))for(const ref of requestRefs(request))if(ids.has(ref.messageId)){
    if(!requestsByMessage.has(ref.messageId))requestsByMessage.set(ref.messageId,[])
    requestsByMessage.get(ref.messageId).push(request)
   }
@@ -56,6 +68,8 @@ export function createObserverGroupPages({readGroup,readSources,readRequests,isO
     sourcesByMessage.get(key).push(source)
    }
   }
+  const routerInputs=[...(group.router?.queue??[]),...(group.router?.active?.inputs??[])].filter(item=>item.kind==='source')
+  const pendingSourceIds=new Set(routerInputs.map(item=>item.sourceRef?.sourceId??item.id).filter(Boolean))
   index.exec('BEGIN')
   try {
    const upsert=index.prepare('INSERT INTO inbox VALUES (?,?,?,?,?) ON CONFLICT(group_id,id) DO UPDATE SET sort=excluded.sort,state=excluded.state,body=excluded.body WHERE sort<>excluded.sort OR state<>excluded.state OR body<>excluded.body')
@@ -69,11 +83,8 @@ export function createObserverGroupPages({readGroup,readSources,readRequests,isO
     }
     const topics=topicsByMessage.get(id)||[], sources=sourcesByMessage.get(JSON.stringify([id,message.messageVersion]))||[]
     const source=sources.length===1?sources[0]:undefined
-    const body={...pick(message,fields),...messageProcessingProjection(message,topics,source,requestsByMessage.get(id)||[],false,false),
-     topicRefs:topics.flatMap(topic=>{
-      const latest=new Map(topic.entries.map(entry=>[entry.unitId??'legacy',entry]))
-      return [...latest.values()].filter(entry=>entry.action==='add'&&entry.messageVersion===message.messageVersion).map(entry=>({topicId:topic.topicId,revision:topic.revision,title:topic.title,unitId:entry.unitId,unitRevision:entry.unitRevision}))
-     })}
+    const body={...pick(message,fields),...messageProcessingProjection(message,topics,source,requestsByMessage.get(id)||[],false,false,pendingSourceIds.has(source?.sourceId)),
+     sourceRefs:source?[{sourceId:source.sourceId,messageId:source.messageId,version:source.version}]:[]}
     const sort=String(Date.parse(message.occurredAt)||0).padStart(17,'0')+':'+String(message.sequence||0).padStart(17,'0')
     changed=!!upsert.run(group.groupId,id,sort,body.processingState,JSON.stringify(body)).changes||changed
    }
@@ -106,8 +117,12 @@ export function createObserverGroupPages({readGroup,readSources,readRequests,isO
     for(const id of new Set([...Object.keys(previous.coordinationRequests??{}),...Object.keys(next.coordinationRequests??{})]))
      if(!isDeepStrictEqual(previous.coordinationRequests?.[id],next.coordinationRequests?.[id])){
       add(previous.coordinationRequests?.[id]);add(next.coordinationRequests?.[id])
-      for(const request of readRequests(group.groupId).filter(request=>request.requestId===id))for(const ref of request.messages)add(ref)
+      for(const request of readRequests(group.groupId).filter(request=>request.requestId===id))for(const ref of requestRefs(request))add(ref)
      }
+    changed(previous.router?.failures,next.router?.failures,value=>JSON.stringify([value.sourceRef?.sourceId,value.phase,value.requestId]),failure=>add(failure.sourceRef))
+    const routerSources=state=>[...(state?.router?.queue??[]),...(state?.router?.active?.inputs??[])].filter(item=>item.kind==='source')
+    const priorSources=routerSources(previous), nextSources=routerSources(next)
+    if(!isDeepStrictEqual(priorSources,nextSources))for(const item of [...priorSources,...nextSources])add({messageId:item.sourceRef?.messageId})
    }
    await sync(group,ids)
   })

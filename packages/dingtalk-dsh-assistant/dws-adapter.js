@@ -215,6 +215,28 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
       if (writesAuthorized) args.push('--yes')
       return withProfile(args)
     },
+    compileDirectSend({ conversationId, recipientActorId, text, idempotencyKey, fileName }) {
+      assertStableId(conversationId, 'conversation_id')
+      nativeMentionIds([recipientActorId])
+      const args = ['chat', '+messages-send', '--as', 'user', '--open-dingtalk-id', recipientActorId,
+        ...(fileName === undefined ? ['--msg-type', 'markdown', '--markdown', assertStableId(text, 'text')]
+          : ['--msg-type', 'file', '--file', `./${assertFileName(fileName)}`]),
+        '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
+      if (writesAuthorized) args.push('--yes')
+      return withProfile(args)
+    },
+    compileDirectReply({ conversationId, recipientActorId, text, idempotencyKey, replyToMessageId, replyToSenderOpenDingTalkId,
+      atOpenDingTalkIds = [], atAll = false }) {
+      nativeMentionIds([recipientActorId])
+      if (!Array.isArray(atOpenDingTalkIds) || atOpenDingTalkIds.length || atAll !== false) throw new Error('dws_direct_audience_invalid')
+      // DWS v1.0.63 reply_extensions.go 核对真实源会话和私聊对端，不走群发送。
+      const args = ['chat', 'message', 'reply', '--open-dingtalk-id', recipientActorId,
+        '--group', assertStableId(conversationId, 'conversation_id'), '--ref-msg-id', assertStableId(replyToMessageId, 'reply_message_id'),
+        '--ref-sender', assertStableId(replyToSenderOpenDingTalkId, 'reply_sender_id'), '--content', assertStableId(text, 'text'),
+        '--uuid', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
+      if (writesAuthorized) args.push('--yes')
+      return withProfile(args)
+    },
     compileSelfSend({ userId, text, idempotencyKey }) {
       const args = ['chat', '+messages-send', '--as', 'user', '--user', assertStableId(userId, 'human_user_id'), '--text', assertStableId(text, 'text'), '--idempotency-key', dwsIdempotencyKey(idempotencyKey), '--format', 'json']
       if (writesAuthorized) args.push('--yes')
@@ -351,6 +373,35 @@ export function createDwsAdapter({ enabled = false, writesAuthorized = false, pr
         throw error
       }
       return sendCommandReceipt(result, 'reply')
+    },
+    async sendDirect(request) {
+      requireEnabled()
+      if (!writesAuthorized) throw new Error('dws_write_not_authorized')
+      assertGroupReply(request.text, [request.conversationId, request.recipientActorId, request.idempotencyKey])
+      const result = await runner.run(this.compileDirectSend(request))
+      if (result.exitCode !== 0) throw commandError('dws_direct_send_failed', result)
+      return sendCommandReceipt(result, 'direct-send')
+    },
+    async sendDirectReply(request) {
+      requireEnabled()
+      if (!writesAuthorized) throw new Error('dws_write_not_authorized')
+      assertGroupReply(request.text, [request.conversationId, request.recipientActorId, request.idempotencyKey,
+        request.replyToMessageId, request.replyToSenderOpenDingTalkId])
+      const result = await runner.run(this.compileDirectReply(request))
+      if (result.exitCode !== 0) {
+        const error = commandError('dws_direct_reply_failed', result)
+        const proof = quotedSendRejectionProof(result, request)
+        if (proof) { error.knownNotSent = true; error.proof = proof }
+        throw error
+      }
+      return sendCommandReceipt(result, 'direct-reply')
+    },
+    async sendDirectFile(request) {
+      requireEnabled()
+      if (!writesAuthorized) throw new Error('dws_write_not_authorized')
+      const result = await runner.run(this.compileDirectSend(request))
+      if (result.exitCode !== 0) throw commandError('dws_direct_file_send_failed', result)
+      return sendCommandReceipt(result, 'direct-file-send')
     },
     async sendSelf(request) {
       const { openTaskId } = await this.sendSelfIntent(request)

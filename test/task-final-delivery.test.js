@@ -23,11 +23,15 @@ test('final attachments freeze reported task files, retain original bytes and re
   assert.equal((await readFile(stored.path)).length, 8)
   assert.equal(result[0].caption, '验收页面结果')
   await assert.rejects(freeze({ selected: [{ ...selected[0], path: 'not-reported.png' }] }), { code: 'TASK_DELIVERY_ARTIFACT_NOT_REPORTED' })
-  executions[0].result.payload.output.artifacts.push('../outside.png', 'link.png')
+  const linkedPath = process.platform === 'win32' ? 'linked/outside.png' : 'link.png'
+  executions[0].result.payload.output.artifacts.push('../outside.png', linkedPath)
   await assert.rejects(freeze({ selected: [{ ...selected[0], path: '../outside.png' }] }), { code: 'TASK_DELIVERY_ARTIFACT_OUTSIDE_TASK' })
-  await writeFile(join(root, 'outside.png'), 'outside')
-  await symlink(join(root, 'outside.png'), join(directory, 'link.png'))
-  await assert.rejects(freeze({ selected: [{ ...selected[0], path: 'link.png' }] }), { code: 'TASK_ARTIFACT_SCOPE_DENIED' })
+  const outside = join(root, 'outside'); await mkdir(outside)
+  await writeFile(join(outside, 'outside.png'), 'outside')
+  // Windows 使用真实 junction 验证目录链越界，无须创建文件 symlink 的权限。
+  if (process.platform === 'win32') await symlink(outside, join(directory, 'linked'), 'junction')
+  else await symlink(join(outside, 'outside.png'), join(directory, 'link.png'))
+  await assert.rejects(freeze({ selected: [{ ...selected[0], path: linkedPath }] }), { code: 'TASK_ARTIFACT_SCOPE_DENIED' })
   executions[0].drained = false
   await assert.rejects(freeze(), { code: 'TASK_DELIVERY_ARTIFACT_NOT_REPORTED' })
 })

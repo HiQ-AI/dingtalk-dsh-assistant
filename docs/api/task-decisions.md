@@ -35,13 +35,37 @@
 
 上线前的决定保留在原命令收据和原统筹日志；没有 `taskDecision` 结构的旧收据不从旁支快照猜测补录，空列表不代表旧任务没有历史。新增部分索引只提高读取效率，不删除或迁移旧收据。回退旧版代码不会删除这些历史，但旧版后续新决定不具备此查询结构。
 
+## Router 回复与通知路由
+
+以下是模型工具 `router_submit` 的回复合同，不是 HTTP 重试接口的请求字段。`reply=null` 表示不回复；回复对象保留 `sourceId`、`text`、`review`，可带原完成附件的 `completion`，并复用通知字段 `replyToMessageId`、`atOpenDingTalkIds`、`atAll`。
+
+`sourceId` 是业务来源与失败恢复锚，不决定显式引用或全部收件人。显式通知字段只使用同群、完整已读、当前版本及作者匹配的来源身份；引用作者必须在所选收件人中。填收件人并省略 `replyToMessageId` 表示不引用，显式空收件人数组表示不提及。`atAll=true` 与引用、非空成员提及互斥。三项通知字段全省略时保留当前来源定向默认；私聊不得指定成员提及或全群通知。不能按显示名猜 ID、默认加入所有历史参与者或用正文手写提及。
+
+正文与路由校验在 `routerCommit` 和 Task 动作前完成，非法候选可在原模型轮次修正。Host 将选定路由及其来源证据冻结在原 reply application 与通知参数中；发送、Outbox 投影、原生回读及严格未发送证明均使用这个实际目标，业务来源不覆盖显式路由。恢复不得换 operation/notification ID 或修改原参数，unknown/starting 仍只对账。
+
 ## 消息处理投影与精确恢复
 
-`GET /state/groups` 及群详情的消息保留 `processingState`（`routing/failed/processing/needs_clarification/processed/unknown`）与精确版本 `processingFacts`。独立协调当前仍有澄清项且其他事项已完成判断时为 `needs_clarification`；其他事项未完成判断仍为 `processing`。`processingConclusion` 合并当前事项的真实 Topic 结论及同版本、同预约代的协调问题/接纳事实，不使用通知正文。待澄清保留已有完整语义决策戳的 `processingCompletedAt` 和语义耗时，缺戳仍为 null；该时间不代表来源已收束、通知送达或业务完成。澄清被正式补齐后不再展示旧问题。新增 `issues[]` 仅含 `phase/code/status/requestId/attempt/retryAt`，phase 为 `routing/decision/host/coordination`，status 为 `failed/retrying`。请求耗尽、当前 Host 阻塞及协调耗尽按原消息版本、当前事项及原 owner 投影；startup 补偿与自动退避不冒充终态。后来完成覆盖旧失败，多话题未完成 owner 不被另一成功遮住。失败的 `processingCompletedAt=null`、`processingFacts.semantic.quality=missing`，不得补当前时间或数字完成历时。
+新消息直接使用 sourceId、messageId 和消息版本关联 Task，不创建 Topic/Unit。消息列表中的 `processingState` 为 `routing/failed/processing/processed/unknown`；首筛未结束为 routing，尚未完成来源处置时，Router 排队或恢复尝试中为 processing，精确来源持久处置后为 processed。来源已处理、Task 业务完成和通知 delivered 是三种独立事实。
 
-语义完成时钟只取不可变事实。新的 Topic decision 在首次合法完成事务写入 `completedAt`；重复 `completeTopicDecision` 直接返回原记录，不更新该字段、`updatedAt`、Topic 或持久存储。历史已经 completed 但缺少 `completedAt` 的记录保持缺失，不以恢复时间或旧 `updatedAt` 回填。当前精确来源 `processingCompleted.at` 在所有当前事项完成判断后落一次，HTTP 优先使用此戳；仍须通过 activeUnitRefs 匹配及当前 Topic 完成门禁。有精确来源记录但尚未落当前 `processingCompleted` 时保持完成时间缺失，不先展示 Topic 数字再切换到迟到来源戳。仅完全没有精确来源记录的旧投影，才在所有相关首个完成决定都有真实 `completedAt` 时取最大值；`updatedAt` 仅用于记录更新诊断。来源戳早于任一已知不可变决定终态属于证据矛盾，`processingCompletedAt=null`、语义耗时 missing，不硬凑数字。通知 ACK/送达、来源 routedAt、重复恢复及后续 Topic 更新均不推进本条语义时间；历史首次来源戳即使本来较晚也不倒写为推测的更早完成时间。
+来源的 `directProcessing` / `processingCompleted.mode="direct"` 提供不可变处置时间，HTTP 据此给出 `processingCompletedAt` 和语义历时，不以恢复时间、通知 ACK 或 Task 状态补造。来源已 processed 后仍可发生后续 Host 回复失败；保留 processed 及原处置时钟，同时显示独立失败和恢复信息。`processingRetrying=true` 表示尝试进行中，不代表成功；本次 token 已消费时不再提供恢复按钮。
 
-安全恢复描述符为 `processingFacts.recovery[]`：`{phase,requestId,token}`。描述符只表达当次可尝试路径，不是业务授权或成功承诺。Host 仅允许已知来源准入的副作用前失败，或动作全部落账且已存在原 Outbox 身份的冲突；未知效果不提供恢复描述符。
+当前可尝试恢复的列表描述符为 `processingRecovery`；详细投影的 `processingFacts.recovery[]` 使用同一身份结构：
+
+```json
+{
+  "sourceId": "original-source-id",
+  "messageId": "original-message-id",
+  "messageVersion": 1,
+  "phase": "host",
+  "role": "application",
+  "requestId": "original-request-id",
+  "retryToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+```
+
+阶段/角色映射为 routing/triage（轻量首筛）、decision/router（常驻 Router）、host/application（Host 应用）。详细 `processingFacts.issues[]` 保留 phase、role、status、requestId、attempt、code、failurePhase 及精确来源身份；status 为 failed/retrying。仅匹配同一来源、消息和版本的记录进入当前投影。首次创建原生会话失败也可持久登记恢复身份，不要求已经存在 sessionId。
+
+旧 Topic/Unit 记录继续只读投影原证据，可能保留 needs_clarification、原问题及旧格式 `{phase,requestId,token}`。这些不是新消息运行合同，不恢复旧 Topic/协调模型。旧 Topic 已真实完成但异步来源结算中断时，启动恢复只补原来源结算，保留原 Task、决议、成功 receipt 和已送达通知，不重新判断或发送。历史缺少完成时间的记录保持缺失。
 
 ### 收件
 
@@ -50,20 +74,22 @@
 ```json
 {
   "messageVersion": 1,
-  "activeUnitRefs": [{"unitId": "current-unit", "unitRevision": 1}],
-  "phase": "decision",
-  "requestId": "original-request",
+  "activeUnitRefs": [],
+  "phase": "host",
+  "requestId": "original-request-id",
   "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 }
 ```
 
-版本与事项 revision 为正整数；事项 pair 不能重复，未归类原消息可为 `[]`。`phase` 为 `routing/decision/host/coordination/coordination-context`，`token` 必须来自最新 GET 的 64 位小写十六进制凭据。禁止额外字段，不接收正文、群身份覆盖、payload、Task 或新请求身份。
+`messageVersion` 为正整数；新来源的 `activeUnitRefs` 为空数组，不创建事项中间层。HTTP 保留该数组字段的严格格式校验：若存在元素，其 unitRevision 为正整数且 pair 不重复，但旧 Topic/协调请求不会因此获准重放。phase 仅接受 routing/decision/host；coordination 与 coordination-context 返回请求格式错误。token 使用最新描述符的 retryToken，必须是 64 位小写十六进制。禁止额外字段，不接收正文、来源身份覆盖、payload、Task 或新请求 ID。
 
-服务验证精确消息版本、activeUnitRefs、原请求/决策/预约及 CAS；Resident 同群串行队列在持久更新前复验。协调沿原 reservation generation 与 ledger fence 恢复，冻结、已接纳、已澄清、已解决或移交不能清预算重来。成功响应 200：`{groupId,messageId,requestId,status:"attempted"}`。不复制原消息，不重做已成功动作；完成、来源收束和通知仍从各自事实回读。
+服务按同群、消息版本、routing epoch、阶段、原 requestId、token 和失败状态持久 CAS；旧 token、错身份和并发重复消费拒绝。先解决真实启动/执行阻断，再沿原来源及原动作/receipt 恢复；未知外部效果沿原 operation/notification 对账，不换 ID 重试。旧来源缺少当前 Router 准入凭据时保持待对账，不能使用此入口重新入站。
 
-`coordination-context` 是明确触发的旧引用遗漏修复，不使用协调失败重试预算。仅原预约未保存 quotedMessage、精确原来源确有完整 quote、当前仍待澄清且没有成员/日程/发生项/作业或接纳效果时允许。令牌绑定来源 ID/版本、原引用字节、activeUnitRefs、预约代、ledger fence 和原安排修订；本机接口再次核验来源作者与群，不接收调用人补写引用。事务将原 ledger fence 加一、改回 reserved，旧语义戳移入 processingHistory，并保留旧问题和所有通知回执；精确旧澄清若仍 prepared 且没有领取/发送/ACK/receipt 证据，同事务退休为 superseded 并保留 payload；已送达记录逐字不变；starting、unknown、已 ACK 或其他发送未明状态拒绝重判，先正常核验。新接纳通知独立发送，不因同来源修复退休。Resident 原预约变为 reserved，generation 不变并记审计。后续只重判同一来源并复用原安排，不重新入站、不全量扫描、不重复发送旧问题、不清 attemptCount 或 nextRetryAt。已规划中的群、运行冻结、CAS变化或已有业务效果均拒绝；200 只表示已请求重判。看板按钮为“重新核对引用”。
+旧回复的来源变为同群、同消息、同作者的严格更高版本后，旧 token 继续失效；后台只沿原回复的 prepare/退役 CAS 补账，真实 ACK 后才清原失败。当前版本失败继续要求显式重试，不自动重放 Task 动作，也不退休或重发 unknown/starting/delivered 通知。
 
-任务Topic适配器在首次决定完成时通过既有 `onInputSettled` 回调推动来源投影；该投影纳入服务的 `whenIdle/close` 等待集合。来源所有当前事项确已完成后即可落戳，不等待同群其他Topic或通知回读排空；投影失败进入诊断，成功重试清除诊断。
+非回复的 Task 应用若已在 SQLite 取得成功 receipt、却在 Resident ACK 前失败落账，随后同作者来源升版，旧 token 仍失效。公开恢复只允许沿原 operation/command ID 和完整原参数核对该成功 receipt，完成原应用的必要收尾及 ACK 后才清原失败；不重复执行 Task reducer。无 receipt 保留未结算，查询异常或参数 digest 冲突不放行；来源升版本身不授权旧动作或新副作用，不能按 taskId 直接标记成功。
+
+成功响应 200：`{groupId,messageId,requestId,status:"attempted"}`。未修复的真实故障仍可能返回失败并留下新失败身份/token；不能把 attempted、一次调度或来源 processed 当作 Task completed 或通知 delivered。应分别回读精确来源、失败记录、Task 和通知事实。
 
 ### 发件
 

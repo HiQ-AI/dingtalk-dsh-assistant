@@ -1,6 +1,7 @@
 import { ObserverMemoryPages } from './observer-memory-pages.js'
+import { groupNotificationRouting } from './group-notification.js'
 import { stableTaskResourceIdentity, mergeTaskResources } from './task-message-projections.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
@@ -14,7 +15,54 @@ import { routingHoldSchema, routingBlocksTopics, topicSchema, topicRefSchema, to
 import { reviseTaskProgress, TaskRevisionError, normalizeRunPlan, stagePlanFor } from './task-input-revision.js'
 import { PERFORMANCE_EVENT_TYPES, performanceProjectionSchema, performanceChunkKey, hasPerformanceFirstStream, projectPerformanceEvent, listPerformance, workflowPerformance, coordinationCosts } from './performance.js'
 
+function assertRouterNotificationRouting(group, routing) {
+  if (!routing) return
+  if (!Array.isArray(routing.sourceRefs) || !Array.isArray(routing.atOpenDingTalkIds)
+    || routing.sourceRefs.some(ref => !ref.sourceId || !ref.messageId || !ref.actorId || !Number.isSafeInteger(ref.messageVersion))) throw new Error('router_reply_routing_invalid')
+  const messages = routing.sourceRefs.map(ref => {
+    const message = group.messages.find(item => item.messageId === ref.messageId && item.messageVersion === ref.messageVersion
+      && !item.ownNotificationRetirement && (item.senderOpenDingTalkId ?? item.actorId) === ref.actorId)
+    if (!message) throw new Error('router_reply_routing_stale')
+    return message
+  })
+  const direct = group.conversationType === 'direct'
+  if (direct && (routing.atAll || routing.atOpenDingTalkIds.length)) throw new Error('group_reply_audience_invalid')
+  const selected = groupNotificationRouting(messages, routing, { quote: !direct })
+  if (selected.target?.senderOpenDingTalkId !== routing.replyToSenderOpenDingTalkId
+    || !isDeepStrictEqual(selected.recipients, routing.atOpenDingTalkIds)) throw new Error('router_reply_routing_invalid')
+}
+
+export function routerReplyCandidates(group, sourceRef) {
+  const source = group.messages.find(item => item.messageId === sourceRef.messageId && item.messageVersion === sourceRef.messageVersion)
+  if (!source) throw new Error('router_reply_source_stale')
+  const ids = new Set([source.messageId, source.quotedMessage?.messageId, source.quotedMessageId].filter(Boolean))
+  return group.outbox.filter(item => ['pending', 'sent'].includes(item.status) && !item.supersededByOutboundId && item.recallStatus !== 'recalled'
+    && [item.sourceMessageId, item.replyToMessageId, item.sourceRef?.messageId, item.deliveredMessageId, ...(item.matterSourceMessageIds ?? [])].some(id => ids.has(id)))
+    .map(item => ({ outboundId: item.outboundId, status: item.status, text: item.text, replyKind: item.replyKind ?? null }))
+}
+
+export function validateRouterReplyReview(review, candidates) {
+  if (!review || !['confirmation', 'substantive', 'correction'].includes(review.kind)) throw new Error('router_reply_review_invalid')
+  const { reviewedOutboundIds, sameMatterOutboundIds, replaceOutboundIds } = review
+  for (const ids of [reviewedOutboundIds, sameMatterOutboundIds, replaceOutboundIds])
+    if (!Array.isArray(ids) || new Set(ids).size !== ids.length) throw new Error('router_reply_review_invalid')
+  if (reviewedOutboundIds.length !== candidates.length || candidates.some(item => !reviewedOutboundIds.includes(item.outboundId))
+    || sameMatterOutboundIds.some(id => !reviewedOutboundIds.includes(id)) || replaceOutboundIds.some(id => !sameMatterOutboundIds.includes(id))) throw new Error('router_reply_review_stale')
+  if (review.kind === 'substantive' && replaceOutboundIds.length) throw new Error('router_reply_review_invalid')
+  if (review.kind === 'correction' && !sameMatterOutboundIds.length) throw new Error('router_reply_review_invalid')
+  if (review.kind !== 'substantive' && (replaceOutboundIds.length !== sameMatterOutboundIds.length || sameMatterOutboundIds.some(id => !replaceOutboundIds.includes(id)))) throw new Error('router_reply_review_invalid')
+  if (review.kind === 'confirmation' && candidates.some(item => sameMatterOutboundIds.includes(item.outboundId) && item.replyKind !== 'confirmation')) throw new Error('router_reply_review_invalid')
+}
+
 export { resolveTopicMessages } from './topic-model.js'
+
+const canonicalRouterFact = value => {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalRouterFact).join(',')}]`
+  if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) throw new Error('router_fact_invalid')
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalRouterFact(value[key])}`).join(',')}}`
+}
+const routerFactDigest = value => createHash('sha256').update(canonicalRouterFact(value)).digest('hex')
 
 const missingText = (value) => typeof value !== 'string' || value.trim() === '' || value.trim().toLowerCase() === 'null'
 // 撤销控制可以越过已停住的决策；原保留和未知操作仍留档，不能恢复成普通执行。
@@ -78,7 +126,7 @@ const messageFactFields = {
   activeUnitRefs: z.array(z.object({ unitId: z.string().min(1), unitRevision: z.number().int().positive() }).strict()).optional(),
 }
 const inboundSchema = z.object({
-  ...messageFactFields, facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed', 'needs-context']).default('pending'), routingError: z.string().optional(), routingHold: routingHoldSchema.optional(), routingEpoch: z.number().int().nonnegative().optional(), routingRecoveryMessageId: z.string().min(1).optional(), routingRecoveryPreviousMessageId: z.string().min(1).optional(),
+  ...messageFactFields, routerIngress: z.object({ messageVersion: z.number().int().positive(), receivedAt: z.string().min(1), timestamp: z.string() }).optional(), facts: z.array(z.record(z.string(), z.unknown())).default([]), routingStatus: z.enum(['pending', 'routed', 'failed', 'needs-context']).default('pending'), routingError: z.string().optional(), routingHold: routingHoldSchema.optional(), routingEpoch: z.number().int().nonnegative().optional(), routingRecoveryMessageId: z.string().min(1).optional(), routingRecoveryPreviousMessageId: z.string().min(1).optional(),
   ownNotificationRetirement: z.object({ outboundId: z.string().min(1), at: z.string().min(1) }).optional(),
   messageId: z.string().min(1), sequence: z.number().int().positive(), text: z.string(), occurredAt: z.union([z.string().min(1), z.number().finite()]),
   messageAiSendFlag: z.literal('DWS').optional(),
@@ -149,10 +197,12 @@ const sourceDispatchSchema = z.object({
 })
 const groupSchema = z.object({
   personAliases: personAliasesSchema.optional(),
+  routerFacts: z.array(z.record(z.string(), z.unknown())).default([]),
+  router: z.record(z.string(), z.unknown()).optional(),
   fixedTopics: z.array(z.object({ topicId: z.enum(fixedTopicIds), title: z.string().min(1), fixed: z.literal(true), createdAt: z.string().min(1) })).optional(),
   sourceDispatchOwnership: z.array(sourceDispatchSchema).default([]),
   coordinationRequests: z.record(z.string(), z.object({ attempt: z.number().int().nonnegative().default(0), resumeEpoch: z.number().int().nonnegative().default(0), updatedAt: z.string().optional(), nextRetryAt: z.string().optional(), status: z.enum(['pending', 'exhausted', 'completed', 'superseded']), messageId: z.string().optional(), lastError: z.string().optional(), failurePhase: z.enum(['startup', 'dispatch']).optional(), failureCode: z.string().optional(), startupAttempt: z.number().int().nonnegative().optional(), supersededBy: z.string().optional(), supersedeReason: z.string().optional() })).default({}),
-  groupId: z.string().min(1), name: z.string().optional(), timezone: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
+  groupId: z.string().min(1), conversationType: z.enum(['group', 'direct']).optional(), conversationId: z.string().min(1).optional(), recipientActorId: z.string().min(1).optional(), name: z.string().optional(), timezone: z.string().optional(), responsibility: z.string(), residentSessionId: z.string().min(1), residentAgentPreset: z.string().min(1).optional(), nextSequence: z.number().int().positive(),
   messages: z.array(inboundSchema), outbox: z.array(outboundSchema),
   routingRevision: z.number().int().nonnegative(), topics: z.array(topicSchema), routeHistory: z.array(z.record(z.string(), z.unknown())), taskReservations: z.array(z.record(z.string(), z.unknown())),
 })
@@ -230,6 +280,8 @@ const schedulerSchema = z.object({
   platformSchedule: platformScheduleSchema.optional(),
   executionBackend: z.enum(['dsh', 'claude-code']).optional(),
   taskSessionModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
+  triageModel: z.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).nullable().optional(),
+  routerModel: z.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).nullable().optional(),
   topicRouteModel: z.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).nullable().optional(),
   topicDecisionModel: z.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).nullable().optional(),
   coordinationModel: z.object({ provider: z.string().min(1), model: z.string().min(1), reasoningMode: z.enum(['inherit', 'model-default', 'explicit']), reasoningEffort: z.string().nullable() }).optional(),
@@ -546,6 +598,13 @@ export async function openResidentStore(storageDomain) {
     await scheduler.put('runtime', { tasks: [] })
     persistedRuntime = scheduler.get('runtime')
   }
+  if ((!Object.hasOwn(persistedRuntime, 'triageModel') && Object.hasOwn(persistedRuntime, 'topicRouteModel'))
+    || (!Object.hasOwn(persistedRuntime, 'routerModel') && Object.hasOwn(persistedRuntime, 'topicDecisionModel'))) {
+    await scheduler.update('runtime', current => ({ ...current,
+      ...(!Object.hasOwn(current, 'triageModel') && Object.hasOwn(current, 'topicRouteModel') ? { triageModel: current.topicRouteModel } : {}),
+      ...(!Object.hasOwn(current, 'routerModel') && Object.hasOwn(current, 'topicDecisionModel') ? { routerModel: current.topicDecisionModel } : {}),
+    }))
+  }
   // v6 数据只能通过离线迁移进入；启动不再猜测旧消息来源。
   const tails = new Map()
   const pendingPerformanceChunks = new Set()
@@ -593,6 +652,17 @@ export async function openResidentStore(storageDomain) {
     current.then(cleanup, cleanup)
     return current
   }
+  const routerState = group => group.router ?? { generation: 0, lease: 0, sessionId: null, continuityRevision: 0, continuity: [],
+    queue: (group.routerFacts ?? []).map(({ fact }) => ({ kind: 'fact', id: fact.factId, digest: fact.factDigest })), active: null, decisions: [], triage: [] }
+  const assertRouterBinding = (group, binding) => {
+    const state = routerState(group)
+    if (binding?.groupId !== group.groupId || binding.conversationType !== (group.conversationType ?? 'group')
+      || binding.conversationId !== (group.conversationId ?? group.groupId) || binding.generation !== state.generation
+      || binding.lease !== state.lease || binding.sessionId !== state.sessionId) throw new Error('router_binding_stale')
+    return state
+  }
+  const routerBinding = (group, state) => ({ groupId: group.groupId, conversationType: group.conversationType ?? 'group',
+    conversationId: group.conversationId ?? group.groupId, generation: state.generation, lease: state.lease, sessionId: state.sessionId })
   const supersedeStaleTaskOutbox = async (task) => {
     const groupEntry = findGroupEntry(task.groupId)
     if (!groupEntry) return
@@ -729,6 +799,8 @@ export async function openResidentStore(storageDomain) {
     getProxyUrl: () => scheduler.get('runtime')?.proxyUrl,
     getExecutionBackend: () => scheduler.get('runtime')?.executionBackend,
     getTaskSessionModelConfig: () => scheduler.get('runtime')?.taskSessionModel,
+    getTriageModelConfig: () => scheduler.get('runtime')?.triageModel,
+    getRouterModelConfig: () => scheduler.get('runtime')?.routerModel,
     getTopicRouteModelConfig: () => scheduler.get('runtime')?.topicRouteModel,
     getTopicDecisionModelConfig: () => scheduler.get('runtime')?.topicDecisionModel,
     getCoordinationModelConfig: () => scheduler.get('runtime')?.coordinationModel,
@@ -806,10 +878,409 @@ export async function openResidentStore(storageDomain) {
       .filter((activity) => taskId === undefined || activity.taskId === taskId)
       .sort(compareActivity)
       .slice(-ACTIVITY_PROJECTION_LIMIT_PER_TASK),
+    routerEnqueueFact: ({ groupId, fact }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      if (!fact || typeof fact !== 'object' || typeof fact.factId !== 'string' || !fact.factId || fact.groupId !== groupId) throw new Error('router_fact_invalid')
+      const { factDigest, ...body } = fact
+      if (typeof factDigest !== 'string' || factDigest !== routerFactDigest(body)) throw new Error('router_fact_digest_invalid')
+      let receipt
+      await groups.update(entry[0], latest => {
+        const records = latest.routerFacts ?? []
+        const previous = records.find(item => item.fact.factId === fact.factId)
+        if (previous) {
+          if (previous.receipt.factDigest !== factDigest) throw new Error('router_fact_identity_conflict')
+          receipt = previous.receipt
+          return latest
+        }
+        receipt = { factId: fact.factId, factDigest, enqueueId: `router-fact-${randomUUID()}` }
+        const router = routerState(latest)
+        return { ...latest, routerFacts: [...records, { fact, receipt }], router: { ...router,
+          queue: [...router.queue, { kind: 'fact', id: fact.factId, digest: factDigest }] } }
+      })
+      return receipt
+    }),
+    getRouterState: groupId => {
+      const group = findGroupEntry(groupId)?.[1]
+      if (!group) throw new Error(`group_not_subscribed:${groupId}`)
+      return structuredClone(routerState(group))
+    },
+    routerCutover: ({ groupId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let result
+      await groups.update(entry[0], group => {
+        const router = routerState(group)
+        if (router.cutover) { result = router.cutover; return group }
+        if (router.sessionId || router.active || router.triage.length || router.decisions.length
+          || router.queue.some(item => item.kind === 'source')) throw new Error('router_cutover_already_started')
+        const pending = group.messages.filter(message => message.routingStatus === 'pending' && !message.ownNotificationRetirement)
+          .map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion, routingEpoch: message.routingEpoch ?? 0 }))
+        const legacyPending = [...(router.legacyPending ?? [])]
+        for (const item of pending) if (!legacyPending.some(value => isDeepStrictEqual(value, item))) legacyPending.push(item)
+        result = { pending, at: new Date().toISOString() }
+        return { ...group, router: { ...router, legacyPending, cutover: result } }
+      })
+      return structuredClone(result)
+    }),
+    routerMarkLegacyPending: ({ groupId, messageId, messageVersion, routingEpoch }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      if (typeof messageId !== 'string' || !messageId || !Number.isSafeInteger(messageVersion) || messageVersion < 1
+        || !Number.isSafeInteger(routingEpoch) || routingEpoch < 0) throw new Error('router_legacy_invalid')
+      let result
+      await groups.update(entry[0], group => {
+        const message = group.messages.find(item => item.messageId === messageId), router = routerState(group)
+        if (!message || message.routingStatus !== 'pending' || message.messageVersion !== messageVersion
+          || (message.routingEpoch ?? 0) !== routingEpoch) throw new Error('router_legacy_stale')
+        if (router.triage.some(item => item.sourceRef.messageId === messageId && item.sourceRef.messageVersion === messageVersion)) throw new Error('router_legacy_already_triaged')
+        const legacyPending = router.legacyPending ?? []
+        result = { messageId, messageVersion, routingEpoch }
+        if (legacyPending.some(item => isDeepStrictEqual(item, result))) return group
+        return { ...group, router: { ...router, legacyPending: [...legacyPending, result] } }
+      })
+      return result
+    }),
+    triageAccept: ({ groupId, sourceRef, actorId, needsProcessing, reply, replyReview }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      if (!sourceRef || typeof sourceRef.sourceId !== 'string' || !sourceRef.sourceId || typeof sourceRef.messageId !== 'string'
+        || !Number.isSafeInteger(sourceRef.messageVersion) || sourceRef.messageVersion < 1 || typeof actorId !== 'string' || !actorId
+        || typeof needsProcessing !== 'boolean' || !(reply === null || typeof reply === 'string' && reply.trim())) throw new Error('router_triage_invalid')
+      sourceRef = structuredClone(sourceRef)
+      replyReview = replyReview === undefined ? undefined : structuredClone(replyReview)
+      const disposition = { sourceRef, actorId, needsProcessing, reply, ...(reply === null ? {} : { replyReview }) }
+      let result
+      await groups.update(entry[0], group => {
+        const message = group.messages.find(item => item.messageId === sourceRef.messageId)
+        if (!message || message.messageVersion !== sourceRef.messageVersion || message.senderOpenDingTalkId !== actorId
+          || message.ownNotificationRetirement) throw new Error('router_triage_source_stale')
+        const router = routerState(group)
+        if ((router.legacyPending ?? []).some(item => item.messageId === message.messageId && item.messageVersion === message.messageVersion
+          && item.routingEpoch === (message.routingEpoch ?? 0))) throw new Error('router_legacy_pending')
+        const previous = router.triage.find(item => item.sourceRef.sourceId === sourceRef.sourceId
+          || item.sourceRef.messageId === sourceRef.messageId && item.sourceRef.messageVersion === sourceRef.messageVersion)
+        if (previous) {
+          if (!isDeepStrictEqual(previous.disposition, disposition)) throw new Error('router_triage_conflict')
+          result = previous
+          return group
+        }
+        if (reply !== null) {
+          const candidates = routerReplyCandidates(group, sourceRef)
+          if (!isDeepStrictEqual(replyReview?.candidates, candidates)) throw new Error('router_reply_review_stale')
+          validateRouterReplyReview(replyReview?.review, candidates)
+        }
+        const triageId = `triage-${randomUUID()}`
+        result = { triageId, sourceRef, disposition, replyStatus: reply === null ? 'none' : 'pending' }
+        return { ...group, router: { ...router, triage: [...router.triage, result],
+          queue: needsProcessing ? [...router.queue, { kind: 'source', id: sourceRef.sourceId, sourceRef, actorId }] : router.queue } }
+      })
+      return structuredClone(result)
+    }),
+    triageRecordReply: ({ groupId, triageId, receipt }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      if (!receipt || typeof receipt !== 'object') throw new Error('router_receipt_invalid')
+      let result
+      await groups.update(entry[0], group => {
+        const router = routerState(group), triage = router.triage.find(item => item.triageId === triageId)
+        if (!triage || triage.replyStatus === 'none') throw new Error('router_triage_reply_missing')
+        if (triage.replyStatus === 'applied') {
+          if (!isDeepStrictEqual(triage.replyReceipt, receipt)) throw new Error('router_receipt_conflict')
+          result = triage
+          return group
+        }
+        result = { ...triage, replyStatus: 'applied', replyReceipt: receipt }
+        return { ...group, router: { ...router, triage: router.triage.map(item => item === triage ? result : item) } }
+      })
+      return structuredClone(result)
+    }),
+    routerRecordFailure: ({ groupId, sourceRef, phase, requestId, error, failurePhase }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let result
+      await groups.update(entry[0], group => {
+        const message = group.messages.find(item => item.messageId === sourceRef.messageId)
+        if (!message || message.messageVersion !== sourceRef.messageVersion) return group
+        const router = routerState(group), failures = router.failures ?? []
+        const previous = failures.find(item => item.requestId === requestId && item.phase === phase && item.sourceRef.sourceId === sourceRef.sourceId)
+        if (previous?.status === 'failed') { result = previous; return group }
+        const failure = { sourceRef, phase, requestId, status: 'failed', attempt: previous?.attempt ?? 1,
+          routingEpoch: message.routingEpoch ?? 0, code: String(error), failurePhase }
+        failure.retryToken = routerFactDigest(failure)
+        result = failure
+        return { ...group, router: { ...router, failures: [...failures.filter(item => item !== previous), failure] } }
+      })
+      return result && structuredClone(result)
+    }),
+    routerRetryFailure: ({ groupId, messageId, messageVersion, phase, requestId, token }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error('MESSAGE_RETRY_STALE')
+      let result
+      await groups.update(entry[0], group => {
+        const router = routerState(group), message = group.messages.find(item => item.messageId === messageId)
+        const failure = (router.failures ?? []).find(item => item.requestId === requestId && item.phase === phase && item.sourceRef.messageId === messageId)
+        if (!message || message.messageVersion !== messageVersion || !failure || failure.status !== 'failed'
+          || failure.sourceRef.messageVersion !== messageVersion || failure.routingEpoch !== (message.routingEpoch ?? 0) || failure.retryToken !== token) throw new Error('MESSAGE_RETRY_STALE')
+        result = { ...failure, status: 'retrying', attempt: failure.attempt + 1, retryToken: undefined }
+        return { ...group, router: { ...router, failures: router.failures.map(item => item === failure ? result : item) } }
+      })
+      return structuredClone(result)
+    }),
+    routerResolveFailure: ({ groupId, sourceId, phase, requestId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      await groups.update(entry[0], group => {
+        const router = routerState(group), failures = router.failures ?? []
+        if (!failures.some(item => item.sourceRef.sourceId === sourceId && item.phase === phase && item.requestId === requestId)) return group
+        return { ...group, router: { ...router, failures: failures.filter(item => !(item.sourceRef.sourceId === sourceId && item.phase === phase && item.requestId === requestId)) } }
+      })
+    }),
+    routerWakeArrangement: ({ groupId, arrangementId, revision, dependencies }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let queued = false
+      await groups.update(entry[0], group => {
+        const router = routerState(group), arrangement = (router.arrangements ?? []).find(item => item.arrangementId === arrangementId)
+        if (!arrangement || arrangement.status !== 'waiting' || (arrangement.revision ?? 0) !== revision
+          || !Array.isArray(dependencies) || !isDeepStrictEqual(dependencies.map(item => item.taskId).sort(), [...arrangement.dependsOnTaskIds].sort())) return group
+        const wake = { arrangementId, revision, dependencies: structuredClone(dependencies) }
+        if ((router.dependencyWakes ?? []).some(item => isDeepStrictEqual(item, wake))) return group
+        queued = true
+        return { ...group, router: { ...router, dependencyWakes: [...(router.dependencyWakes ?? []), wake],
+          queue: [...router.queue, { kind: 'dependency', ...wake, sourceRefs: arrangement.sourceRefs }] } }
+      })
+      return queued
+    }),
+    routerClaim: ({ groupId, sessionId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let result
+      await groups.update(entry[0], group => {
+        let router = routerState(group)
+        if (router.active) { result = { binding: routerBinding(group, router), batch: router.active, continuity: router.continuity }; return group }
+        if (!router.queue.length) { result = null; return group }
+        if (!router.sessionId) {
+          if (typeof sessionId !== 'string' || !sessionId) throw new Error('router_session_required')
+          router = { ...router, sessionId, generation: 1, lease: 1 }
+        }
+        const batch = { batchId: `router-batch-${randomUUID()}`, inputs: structuredClone(router.queue) }
+        router = { ...router, active: batch, queue: [] }
+        result = { binding: routerBinding(group, router), batch, continuity: router.continuity }
+        return { ...group, router }
+      })
+      return structuredClone(result)
+    }),
+    routerReleaseStale: ({ groupId, binding, batchId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      await groups.update(entry[0], group => {
+        const router = assertRouterBinding(group, binding), batch = router.active
+        if (!batch || batch.batchId !== batchId) throw new Error('router_batch_stale')
+        const stale = batch.inputs.filter(item => item.kind === 'source' ? !group.messages.some(message => message.messageId === item.sourceRef.messageId
+          && message.messageVersion === item.sourceRef.messageVersion && message.senderOpenDingTalkId === item.actorId)
+          : ['retry', 'dependency'].includes(item.kind) && item.sourceRefs.some(ref => !group.messages.some(message => message.messageId === ref.messageId && message.messageVersion === ref.messageVersion)))
+        if (!stale.length) throw new Error('router_batch_not_stale')
+        const staleItems = new Set(stale)
+        return { ...group, router: { ...router, active: null,
+          queue: [...batch.inputs.filter(item => !staleItems.has(item)), ...router.queue],
+          abandoned: [...(router.abandoned ?? []), { batchId, inputs: stale, reason: 'source-stale' }] } }
+      })
+    }),
+    routerCommit: ({ groupId, binding, batchId, decision, continuity, applications, arrangements = [] }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      if (!Array.isArray(continuity) || !Array.isArray(applications) || !Array.isArray(arrangements) || !decision || typeof decision !== 'object') throw new Error('router_commit_invalid')
+      ;({ binding, decision, continuity, applications, arrangements } = structuredClone({ binding, decision, continuity, applications, arrangements }))
+      let result
+      await groups.update(entry[0], group => {
+        const router = assertRouterBinding(group, binding)
+        const prior = router.decisions.find(item => item.batchId === batchId)
+        if (prior) {
+          if (!isDeepStrictEqual(prior.decision, decision) || !isDeepStrictEqual(prior.continuity, continuity)
+            || !isDeepStrictEqual(prior.arrangements ?? [], arrangements)
+            || !isDeepStrictEqual(prior.applications.map(({ status, receipt, retriedBy, ...item }) => item), applications)) throw new Error('router_commit_conflict')
+          result = prior
+          return group
+        }
+        if (!router.active || router.active.batchId !== batchId) throw new Error('router_batch_stale')
+        for (const item of router.active.inputs.filter(item => item.kind === 'source')) {
+          const message = group.messages.find(value => value.messageId === item.sourceRef.messageId)
+          if (!message || message.messageVersion !== item.sourceRef.messageVersion || message.senderOpenDingTalkId !== item.actorId) throw new Error('router_source_stale')
+        }
+        for (const input of router.active.inputs.filter(item => item.kind === 'retry')) {
+          const priorDecision = router.decisions.find(item => item.decisionId === input.decisionId)
+          const prior = priorDecision?.applications.find(item => item.operationId === input.operationId)
+          const retries = applications.filter(item => item.retryOfOperationId === input.operationId)
+          if (!prior || prior.status !== 'rejected' || prior.retriedBy || retries.length !== 1) throw new Error('router_retry_invalid')
+          const retry = retries[0], { dependencies: _old, ...originalAction } = prior.action
+          const { dependencies: _new, ...newAction } = retry.action
+          if (retry.arrangementId !== prior.arrangementId || !isDeepStrictEqual(retry.sourceRefs, prior.sourceRefs)
+            || !isDeepStrictEqual(originalAction, newAction) || !Array.isArray(retry.action.dependencies)) throw new Error('router_retry_invalid')
+          for (const ref of input.sourceRefs) if (!group.messages.some(message => message.messageId === ref.messageId && message.messageVersion === ref.messageVersion)) throw new Error('router_source_stale')
+        }
+        if (applications.some(item => item.retryOfOperationId && !router.active.inputs.some(input => input.kind === 'retry' && input.operationId === item.retryOfOperationId))) throw new Error('router_retry_invalid')
+        const ids = new Set()
+        for (const item of applications) {
+          if (!item || typeof item.operationId !== 'string' || !item.operationId || Object.hasOwn(item, 'status') || Object.hasOwn(item, 'receipt') || ids.has(item.operationId)
+            || router.decisions.some(record => record.applications.some(existing => existing.operationId === item.operationId))) throw new Error('router_operation_invalid')
+          if (item.kind === 'reply') {
+            const message = group.messages.find(value => value.messageId === item.sourceRef?.messageId)
+            if (!message || message.messageVersion !== item.sourceRef.messageVersion || message.senderOpenDingTalkId !== item.actorId
+              || message.ownNotificationRetirement || typeof item.text !== 'string' || !item.text.trim()) throw new Error('router_reply_source_stale')
+            const candidates = routerReplyCandidates(group, item.sourceRef)
+            if (!isDeepStrictEqual(item.replyReview?.candidates, candidates)) throw new Error('router_reply_review_stale')
+            validateRouterReplyReview(item.replyReview?.review, candidates)
+            assertRouterNotificationRouting(group, item.notificationRouting)
+            if (item.completion) {
+              const completion = item.completion
+              const fact = (group.routerFacts ?? []).find(entry => entry.fact.factId === completion.factId)?.fact
+              if (!fact || fact.kind !== 'completed' || fact.taskId !== completion.taskId || fact.factDigest !== completion.factDigest
+                || !isDeepStrictEqual(fact.taskVersion, completion.taskVersion) || !fact.sourceIds?.includes(item.sourceRef.sourceId)
+                || !router.active.inputs.some(input => input.kind === 'fact' && input.id === completion.factId && input.digest === completion.factDigest)
+                || !Array.isArray(completion.files) || !completion.files.length
+                || completion.files.some(file => !file?.artifact?.artifactId)
+                || new Set(completion.files.map(file => file.artifact.artifactId)).size !== completion.files.length
+                || completion.files.some(file => !fact.result?.artifactFiles?.some(original => isDeepStrictEqual(original, file)))) throw new Error('router_reply_completion_invalid')
+            }
+          }
+          ids.add(item.operationId)
+        }
+        const existingArrangements = router.arrangements ?? [], arrangementIds = new Set(existingArrangements.map(item => item.arrangementId))
+        for (const item of arrangements) {
+          if (!item || typeof item.arrangementId !== 'string' || !item.arrangementId || arrangementIds.has(item.arrangementId)
+            || typeof item.taskId !== 'string' || !item.taskId || typeof item.title !== 'string' || !item.title.trim()
+            || typeof item.objective !== 'string' || !item.objective.trim() || !Array.isArray(item.sourceRefs) || !item.sourceRefs.length
+            || !Array.isArray(item.dependsOnTaskIds) || !item.dependsOnTaskIds.length || new Set(item.dependsOnTaskIds).size !== item.dependsOnTaskIds.length
+            || item.dependsOnTaskIds.some(id => typeof id !== 'string' || !id || id === item.taskId)
+            || Object.hasOwn(item, 'status')) throw new Error('router_arrangement_invalid')
+          for (const ref of item.sourceRefs) {
+            const message = group.messages.find(value => value.messageId === ref.messageId)
+            if (!ref.sourceId || !message || message.messageVersion !== ref.messageVersion || !message.senderOpenDingTalkId) throw new Error('router_source_stale')
+          }
+          arrangementIds.add(item.arrangementId)
+        }
+        const activated = new Set()
+        for (const item of applications.filter(value => value.arrangementId)) {
+          const arrangement = existingArrangements.find(value => value.arrangementId === item.arrangementId)
+          if (!arrangement || arrangement.status !== 'waiting' || activated.has(item.arrangementId)
+            || router.queue.some(input => input.kind === 'retry' && router.decisions.some(record => record.applications.some(value => value.operationId === input.operationId && value.arrangementId === item.arrangementId)))
+            || item.action?.kind !== 'new-task' || Object.keys(item.action).sort().join(',') !== 'dependencies,kind,objective,taskId,title'
+            || item.action.taskId !== arrangement.taskId
+            || item.action.title !== arrangement.title || item.action.objective !== arrangement.objective
+            || !isDeepStrictEqual(item.sourceRefs, arrangement.sourceRefs)
+            || !Array.isArray(item.action.dependencies)
+            || item.action.dependencies.some(value => !value || Object.keys(value).sort().join(',') !== 'contextRevision,controlRevision,requirementRevision,runSequence,taskId'
+              || ['requirementRevision', 'contextRevision', 'controlRevision', 'runSequence'].some(key => !Number.isSafeInteger(value[key])))
+            || !isDeepStrictEqual(item.action.dependencies.map(value => value.taskId).sort(), [...arrangement.dependsOnTaskIds].sort())) throw new Error('router_arrangement_conflict')
+          for (const ref of arrangement.sourceRefs) {
+            const message = group.messages.find(value => value.messageId === ref.messageId)
+            if (!message || message.messageVersion !== ref.messageVersion) throw new Error('router_source_stale')
+          }
+          activated.add(item.arrangementId)
+        }
+        const decisionId = `router-decision-${randomUUID()}`
+        result = { decisionId, batchId, binding, inputs: router.active.inputs, decision, continuity, arrangements,
+          applications: applications.map(item => ({ ...item, status: 'pending' })) }
+        const savedArrangements = existingArrangements.map(item => {
+          const application = applications.find(value => value.arrangementId === item.arrangementId)
+          return application ? { ...item, status: 'accepted', decisionId, operationId: application.operationId } : item
+        })
+        const decisions = router.decisions.map(record => ({ ...record, applications: record.applications.map(existing => {
+          const retry = applications.find(item => item.retryOfOperationId === existing.operationId)
+          return retry ? { ...existing, retriedBy: { decisionId, operationId: retry.operationId } } : existing
+        }) }))
+        return { ...group, router: { ...router, active: null, continuity, continuityRevision: router.continuityRevision + 1,
+          arrangements: [...savedArrangements, ...arrangements.map(item => ({ ...item, status: 'waiting' }))], decisions: [...decisions, result] } }
+      })
+      return structuredClone(result)
+    }),
+    routerRecordRejection: ({ groupId, decisionId, operationId, receipt }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      if (receipt?.status !== 'known-not-applied' || !['DYNAMIC_ROUTER_DEPENDENCY_STALE', 'DYNAMIC_ROUTER_DEPENDENCY_UNSETTLED'].includes(receipt.code)
+        || receipt.operationId !== operationId || receipt.commandId !== `router-operation:${operationId}`) throw new Error('router_rejection_invalid')
+      let result
+      await groups.update(entry[0], group => {
+        const router = routerState(group), decision = router.decisions.find(item => item.decisionId === decisionId)
+        const application = decision?.applications.find(item => item.operationId === operationId)
+        if (!application) throw new Error('router_operation_missing')
+        if (application.status === 'rejected') {
+          if (!isDeepStrictEqual(application.receipt, receipt)) throw new Error('router_receipt_conflict')
+          result = application
+          return group
+        }
+        if (application.status !== 'pending') throw new Error('router_receipt_conflict')
+        result = { ...application, status: 'rejected', receipt }
+        const arrangements = (router.arrangements ?? []).map(item => item.arrangementId === application.arrangementId && item.operationId === operationId
+          ? { ...item, status: 'waiting', revision: (item.revision ?? 0) + 1, decisionId: undefined, operationId: undefined } : item)
+        const retry = { kind: 'retry', id: operationId, decisionId, operationId, sourceRefs: application.sourceRefs ?? [] }
+        return { ...group, router: { ...router, arrangements, queue: [...router.queue, retry], decisions: router.decisions.map(item => item !== decision ? item : { ...item,
+          applications: item.applications.map(value => value !== application ? value : result) }) } }
+      })
+      return structuredClone(result)
+    }),
+    routerRecordApplication: ({ groupId, decisionId, operationId, receipt }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      if (!receipt || typeof receipt !== 'object') throw new Error('router_receipt_invalid')
+      let result
+      await groups.update(entry[0], group => {
+        const router = routerState(group), record = router.decisions.find(item => item.decisionId === decisionId)
+        const application = record?.applications.find(item => item.operationId === operationId)
+        if (!application) throw new Error('router_operation_missing')
+        if (application.status === 'applied') {
+          if (!isDeepStrictEqual(application.receipt, receipt)) throw new Error('router_receipt_conflict')
+          result = application
+          return group
+        }
+        if (application.status !== 'pending') throw new Error('router_receipt_conflict')
+        result = { ...application, status: 'applied', receipt }
+        return { ...group, router: { ...router, decisions: router.decisions.map(item => item !== record ? item : { ...item,
+          applications: item.applications.map(value => value !== application ? value : result) }) } }
+      })
+      return structuredClone(result)
+    }),
+    routerRotate: ({ groupId, binding, expectedContinuityRevision, sessionId }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      if (typeof sessionId !== 'string' || !sessionId || sessionId === binding.sessionId) throw new Error('router_session_invalid')
+      let result
+      await groups.update(entry[0], group => {
+        const router = assertRouterBinding(group, binding)
+        if (router.continuityRevision !== expectedContinuityRevision || router.active || router.queue.length
+          || group.messages.some(message => message.routingStatus === 'pending' && !message.ownNotificationRetirement
+            && !(router.legacyPending ?? []).some(item => item.messageId === message.messageId
+              && item.messageVersion === message.messageVersion && item.routingEpoch === (message.routingEpoch ?? 0))
+            && !router.triage.some(item => item.sourceRef.messageId === message.messageId
+              && item.sourceRef.messageVersion === message.messageVersion))
+          || router.decisions.some(item => item.applications.some(application => application.status === 'pending'))
+          || router.triage.some(item => item.replyStatus === 'pending')) throw new Error('router_rotation_busy')
+        const next = { ...router, generation: router.generation + 1, lease: router.lease + 1, sessionId }
+        result = routerBinding(group, next)
+        return { ...group, router: next }
+      })
+      return result
+    }),
+    ensureDirectConversation: ({ conversationId, actorId }) => {
+      if (typeof conversationId !== 'string' || !conversationId.trim() || typeof actorId !== 'string' || !actorId.trim()) throw new Error('direct_conversation_identity_invalid')
+      const groupId = `direct:${createHash('sha256').update(conversationId).digest('hex')}`
+      return serialize(groupId, async () => {
+        const existing = findGroupEntry(groupId)?.[1]
+        if (existing) {
+          if (existing.conversationType !== 'direct' || existing.conversationId !== conversationId || existing.recipientActorId !== actorId) throw new Error('direct_conversation_identity_conflict')
+          return existing
+        }
+        const group = { groupId, conversationType: 'direct', conversationId, recipientActorId: actorId, responsibility: '', residentSessionId: `session-${randomUUID()}`, nextSequence: 1, messages: [], outbox: [], topics: [], routingRevision: 0, routeHistory: [], taskReservations: [] }
+        await groups.put(groupId, group)
+        return groups.get(groupId)
+      })
+    },
     subscribe: ({ groupId, name, responsibility = '', timezone, personAliases, residentSessionId, residentAgentPreset }) => serialize(groupId, async () => {
       if (timezone !== undefined) new Intl.DateTimeFormat('en', { timeZone: timezone }).format()
       if (personAliases !== undefined) personAliases = personAliasesSchema.parse(personAliases)
       const existing = findGroupEntry(groupId)?.[1]
+      if (existing?.conversationType === 'direct') throw new Error('group_conversation_identity_conflict')
       if (existing !== undefined) return { created: false, group: existing }
       const group = ensureFixedTopics({ groupId, ...(timezone ? { timezone } : {}), ...(name ? { name } : {}), ...(personAliases !== undefined ? { personAliases } : {}), responsibility, residentSessionId: residentSessionId ?? `session-${randomUUID()}`, ...(residentAgentPreset ? { residentAgentPreset } : {}), nextSequence: 1, messages: [], outbox: [], topics: [], routingRevision: 0, routeHistory: [], taskReservations: [] })
       await groups.put(groupId, group)
@@ -844,7 +1315,22 @@ export async function openResidentStore(storageDomain) {
       await groups.delete(entry[0])
       return { removed: true, groupId }
     }),
-    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, clarificationRecovery, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
+    ingestHistory: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      let duplicate = false, sequence
+      const group = await groups.update(entry[0], latest => {
+        const previous = latest.messages.find(item => item.messageId === messageId)
+        if (previous) { duplicate = true; sequence = previous.sequence; return latest }
+        sequence = latest.nextSequence
+        const message = inboundSchema.parse({ messageId, sequence, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage,
+          imageRefs, mediaUnavailable, resourceRefs, sourceKind, messageVersion: messageVersion ?? 1, facts: [], routingStatus: 'routed', agentDeliveryStatus: 'skipped' })
+        return { ...latest, nextSequence: sequence + 1, messages: [...latest.messages, message] }
+      })
+      return { duplicate, enriched: false, sequence, group }
+    }),
+    ingest: ({ groupId, messageId, text, occurredAt, senderName, senderOpenDingTalkId, messageAiSendFlag, mentionedAgent, quotedMessage, imageRefs, mediaUnavailable, resourceRefs, messageVersion, clarificationRecovery, routerIngress, sourceKind = 'dingtalk' }) => serialize(groupId, async () => {
+      if (routerIngress !== undefined && (typeof routerIngress?.receivedAt !== 'string' || !routerIngress.receivedAt || typeof routerIngress.timestamp !== 'string')) throw new Error('router_ingress_invalid')
       const entry = findGroupEntry(groupId)
       if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
       let duplicate = false, enriched = false, sequence
@@ -905,7 +1391,14 @@ export async function openResidentStore(storageDomain) {
         }) : latest.messages
         return { ...latest, nextSequence: sequence + 1, ...(quotedHold ? { routingRevision: latest.routingRevision + 1 } : {}), messages: [...messages, accepted] }
       }
-      const group = await groups.update(entry[0], latest => normalizeRoutingRecoveryEdges(applyIngress(latest)))
+      const group = await groups.update(entry[0], latest => {
+        let next = normalizeRoutingRecoveryEdges(applyIngress(latest))
+        if (routerIngress !== undefined) next = { ...next, messages: next.messages.map(message => {
+          if (message.messageId !== messageId || message.routerIngress?.messageVersion === message.messageVersion) return message
+          return { ...message, routerIngress: { messageVersion: message.messageVersion, receivedAt: routerIngress.receivedAt, timestamp: routerIngress.timestamp } }
+        }) }
+        return next
+      })
       return { duplicate, enriched, sequence, group }
     }),
     listTopics: (groupId) => [...groups.entries()].flatMap(([, group]) => groupId === undefined || group.groupId === groupId ? group.topics : []),
@@ -1581,7 +2074,8 @@ export async function openResidentStore(storageDomain) {
       const value = outboundSchema.parse(outbound)
       const previous = entry[1].outbox.find(item => item.outboundId === value.outboundId)
       if (previous && previous.text !== value.text) throw new Error('task_notification_projection_conflict')
-      if (previous?.notificationState === 'delivered' && value.notificationState !== 'delivered'
+      if (previous?.supersededReason === 'router-source-stale-before-prepare' && value.notificationState !== 'superseded'
+        || previous?.notificationState === 'delivered' && value.notificationState !== 'delivered'
         || previous?.notificationState === 'superseded' && value.notificationState !== 'superseded') return entry[1]
       const next = Object.fromEntries(Object.entries({ ...previous, ...value,
         ...(value.status === 'sent' ? { deliveryPendingReason: undefined, deliveryError: undefined } : {}) }).filter(([, item]) => item !== undefined))
@@ -1600,7 +2094,9 @@ export async function openResidentStore(storageDomain) {
           || sameId.replyToSenderOpenDingTalkId !== replyToSenderOpenDingTalkId || !!sameId.atAll !== !!atAll
           || JSON.stringify(sameId.atOpenDingTalkIds ?? []) !== JSON.stringify(atOpenDingTalkIds ?? [])
           || ['messageId', 'actorId', 'messageVersion'].some(key => sameId.sourceRef?.[key] !== sourceRef?.[key])
-          || !isDeepStrictEqual(sameId.artifactFiles ?? [], artifactFiles ?? [])) throw new Error('outbox_identity_conflict')
+          || !isDeepStrictEqual(sameId.artifactFiles ?? [], artifactFiles ?? [])
+          || outboundId.startsWith('router-reply:') && (sameId.replyKind !== replyKind
+            || !isDeepStrictEqual(sameId.replacesOutboundIds ?? [], replacesOutboundIds ?? []))) throw new Error('outbox_identity_conflict')
         return current
       }
       const existing = current.outbox.find((item) => item.sourceMessageId === sourceMessageId)
@@ -1640,6 +2136,62 @@ export async function openResidentStore(storageDomain) {
       const outbox = reconcileReplacementGraph(entry[1].outbox)
       if (outbox.every((item, index) => item.status === entry[1].outbox[index].status && item.supersededByOutboundId === entry[1].outbox[index].supersededByOutboundId && item.supersededAt === entry[1].outbox[index].supersededAt)) return entry[1]
       return groups.update(entry[0], latest => ({ ...latest, outbox: reconcileReplacementGraph(latest.outbox) }))
+    }),
+    withRouterReplyPreparation: ({ groupId, intent, outbound, preflight, inspectNotification, commit }) => serialize(groupId, async () => {
+      const entry = findGroupEntry(groupId)
+      if (!entry) throw new Error(`group_not_subscribed:${groupId}`)
+      const group = entry[1], router = routerState(group)
+      const triage = router.triage.find(item => item.triageId === intent.decisionId && item.triageId === intent.operationId)
+      const decision = router.decisions.find(item => item.decisionId === intent.decisionId)
+      const application = decision?.applications.find(item => item.kind === 'reply' && item.operationId === intent.operationId)
+      const original = triage ? { sourceRef: triage.sourceRef, actorId: triage.disposition.actorId, text: triage.disposition.reply, replyReview: triage.disposition.replyReview }
+        : application
+      if (!original || original.text !== intent.text || !isDeepStrictEqual(original.sourceRef, intent.sourceRef)
+        || !isDeepStrictEqual(original.replyReview, { review: intent.replyReview, candidates: intent.candidates })
+        || !isDeepStrictEqual(original.completion, intent.completion) || !isDeepStrictEqual(original.notificationRouting, intent.notificationRouting)
+        || intent.replyKind !== intent.replyReview.kind
+        || outbound.outboundId !== `router-reply:${intent.operationId}` || outbound.decisionId !== intent.decisionId
+        || !isDeepStrictEqual(outbound.sourceRef, { messageId: intent.sourceRef.messageId, messageVersion: intent.sourceRef.messageVersion, actorId: original.actorId })
+        || outbound.replyKind !== intent.replyKind || !isDeepStrictEqual(outbound.replacesOutboundIds ?? [], intent.replyReview.replaceOutboundIds)
+        || !isDeepStrictEqual(outbound.artifactFiles ?? [], intent.completion?.files ?? [])) throw new Error('router_reply_preparation_identity_invalid')
+      if (intent.notificationRouting && (outbound.replyToMessageId !== intent.notificationRouting.replyToMessageId
+        || outbound.replyToSenderOpenDingTalkId !== intent.notificationRouting.replyToSenderOpenDingTalkId
+        || !isDeepStrictEqual(outbound.atOpenDingTalkIds ?? [], intent.notificationRouting.atOpenDingTalkIds)
+        || Boolean(outbound.atAll) !== Boolean(intent.notificationRouting.atAll))) throw new Error('router_reply_preparation_identity_invalid')
+      const keys = ['outboundId', 'decisionId', 'sourceMessageId', 'text', 'sourceRef', 'replyToMessageId', 'replyToSenderOpenDingTalkId', 'atOpenDingTalkIds', 'atAll', 'replyKind', 'matterSourceMessageIds', 'replacesOutboundIds', 'artifactFiles']
+      const normalized = value => Object.fromEntries(keys.filter(key => value[key] !== undefined && !(Array.isArray(value[key]) && !value[key].length) && !(key === 'atAll' && !value[key])).map(key => [key, value[key]]))
+      const existing = group.outbox.find(item => item.outboundId === outbound.outboundId)
+      if (existing && !isDeepStrictEqual(normalized(existing), normalized(outbound))) throw new Error('router_reply_preparation_identity_invalid')
+      if (existing?.status === 'superseded' && existing.supersededReason === 'router-source-stale-before-prepare') return { status: 'retired' }
+      const message = group.messages.find(item => item.messageId === intent.sourceRef.messageId)
+      const routingSuperseded = intent.notificationRouting?.sourceRefs.some(ref => group.messages.some(item => item.messageId === ref.messageId
+        && item.messageVersion > ref.messageVersion && !item.ownNotificationRetirement
+        && (item.senderOpenDingTalkId ?? item.actorId) === ref.actorId))
+      const current = message && message.messageVersion === intent.sourceRef.messageVersion
+        && (message.senderOpenDingTalkId ?? message.actorId) === original.actorId && !message.ownNotificationRetirement && !routingSuperseded
+      const inspection = await inspectNotification({ retireIfUnsent: !current })
+      if (!['absent', 'retired', 'existing'].includes(inspection?.status)) throw new Error('router_reply_preparation_blocked')
+      if (inspection.status === 'existing') return { status: 'existing' }
+      if (!current || inspection.status === 'retired') {
+        if (existing && ((existing.status !== 'pending' && !(inspection.status === 'retired' && existing.status === 'superseded' && existing.notificationState === 'superseded'))
+          || existing.supersededByOutboundId || existing.sendStartedAt
+          || existing.notificationState && !(inspection.status === 'retired' && ['prepared', 'superseded'].includes(existing.notificationState))
+          || existing.deliveredAt || existing.deliveryError || existing.sendAttemptCount || existing.readbackAttemptCount)) throw new Error('router_reply_preparation_blocked')
+        const retired = { ...(existing ?? normalized(outbound)), status: 'superseded', readbackRequired: true,
+          ...(inspection.status === 'retired' ? { notificationState: 'superseded' } : {}),
+          supersededAt: new Date().toISOString(), supersededReason: 'router-source-stale-before-prepare' }
+        await groups.update(entry[0], latest => ({ ...latest, outbox: existing ? latest.outbox.map(item => item.outboundId === outbound.outboundId ? retired : item) : [...latest.outbox, retired] }))
+        return { status: 'retired' }
+      }
+      if (existing && (existing.status !== 'pending' || existing.supersededByOutboundId)) throw new Error('router_reply_preparation_blocked')
+      assertRouterNotificationRouting(group, intent.notificationRouting)
+      if (!existing) {
+        const veto = preflight?.(group)
+        if (veto !== undefined) throw new Error('router_reply_preparation_blocked')
+        if (replacementBusy(group, outbound.replacesOutboundIds ?? [], intent.decisionId)) throw new Error('router_reply_preparation_blocked')
+        await groups.update(entry[0], latest => ({ ...latest, outbox: reconcileReplacementGraph([...latest.outbox, { ...normalized(outbound), status: 'pending', readbackRequired: true }]) }))
+      }
+      return { status: 'prepared', result: await commit() }
     }),
     beginOutboundSend: ({ groupId, outboundId }) => serialize(groupId, async () => {
       const entry = findGroupEntry(groupId)

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
-import { join, dirname } from 'node:path'
+import { join, dirname, posix } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { parse } from 'acorn'
@@ -18,10 +18,12 @@ const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i)
 test('fixed baseline registrations, variants and helper bodies survive the physical split', async () => {
   const contracts = await load()
   assert.equal(contracts.sourceCommit, '7ca36c26ad1c52e8b1896fdc76a7e8aed1c9a697')
-  assert.equal(contracts.groups.reduce((n, g) => n + g.originalRegistrations, 0), 202)
-  assert.equal(contracts.groups.reduce((n, g) => n + g.originalVariants, 0), 220)
+  const fixed = contracts.groups.filter(group => !group.baselineIds)
+  assert.equal(fixed.length, 3)
+  assert.equal(fixed.reduce((n, g) => n + g.originalRegistrations, 0), 202)
+  assert.equal(fixed.reduce((n, g) => n + g.originalVariants, 0), 220)
   const keep = [[1,9], [19,20], [1,3,4,...range(19,26),33,34,35,36,40,61,62,91,92,...range(101,107),121,123,126,127,136,137,141]]
-  for (const [index, group] of contracts.groups.entries()) {
+  for (const [index, group] of fixed.entries()) {
     const baseline = execFileSync('git', ['show', `${contracts.sourceCommit}:${group.original}`], { cwd: root, encoding: 'utf8' })
     assert.equal(digest(baseline), group.originalSha256)
     const original = registrations(baseline)
@@ -43,7 +45,51 @@ test('fixed baseline registrations, variants and helper bodies survive the physi
     const normalizeHelperWhitespace = text => text.replaceAll('\r\n', '\n').replace(/^[ \t]+$/gm, '').trim()
     assert.equal(normalizeHelperWhitespace(actual), normalizeHelperWhitespace(helpers), group.fixture.file)
   }
-  assert.equal((await checkedContracts(root)).size, 6)
+  assert.equal((await checkedContracts(root)).size, contracts.groups.reduce((n, group) => n + group.destinations.length, 0))
+})
+
+test('已审 Router 历史子集保持独立固定基线，其他注册仍留 Release', async () => {
+  const contracts = await load()
+  const groups = contracts.groups.filter(group => group.baselineIds)
+  const expected = [
+    { name: 'task-session-service', ids: [12], registrations: 42, variants: 53, aliases: ['test'], sha: 'ef8becce25836348006889b440af6b19e538a5f1df60783bca3e1858d51ec707' },
+    { name: 'task-topic-routing', ids: [6, 7, 10, 11, 12], registrations: 36, variants: 45, aliases: ['testRunner'], sha: 'e57194aa5dc062f645d1caa2ebd8c337ada4614ab5dae3a297be61114e4f371b' },
+  ]
+  assert.equal(groups.length, expected.length)
+  const normalizeImports = (source, file) => {
+    const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module' })
+    for (const node of [...ast.body].reverse()) if (node.type === 'ImportDeclaration' && node.source.value.startsWith('.')) {
+      const target = posix.normalize(posix.join(posix.dirname(file), node.source.value))
+      source = source.slice(0, node.source.start) + JSON.stringify(target) + source.slice(node.source.end)
+    }
+    return source.replaceAll('\r\n', '\n').replace(/^[ \t]+$/gm, '').trim()
+  }
+  for (const [i, group] of groups.entries()) {
+    const fixed = expected[i]
+    assert.equal(group.sourceCommit, '14ad11aa7c7ba2f0c4082ecc65bfd81cfa5b2a2f')
+    assert.equal(group.original, `test/${fixed.name}-native.test.js`)
+    assert.deepEqual(group.baselineIds, fixed.ids)
+    assert.deepEqual(group.registrationAliases, fixed.aliases)
+    assert.deepEqual(group.destinations, [`test/${fixed.name}-history.test.js`])
+    assert.equal(group.fixture.file, `test/fixtures/${fixed.name}-history.js`)
+    const baseline = execFileSync('git', ['show', `${group.sourceCommit}:${group.original}`], { cwd: root, encoding: 'utf8' })
+    assert.equal(digest(baseline), fixed.sha)
+    assert.equal(group.originalSha256, fixed.sha)
+    const original = registrations(baseline, { forwardingWrappers: true })
+    assert.equal(original.length, fixed.registrations)
+    assert.equal(original.reduce((n, item) => n + item.variants, 0), fixed.variants)
+    const selected = original.filter(item => fixed.ids.includes(item.id))
+    assert.deepEqual(group.cases.map(item => [item.originalId, item.sha256, item.variants]), selected.map(item => [item.id, item.sha256, item.variants]))
+    assert.ok(group.cases.every(item => item.contract === 'historical'))
+    let helpers = baseline
+    for (const item of [...original].reverse()) helpers = helpers.slice(0, item.start) + helpers.slice(item.end)
+    const fixture = await readFile(join(root, group.fixture.file), 'utf8')
+    const exportNode = parse(fixture, { ecmaVersion: 'latest', sourceType: 'module' }).body.at(-1)
+    assert.equal(exportNode.type, 'ExportNamedDeclaration')
+    assert.equal(normalizeImports(fixture.slice(0, exportNode.start), group.fixture.file), normalizeImports(helpers, group.original))
+  }
+  const { entries } = await inventory()
+  for (const item of expected) assert.equal(entries.find(entry => entry.file === `test/${item.name}-native.test.js`)?.release, true)
 })
 
 async function fixture(t) {
@@ -83,6 +129,20 @@ test('import changes and new historical helper statements require review', async
   assert.throws(() => registrations("import test from 'node:test'; const unreviewed = 1", { strict: true }), /unreviewed_mixed/)
 })
 
+test('仅刷新目的文件摘要不能把未审 helper 或新注册带入历史组', async t => {
+  for (const index of [0, 4]) await t.test(`group=${index}`, async t => {
+    const f = await fixture(t), group = f.contracts.groups[index], file = group.destinations.at(-1)
+    const originalImport = `from './fixtures/${posix.basename(group.fixture.file)}'`
+    const source = (await readFile(join(f.directory, file), 'utf8')).replace(originalImport, "from './fixtures/unreviewed-history-bridge.js'")
+    assert.ok(!source.includes(originalImport))
+    await writeFile(join(f.directory, file), source)
+    await writeFile(join(f.directory, 'test/fixtures/unreviewed-history-bridge.js'), `export * from './${posix.basename(group.fixture.file)}'; import test from 'node:test'; test('new-current-contract', () => {})`)
+    group.destinationSha256[file] = digest(source)
+    await f.save()
+    await assert.rejects(checkedContracts(f.directory), /mixed_destination_import_invalid/)
+  })
+})
+
 test('an explicit re-review retains original identities and rejects incomplete or mismatched evidence', async t => {
   for (const mutation of ['wrong-origin', 'empty-reason', 'empty-evidence', 'wrong-current-digest', 'changed-classification']) await t.test(mutation, async t => {
     const f = await fixture(t)
@@ -117,6 +177,15 @@ test('registration catalog hashes full parameter loops, nested assertions, optio
   assert.equal(entries[0].variants, 2)
   assert.notEqual(entries[0].sha256, registrations(source.replace('123', '124'))[0].sha256)
   assert.equal(digest('line\r\n'), digest('line\n'))
+})
+
+test('直转发包装是 helper，参数循环与嵌套断言仍完整登记', () => {
+  const source = "import run from 'node:test'; const test=(...args)=>run(...args); for(const value of ['a','b']) test(value, {timeout:12}, t=>{ t.test('nested',()=>{}) })"
+  const entries = registrations(source, { forwardingWrappers: true })
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0].variants, 2)
+  assert.ok(entries[0].title.startsWith('for('))
+  assert.notEqual(entries[0].sha256, registrations(source.replace('timeout:12', 'timeout:13'), { forwardingWrappers: true })[0].sha256)
 })
 
 test('recursive discovery sees new nested tests and rejects unsupported test extensions', async t => {

@@ -85,6 +85,13 @@ export function notificationOpenTaskId(ack) {
   return ack?.openTaskId ?? ack?.sendReceipt?.openTaskId ?? ack?.result?.openTaskId ?? ack?.result?.result?.openTaskId
 }
 
+/** 业务来源只作溯源；显式通知路由决定原生引用。 */
+export function notificationReplyTarget(payload) {
+  const { replyToMessageId, replyToSenderOpenDingTalkId } = payload.notificationRouting
+    ?? { replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId }
+  return { replyToMessageId, replyToSenderOpenDingTalkId }
+}
+
 /** 只收集事实里的结构化身份和摘要；业务正文、标题及普通数值不作为内部标识。 */
 function factInternalIds(fact) {
   if (!fact || typeof fact !== 'object') return []
@@ -98,16 +105,27 @@ function factInternalIds(fact) {
 
 export function sendWorkflowNotification(adapter, notification) {
   const payload = notification.payload
+  const { replyToMessageId, replyToSenderOpenDingTalkId } = notificationReplyTarget(payload)
   if (payload.reportChannel === 'web' || payload.externalMessaging === false
     || notification.disclosure?.authorizationRef?.startsWith('web-rerun:')) throw new Error('WORKFLOW_WEB_NOTIFICATION_FORBIDDEN')
   assertGroupReply(payload.text, [notification.id, notification.taskId, payload.conversationId, payload.sourceMessageId,
-    payload.actorId, payload.recipientUserId, payload.humanRequestId,
+    payload.actorId, payload.recipientUserId, payload.humanRequestId, replyToMessageId, replyToSenderOpenDingTalkId,
     ...(Array.isArray(payload.atOpenDingTalkIds) ? payload.atOpenDingTalkIds : []), ...factInternalIds(payload.fact)])
+  if (payload.conversationType === 'direct') {
+    if (typeof payload.recipientActorId !== 'string' || !payload.recipientActorId.trim()
+      || payload.atAll || !Array.isArray(payload.atOpenDingTalkIds ?? []) || payload.atOpenDingTalkIds?.length)
+      throw new Error('DWS_DIRECT_NOTIFICATION_TARGET_INVALID')
+    const request = { conversationId: payload.conversationId, recipientActorId: payload.recipientActorId,
+      text: payload.text, idempotencyKey: notification.id }
+    return replyToMessageId && replyToSenderOpenDingTalkId
+      ? adapter.sendDirectReply({ ...request, replyToMessageId, replyToSenderOpenDingTalkId })
+      : adapter.sendDirect(request)
+  }
   // 普通提醒与引用回复都使用原生提及参数，不把人员 ID 或 @ 姓名拼进正文。
   const base = { groupId: payload.conversationId, text: payload.text, idempotencyKey: notification.id,
     atOpenDingTalkIds: payload.atOpenDingTalkIds ?? [], ...(payload.atAll ? { atAll: true } : {}) }
-  return payload.sourceMessageId && payload.actorId
-    ? adapter.sendGroupReply({ ...base, replyToMessageId: payload.sourceMessageId, replyToSenderOpenDingTalkId: payload.actorId })
+  return replyToMessageId && replyToSenderOpenDingTalkId
+    ? adapter.sendGroupReply({ ...base, replyToMessageId, replyToSenderOpenDingTalkId })
     : adapter.sendGroup(base)
 }
 

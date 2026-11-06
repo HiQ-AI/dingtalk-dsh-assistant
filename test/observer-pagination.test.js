@@ -197,14 +197,37 @@ test('topic task summaries select only the visible SQL fields without execution 
  assert.throws(()=>observerPage(db,{collection:'tasks',summary:true,offset:20,limit:10,revision:result.revision},'test'),{code:'OBSERVER_PAGE_STALE'})
 })
 
-test('topic task service passes the summary page through without detail DTO or additional queries',async()=>{
+test('Task 结构化来源严格沿 sourceRefs 读取真实来源元数据',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/task-session-service.js',import.meta.url),'utf8')
+ const start=source.indexOf('  const taskSourceMessages ='),end=source.indexOf('  const taskDTO =',start)
+ const helper=source.slice(start,end),queries=[]
+ const values=new Map([
+  ['source-v2',{sourceId:'source-v2',groupId:'g',messageId:'m',version:2,text:'正文不应投影'}],
+  ['invalid',{sourceId:'invalid',groupId:'g',messageId:'missing-version'}],
+ ])
+ const project=runInNewContext(`(()=>{${helper};return taskSourceMessages})()`,{
+  query:async(kind,args)=>{queries.push({kind,...args});return values.get(args.sourceId)??null},Promise,Number
+ })
+ assert.deepEqual(JSON.parse(JSON.stringify(await project({groupId:'g',sourceRefs:['source-v2','missing','invalid']}))),[
+  {sourceId:'source-v2',groupId:'g',messageId:'m',version:2}
+ ])
+ assert.deepEqual(queries,[{kind:'source.get',sourceId:'source-v2'},{kind:'source.get',sourceId:'missing'},{kind:'source.get',sourceId:'invalid'}])
+})
+
+test('task summary page adds direct source metadata only for the selected tasks',async()=>{
  const source=await readFile(new URL('../packages/dingtalk-dsh-assistant/task-session-service.js',import.meta.url),'utf8')
  const method=source.slice(source.indexOf('    async boardTasks(options)'),source.indexOf('    async taskDecisions('))
  const page={items:[{taskId:'task',title:'任务',state:'running',archivedAt:null,updatedAt:'now'}],total:1,offset:0,limit:10,nextOffset:null}
- const queries=[]
- const board=runInNewContext(`({${method}}).boardTasks`,{query:async(kind,args)=>{queries.push({kind,...args});return page}})
- assert.equal(await board({summary:true,groupId:'g',topicId:'topic',archived:'all',offset:0,limit:10}),page)
- assert.deepEqual(queries,[{kind:'observer.page',collection:'tasks',summary:true,groupId:'g',topicId:'topic',archived:'all',offset:0,limit:10}])
+ const task={taskId:'task',sourceRefs:['source-1']},queries=[]
+ const board=runInNewContext(`({${method}}).boardTasks`,{
+  query:async(kind,args)=>{queries.push({kind,...args});return kind==='observer.page'?page:kind==='task.get'?task:undefined},
+  taskSourceMessages:async selected=>selected.sourceRefs.map(sourceId=>({sourceId,groupId:'g',messageId:'m',version:2})),
+  taskTopicRefs:()=>[],dirname:value=>value,taskFilePath:()=>'',taskSessionLogRoot:()=>''
+ })
+ const result=await board({summary:true,groupId:'g',archived:'all',offset:0,limit:10})
+ assert.deepEqual(result.items[0].sourceRefs,['source-1'])
+ assert.deepEqual(result.items[0].sourceMessages,[{sourceId:'source-1',groupId:'g',messageId:'m',version:2}])
+ assert.deepEqual(queries,[{kind:'observer.page',collection:'tasks',summary:true,groupId:'g',archived:'all',offset:0,limit:10},{kind:'task.get',taskId:'task'}])
 })
 
 

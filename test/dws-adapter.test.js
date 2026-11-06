@@ -558,3 +558,31 @@ test('历史待发正文在领取前拒绝内部机制，已发送记录仍可�
  const delivered={...adapter,readGroup:async()=>({complete:true,messages:[{messageId:'m',outboundId:'out-public',text:outbound.text}]})}
  assert.equal((await dispatchOutbox({adapter:delivered,groupId:'g',outbound})).deduplicated,true)
 })
+
+test('私聊简答、引用及文件只用真实对端，内部key不作为DWS目的地且默认禁止写入', async () => {
+  const commands = [], runner = { run: async args => { commands.push(args); return { exitCode: 0, stdout: '{"sendReceipt":{"openTaskId":"private-send"}}' } } }
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, profile: 'corp:user', runner })
+  const payload = { groupId: 'direct:internal-key', conversationType: 'direct', conversationId: 'private-cid', recipientActorId: 'open-peer', text: '我会按这个顺序处理。' }
+  for (const quoted of [false, true]) {
+    await sendWorkflowNotification(adapter, { id: `direct-${quoted}`, payload: { ...payload,
+      ...(quoted ? { sourceMessageId: 'source-private', actorId: 'open-peer' } : {}) } })
+    const args = commands.at(-1)
+    assert.equal(args[args.indexOf('--open-dingtalk-id') + 1], 'open-peer')
+    assert.equal(args.includes('direct:internal-key'), false)
+    assert.deepEqual(args.slice(-2), ['--profile', 'corp:user'])
+    assert.equal(args.includes('--at-open-dingtalk-ids'), false)
+    if (quoted) {
+      assert.equal(args[args.indexOf('--ref-msg-id') + 1], 'source-private')
+      assert.equal(args[args.indexOf('--group') + 1], 'private-cid')
+    } else assert.equal(args.includes('--group'), false)
+  }
+  await adapter.sendDirectFile({ conversationId: payload.conversationId, recipientActorId: payload.recipientActorId, fileName: 'result.txt', idempotencyKey: 'direct-file' })
+  assert.equal(commands.at(-1)[commands.at(-1).indexOf('--file') + 1], './result.txt')
+  const count = commands.length
+  const readOnly = createDwsAdapter({ enabled: true, runner })
+  await assert.rejects(readOnly.sendDirect({ ...payload, idempotencyKey: 'blocked' }), /dws_write_not_authorized/)
+  await assert.rejects(readOnly.sendDirectFile({ ...payload, fileName: 'result.txt', idempotencyKey: 'blocked-file' }), /dws_write_not_authorized/)
+  assert.throws(() => sendWorkflowNotification(adapter, { id: 'bad', payload: { ...payload, atOpenDingTalkIds: ['someone-else'] } }), /DWS_DIRECT_NOTIFICATION_TARGET_INVALID/)
+  assert.throws(() => adapter.compileDirectReply({ ...payload, atAll: true }), /dws_direct_audience_invalid/)
+  assert.equal(commands.length, count)
+})

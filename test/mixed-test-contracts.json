@@ -3143,6 +3143,154 @@
         "test/runtime.test.js": "84a0f722c97b475155b8627e9b2686a59e7c9342d9c0abe0983f142a7b307efe",
         "test/runtime-history.test.js": "f8fd4f6836ab31c4f55bd7679ae2ff03c1c4e45c5b8ceb08cf7c2925111cdbcc"
       }
+    },
+    {
+      "original": "test/task-session-service-native.test.js",
+      "sourceCommit": "14ad11aa7c7ba2f0c4082ecc65bfd81cfa5b2a2f",
+      "originalSha256": "ef8becce25836348006889b440af6b19e538a5f1df60783bca3e1858d51ec707",
+      "baselineIds": [
+        12
+      ],
+      "baselineRegistrations": 42,
+      "baselineVariants": 53,
+      "originalRegistrations": 1,
+      "originalVariants": 3,
+      "registrationAliases": [
+        "test"
+      ],
+      "destinations": [
+        "test/task-session-service-history.test.js"
+      ],
+      "fixture": {
+        "file": "test/fixtures/task-session-service-history.js",
+        "sha256": "5268032cf7848569f551c99505ec7fd62a6e45bda5f799fe78d9914ce84e1790"
+      },
+      "cases": [
+        {
+          "originalId": 12,
+          "originalLine": 682,
+          "title": "for (const [ownEcho, followupActor] of [[true, 'native-user'], [true, 'colleague'], [false, 'native-user']]) test(`话题历史${ownEcho ? '自身通知不阻断人工补充' : '未准入真实消息仍拒绝更新且不发送成功回复'}-${followupActor}`, { ...({ timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {",
+          "sha256": "81370b5ad73e0c44e93050107eaa9c8dfa2a275e019b87310e719ca5780f1df4",
+          "variants": 3,
+          "file": "test/task-session-service-history.test.js",
+          "contract": "historical",
+          "reason": "仅退役旧Topic历史回放的三变体协议；真实来源围栏、待答及成功receipt保证已迁直接Router的保留注册",
+          "evidence": [
+            "README.md#常驻-router-与直接-task-路由",
+            "docs/spec/resident-router-direct-tasks.md",
+            "docs/acceptance/topic-routing-quality/goal.md"
+          ]
+        }
+      ],
+      "destinationSha256": {
+        "test/task-session-service-history.test.js": "de342fff54aef3be8acad8a2d34d575da737479d6de55d8745ed0ee3237d78fc"
+      }
+    },
+    {
+      "original": "test/task-topic-routing-native.test.js",
+      "sourceCommit": "14ad11aa7c7ba2f0c4082ecc65bfd81cfa5b2a2f",
+      "originalSha256": "e57194aa5dc062f645d1caa2ebd8c337ada4614ab5dae3a297be61114e4f371b",
+      "baselineIds": [
+        6,
+        7,
+        10,
+        11,
+        12
+      ],
+      "baselineRegistrations": 36,
+      "baselineVariants": 45,
+      "originalRegistrations": 5,
+      "originalVariants": 6,
+      "registrationAliases": [
+        "testRunner"
+      ],
+      "destinations": [
+        "test/task-topic-routing-history.test.js"
+      ],
+      "fixture": {
+        "file": "test/fixtures/task-topic-routing-history.js",
+        "sha256": "847621f03c62afbbcecc210f429e13d9119260e8ddd759056bbb4ba86c5c55ba"
+      },
+      "cases": [
+        {
+          "originalId": 6,
+          "originalLine": 322,
+          "title": "testRunner('一级运行中十五条入批且第十六条在下一批处理', { timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {",
+          "sha256": "217aaeb57c7bda2681278405aa335a3e9f9ee9e8b3e32cbc54296eb1919763db",
+          "variants": 1,
+          "file": "test/task-topic-routing-history.test.js",
+          "contract": "historical",
+          "reason": "仅退役已审旧Route批次、Topic首包目录或旧request绑定协议；当前来源/版本/审阅与同群保证保留Release",
+          "evidence": [
+            "README.md#常驻-router-与直接-task-路由",
+            "docs/spec/resident-router-direct-tasks.md",
+            "docs/acceptance/topic-routing-quality/goal.md"
+          ]
+        },
+        {
+          "originalId": 7,
+          "originalLine": 364,
+          "title": "for (const unrelatedCount of [13, 14]) testRunner(`原生路由保持恢复配对完整并遵守十五条上限：其他来源=${unrelatedCount}`,",
+          "sha256": "37bbd0525eff48a05e878e09aca619f899c2d374461d35dfad616491e9282c3c",
+          "variants": 2,
+          "file": "test/task-topic-routing-history.test.js",
+          "contract": "historical",
+          "reason": "仅退役已审旧Route批次、Topic首包目录或旧request绑定协议；当前来源/版本/审阅与同群保证保留Release",
+          "evidence": [
+            "README.md#常驻-router-与直接-task-路由",
+            "docs/spec/resident-router-direct-tasks.md",
+            "docs/acceptance/topic-routing-quality/goal.md"
+          ]
+        },
+        {
+          "originalId": 10,
+          "originalLine": 469,
+          "title": "testRunner('completed task catalogue stays within the tool budget and advances by returned entries without losing tasks', () => {",
+          "sha256": "b7527fa47191b982b666bbcbdbd7daab7a2b4ea67cc5fcc9010e46b2ba4572e5",
+          "variants": 1,
+          "file": "test/task-topic-routing-history.test.js",
+          "contract": "historical",
+          "reason": "仅退役已审旧Route批次、Topic首包目录或旧request绑定协议；当前来源/版本/审阅与同群保证保留Release",
+          "evidence": [
+            "README.md#常驻-router-与直接-task-路由",
+            "docs/spec/resident-router-direct-tasks.md",
+            "docs/acceptance/topic-routing-quality/goal.md"
+          ]
+        },
+        {
+          "originalId": 11,
+          "originalLine": 498,
+          "title": "testRunner('task catalogue continuation carries the exact normalized query and current snapshot identity', () => {",
+          "sha256": "440bac7e4d09c5a4d7e4bdec1c23e3c7be1948ebf655c544db25dea4b690ec09",
+          "variants": 1,
+          "file": "test/task-topic-routing-history.test.js",
+          "contract": "historical",
+          "reason": "仅退役已审旧Route批次、Topic首包目录或旧request绑定协议；当前来源/版本/审阅与同群保证保留Release",
+          "evidence": [
+            "README.md#常驻-router-与直接-task-路由",
+            "docs/spec/resident-router-direct-tasks.md",
+            "docs/acceptance/topic-routing-quality/goal.md"
+          ]
+        },
+        {
+          "originalId": 12,
+          "originalLine": 513,
+          "title": "testRunner('native request-bound review and Topic reads accept empty args while routing never guesses a Topic',",
+          "sha256": "4afe61f994eaedc734e682da7c3b10ed445ffe1d16352254e6438d31350f65fa",
+          "variants": 1,
+          "file": "test/task-topic-routing-history.test.js",
+          "contract": "historical",
+          "reason": "仅退役已审旧Route批次、Topic首包目录或旧request绑定协议；当前来源/版本/审阅与同群保证保留Release",
+          "evidence": [
+            "README.md#常驻-router-与直接-task-路由",
+            "docs/spec/resident-router-direct-tasks.md",
+            "docs/acceptance/topic-routing-quality/goal.md"
+          ]
+        }
+      ],
+      "destinationSha256": {
+        "test/task-topic-routing-history.test.js": "956857b28a653f83d4bbb401ebbfc6a375a31b0aea6adc1c83f17badc3c6618e"
+      }
     }
   ]
 }

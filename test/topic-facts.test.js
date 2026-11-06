@@ -59,6 +59,48 @@ async function fixture(t, { signature = '' } = {}) {
     async reopen() { await ledger.close(); ledger = await openDynamicTaskStore(config) } }
 }
 
+test('旧已接纳未投影决定不重新裁决，迁移明确阻断并保留原决定', async t => {
+  const f = await fixture(t), binding = await f.task('legacy-accepted')
+  await f.finish(binding)
+  const original = f.resident.applyTopicFactSummary
+  f.resident.applyTopicFactSummary = async () => { throw new Error('projection-interrupted') }
+  try { await assert.rejects(f.submit(f.submission(await f.context(), 'accepted-decision')), /projection-interrupted/) }
+  finally { f.resident.applyTopicFactSummary = original }
+  const [legacy] = await f.query('router.fact.legacy-unsettled')
+  assert.equal(legacy.state, 'accepted')
+  assert.equal(legacy.decisionId, 'accepted-decision')
+  await assert.rejects(f.commit('router.fact.migrateLegacy', { factId: legacy.id }), { code: 'DYNAMIC_ROUTER_LEGACY_FACT_BLOCKED' })
+  assert.deepEqual(await f.query('topic.fact.get', { factId: legacy.id }), legacy)
+  assert.deepEqual(await f.query('router.fact.pending'), [])
+})
+
+test('旧待投事实按原任务决定和来源迁移，历史账保持不变', async t => {
+  const f = await fixture(t), binding = await f.task('legacy-migrate')
+  await f.finish(binding)
+  const [legacy] = await f.query('router.fact.legacy-unsettled')
+  const receipt = await f.query('receipt.get', { id: legacy.commandId })
+  const wakes = await f.query('wake.list', { taskId: 'legacy-migrate', state: 'claimed' })
+  await f.commit('wake.ack', { binding, wakeIds: wakes.map(wake => wake.id) })
+  await f.commit('task.drained', { binding })
+  await f.commit('task.archive', { taskId: 'legacy-migrate', actorId: 'user' })
+  const refs = await f.query('source.taskRefs', { groupId: 'group', sourceIds: ['source'] })
+  assert.deepEqual(refs.map(({ sourceId, messageId, version, taskId }) => ({ sourceId, messageId, version, taskId })),
+    [{ sourceId: 'source', messageId: 'origin', version: 1, taskId: 'legacy-migrate' }])
+  assert.ok(refs[0].archivedAt)
+  assert.deepEqual(await f.query('source.taskRefs', { groupId: 'other', sourceIds: ['source'] }), [])
+  const migrated = await f.commit('router.fact.migrateLegacy', { factId: legacy.id }, `migrate:${legacy.id}`)
+  const fact = migrated.result.fact.fact
+  assert.equal(fact.factId, `legacy-router:${legacy.id}`)
+  assert.deepEqual(fact.sourceIds, legacy.sourceIds)
+  assert.equal(fact.taskVersion.controlRevision, receipt.taskDecision.controlRevision)
+  assert.equal(fact.taskVersion.requirementRevision, legacy.requirementRevision)
+  assert.deepEqual(await f.query('topic.fact.get', { factId: legacy.id }), legacy)
+  await f.reopen()
+  assert.deepEqual(await f.query('source.taskRefs', { groupId: 'group', sourceIds: ['source'] }), refs)
+  assert.equal((await f.commit('router.fact.migrateLegacy', { factId: legacy.id }, `migrate:${legacy.id}`)).replayed, true)
+  assert.deepEqual((await f.query('router.fact.get', { factId: fact.factId })).fact, fact)
+})
+
 test('ordinary Topic final result shares the whole-group contract and persists it across recovery', async t => {
   const f = await fixture(t, { signature: '助手代回' }), binding = await f.task('all-result')
   await f.finish(binding)

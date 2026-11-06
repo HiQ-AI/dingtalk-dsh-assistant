@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readTaskNotificationDelivery, verifyTaskNotificationReadback, readOperatorNotificationDelivery } from '../packages/dingtalk-dsh-assistant/task-notification-readback.js'
 import { createDwsAdapter } from '../packages/dingtalk-dsh-assistant/dws-adapter.js'
 import { sendWorkflowNotification } from '../packages/dingtalk-dsh-assistant/group-message.js'
+import { taskNotificationOutbound } from '../packages/dingtalk-dsh-assistant/task-message-projections.js'
 const notification = { id: 'n', payload: { conversationId: 'g', sourceMessageId: 's', text: '核验完成。', atOpenDingTalkIds: ['u'] } }
 const observed = { messageId: 'm', conversationId: 'g', text: '核验完成。', quotedMessage: { messageId: 's', conversationId: 'g' }, atOpenDingTalkIds: ['u'] }
 
@@ -230,4 +231,76 @@ test('原SUCCESS发送回执只核验原消息，unknown结清不调用发送且
     {sendStatus:'SUCCESS',openConversationId:'g'}]) {
     status={result};await run();assert.equal(commands[0].kind,'notification.diagnostic')
   }
+})
+
+test('私聊通知按真实会话精确回读，错会话或明确错误对端不能由SUCCESS放行', async () => {
+  const pending = { id: 'direct-notice', payload: { conversationType: 'direct', conversationId: 'private-cid',
+    groupId: 'direct:internal-key', recipientActorId: 'peer', text: '已经核对完成。' }, ack: { openTaskId: 'private-send' } }
+  let target = 'private-cid', peer = 'peer'
+  const adapter = { querySendStatus: async () => ({ result: { sendStatus: 'SUCCESS', openConversationId: target, openMessageId: 'sent-private' } }),
+    readMessage: async (conversationId, messageId) => { assert.equal(conversationId, 'private-cid'); return { conversationId, messageId, recipientOpenDingTalkId: peer } } }
+  assert.equal((await readTaskNotificationDelivery(adapter, pending)).messageId, 'sent-private')
+  target = 'another-conversation'
+  assert.equal(await readTaskNotificationDelivery(adapter, pending), undefined)
+  target = 'private-cid'; peer = 'another-peer'
+  assert.equal(await readTaskNotificationDelivery(adapter, pending), undefined)
+  delete pending.ack; peer = 'peer'
+  let historyReads = 0
+  adapter.readConversation = async id => { assert.equal(id, 'private-cid'); historyReads++; return [
+    { messageId: 'sent-private', conversationId: id, text: pending.payload.text, uuid: pending.id } ] }
+  adapter.readMessage = async (conversationId, messageId) => ({ conversationId, messageId, text: pending.payload.text, uuid: pending.id, recipientOpenDingTalkId: peer })
+  adapter.readGroup = () => { throw new Error('不能把私聊当群历史') }
+  adapter.sendDirect = () => { throw new Error('unknown只回读，不能重发') }
+  assert.equal((await readTaskNotificationDelivery(adapter, pending)).messageId, 'sent-private')
+  assert.equal(historyReads, 1)
+})
+
+for (const quoted of [false, true]) test(`显式通知路由与业务来源分离后发送及unknown回读保持一致 quoted=${quoted}`, async () => {
+  const recipients = ['context-author', 'requester']
+  const routing = { ...(quoted ? { replyToMessageId: 'earlier-context', replyToSenderOpenDingTalkId: 'context-author' } : {}),
+    atOpenDingTalkIds: recipients }
+  const pending = { id: `explicit-routing-${quoted}`, state: 'prepared', sendAttemptCount: 1,
+    payload: { conversationId: 'g', sourceMessageId: 'business-origin', actorId: 'requester',
+      text: '资料核验已完成。', atOpenDingTalkIds: recipients, notificationRouting: routing } }
+  const outbound = taskNotificationOutbound(pending)
+  assert.equal(outbound.replyToMessageId, quoted ? 'earlier-context' : undefined)
+  assert.equal(outbound.replyToSenderOpenDingTalkId, quoted ? 'context-author' : undefined)
+  assert.deepEqual(outbound.atOpenDingTalkIds, recipients)
+  assert.deepEqual(outbound.matterSourceMessageIds, ['business-origin'])
+  const sent = []
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async args => {
+    sent.push(args)
+    return { exitCode: 0, stdout: JSON.stringify({ sendReceipt: { openTaskId: 'original-send' } }) }
+  } } })
+  await sendWorkflowNotification(adapter, pending)
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].includes('--ref-msg-id'), quoted)
+  if (quoted) {
+    assert.equal(sent[0][sent[0].indexOf('--ref-msg-id') + 1], 'earlier-context')
+    assert.equal(sent[0][sent[0].indexOf('--ref-sender') + 1], 'context-author')
+  } else assert.ok(sent[0].includes('+messages-send'))
+  assert.equal(sent[0][sent[0].indexOf('--at-open-dingtalk-ids') + 1], recipients.join(','))
+  pending.state = 'unknown'
+  const observed = { messageId: 'actual-delivery', conversationId: 'g', text: pending.payload.text,
+    uuid: pending.id, atOpenDingTalkIds: recipients,
+    ...(quoted ? { quotedMessage: { messageId: 'earlier-context', conversationId: 'g' } } : {}) }
+  let reads = 0
+  adapter.readGroup = async () => ({ complete: true, messages: [observed] })
+  adapter.readMessage = async (group, id) => { assert.equal(group, 'g'); assert.equal(id, observed.messageId); reads++; return observed }
+  adapter.findOutboundMessage = async () => assert.fail('完整历史中的原消息应按实际引用直接匹配')
+  const { deliverTaskNotification } = await import('../packages/dingtalk-dsh-assistant/notification-delivery.js')
+  const writes = []
+  await deliverTaskNotification({ notification: pending, notifications: {
+    send: () => assert.fail('unknown只能回读，不能重发'), readback: n => readTaskNotificationDelivery(adapter, n),
+  }, command: async (kind, args) => writes.push({ kind, args }) })
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].kind, 'notification.reconcile')
+  assert.equal(writes[0].args.receipt.messageId, observed.messageId)
+  assert.equal(writes[0].args.receipt.quoteMessageId, quoted ? 'earlier-context' : undefined)
+  assert.equal(reads, 1)
+  assert.equal(sent.length, 1)
+  assert.equal(pending.sendAttemptCount, 1)
+  assert.equal(verifyTaskNotificationReadback(pending, { ...observed,
+    quotedMessage: { messageId: 'business-origin', conversationId: 'g' } }), undefined)
+  assert.equal(verifyTaskNotificationReadback(pending, { ...observed, atOpenDingTalkIds: ['requester'] }), undefined)
 })

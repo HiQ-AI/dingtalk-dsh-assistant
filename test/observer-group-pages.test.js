@@ -85,6 +85,25 @@ test('persistent inbox survives restart; source completion updates its row witho
  await assert.rejects(page('g',{revision:first.revision}),{code:'OBSERVER_PAGE_STALE'})
 })
 
+test('direct source projection links exact version and ignores Topic completion state',async t=>{
+ const message={messageId:'m',messageVersion:2,sequence:1,occurredAt:'2026-11-06T00:00:00.000Z',routingStatus:'routed',text:'直接来源'}
+ let source={sourceId:'source-m-v2',groupId:'g',messageId:'m',version:2,processingPending:true}
+ let group={groupId:'g',topics:[{topicId:'old',revision:1,processedRevision:1,entries:[{messageId:'m',messageVersion:2,action:'add'}],decisions:[{status:'completed',completedAt:'2026-11-06T00:01:00.000Z'}]}],messages:[message],router:{queue:[{kind:'source',id:source.sourceId,sourceRef:{sourceId:source.sourceId,messageId:'m',messageVersion:2}}],active:null}}
+ const page=createObserverGroupPages({readGroup:()=>group,readSources:()=>[source],readRequests:()=>[],isOwnNotification:()=>false})
+ t.after(()=>page.close());page.update({group});await page.ready()
+ let row=(await page('g')).items[0]
+ assert.equal(row.processingState,'processing','old Topic completion is not a direct source terminal')
+ assert.deepEqual(row.sourceRefs,[{sourceId:'source-m-v2',messageId:'m',version:2}])
+ assert.equal(row.topicRefs,undefined)
+ const previous=group
+ source={...source,processingPending:false,directProcessing:{disposition:{phase:'router',decisionId:'decision-1'},at:'2026-11-06T00:02:00.000Z'},processingCompleted:{mode:'direct',decisionId:'decision-1',at:'2026-11-06T00:02:00.000Z'}}
+ group={...group,router:{queue:[],active:null}}
+ page.update({previous,group});page.sourceChanged(source);await page.ready()
+ row=(await page('g',{filter:'processed'})).items[0]
+ assert.equal(row.processingState,'processed')
+ assert.equal(row.processingCompletedAt,new Date(source.directProcessing.at).toISOString())
+})
+
 test('another source update cannot hide an interrupted projection',async t=>{
  let group={groupId:'g',topics:[],messages:['a','b'].map(messageId=>({messageId,messageVersion:1,text:'Original'}))},unavailable=false
  const page=createObserverGroupPages({readGroup:()=>group,readSources:()=>{if(unavailable)throw new Error('source unavailable');return []},readRequests:()=>[],isOwnNotification:()=>false})
@@ -120,4 +139,48 @@ test('a Web-only completion cannot cover an earlier group message or hide its la
  assert.equal(row.processingState,'processed')
  assert.equal(row.processingConclusion,actual.decision.reason,'select the real Topic judgment at the same revision')
  assert.equal(row.processingCompletedAt,new Date(actual.completedAt).toISOString())
+})
+
+test('router failure requests project on cold sync and incremental state changes without hiding completed source identity',async t=>{
+ const message={messageId:'m',messageVersion:2,sequence:1,occurredAt:'2026-11-06T00:00:00.000Z',routingStatus:'routed',text:'来源已完成，后续回复失败'}
+ const source={sourceId:'source-m-v2',groupId:'g',messageId:'m',version:2,routed:true,
+  directProcessing:{disposition:{phase:'router',decisionId:'decision-1'},at:'2026-11-06T00:02:00.000Z'},
+  processingCompleted:{mode:'direct',decisionId:'decision-1',at:'2026-11-06T00:02:00.000Z'}}
+ const failure={sourceRef:{sourceId:source.sourceId,messageId:'m',messageVersion:2},phase:'host',requestId:'reply-host-1',status:'failed',attempt:1,
+  routingEpoch:4,code:'HOST_REPLY_FAILED',failurePhase:'application',retryToken:'retry-token-1'}
+ let failures=[failure,
+  {...failure,sourceRef:{...failure.sourceRef,sourceId:'another-source'},requestId:'wrong-source'},
+  {...failure,sourceRef:{...failure.sourceRef,messageVersion:1},requestId:'old-version'}]
+ let group={groupId:'g',topics:[],messages:[message],router:{failures}}
+ const page=createObserverGroupPages({readGroup:()=>group,readSources:()=>[source],readRequests:()=>failures,isOwnNotification:()=>false})
+ t.after(()=>page.close());page.update({group});await page.ready()
+ let row=(await page('g',{filter:'processed'})).items[0]
+ assert.equal(row.processingState,'processed','the source completion remains the semantic result')
+ assert.deepEqual(row.processingRecovery,{sourceId:'source-m-v2',messageId:'m',messageVersion:2,phase:'host',role:'application',requestId:'reply-host-1',retryToken:'retry-token-1'})
+ const previous=group
+ const retrying={...failure,status:'retrying',retryToken:undefined,attempt:2}
+ failures=[retrying,...failures.slice(1)]
+ group={...group,router:{failures}}
+ page.update({previous,group});await page.ready()
+ row=(await page('g',{filter:'processed'})).items[0]
+ assert.equal(row.processingState,'processed')
+ assert.equal(row.processingRecovery,null,'an in-flight retry has no retry affordance')
+ assert.equal(row.processingRetrying,true,'attempted is not a terminal result')
+})
+
+test('message recovery UI sends the persisted request identity and displays Router role',async()=>{
+ const source=await readFile(new URL('../packages/dingtalk-dsh-observer/web-client.js',import.meta.url),'utf8')
+ const start=source.indexOf('    function messageRecoveryDetails('),end=source.indexOf('    function MessageRecovery(',start)
+ assert.ok(start>=0&&end>start)
+ const helper=runInNewContext(`${source.slice(start,end)}; messageRecoveryDetails`)
+ const direct=JSON.parse(JSON.stringify(helper({messageId:'m',messageVersion:3,activeUnitRefs:[]},{sourceId:'source-m-v2',messageId:'m',messageVersion:2,
+  phase:'host',role:'application',requestId:'reply-host-1',retryToken:'retry-token-1'})))
+ assert.deepEqual(direct.body,{messageVersion:2,activeUnitRefs:[],phase:'host',requestId:'reply-host-1',token:'retry-token-1'})
+ assert.match(direct.identity,/应用处理（host）/)
+ assert.match(direct.identity,/source-m-v2/)
+ assert.match(direct.identity,/消息 m v2/)
+ assert.match(direct.identity,/请求 reply-host-1/)
+ const legacy=JSON.parse(JSON.stringify(helper({messageId:'old',messageVersion:7,activeUnitRefs:[{unitId:'u',unitRevision:1}]},
+  {messageId:'old',phase:'decision',requestId:'legacy-request',token:'legacy-token'})))
+ assert.deepEqual(legacy.body,{messageVersion:7,activeUnitRefs:[{unitId:'u',unitRevision:1}],phase:'decision',requestId:'legacy-request',token:'legacy-token'})
 })
