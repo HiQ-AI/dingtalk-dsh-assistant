@@ -79,9 +79,10 @@ test('every test file is mapped once; only reviewed historical registrations lea
   const reviewed = await checkedContracts(fileURLToPath(new URL('../', import.meta.url)))
   assert.ok(map.entries.every(x => x.reason && (x.release || reviewed.get(x.file)?.every(item => item.contract === 'historical'))))
   assert.deepEqual(map.entries.filter(x => !x.release).map(x => x.file), [
-    'test/execution-local-acceptance-history.test.js', 'test/runtime-history.test.js', 'test/workflow-engineering-history.test.js',
+    'test/execution-local-acceptance-history.test.js', 'test/runtime-history.test.js',
+    'test/task-session-service-history.test.js', 'test/task-topic-routing-history.test.js', 'test/workflow-engineering-history.test.js',
   ])
-  for (const file of ['task-session-execution-provider-recovery-native.test.js', 'task-session-skills-native.test.js', 'message-impact.test.js', 'workflow-engineering.test.js']) assert.ok(map.entries.some(x => x.file === 'test/' + file && x.release))
+  for (const file of ['task-session-execution-provider-recovery-native.test.js', 'task-session-skills-native.test.js', 'task-session-service-native.test.js', 'task-topic-routing-native.test.js', 'message-impact.test.js', 'workflow-engineering.test.js']) assert.ok(map.entries.some(x => x.file === 'test/' + file && x.release))
   assert.ok(map.entries.find(x => x.file === 'test/runtime.test.js').release)
   assert.ok(map.entries.find(x => x.file === 'test/execution-local-acceptance.test.js').release)
 })

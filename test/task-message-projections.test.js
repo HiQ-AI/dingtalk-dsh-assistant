@@ -101,6 +101,16 @@ test('message processing DTO keeps exact source versions, unknown history and no
   assert.deepEqual(messageProcessingSources(sources, notices, 'other'), [])
 })
 
+test('直接处置来源投影保留决议和待处理状态', () => {
+  const [source] = messageProcessingSources([{ sourceId: 's', groupId: 'g', messageId: 'm', version: 1,
+    processingPending: true, directProcessing: { at: 'done', disposition: { phase: 'router', decisionId: 'd' } },
+    processingCompleted: { at: 'done', mode: 'direct', decisionId: 'd' } }], [], 'g')
+  assert.deepEqual(source.directProcessing, { at: 'done', disposition: { phase: 'router', decisionId: 'd' } })
+  assert.equal(source.processingPending, true)
+  assert.equal(source.processingCompleted.mode, 'direct')
+  assert.equal(source.processingCompleted.decisionId, 'd')
+})
+
 test('new inbound image bytes become existing attachment references without losing quote facts', async () => {
   const quote = { messageId: 'quoted', senderName: 'Alice', content: '事实' }
   const images = [{ data: new Uint8Array([1]), mediaType: 'image/png' }]
@@ -152,6 +162,19 @@ test('notification projections retain unknown and only verified delivery becomes
   const calls = []
   await projectTaskNotification({ residentStore: { projectTaskNotification: async value => calls.push(value) }, notification })
   assert.deepEqual(calls, [{ groupId: 'g', outbound: unknown }])
+})
+
+test('私聊通知按内部身份投影并关联来源，传输会话身份保持真实值', async t => {
+  const store = await openResidentStore(memoryFacility()); t.after(() => store.close())
+  const conversation = await store.ensureDirectConversation({ conversationId: 'real-conversation', actorId: 'actor' })
+  const notification = { id: 'direct-notice', state: 'delivered', receipt: { messageId: 'sent' },
+    payload: { groupId: conversation.groupId, conversationType: 'direct', conversationId: 'real-conversation',
+      recipientActorId: 'actor', sourceMessageId: 'source', sourceVersion: 1, text: '回复' } }
+  await projectTaskNotification({ residentStore: store, notification })
+  assert.equal(store.getGroup(conversation.groupId).outbox[0].deliveredMessageId, 'sent')
+  assert.equal(notification.payload.conversationId, 'real-conversation')
+  const [source] = messageProcessingSources([{ sourceId: 's', groupId: conversation.groupId, messageId: 'source', version: 1 }], [notification], conversation.groupId)
+  assert.equal(source.notifications[0].notificationId, 'direct-notice')
 })
 
 test('通知重复投影不再持久写，真实状态变化只写一次并保留既有业务关联', async t => {

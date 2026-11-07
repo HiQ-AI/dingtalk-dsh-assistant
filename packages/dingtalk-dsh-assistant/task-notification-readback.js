@@ -1,5 +1,5 @@
 import { dwsIdempotencyKey, matchesOutbound } from './dws-adapter.js'
-import { notificationOpenTaskId } from './group-message.js'
+import { notificationOpenTaskId, notificationReplyTarget } from './group-message.js'
 import { sameDeliveredText } from './group-message.js'
 import { messageTimestamp } from './dws-bridge.js'
 
@@ -16,6 +16,8 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
   const payload = notification.payload
   const messageId = observed?.messageId
   if (!messageId || observed.conversationId !== payload.conversationId) return undefined
+  if (payload.conversationType === 'direct' && (typeof payload.recipientActorId !== 'string' || !payload.recipientActorId
+    || observed.recipientOpenDingTalkId !== undefined && observed.recipientOpenDingTalkId !== payload.recipientActorId)) return undefined
   if (acknowledgedMessageId && acknowledgedMessageId !== messageId) return undefined
   const sentTime = messageTimestamp(observed.createTime)
   // 精确 SUCCESS 回执绑定原发送任务与消息，只确认送达，不推断正文、引用或 @ 核验结果。
@@ -25,7 +27,8 @@ export function verifyTaskNotificationReadback(notification, observed, { acknowl
     atOpenDingTalkIds: [], mentionVerification: 'unavailable', observedAt: new Date().toISOString(),
   }
   const quote = observed.quotedMessage
-  if (payload.sourceMessageId ? quote?.messageId !== payload.sourceMessageId || quote?.conversationId !== payload.conversationId
+  const { replyToMessageId } = notificationReplyTarget(payload)
+  if (replyToMessageId ? quote?.messageId !== replyToMessageId || quote?.conversationId !== payload.conversationId
     : quote != null) return undefined
   const expected = payload.atOpenDingTalkIds ?? []
   const actualAll = observed.atAll ?? observed.at?.atAll
@@ -69,9 +72,12 @@ export async function readTaskNotificationDelivery(adapter, notification, { send
   const acknowledgedMessageId = messageId
   if (!messageId) {
     const outbound = { outboundId: notification.id, text: notification.payload.text,
-      replyToMessageId: notification.payload.sourceMessageId, replyToSenderOpenDingTalkId: notification.payload.actorId,
+      ...notificationReplyTarget(notification.payload),
       atOpenDingTalkIds: notification.payload.atOpenDingTalkIds ?? [], ...(notification.payload.atAll ? { atAll: true } : {}) }
-    const history = await adapter.readGroup(notification.payload.conversationId)
+    const history = notification.payload.conversationType === 'direct'
+      ? { messages: await adapter.readConversation(notification.payload.conversationId,
+        { start: notification.createdAt, end: new Date().toISOString() }), complete: true }
+      : await adapter.readGroup(notification.payload.conversationId)
     if (history.complete !== true || history.hasMore === true || !Array.isArray(history.messages) || history.failedCount > 0 || history.failures?.length) throw new Error('TASK_NOTIFICATION_INCOMPLETE_READBACK')
     const exact = history.messages?.filter(message => matchesOutbound(message, outbound)) ?? []
     if (exact.length > 1) throw new Error('TASK_NOTIFICATION_AMBIGUOUS_READBACK')

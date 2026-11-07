@@ -29,14 +29,14 @@ test('发送时间随送达回执持久保存，历史记录不以创建时间�
   assert.equal(taskNotificationOutbound({ ...saved, receipt: { messageId: 'old', observedAt: proof.observedAt } }).sentAt, undefined)
 })
 
-async function fixture(t, text = 'done') {
+async function fixture(t, text = 'done', payload = {}) {
   const root = await mkdtemp(join(tmpdir(), 'notice-receipt-'))
   const config = { dbPath: join(root, 'tasks.sqlite'), instanceId: 'receipt-test', initialize: true }
   let store = await openDynamicTaskStore(config), sequence = 0
   t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }) })
   const command = (kind, args, id = `c-${++sequence}`) => store.command({ kind, args, id })
   const notification = (await command('notification.prepare', { notificationId: 'notice', taskId: null, requirementRevision: 1, kind: 'topic-reply',
-    payload: { conversationId: 'g', text, sourceMessageId: 'source', actorId: 'owner', atOpenDingTalkIds: ['owner'], fact: { topicRefs: [{ topicId: 'topic', revision: 1 }] } } })).result.notification
+    payload: { conversationId: 'g', text, sourceMessageId: 'source', actorId: 'owner', atOpenDingTalkIds: ['owner'], fact: { topicRefs: [{ topicId: 'topic', revision: 1 }] }, ...payload } })).result.notification
   const read = async () => (await store.query({ kind: 'notification.list' }))[0]
   return { command, notification, read, async reopen() { await store.close(); store = await openDynamicTaskStore({ ...config, initialize: false }) } }
 }
@@ -268,6 +268,39 @@ test('exact quote-guard refusal is durable not-sent, waits, and retries the same
   assert.deepEqual(calls[1].slice(0, 3), ['chat', 'message', 'reply'])
   assert.equal(calls[1][calls[1].indexOf('--ref-msg-id') + 1], 'source')
   assert.equal(calls[1][calls[1].indexOf('--at-open-dingtalk-ids') + 1], 'owner')
+})
+
+test('显式引用按实际目标校验未发送证明，普通发送不继承来源引用', async t => {
+  const routing = { replyToMessageId: 'quoted', replyToSenderOpenDingTalkId: 'other', atOpenDingTalkIds: ['other'], sourceRefs: [] }
+  const f = await fixture(t, 'done', { notificationRouting: routing, atOpenDingTalkIds: ['other'] })
+  const adapter = createDwsAdapter({ enabled: true, writesAuthorized: true, runner: { run: async () => ({ exitCode: 1, stdout: '', stderr: JSON.stringify({ error: guardError }) }) } })
+  await assert.rejects(deliverTaskNotification({ notification: f.notification, command: f.command, notifications: {
+    send: notice => adapter.sendGroupReply({ groupId: 'g', replyToMessageId: 'quoted', replyToSenderOpenDingTalkId: 'other', text: 'done', idempotencyKey: notice.id }),
+  } }))
+  const failed = await f.read()
+  assert.equal(failed.state, 'failed')
+  assert.equal(failed.deliveryError.proof.replyToMessageId, 'quoted')
+  assert.equal(notificationDelivery.taskNotificationRecovery(failed).action, 'send')
+  const wrong = structuredClone(failed)
+  wrong.payload.notificationRouting.replyToMessageId = 'source'
+  wrong.payload.notificationRouting.replyToSenderOpenDingTalkId = 'owner'
+  assert.equal(notificationDelivery.taskNotificationRecovery(wrong).action, null)
+  const plain = taskNotificationOutbound({ ...failed, payload: { ...failed.payload, notificationRouting: { atOpenDingTalkIds: [], sourceRefs: [] } } })
+  assert.equal(plain.replyToMessageId, undefined)
+  assert.equal(plain.replyToSenderOpenDingTalkId, undefined)
+  assert.equal(plain.sourceRef, undefined)
+  const pending = await fixture(t, 'done', { notificationRouting: routing, atOpenDingTalkIds: ['other'] })
+  const started = (await pending.command('notification.start', { notificationId: 'notice' })).result.notification
+  const mismatch = { ...failed.deliveryError, knownNotSent: false, proof: { ...failed.deliveryError.proof, replyToMessageId: 'source', replyToSenderOpenDingTalkId: 'owner' } }
+  await pending.command('notification.receipt', { notificationId: 'notice', dispatchToken: started.dispatchToken, state: 'unknown', error: mismatch })
+  await pending.command('notification.rejectBeforeSend', { notificationId: 'notice' })
+  assert.equal((await pending.read()).state, 'unknown')
+  let sends = 0
+  await deliverTaskNotification({ notification: await pending.read(), command: pending.command, notifications: { send: async () => { sends++ }, readback: async () => null } })
+  const unknown = await pending.read()
+  assert.equal(unknown.state, 'unknown')
+  assert.deepEqual(unknown.deliveryError.proof, mismatch.proof)
+  assert.equal(sends, 0)
 })
 
 test('old unknown exact pre-send refusal reclassifies in place without history reads or manufactured ACK', async t => {

@@ -7,8 +7,212 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { isolationBinding, isolationDigest, hasRestartIsolation } from '../packages/dingtalk-dsh-assistant/native-restart-isolation.js'
 import { openDynamicTaskStore, pendingTaskHumanReview } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
+import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { projectTaskTimeline, latestExecutionRoundTiming } from '../packages/dingtalk-dsh-assistant/task-execution-timeline.js'
 import { fixedUnitRequestId } from '../packages/dingtalk-dsh-assistant/fixed-topics.js'
+
+test('Router 回复使用真实来源并在来源过期时拒绝新通知', async t => {
+  const f = await fixture(t)
+  await f.command('source.record', { sourceId: 's', groupId: 'internal-direct', messageId: 'm', version: 1, actorId: 'actor', text: '请求' })
+  const payload = { groupId: 'internal-direct', conversationId: 'real-direct', conversationType: 'direct', recipientActorId: 'actor',
+    sourceId: 's', sourceMessageId: 'm', sourceVersion: 1, actorId: 'actor', text: '收到',
+    sourceRef: { messageId: 'm', messageVersion: 1, actorId: 'actor' }, replyToMessageId: 'm', replyToSenderOpenDingTalkId: 'actor', atOpenDingTalkIds: [] }
+  const args = { notificationId: 'router-reply:op', taskId: null, requirementRevision: 1, kind: 'router-reply', payload }
+  const prepared = await f.command('notification.prepare', args, 'prepare-router-reply')
+  assert.equal(prepared.result.notification.payload.conversationId, 'real-direct')
+  await assert.rejects(f.command('notification.prepare', { ...args, notificationId: 'direct-at', payload: { ...payload, atOpenDingTalkIds: ['actor'] } }), { code: 'DYNAMIC_ROUTER_REPLY_SOURCE_INVALID' })
+  await assert.rejects(f.command('notification.prepare', { ...args, notificationId: 'bad', payload: { ...payload, groupId: 'other' } }), { code: 'DYNAMIC_ROUTER_REPLY_SOURCE_INVALID' })
+  const retiredArgs = { ...args, notificationId: 'router-reply:retired' }
+  await f.command('notification.prepare', retiredArgs, 'prepare-notification:router-reply:retired')
+  await assert.rejects(f.command('notification.routerRetireUnsent', { notificationId: retiredArgs.notificationId,
+    prepareArgs: { ...retiredArgs, payload: { ...payload, text: '篡改' } } }), { code: 'DYNAMIC_NOTIFICATION_ID_CONFLICT' })
+  assert.equal((await f.command('notification.routerRetireUnsent', { notificationId: retiredArgs.notificationId, prepareArgs: retiredArgs })).result.status, 'retired')
+  assert.equal((await f.command('notification.start', { notificationId: retiredArgs.notificationId })).dispatchEligible, false)
+  assert.equal((await f.command('notification.routerRetireUnsent', { notificationId: retiredArgs.notificationId, prepareArgs: retiredArgs })).result.status, 'retired')
+  await f.command('source.record', { sourceId: 's2', groupId: 'internal-direct', messageId: 'm', version: 2, actorId: 'actor', text: '已修改' })
+  assert.equal((await f.command('notification.prepare', args, 'prepare-router-reply')).replayed, true)
+  await assert.rejects(f.command('notification.prepare', { ...args, notificationId: 'stale' }), { code: 'DYNAMIC_ROUTER_REPLY_SOURCE_INVALID' })
+})
+
+test('Router 通知验证显式收件人与引用来源，同时允许无引用的全体通知', async t => {
+  const f = await fixture(t)
+  await f.command('source.record', { sourceId: 'anchor', groupId: 'g', messageId: 'm1', version: 1, actorId: 'a', text: '请求' })
+  await f.command('source.record', { sourceId: 'target', groupId: 'g', messageId: 'm2', version: 1, actorId: 'b', text: '补充' })
+  const ref = { sourceId: 'target', messageId: 'm2', messageVersion: 1, actorId: 'b' }
+  const routing = { replyToMessageId: 'm2', replyToSenderOpenDingTalkId: 'b', atOpenDingTalkIds: ['b'], sourceRefs: [ref] }
+  const payload = { groupId: 'g', conversationId: 'g', sourceId: 'anchor', sourceMessageId: 'm1', sourceVersion: 1, actorId: 'a', text: '收到',
+    sourceRef: { messageId: 'm1', messageVersion: 1, actorId: 'a' }, replyToMessageId: 'm2', replyToSenderOpenDingTalkId: 'b', atOpenDingTalkIds: ['b'], notificationRouting: routing }
+  const args = { notificationId: 'quoted', taskId: null, requirementRevision: 1, kind: 'router-reply', payload }
+  assert.equal((await f.command('notification.prepare', args)).result.notification.payload.replyToMessageId, 'm2')
+  await assert.rejects(f.command('notification.prepare', { ...args, notificationId: 'forged', payload: { ...payload, notificationRouting: { ...routing, sourceRefs: [{ ...ref, actorId: 'x' }] } } }), { code: 'DYNAMIC_ROUTER_REPLY_SOURCE_INVALID' })
+  const all = { ...payload, replyToMessageId: undefined, replyToSenderOpenDingTalkId: undefined, atOpenDingTalkIds: [], atAll: true,
+    notificationRouting: { atOpenDingTalkIds: [], atAll: true, sourceRefs: [] } }
+  delete all.replyToMessageId; delete all.replyToSenderOpenDingTalkId
+  assert.equal((await f.command('notification.prepare', { ...args, notificationId: 'all', payload: all })).result.notification.payload.atAll, true)
+})
+
+test('Router 附件绑定完成事实并阻止跨操作重复发送', async t => {
+  const f = await fixture(t)
+  await f.command('source.record', { sourceId: 'file-source', groupId: 'g', messageId: 'm', actorId: 'actor', text: '请求文件' })
+  await f.command('task.create', { taskId: 'file-task', groupId: 'g', sourceRefs: ['file-source'], request: '请求文件' })
+  const { binding } = (await f.command('task.claim', { taskId: 'file-task' })).result
+  const files = [{ artifact: { artifactId: 'artifact', taskId: 'file-task', requirementRevision: 1, fileName: 'result.txt' }, caption: '结果' }]
+  const { routerFacts } = await f.command('task.complete', { binding, summary: '完成', result: { artifactFiles: files }, routerFacts: true })
+  const fact = routerFacts[0].fact
+  const completion = { factId: fact.factId, factDigest: fact.factDigest, taskId: fact.taskId, taskVersion: fact.taskVersion, files }
+  const payload = { groupId: 'g', conversationId: 'g', sourceId: 'file-source', sourceMessageId: 'm', sourceVersion: 1,
+    actorId: 'actor', text: '完成', sourceRef: { messageId: 'm', messageVersion: 1, actorId: 'actor' },
+    replyToMessageId: 'm', replyToSenderOpenDingTalkId: 'actor', atOpenDingTalkIds: ['actor'], completion, artifactFiles: files }
+  const args = { notificationId: 'router-reply:file', taskId: null, requirementRevision: 1, kind: 'router-reply', payload }
+  await assert.rejects(f.command('notification.prepare', { ...args, payload: { ...payload, completion: { ...completion, factDigest: 'forged' } } }), { code: 'DYNAMIC_ROUTER_REPLY_COMPLETION_INVALID' })
+  const result = await f.command('notification.prepare', args, 'prepare-notification:router-reply:file')
+  assert.equal(result.result.notifications[1].id, 'router-reply:file:file:artifact')
+  assert.equal((await f.command('notification.prepare', args, 'prepare-notification:router-reply:file')).replayed, true)
+  await assert.rejects(f.command('notification.prepare', { ...args, notificationId: 'router-reply:other' }), { code: 'DYNAMIC_ROUTER_REPLY_ARTIFACT_CONFLICT' })
+  const parent = (await f.command('notification.start', { notificationId: args.notificationId })).result.notification
+  await f.command('notification.receipt', { notificationId: args.notificationId, dispatchToken: parent.dispatchToken,
+    state: 'delivered', receipt: { messageId: 'delivered-summary' } })
+  const fileId = 'router-reply:file:file:artifact'
+  assert.equal((await f.command('notification.start', { notificationId: fileId })).dispatchEligible, true)
+  await f.reopen()
+  assert.equal((await f.query({ kind: 'notification.get', notificationId: fileId })).state, 'unknown')
+  assert.equal((await f.command('notification.routerRetireUnsent', { notificationId: args.notificationId, prepareArgs: args })).result.status, 'existing')
+  assert.equal((await f.command('notification.start', { notificationId: fileId })).dispatchEligible, false)
+  await assert.rejects(f.command('notification.prepare', { ...args, notificationId: 'router-reply:after-restart' }), { code: 'DYNAMIC_ROUTER_REPLY_ARTIFACT_CONFLICT' })
+})
+
+test('直接来源按固定决议完成，不伪造 Unit 且保留重试身份', async t => {
+  const f = await fixture(t)
+  const input = { sourceId: 'direct-source', groupId: 'g', messageId: 'm', version: 1, actorId: 'actor', text: '请求' }
+  await f.command('source.record', input)
+  const disposition = { sourceId: input.sourceId, groupId: 'g', messageVersion: 1, phase: 'router', decisionId: 'decision' }
+  const completed = (await f.command('source.directProcessed', disposition, 'direct-done')).result.source
+  assert.equal(completed.processingCompleted.mode, 'direct')
+  assert.equal(completed.processingCompleted.activeUnitRefs, undefined)
+  assert.equal((await f.command('source.record', input)).result.source.directProcessing.disposition.decisionId, 'decision')
+  await assert.rejects(f.command('source.directProcessed', { ...disposition, decisionId: 'other' }), { code: 'DYNAMIC_SOURCE_PROCESSING_CONFLICT' })
+  await f.reopen()
+  assert.equal((await f.command('source.directProcessed', disposition, 'direct-done')).replayed, true)
+  assert.equal((await f.query({ kind: 'source.get', sourceId: input.sourceId })).routed, true)
+})
+
+test('Router 收到等待、阻塞和需输入事实，身份不足时明确阻断', async t => {
+  const f = await fixture(t)
+  await f.command('source.record', { sourceId: 's', groupId: 'g', messageId: 'm', actorId: 'owner', text: '请求' })
+  for (const [id, args, expected] of [
+    ['wait', { action: 'wait', summary: '等待执行' }, 'wait'],
+    ['blocked', { action: 'blocked', summary: '无法继续' }, 'blocked'],
+    ['question', { action: 'wait', summary: '需要信息', question: '请补充', humanRequest: { requestId: 'human', audience: 'requester' } }, 'needs-input'],
+  ]) {
+    await f.command('task.create', { taskId: id, groupId: 'g', sourceRefs: ['s'], request: '请求' })
+    const { binding } = (await f.command('task.claim', { taskId: id })).result
+    const result = await f.command('task.wait', { binding, ...args, routerFacts: true })
+    assert.equal(result.routerFacts[0].fact.kind, expected)
+    assert.equal(result.routerFacts[0].state, 'pending')
+  }
+  const { binding } = await f.task('missing-source')
+  const result = await f.command('task.wait', { binding, action: 'blocked', summary: '缺少身份', routerFacts: true })
+  assert.equal(result.routerFacts[0].state, 'blocked')
+  assert.equal(result.routerFacts[0].reason, 'ROUTER_FACT_SOURCE_IDENTITY_MISSING')
+  await f.command('source.record', { sourceId: 'web', groupId: 'g', messageId: 'web-message', actorId: 'owner', channel: 'web', text: 'Web 请求' })
+  await f.command('task.create', { taskId: 'web-only', groupId: 'g', sourceRefs: ['web'], request: 'Web 请求' })
+  const webBinding = (await f.command('task.claim', { taskId: 'web-only' })).result.binding
+  assert.deepEqual((await f.command('task.complete', { binding: webBinding, summary: '完成', routerFacts: true })).routerFacts, [])
+  await f.command('task.create', { taskId: 'mixed', groupId: 'g', sourceRefs: ['s', 'web'], request: '混合请求' })
+  const mixedBinding = (await f.command('task.claim', { taskId: 'mixed' })).result.binding
+  const mixed = await f.command('task.complete', { binding: mixedBinding, summary: '完成', routerFacts: true })
+  assert.deepEqual(mixed.routerFacts[0].fact.sourceIds, ['s'])
+  assert.equal(mixed.routerFacts[0].state, 'pending')
+})
+
+test('Router 任务动作固定操作身份并拒绝跨会话、来源版本和过期控制版本', async t => {
+  const f = await fixture(t)
+  await f.command('source.record', { sourceId: 's', groupId: 'g', messageId: 'm', version: 1, actorId: 'owner', text: '请求' })
+  const args = { groupId: 'g', decisionId: 'd', operationId: 'op', sourceRefs: [{ sourceId: 's', messageId: 'm', messageVersion: 1 }],
+    action: { kind: 'new-task', taskId: 'direct', title: '事项', objective: '完成请求', acceptanceCriteria: ['完成'] } }
+  const first = await f.command('router.task.apply', args, 'router-op')
+  assert.deepEqual(first.result.task.sourceRefs, ['s'])
+  assert.equal(first.result.task.ownerActorId, 'owner')
+  assert.deepEqual(first.result.task.topicRefs, [])
+  assert.equal((await f.command('router.task.apply', args, 'router-op')).replayed, true)
+  await assert.rejects(f.command('router.task.apply', { ...args, action: { ...args.action, objective: '不同目标' } }, 'router-op'), { code: 'DYNAMIC_COMMAND_ID_CONFLICT' })
+  await assert.rejects(f.command('router.task.apply', { ...args, groupId: 'other' }), { code: 'TASK_ROUTER_SOURCE_INVALID' })
+  await assert.rejects(f.command('router.task.apply', { ...args, sourceRefs: [{ ...args.sourceRefs[0], messageVersion: 2 }] }), { code: 'TASK_ROUTER_SOURCE_INVALID' })
+  await f.command('source.record', { sourceId: 'other', groupId: 'g', messageId: 'other-message', actorId: 'other-actor', text: '取消' })
+  await assert.rejects(f.command('router.task.apply', { ...args, operationId: 'forbidden',
+    sourceRefs: [{ sourceId: 'other', messageId: 'other-message', messageVersion: 1 }], action: { kind: 'task-cancel', taskId: 'direct',
+      inputVersion: 1, runSequence: 1, expectedControlRevision: 1, reason: '取消' } }), { code: 'TASK_ROUTER_SOURCE_FORBIDDEN' })
+  await assert.rejects(f.command('router.task.apply', { ...args, operationId: 'cancel', action: { kind: 'task-cancel', taskId: 'direct',
+    inputVersion: 1, runSequence: 1, expectedControlRevision: 2, reason: '取消' } }), { code: 'DYNAMIC_TASK_REVISION_STALE' })
+  await f.command('source.record', { sourceId: 's2', groupId: 'g', messageId: 'm', version: 2, actorId: 'owner', text: '已修改' })
+  await assert.rejects(f.command('router.task.apply', { ...args, operationId: 'stale', action: { ...args.action, taskId: 'stale' } }),
+    { code: 'DYNAMIC_SOURCE_REVISION_CONFLICT' })
+})
+
+test('Router 后续动作在同一事务核验前置任务版本和排空', async t => {
+  const f = await fixture(t)
+  await f.command('source.record', { sourceId: 's', groupId: 'g', messageId: 'm', actorId: 'actor', text: '先完成 A，再执行 B' })
+  await f.command('task.create', { taskId: 'a', groupId: 'g', sourceRefs: ['s'], request: '完成 A' })
+  const { binding } = (await f.command('task.claim', { taskId: 'a' })).result
+  const completed = (await f.command('task.complete', { binding, summary: 'A 完成' })).result.task
+  const dep = { taskId: 'a', requirementRevision: completed.requirementRevision, contextRevision: completed.contextRevision ?? 0,
+    controlRevision: completed.controlRevision, runSequence: completed.runSequence }
+  const args = { groupId: 'g', decisionId: 'd', operationId: 'b', sourceRefs: [{ sourceId: 's', messageId: 'm', messageVersion: 1 }],
+    action: { kind: 'new-task', taskId: 'b', objective: '执行 B', dependencies: [dep] } }
+  await assert.rejects(f.command('router.task.apply', args, 'b-op'), { code: 'DYNAMIC_ROUTER_DEPENDENCY_UNSETTLED' })
+  assert.equal(await f.query({ kind: 'task.get', taskId: 'b' }), null)
+  await f.command('task.drained', { binding })
+  await assert.rejects(f.command('router.task.apply', { ...args, action: { ...args.action, dependencies: [{ ...dep, controlRevision: dep.controlRevision + 1 }] } }), { code: 'DYNAMIC_ROUTER_DEPENDENCY_STALE' })
+  await f.command('source.record', { sourceId: 'other-source', groupId: 'other', messageId: 'other-message', actorId: 'actor', text: '执行 B' })
+  await assert.rejects(f.command('router.task.apply', { ...args, groupId: 'other',
+    sourceRefs: [{ sourceId: 'other-source', messageId: 'other-message', messageVersion: 1 }] }), { code: 'DYNAMIC_ROUTER_DEPENDENCY_STALE' })
+  const result = await f.command('router.task.apply', args, 'b-op')
+  assert.equal(result.result.task.taskId, 'b')
+  assert.equal((await f.command('router.task.apply', args, 'b-op')).replayed, true)
+  assert.equal((await f.query({ kind: 'task.list' })).filter(task => task.taskId === 'b').length, 1)
+  await f.command('task.archive', { taskId: 'a', actorId: 'actor' })
+  const next = { ...args, operationId: 'c', action: { ...args.action, taskId: 'c', objective: '执行 C' } }
+  assert.equal((await f.command('router.task.apply', next, 'c-op')).result.task.taskId, 'c')
+})
+
+test('Router 事实与任务完成同事务落账并在重启后按原身份确认入队', async t => {
+  const f = await fixture(t)
+  await f.command('source.record', { sourceId: 'source', groupId: 'g', messageId: 'message', actorId: 'actor', text: '请求' })
+  await f.command('task.create', { taskId: 'direct', groupId: 'g', sourceRefs: ['source'], request: '请求', metadata: { router: true } })
+  const { binding } = (await f.command('task.claim', { taskId: 'direct' })).result
+  const receipt = await f.command('task.complete', { binding, summary: '完成', routerFacts: true }, 'complete-direct')
+  const entry = receipt.routerFacts[0]
+  assert.equal(entry.state, 'pending')
+  assert.equal(entry.fact.kind, 'completed')
+  assert.deepEqual(entry.fact.sourceIds, ['source'])
+  assert.equal((await f.command('task.complete', { binding, summary: '完成', routerFacts: true }, 'complete-direct')).replayed, true)
+  await f.reopen()
+  assert.deepEqual(await f.query({ kind: 'router.fact.pending', groupId: 'g' }), [entry])
+  const rows = new Map()
+  const table = name => ({ get: key => rows.get(`${name}:${key}`),
+    entries: () => [...rows.entries()].filter(([key]) => key.startsWith(`${name}:`)).map(([key, value]) => [key.slice(name.length + 1), value])[Symbol.iterator](),
+    async put(key, value) { rows.set(`${name}:${key}`, value) }, async delete(key) { rows.delete(`${name}:${key}`) },
+    async update(key, transform) { const storageKey = `${name}:${key}`, value = transform(rows.get(storageKey)); rows.set(storageKey, value); return value } })
+  const facility = { async open() { return { table, close: async () => undefined } } }
+  let resident = await openResidentStore(facility)
+  t.after(() => resident.close())
+  await resident.subscribe({ groupId: 'g' })
+  const enqueueReceipt = await resident.routerEnqueueFact({ groupId: 'g', fact: entry.fact })
+  await resident.close()
+  resident = await openResidentStore(facility)
+  assert.deepEqual(await resident.routerEnqueueFact({ groupId: 'g', fact: entry.fact }), enqueueReceipt)
+  await assert.rejects(f.command('router.fact.enqueued', { factId: entry.fact.factId, factDigest: entry.fact.factDigest,
+    enqueueReceipt: { ...enqueueReceipt, factDigest: 'wrong' } }), { code: 'DYNAMIC_ROUTER_FACT_RECEIPT_INVALID' })
+  await f.command('router.fact.enqueued', { factId: entry.fact.factId, factDigest: entry.fact.factDigest, enqueueReceipt }, 'fact-ack')
+  assert.deepEqual(await f.query({ kind: 'router.fact.pending', groupId: 'g' }), [])
+  const drained = await f.command('task.drained', { binding }, 'drain-direct')
+  assert.equal(drained.routerFacts[0].fact.kind, 'drained')
+  assert.notEqual(drained.routerFacts[0].fact.factId, entry.fact.factId)
+  assert.equal((await f.command('task.drained', { binding }, 'drain-direct')).replayed, true)
+  await f.reopen()
+  assert.deepEqual((await f.query({ kind: 'router.fact.get', factId: entry.fact.factId })).enqueueReceipt, enqueueReceipt)
+  assert.equal((await f.query({ kind: 'router.fact.pending', groupId: 'g' }))[0].fact.kind, 'drained')
+})
 
 test('正常初始化与重启不触发全库完整性审计，任务身份保持', async t => {
   const prepare = DatabaseSync.prototype.prepare

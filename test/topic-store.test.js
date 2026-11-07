@@ -19,39 +19,39 @@ async function setup() {
   await store.subscribe({ groupId: 'g' })
   return { snapshot, storage, store }
 }
-test('两级模型配置兼容旧记录、独立持久化并可重置继承', async () => {
+test('初筛与Router模型经真实Domain独立持久化并可重置继承', async () => {
   const { store, snapshot } = await setup()
-  assert.equal(store.getTopicRouteModelConfig(), undefined)
-  assert.equal(store.getTopicDecisionModelConfig(), undefined)
+  assert.equal(store.getTriageModelConfig(), undefined)
+  assert.equal(store.getRouterModelConfig(), undefined)
   const owner = { provider: 'owner', model: 'owner-model', reasoningMode: 'explicit', reasoningEffort: 'high' }
   const route = { provider: 'gateway', model: 'route-model', reasoningMode: 'model-default', reasoningEffort: null }
   const decision = { provider: 'gateway', model: 'decision-model', reasoningMode: 'explicit', reasoningEffort: 'high' }
-  await store.setAgentSettings({ taskSessionModel: owner, topicRouteModel: route, topicDecisionModel: decision })
-  assert.deepEqual(store.getTopicRouteModelConfig(), route)
-  assert.deepEqual(store.getTopicDecisionModelConfig(), decision)
+  await store.setAgentSettings({ taskSessionModel: owner, triageModel: route, routerModel: decision })
+  assert.deepEqual(store.getTriageModelConfig(), route)
+  assert.deepEqual(store.getRouterModelConfig(), decision)
   await store.close()
   const reopened = await openResidentStore(facility(snapshot))
   try {
-    assert.deepEqual(reopened.getTopicRouteModelConfig(), route)
-    assert.deepEqual(reopened.getTopicDecisionModelConfig(), decision)
-    for (const field of ['topicRouteModel', 'topicDecisionModel']) {
+    assert.deepEqual(reopened.getTriageModelConfig(), route)
+    assert.deepEqual(reopened.getRouterModelConfig(), decision)
+    for (const field of ['triageModel', 'routerModel']) {
       for (const invalid of [{ ...route, provider: '' }, { ...route, provider: '   ' }, { ...route, model: '' }, { ...route, model: '   ' }, { ...route, reasoningMode: 'unknown' }, { ...route, reasoningEffort: 1 }]) {
         const malformed = structuredClone(snapshot)
         malformed.tables.scheduler.runtime[field] = invalid
         await assert.rejects(openResidentStore(facility(malformed)), { code: 'invalid-record' })
       }
     }
-    assert.deepEqual(reopened.getTopicRouteModelConfig(), route)
-    assert.deepEqual(reopened.getTopicDecisionModelConfig(), decision)
-    await reopened.setAgentSettings({ topicRouteModel: null })
-    assert.equal(reopened.getTopicRouteModelConfig(), null)
-    assert.deepEqual(reopened.getTopicDecisionModelConfig(), decision)
-    await reopened.setAgentSettings({ topicDecisionModel: null })
+    assert.deepEqual(reopened.getTriageModelConfig(), route)
+    assert.deepEqual(reopened.getRouterModelConfig(), decision)
+    await reopened.setAgentSettings({ triageModel: null })
+    assert.equal(reopened.getTriageModelConfig(), null)
+    assert.deepEqual(reopened.getRouterModelConfig(), decision)
+    await reopened.setAgentSettings({ routerModel: null })
   } finally { await reopened.close() }
   const reset = await openResidentStore(facility(snapshot))
   try {
-    assert.equal(reset.getTopicRouteModelConfig(), null)
-    assert.equal(reset.getTopicDecisionModelConfig(), null)
+    assert.equal(reset.getTriageModelConfig(), null)
+    assert.equal(reset.getRouterModelConfig(), null)
     assert.deepEqual(reset.getTaskSessionModelConfig(), owner)
   } finally { await reset.close() }
 })

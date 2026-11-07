@@ -21,12 +21,22 @@ export async function testFiles(root, directory = 'test') {
 
 // Catalogue registration statements, including parameterized loops, without executing tests.
 // The entire statement is hashed: changing a loop, option, assertion or timeout needs review.
-export function registrations(source, { strict = false } = {}) {
+export function registrations(source, { strict = false, forwardingWrappers = false, aliases = [] } = {}) {
   const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module', locations: true })
   const names = new Set()
   for (const node of ast.body) if (node.type === 'ImportDeclaration' && node.source.value === 'node:test') {
     for (const spec of node.specifiers) if (spec.type === 'ImportDefaultSpecifier' || ['test', 'it', 'describe', 'suite'].includes(spec.imported?.name)) names.add(spec.local.name)
   }
+  const wrappers = new Set()
+  if (forwardingWrappers) for (const node of ast.body) {
+    if (node.type !== 'VariableDeclaration' || !node.declarations.every(declaration =>
+      declaration.id.type === 'Identifier' && declaration.init?.type === 'ArrowFunctionExpression'
+      && declaration.init.body.type === 'CallExpression' && declaration.init.body.callee.type === 'Identifier'
+      && names.has(declaration.init.body.callee.name))) continue
+    wrappers.add(node)
+    for (const declaration of node.declarations) names.add(declaration.id.name)
+  }
+  for (const alias of aliases) names.add(alias)
   const contains = node => {
     if (!node || typeof node !== 'object') return false
     if (node.type === 'CallExpression') {
@@ -36,7 +46,7 @@ export function registrations(source, { strict = false } = {}) {
     }
     return Object.values(node).some(value => Array.isArray(value) ? value.some(contains) : contains(value))
   }
-  const statements = ast.body.filter(node => !['ImportDeclaration', 'FunctionDeclaration'].includes(node.type) && contains(node))
+  const statements = ast.body.filter(node => !wrappers.has(node) && !['ImportDeclaration', 'FunctionDeclaration'].includes(node.type) && contains(node))
   if (strict && ast.body.some(node => node.type !== 'ImportDeclaration' && !statements.includes(node))) throw Error('unreviewed_mixed_test_statement')
   return statements.map((node, index) => ({
     id: index + 1, line: node.loc.start.line, start: node.start, end: node.end,

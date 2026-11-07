@@ -1,0 +1,3113 @@
+{
+  "scope": "SG8 final worktree local package validation; not a release, deployment or real DingTalk send",
+  "baseHead": "14ad11aa7c7ba2f0c4082ecc65bfd81cfa5b2a2f",
+  "dirtyWorktree": true,
+  "candidateState": "local-smoke-passed",
+  "deliveryEligible": true,
+  "supersededEvidence": "previousPackageCandidate in this file; superseded tgz removed, original input hashes preserved",
+  "sourceSha256": {
+    "CHANGELOG.md": "e3f8b4c4bceb5f296cb7d5ec852ac913c30460f9ebb312d70cfd6df3478db749",
+    "README.md": "9561b9fd378fab1bf7b85d6075624fa5abfeeb15dd13466cbaae2edbdf3603b0",
+    "cordis.patch.yml": "d7136a2ce7a424a43a9ba13b1f41175e52573c08a11a1e5ad952c9e631d6d658",
+    "index.js": "1a39b16ee590d351091b02c6bc6f52c43371f9be83511eb7a51b70db31d51ab3",
+    "package.json": "cefb0f5501dc2984e78c6be6d933fb5835d6079e06e4468f650b799838d00e84",
+    "packages/dingtalk-dsh-assistant/README.md": "24320f8f80f5f30302e382ad7369cd3f4552b268df831e8d4bde75d79590e76a",
+    "packages/dingtalk-dsh-assistant/artifact-json.js": "51b9ab4d8e6a6b524ed3caa0a076de359a759c56f45cdf50ead403b13770156f",
+    "packages/dingtalk-dsh-assistant/claude-execution-session.js": "b3cc15e04ad5f66eac66f17b4063033e3d49e8ccea4cc07b4e8a1c47a541e3a1",
+    "packages/dingtalk-dsh-assistant/client.js": "7013131cf749c93e8e5e004f7f0f45c00ee09d1a6b7e535e8f507d0ba9492189",
+    "packages/dingtalk-dsh-assistant/conversation-router-session.js": "bd52802a8789ccc39a38e2e0291fded327fb7005dd8900ef738eceb6db4cdfab",
+    "packages/dingtalk-dsh-assistant/conversation-router.js": "8749b477728b65de513366d0d0cb8a2937890acae4120d9bb08ad54a2e6312a1",
+    "packages/dingtalk-dsh-assistant/coordination-context.js": "b09960a88ff53c3583559f19c001470dfffbb09b9e6e76f01f093b6cd02bd217",
+    "packages/dingtalk-dsh-assistant/coordination-migration-state.js": "e5d49740827bff2345a0b212cfebd88b0ab26813b34a9123d5c0b086076ee7c7",
+    "packages/dingtalk-dsh-assistant/coordination-resources.js": "3f38c4e355f7b4b0b0251a9be1efa439c3e46acbb7168f2b6b52bf97a11d14ec",
+    "packages/dingtalk-dsh-assistant/coordination-retirement.js": "75ac1ebccff0def954de65ef20f4f9729119b53febdd9830e712168546a43062",
+    "packages/dingtalk-dsh-assistant/coordination-sessions.js": "18616fdfb109d1d50a276b314d383d3bb8b8c7592494d3e8947d16d9f4ed5d42",
+    "packages/dingtalk-dsh-assistant/cordis.patch.yml": "417cb0b4ca02f4ea6518bff167d630e9aff7c4ef63168c06eed3581aa0408944",
+    "packages/dingtalk-dsh-assistant/decision.js": "bc0cf51e20d12e99b805db8e8df3334e9de6449328f40a4fc0aa5ba0519cc45a",
+    "packages/dingtalk-dsh-assistant/dws-adapter.js": "ff4924f52ee454fb0fefc412b56fcefb7eb709c18be4e09ab4ae5f0a742d6044",
+    "packages/dingtalk-dsh-assistant/dws-bridge.js": "b740a9d4bbcf208a92c0ed19e45e1d0bb95f33ac08ba678e2839fbd2fbdf6e11",
+    "packages/dingtalk-dsh-assistant/dws-runner.js": "ec3d0368b17d1e84df064d2fd76c185de791fbb5a9d94959fe4b586ac8d69cad",
+    "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js": "ee6bc1469be87c34bd41d23434ed5251cf7fbc05f35f3358976c0cdd9b0b4cf7",
+    "packages/dingtalk-dsh-assistant/dynamic-native-job.js": "765c32fd7b226ff083595838a9617123eb859109cd246b46c19e6df2ebbc1a53",
+    "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js": "f17f4ee8a15684ae67e748af0c00484781158c376e75d74639c49fdf84d73900",
+    "packages/dingtalk-dsh-assistant/dynamic-process-scope.js": "f6b43410d3850570a2a93c3e44fc91557a5f62ebb73213e95e20b383678a7039",
+    "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "bff4778e81386a73bf4e7aef36b94c5f15acbc18ba263d39b752128dc9c6e52a",
+    "packages/dingtalk-dsh-assistant/environment.js": "7f55a26ab86396e342b2d10d4834fb339f823e82f39fff33669042407be0d13a",
+    "packages/dingtalk-dsh-assistant/execution-context.js": "e62df40af1c0648390b2f72dca3fae0bc6dfa216c43e3bfc681c59dd3b4b4335",
+    "packages/dingtalk-dsh-assistant/execution-provider-failure.js": "f0d24b3c1ddc3a9300da7aa14a109d528eea6db6bca266b1f1d6767682d0a59e",
+    "packages/dingtalk-dsh-assistant/execution-resource-catalog.js": "5777b892709d9ef3152633484de802a3544b7cdda734512748f4d7eae7febedf",
+    "packages/dingtalk-dsh-assistant/execution-session.js": "2dd152f6005f8492e2536604dde1a19b321f39790b1c793a3908cca422578dca",
+    "packages/dingtalk-dsh-assistant/fake-llm.js": "f6114d893e014c36a09ff86a123725b04206c2b88e4556becc943bc4506e6c6e",
+    "packages/dingtalk-dsh-assistant/fixed-topic-correction.js": "5ace7543abec034f3745f97fb58d028cb5da8d7680763cc3d8de5b0b341cf47a",
+    "packages/dingtalk-dsh-assistant/fixed-topic-handler.js": "d96838e804b5fe67ac7d616ae00945a3f859db65763666c842055432ec73cec6",
+    "packages/dingtalk-dsh-assistant/fixed-topics.js": "2e69219ea8affdd36253b488d2a1fed924cb8c00454e2927302b0a67933dab09",
+    "packages/dingtalk-dsh-assistant/group-coordinator-session.js": "7676e64bd6c6913a9ad64d86e72183b20c1d1d59edbd5156ed16a43a2c312d06",
+    "packages/dingtalk-dsh-assistant/group-message.js": "5da36d4541971a166a60ecffd7d437838488e4ed98b5f58f40fc592d91bd60ef",
+    "packages/dingtalk-dsh-assistant/group-notification.js": "854cce96c76798bbcf4093ef94ccb8a145360bc4e1790e5d5cd77847a0b816c1",
+    "packages/dingtalk-dsh-assistant/group-person-aliases.js": "8b8e0dabd2afda1505b572cf81bd2ddc9c15e8ac8de51eda646a2f7d3c1abd76",
+    "packages/dingtalk-dsh-assistant/group-reply-format.js": "ba650e68d1538e68796fa9125b90f2e35298c89374d334f9873c74624cf55efd",
+    "packages/dingtalk-dsh-assistant/host-context.js": "497fe3a542249276f3ad549c7785fc033f616713daee0cac68d3239ad0a0942a",
+    "packages/dingtalk-dsh-assistant/http.js": "609f23ecd3fab017fed079dfc6289676b88531b8caa05d4bef4781404fc168be",
+    "packages/dingtalk-dsh-assistant/index.js": "d9c9a99ec280fa37af3f1ec956db1497caa76d0e882ac95b44978b5a00a70ee7",
+    "packages/dingtalk-dsh-assistant/model-context.js": "4b87ea6078341f727440c6015b9e27229255b7c044a8c85160863ff8e7cbbd23",
+    "packages/dingtalk-dsh-assistant/native-dws-send.js": "aebd551bdd7c2ed559c20eb90aad63dd8df48524b21557c24eaae68b6bc88723",
+    "packages/dingtalk-dsh-assistant/native-maintenance-drain.js": "d27fb5593606dc74b1b3efffa3d05245b0dadfd0955aa6efce5f8ea51f63aacb",
+    "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js": "e2ea17ed3321c34c1696286122f51649984e980b00ba05d4b077dd67122bcf54",
+    "packages/dingtalk-dsh-assistant/native-restart-isolation.js": "b7cac828e576ba88cc392e1b7ee002aed0653cf36ddd7fdf2b3f5364cc5bbadd",
+    "packages/dingtalk-dsh-assistant/native-restart-scope-probe.js": "f073b53dae7af595035319c45845aa2c34b22f1054795317eee76239a990d70a",
+    "packages/dingtalk-dsh-assistant/notification-delivery.js": "266538c8eca17a179f9a6c5174eea57e902ef7eea37064925f949c2bf34fa28d",
+    "packages/dingtalk-dsh-assistant/observer-alert-pages.js": "c94be5045799b80088862310256c8e3170c595ed9a5a273d1130e6e667ace4fc",
+    "packages/dingtalk-dsh-assistant/observer-artifact-bindings.js": "cadb1a6f6c8e6a2612655715e0ea305d3eca7e2493e00a2ee829f88e717279cc",
+    "packages/dingtalk-dsh-assistant/observer-artifact-pages.js": "d0fa2ced3d52f664b80599baf00f8a9c5156eb8c8aace5039063b701338b7699",
+    "packages/dingtalk-dsh-assistant/observer-evidence-pages.js": "ddbf127f64d9d03848eb168e69b8fe891069d9627f6073383b6e7b06da64de79",
+    "packages/dingtalk-dsh-assistant/observer-fixed-topic-pages.js": "446d7302532c1193dff6baa5e183b21015ccfa40652ec22e4a25cf7c4224a682",
+    "packages/dingtalk-dsh-assistant/observer-group-pages.js": "9e646fcd24f61c95f3808835d05f79f7f217937eb40c3e8430458487d366892e",
+    "packages/dingtalk-dsh-assistant/observer-legacy-execution-pages.js": "2846b7fe8829cec9eb942571752a3685fb75acedca33cd0da78c6c322c4f717a",
+    "packages/dingtalk-dsh-assistant/observer-memory-pages.js": "67d1acbeb2fb6627bfb927b03b547496c7bba1383eccffbe67484e09b66d32d7",
+    "packages/dingtalk-dsh-assistant/observer-message-projection.js": "50fb135783ccb488c54697d5a05c9dac4ca4d5d18e8fa80ddca9c41f5d67710d",
+    "packages/dingtalk-dsh-assistant/observer-outbox-state.js": "10f40c5df9f2f6f4a6a8a49dcf04569701ee9f0fba85192cc0b4f1a2f257c775",
+    "packages/dingtalk-dsh-assistant/observer-pagination.js": "06d649946f3a03c7916937336ae64b0e1fe383a144da3a75d6d3ed38612cded1",
+    "packages/dingtalk-dsh-assistant/observer-trace-pages.js": "00672ab3a38322b376f38650bd536d5cde66c3fba1442c38beeb1ea10bf58710",
+    "packages/dingtalk-dsh-assistant/observer-work-index.js": "78865186da6478bdb92409b802d4ff2336f824c5bc6e4f61a1788e1048de15a0",
+    "packages/dingtalk-dsh-assistant/package.json": "fdd5f7b67e185a736f8558d6438f85e469edb64fce7d88570b3baa9ba74b5314",
+    "packages/dingtalk-dsh-assistant/performance.js": "53aa9b78d600f72bb75fe5c3d228bb24b973ff064fabd8f054f97f836ae174e2",
+    "packages/dingtalk-dsh-assistant/platform-notification.js": "5870e5419020eb57bdec03c9dc0bcd3abd4f8e40684829b5f9f27796aaea5537",
+    "packages/dingtalk-dsh-assistant/platform-schedule.js": "fd4bce7a4fbcdbbcfb5e958f670a4e3930ba9db51f912687f37681ad49143979",
+    "packages/dingtalk-dsh-assistant/resident.js": "5322ac56bd6d421b663089761096934d457904f56cf9d531b4efb688393859e8",
+    "packages/dingtalk-dsh-assistant/resource-close.js": "f3f0036fccde60b4ec2afb2b1ec270e0977f4219a811745648449a7728103aa3",
+    "packages/dingtalk-dsh-assistant/session-persistence.js": "7c7ae2f4f45d3524798352da2adaebba95e9d9fffb9bb3cb790ba6665b5993b4",
+    "packages/dingtalk-dsh-assistant/session-skill-refresh.js": "f8d9fdf2c555961aca5f5d684b49ac351d7939118cdd1c5ddba4d997188d7dfd",
+    "packages/dingtalk-dsh-assistant/session-workspaces.js": "890ce278e7926426623365d8beffa4e6a25ec3483d2b96227d478abd881bb19b",
+    "packages/dingtalk-dsh-assistant/startup-metrics.js": "672efece17c202ccfbd090c337d8e1bd11c4a529cf502cdfa1442e811fb0667d",
+    "packages/dingtalk-dsh-assistant/store.js": "9d47546e7e88bf3728fa730148215a650b1045c0ae592be532bcc1484f1d333f",
+    "packages/dingtalk-dsh-assistant/task-archive.js": "e1a17ba8b56dc29d1a77f1c68ae9a20f1842e3196bbe92d14ca998045f7eac78",
+    "packages/dingtalk-dsh-assistant/task-artifact-files.js": "23d1c8d935a186285724ccad78c47a2667e1913895783fe9e44f68b620635186",
+    "packages/dingtalk-dsh-assistant/task-artifact-scope.js": "9ce3b6b9d08dc7bb39c7f28eb272a0b24202a3b45651d6a3b0c19ed2f3f86c39",
+    "packages/dingtalk-dsh-assistant/task-boundary-instructions.js": "d73ed5c39725e31dc7b6b46e710ee4ae5e952a93a211f7eab8be59f174ea28af",
+    "packages/dingtalk-dsh-assistant/task-execution-timeline.js": "2fd85f17afe986046b8b0e2672a0a457ff1cced9c123caf6b1cdf09db9898397",
+    "packages/dingtalk-dsh-assistant/task-final-delivery.js": "9e41a51acf01ba733ecccfb052d9760e639bdd2666a956f772d46d4af67e7710",
+    "packages/dingtalk-dsh-assistant/task-input-contract.js": "ca8cf972770185bdcacff2573a81efe0097ee78ae836df2903ef68595cc0151b",
+    "packages/dingtalk-dsh-assistant/task-input-revision.js": "83dd88b74c3b2d3342b95bbd1852526089af574cb67ff6eb87f33b4b30fab9f2",
+    "packages/dingtalk-dsh-assistant/task-message-projections.js": "475ab2e2307f82a2be84bfcba1df0d3b6dcb8dc53a4bfdb1d25c413697d2b4f0",
+    "packages/dingtalk-dsh-assistant/task-model-config.js": "ef3331c7980477af8e5058fe6ce0172e9bc294240d6a60d7ba53fc2fdd8ab146",
+    "packages/dingtalk-dsh-assistant/task-notification-readback.js": "730b4dff2fc647780265122135d024d7e37ee4a4a76aaeaaadc885dce37784e8",
+    "packages/dingtalk-dsh-assistant/task-plan.js": "a8cb370dc6b21446d96b72242624d44de2807a00682b3b7a48f289aca05afe99",
+    "packages/dingtalk-dsh-assistant/task-progress.js": "271058bfda0091161c69ecd98217702de666c39cd10e187983edc4b52cb8a00c",
+    "packages/dingtalk-dsh-assistant/task-report-step-gate.js": "dc5b78439992707c304321e64a8eaaf282fad27408cc2e6640cf3defaeeacc5f",
+    "packages/dingtalk-dsh-assistant/task-resident-runtime.js": "5167e1f7893a0bee36dc98c6c7155570baf061a564123ed9e7f0cde4b8e7b620",
+    "packages/dingtalk-dsh-assistant/task-result.js": "6caca1326450fa7a9fb3fa2cc0a37b0fb985b8240fd6f1739da4ee687e9592e2",
+    "packages/dingtalk-dsh-assistant/task-session-observability.js": "783b8bc4bd77bcfe1cd6b1867ab3c2e9baa82b78f46aba329ecf1feaebf53b4b",
+    "packages/dingtalk-dsh-assistant/task-session-persistence.js": "d91c1c0bb59c89b4b6a3dc0e378a1047d3074daec7fc64b5a5d41c0f2ae8737f",
+    "packages/dingtalk-dsh-assistant/task-session-service.js": "7ff11a9c9a32d0b87080a7de4d4dc5b2e01162b316d764512b798207f127a2c7",
+    "packages/dingtalk-dsh-assistant/task-session.js": "7f45bd23ce2a826e69389c41025ddee10ebfaa0cf5fa55b5f2e1d17e888f70e8",
+    "packages/dingtalk-dsh-assistant/task-source-instructions.js": "c2bb432df1d80d97bedc25bb43dbd480ce3dc1144b6b2f37ed88244e44a2cd79",
+    "packages/dingtalk-dsh-assistant/task-store-integrity-worker.js": "38f15691fea20f633c04c38023d88e381e6429a03a79a0f71ae415b2ac852e5a",
+    "packages/dingtalk-dsh-assistant/task-store-integrity.js": "cea259dc79d3eb6ad9c40db27952be93fd7023b146457cb7d7056278d3589d01",
+    "packages/dingtalk-dsh-assistant/task-topic-coordinator.js": "6b8686e373ef2b3b495ae0be8ce606c3d46ab2f00709867bfbc5f3cf7644450d",
+    "packages/dingtalk-dsh-assistant/tool-schema.js": "ead7caba335c0fd04f1a9126fc65217c56f372f490e8a55ca25792894847559b",
+    "packages/dingtalk-dsh-assistant/topic-facts.js": "8ae8a96e8bdcfb3d7fa82dfeaf8b7a69a61df02ed3ff072f550a0b96090fe256",
+    "packages/dingtalk-dsh-assistant/topic-model.js": "75366b05230258075fdb37a2cbbbb9df11acd55b5a3521cfc7a907b751b31aac",
+    "packages/dingtalk-dsh-assistant/topic-runtime.js": "c2d87b5647625b3fc6510f0e7c094a51e0b26eedd25e62a24edb904b8e304596",
+    "packages/dingtalk-dsh-assistant/version-check.js": "368bc54d77b80a3e0cc2bd13c04bca712b24db4302d6fee45cfd72f3a1f58bca",
+    "packages/dingtalk-dsh-assistant/web-client.js": "6cc01c9843416fa1b2c79d3f0d8a180c4a27add3fbd1599361fc704fea5d91cb",
+    "packages/dingtalk-dsh-observer/cordis.patch.yml": "a598a7886fad50dad14b6a97aa0ee9b7aa9df5aad764a1832e32f71af2a48fbc",
+    "packages/dingtalk-dsh-observer/index.js": "6e8cf925682f5bc357d8c06e3fda0059f743f60dabfd2207a47c6ad875b8b546",
+    "packages/dingtalk-dsh-observer/package.json": "fce859096cc09edb1eea2b243da207e4d9a54f6321cf2c19b36691b54a01f98b",
+    "packages/dingtalk-dsh-observer/web-client.js": "f27ed5c5b536c611b7097f44272fa0c2b7db6b7577ecdac79a2fd49632c4119e",
+    "pnpm-lock.yaml": "3501a70b9f1c43af3b76364400ac700a708ac4dc72ae620644b21b02d635be3b",
+    "pnpm-workspace.yaml": "8659450c544793cb9d8f56b94a0441e7cf3fa57da5a01e2836f248eb5a7bbbde",
+    "scripts/build-web-client.mjs": "bbe91f6eb112d19a2c882f2847092b20b6416cac922e6d1bc1d6573f990d6007",
+    "scripts/test-catalog.mjs": "3a5d14067633e6574fa85a278a6a63fff290e25b873663a7b2d77732c99cdb75",
+    "scripts/test-contracts.mjs": "1a046a19c9306a46ec8ee29c832144f7ac376f638f3b20286f162d7a2ee86252",
+    "scripts/test-suites.mjs": "a745bdc597b4fff80de0a647f91a2abae5eb7fe21b07bc1674383e5b705ed689",
+    "test/coordination-model-native.test.js": "7ead1ae51982c56c3a5327cc608a8defd3b8484886221e65cd00870d1c4a114a",
+    "test/coordination-native-lifecycle.test.js": "de1a668f1933a93dd92839abd7c6d0106039bd3e157272b9264db24f1ebe1f34",
+    "test/coordination-sessions.test.js": "f6e7f63a5d2d6aebf0bf87b40f24e74d50cefd79930d9dde20b1ea5e2f2aec30",
+    "test/coordination-workspace-native.test.js": "9f29ba1286165297488667e4c57ae1b4f2f10d739dbd2769d372a13f33dbd369",
+    "test/dws-adapter.test.js": "8c5ba631a92520008518228558d383cb96ec65ea39b73f37a6dace6de1020361",
+    "test/dws-bridge.test.js": "c7676c0bf4aa9930e72e6ea294bfcc43b4decdedffe6b9917e10483a6f2a13e4",
+    "test/dynamic-task-store.test.js": "9e577b889ff296e28ca81e5977dda8a978176208c9cbf02d36bea008a71689df",
+    "test/fixtures/lifecycle-stages.js": "e85a1d9070972f89d1d0ed12543889a34b89329d0d780d03fc2aa1c4a0c7b4fe",
+    "test/fixtures/native-lifecycle.js": "96124798772804ca22acc6a5e44807cd84c3358833750338555878acda1ae114",
+    "test/fixtures/native-profile/package.json": "805ac281ef4c48a462a46652e6e286080c4ce562b5a57a5b3e5493eeddf1d16e",
+    "test/fixtures/task-session-native-host.js": "c26df535d39f430fda86a022fe24f624f77010afbc424d3117c4c4da57b57b75",
+    "test/fixtures/task-session-service-history.js": "5268032cf7848569f551c99505ec7fd62a6e45bda5f799fe78d9914ce84e1790",
+    "test/fixtures/task-topic-routing-history.js": "847621f03c62afbbcecc210f429e13d9119260e8ddd759056bbb4ba86c5c55ba",
+    "test/group-notification.test.js": "1775a3b3bbaef87ac949e76474e3c59d943d57e3e745d27c2d945f1b0aa8577b",
+    "test/http.test.js": "b251f8d405a2382fa23bec4b18f0f197df3cdf061926e0650859c50d5fbb22bd",
+    "test/mixed-test-contracts.json": "ffaa85f515a787e0ff7ef402a927f701507a118b0c3cac5d9fad04a400606c45",
+    "test/observer-board-restoration.test.js": "88a731fc3b42053c00da356053c92cc0e794d031f47028296760c870cdb61878",
+    "test/observer-group-pages.test.js": "e7fc12ec775d507a69d1149241704558f746395965f85068ff16f012679e6c03",
+    "test/observer-pagination.test.js": "757a5670e6244ee87f6b0f8afb997522cf8e833cabec9e5772929a47771090fe",
+    "test/release-artifacts.test.js": "71933d7400122e16aeb6cf1a490d6e3ee4bdc9ac986d12e100db0df5fbf28f87",
+    "test/release-workflow.test.js": "40d8702b4afb76cf4af3b03624172ba021984e68452ea9b641f72b9fecbfa92d",
+    "test/session-workspaces.test.js": "39e89fdbda46e28e04b226c7d8ea6de4a8b79a71b84df22b5c89c02d3ffd4410",
+    "test/store.test.js": "b84126810ae57d1f7eabc899369ce4d1047122c64e42146089381a2a1ed929fe",
+    "test/suite-map.json": "959f1654b665bba7caf4783b3dbf4a84ce80607b657e72126647a74b38ef6602",
+    "test/task-background-retry-native.test.js": "6743df2a0c2cce94b4eb59b7bc708bec8725e9ff79adfb8c3208f49f037f8930",
+    "test/task-final-delivery.test.js": "cef49571eed669772fd54c1690e566317e75cbf5a8796d469c7f0c814d8a061a",
+    "test/task-message-projections.test.js": "824b74c9c7e43b06bf6c9cecbcad2414e6cc6be8abee1b4157681460c538ac26",
+    "test/task-model-config.test.js": "8beeef74e29e21c594b717fe40fb507357ab4f64cdf688e9c3f0232abf51f2ae",
+    "test/task-notification-delivery.test.js": "34e86388d4f33e573dcc37b64615d11845e7d58a5524e842964b92ee464fae41",
+    "test/task-notification-readback.test.js": "1b87352e8cc6f996c198ae8812e432eeb00af941eaa137cf0e5f3b3bc22b6fe4",
+    "test/task-session-clean-start.test.js": "768f0b0ef3189059a812a9352863186ef3f93ef26849f4e36853563007ff6fd8",
+    "test/task-session-package-native.test.js": "59ea963f1973e41b860c4a55e8c975270a96fb659ab05c572c08e83fd80c138a",
+    "test/task-session-service-history.test.js": "de342fff54aef3be8acad8a2d34d575da737479d6de55d8745ed0ee3237d78fc",
+    "test/task-session-service-native.test.js": "903a040d8c743d3f74b37400e59dd1e7b5d5824e88e7c8dfc8cc297e466a5fe9",
+    "test/task-session-skills-native.test.js": "d344cc57e64877de6091f486e9bf694f0753255c10d33c96a4d84a56d48fa125",
+    "test/task-topic-routing-history.test.js": "956857b28a653f83d4bbb401ebbfc6a375a31b0aea6adc1c83f17badc3c6618e",
+    "test/task-topic-routing-native.test.js": "f0c8c5118aa2d7befb2b8a979a3a799a65e4aba0abce693440419160bacf65b9",
+    "test/test-suite-contracts.test.js": "fe7c402300f99d331da1c36b5ad497c4159d82a7ee062dc8998db43012e2b199",
+    "test/topic-facts.test.js": "32777a9e89f3a5c6060c1249c158174ebd1beb93030aa9e83c97e39fd2fcd147",
+    "test/topic-store.test.js": "9c722e41400dc08e7c165c531009529d1f3d203128323e775467a998da347697"
+  },
+  "sourceBlobs": {
+    "packages/dingtalk-dsh-assistant/conversation-router.js": "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+    "packages/dingtalk-dsh-assistant/conversation-router-session.js": "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+    "packages/dingtalk-dsh-assistant/task-session-service.js": "15ea0896181941537aa39012fff084a8702d2d28",
+    "test/fixtures/task-session-native-host.js": "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+    "test/task-topic-routing-native.test.js": "5d93242950c40dc21b0eb313af7bbe68aaa42429",
+    "test/task-session-service-native.test.js": "7dfb958bc564c75b176184202b75e7d9fe91c983"
+  },
+  "checkpoints": {
+    "beforePack": {
+      "files": 154,
+      "digest": "a7d3520f40f78547304be9488d81202fd258488a1f728fb0b483586f42e87fda"
+    },
+    "afterPack": {
+      "files": 154,
+      "digest": "a7d3520f40f78547304be9488d81202fd258488a1f728fb0b483586f42e87fda",
+      "matchesBeforePack": true
+    },
+    "afterSmoke": {
+      "files": 154,
+      "digest": "a7d3520f40f78547304be9488d81202fd258488a1f728fb0b483586f42e87fda",
+      "matchesBeforePack": true,
+      "packageSha256Unchanged": true
+    }
+  },
+  "packages": [
+    {
+      "file": "dingtalk-dsh-assistant-2.3.0.tgz",
+      "packageName": "dingtalk-dsh-assistant",
+      "version": "2.3.0",
+      "bytes": 55335,
+      "sha256": "1a0477391709446d6a57c2ffe0b76d8abcb124f100db65be29a355eb7ff44582",
+      "files": 5,
+      "nonManifestSourceFiles": [
+        "index.js",
+        "CHANGELOG.md",
+        "README.md",
+        "cordis.patch.yml"
+      ]
+    },
+    {
+      "file": "zzusp-dingtalk-dsh-assistant-2.3.0.tgz",
+      "packageName": "@zzusp/dingtalk-dsh-assistant",
+      "version": "2.3.0",
+      "bytes": 550690,
+      "sha256": "c942d2c4818f12ee7df972b0f78ecacf4a610ea462df75c29b658af76c4c7299",
+      "files": 98,
+      "nonManifestSourceFiles": [
+        "packages/dingtalk-dsh-assistant/artifact-json.js",
+        "packages/dingtalk-dsh-assistant/claude-execution-session.js",
+        "packages/dingtalk-dsh-assistant/conversation-router-session.js",
+        "packages/dingtalk-dsh-assistant/conversation-router.js",
+        "packages/dingtalk-dsh-assistant/coordination-context.js",
+        "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
+        "packages/dingtalk-dsh-assistant/coordination-resources.js",
+        "packages/dingtalk-dsh-assistant/coordination-retirement.js",
+        "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+        "packages/dingtalk-dsh-assistant/decision.js",
+        "packages/dingtalk-dsh-assistant/dws-adapter.js",
+        "packages/dingtalk-dsh-assistant/dws-bridge.js",
+        "packages/dingtalk-dsh-assistant/dws-runner.js",
+        "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
+        "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
+        "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js",
+        "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
+        "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+        "packages/dingtalk-dsh-assistant/environment.js",
+        "packages/dingtalk-dsh-assistant/execution-context.js",
+        "packages/dingtalk-dsh-assistant/execution-provider-failure.js",
+        "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
+        "packages/dingtalk-dsh-assistant/execution-session.js",
+        "packages/dingtalk-dsh-assistant/fake-llm.js",
+        "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
+        "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
+        "packages/dingtalk-dsh-assistant/fixed-topics.js",
+        "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
+        "packages/dingtalk-dsh-assistant/group-message.js",
+        "packages/dingtalk-dsh-assistant/group-notification.js",
+        "packages/dingtalk-dsh-assistant/group-person-aliases.js",
+        "packages/dingtalk-dsh-assistant/group-reply-format.js",
+        "packages/dingtalk-dsh-assistant/host-context.js",
+        "packages/dingtalk-dsh-assistant/http.js",
+        "packages/dingtalk-dsh-assistant/index.js",
+        "packages/dingtalk-dsh-assistant/model-context.js",
+        "packages/dingtalk-dsh-assistant/native-dws-send.js",
+        "packages/dingtalk-dsh-assistant/native-maintenance-drain.js",
+        "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
+        "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
+        "packages/dingtalk-dsh-assistant/native-restart-scope-probe.js",
+        "packages/dingtalk-dsh-assistant/notification-delivery.js",
+        "packages/dingtalk-dsh-assistant/observer-alert-pages.js",
+        "packages/dingtalk-dsh-assistant/observer-artifact-bindings.js",
+        "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
+        "packages/dingtalk-dsh-assistant/observer-evidence-pages.js",
+        "packages/dingtalk-dsh-assistant/observer-fixed-topic-pages.js",
+        "packages/dingtalk-dsh-assistant/observer-group-pages.js",
+        "packages/dingtalk-dsh-assistant/observer-legacy-execution-pages.js",
+        "packages/dingtalk-dsh-assistant/observer-memory-pages.js",
+        "packages/dingtalk-dsh-assistant/observer-message-projection.js",
+        "packages/dingtalk-dsh-assistant/observer-outbox-state.js",
+        "packages/dingtalk-dsh-assistant/observer-pagination.js",
+        "packages/dingtalk-dsh-assistant/observer-trace-pages.js",
+        "packages/dingtalk-dsh-assistant/observer-work-index.js",
+        "packages/dingtalk-dsh-assistant/performance.js",
+        "packages/dingtalk-dsh-assistant/platform-notification.js",
+        "packages/dingtalk-dsh-assistant/platform-schedule.js",
+        "packages/dingtalk-dsh-assistant/resident.js",
+        "packages/dingtalk-dsh-assistant/resource-close.js",
+        "packages/dingtalk-dsh-assistant/session-persistence.js",
+        "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
+        "packages/dingtalk-dsh-assistant/session-workspaces.js",
+        "packages/dingtalk-dsh-assistant/startup-metrics.js",
+        "packages/dingtalk-dsh-assistant/store.js",
+        "packages/dingtalk-dsh-assistant/task-archive.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-files.js",
+        "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
+        "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
+        "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+        "packages/dingtalk-dsh-assistant/task-final-delivery.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js",
+        "packages/dingtalk-dsh-assistant/task-input-revision.js",
+        "packages/dingtalk-dsh-assistant/task-message-projections.js",
+        "packages/dingtalk-dsh-assistant/task-model-config.js",
+        "packages/dingtalk-dsh-assistant/task-notification-readback.js",
+        "packages/dingtalk-dsh-assistant/task-plan.js",
+        "packages/dingtalk-dsh-assistant/task-progress.js",
+        "packages/dingtalk-dsh-assistant/task-report-step-gate.js",
+        "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+        "packages/dingtalk-dsh-assistant/task-result.js",
+        "packages/dingtalk-dsh-assistant/task-session-observability.js",
+        "packages/dingtalk-dsh-assistant/task-session-persistence.js",
+        "packages/dingtalk-dsh-assistant/task-session-service.js",
+        "packages/dingtalk-dsh-assistant/task-session.js",
+        "packages/dingtalk-dsh-assistant/task-source-instructions.js",
+        "packages/dingtalk-dsh-assistant/task-store-integrity-worker.js",
+        "packages/dingtalk-dsh-assistant/task-store-integrity.js",
+        "packages/dingtalk-dsh-assistant/task-topic-coordinator.js",
+        "packages/dingtalk-dsh-assistant/tool-schema.js",
+        "packages/dingtalk-dsh-assistant/topic-facts.js",
+        "packages/dingtalk-dsh-assistant/topic-model.js",
+        "packages/dingtalk-dsh-assistant/topic-runtime.js",
+        "packages/dingtalk-dsh-assistant/version-check.js",
+        "packages/dingtalk-dsh-assistant/web-client.js",
+        "packages/dingtalk-dsh-assistant/README.md",
+        "packages/dingtalk-dsh-assistant/cordis.patch.yml"
+      ]
+    },
+    {
+      "file": "zzusp-dingtalk-dsh-observer-2.3.0.tgz",
+      "packageName": "@zzusp/dingtalk-dsh-observer",
+      "version": "2.3.0",
+      "bytes": 62783,
+      "sha256": "d147a380d7e982e4a66280d65f024628ee2759118e53bca2718db3479dad961f",
+      "files": 4,
+      "nonManifestSourceFiles": [
+        "packages/dingtalk-dsh-observer/index.js",
+        "packages/dingtalk-dsh-observer/web-client.js",
+        "packages/dingtalk-dsh-observer/cordis.patch.yml"
+      ]
+    }
+  ],
+  "packedNonManifestFilesMatch": 104,
+  "packageNameVersionMatch": true,
+  "packRun": {
+    "taskId": "b5bgwaefa",
+    "exitCode": 0,
+    "outputSha256": "73566622799b92aff0da410a23fbb30988ba767856b86df236d321abdbd9ed91"
+  },
+  "smoke": {
+    "taskId": "b4l2lvsub",
+    "exitCode": 0,
+    "tests": 14,
+    "pass": 14,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "outputSha256": "d614ba2e1af4ea87302b0fa74a0b42824fcaebe376691386e348c5a3cb75454b",
+    "lifecycleStages": [
+      {
+        "lifecyclePhase": "prepare",
+        "elapsedMs": 1,
+        "aborted": false
+      },
+      {
+        "lifecyclePhase": "business",
+        "elapsedMs": 26295,
+        "aborted": false
+      },
+      {
+        "lifecyclePhase": "cleanup",
+        "elapsedMs": 593,
+        "aborted": false
+      },
+      {
+        "lifecyclePhase": "prepare",
+        "elapsedMs": 2,
+        "aborted": false
+      },
+      {
+        "lifecyclePhase": "business",
+        "elapsedMs": 8178,
+        "aborted": false
+      },
+      {
+        "lifecyclePhase": "cleanup",
+        "elapsedMs": 184,
+        "aborted": false
+      }
+    ],
+    "businessTimeoutMs": 30000,
+    "explicitNativeProfile": true,
+    "forcedActualPackageDirectory": true,
+    "preSmokeSourceCheckpoint": "afterPack",
+    "durationMs": 50755.8612
+  },
+  "previousPackageCandidate": {
+    "scope": "SG8最终冻结版本地三包验证；不用于部署，不代表真实模型或钉钉外发验收",
+    "baseHead": "14ad11aa7c7ba2f0c4082ecc65bfd81cfa5b2a2f",
+    "dirtyWorktree": true,
+    "sourceSha256": {
+      "CHANGELOG.md": "e3f8b4c4bceb5f296cb7d5ec852ac913c30460f9ebb312d70cfd6df3478db749",
+      "README.md": "b0e886997360bf7ec28921d258c8bdccb6aa6021902a0ab4db1f3fbccc4dbc18",
+      "cordis.patch.yml": "d7136a2ce7a424a43a9ba13b1f41175e52573c08a11a1e5ad952c9e631d6d658",
+      "index.js": "1a39b16ee590d351091b02c6bc6f52c43371f9be83511eb7a51b70db31d51ab3",
+      "package.json": "cefb0f5501dc2984e78c6be6d933fb5835d6079e06e4468f650b799838d00e84",
+      "packages/dingtalk-dsh-assistant/README.md": "24320f8f80f5f30302e382ad7369cd3f4552b268df831e8d4bde75d79590e76a",
+      "packages/dingtalk-dsh-assistant/artifact-json.js": "51b9ab4d8e6a6b524ed3caa0a076de359a759c56f45cdf50ead403b13770156f",
+      "packages/dingtalk-dsh-assistant/claude-execution-session.js": "b3cc15e04ad5f66eac66f17b4063033e3d49e8ccea4cc07b4e8a1c47a541e3a1",
+      "packages/dingtalk-dsh-assistant/conversation-router-session.js": "bd52802a8789ccc39a38e2e0291fded327fb7005dd8900ef738eceb6db4cdfab",
+      "packages/dingtalk-dsh-assistant/conversation-router.js": "e7ed839b4b33829a26403aaa380cd9e04e5dd0589d1758d44b86245cb4561440",
+      "packages/dingtalk-dsh-assistant/coordination-context.js": "b09960a88ff53c3583559f19c001470dfffbb09b9e6e76f01f093b6cd02bd217",
+      "packages/dingtalk-dsh-assistant/coordination-migration-state.js": "e5d49740827bff2345a0b212cfebd88b0ab26813b34a9123d5c0b086076ee7c7",
+      "packages/dingtalk-dsh-assistant/coordination-resources.js": "3f38c4e355f7b4b0b0251a9be1efa439c3e46acbb7168f2b6b52bf97a11d14ec",
+      "packages/dingtalk-dsh-assistant/coordination-retirement.js": "75ac1ebccff0def954de65ef20f4f9729119b53febdd9830e712168546a43062",
+      "packages/dingtalk-dsh-assistant/coordination-sessions.js": "18616fdfb109d1d50a276b314d383d3bb8b8c7592494d3e8947d16d9f4ed5d42",
+      "packages/dingtalk-dsh-assistant/cordis.patch.yml": "417cb0b4ca02f4ea6518bff167d630e9aff7c4ef63168c06eed3581aa0408944",
+      "packages/dingtalk-dsh-assistant/decision.js": "bc0cf51e20d12e99b805db8e8df3334e9de6449328f40a4fc0aa5ba0519cc45a",
+      "packages/dingtalk-dsh-assistant/dws-adapter.js": "ff4924f52ee454fb0fefc412b56fcefb7eb709c18be4e09ab4ae5f0a742d6044",
+      "packages/dingtalk-dsh-assistant/dws-bridge.js": "b740a9d4bbcf208a92c0ed19e45e1d0bb95f33ac08ba678e2839fbd2fbdf6e11",
+      "packages/dingtalk-dsh-assistant/dws-runner.js": "ec3d0368b17d1e84df064d2fd76c185de791fbb5a9d94959fe4b586ac8d69cad",
+      "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js": "ee6bc1469be87c34bd41d23434ed5251cf7fbc05f35f3358976c0cdd9b0b4cf7",
+      "packages/dingtalk-dsh-assistant/dynamic-native-job.js": "765c32fd7b226ff083595838a9617123eb859109cd246b46c19e6df2ebbc1a53",
+      "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js": "f17f4ee8a15684ae67e748af0c00484781158c376e75d74639c49fdf84d73900",
+      "packages/dingtalk-dsh-assistant/dynamic-process-scope.js": "f6b43410d3850570a2a93c3e44fc91557a5f62ebb73213e95e20b383678a7039",
+      "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "bff4778e81386a73bf4e7aef36b94c5f15acbc18ba263d39b752128dc9c6e52a",
+      "packages/dingtalk-dsh-assistant/environment.js": "7f55a26ab86396e342b2d10d4834fb339f823e82f39fff33669042407be0d13a",
+      "packages/dingtalk-dsh-assistant/execution-context.js": "e62df40af1c0648390b2f72dca3fae0bc6dfa216c43e3bfc681c59dd3b4b4335",
+      "packages/dingtalk-dsh-assistant/execution-provider-failure.js": "f0d24b3c1ddc3a9300da7aa14a109d528eea6db6bca266b1f1d6767682d0a59e",
+      "packages/dingtalk-dsh-assistant/execution-resource-catalog.js": "5777b892709d9ef3152633484de802a3544b7cdda734512748f4d7eae7febedf",
+      "packages/dingtalk-dsh-assistant/execution-session.js": "2dd152f6005f8492e2536604dde1a19b321f39790b1c793a3908cca422578dca",
+      "packages/dingtalk-dsh-assistant/fake-llm.js": "f6114d893e014c36a09ff86a123725b04206c2b88e4556becc943bc4506e6c6e",
+      "packages/dingtalk-dsh-assistant/fixed-topic-correction.js": "5ace7543abec034f3745f97fb58d028cb5da8d7680763cc3d8de5b0b341cf47a",
+      "packages/dingtalk-dsh-assistant/fixed-topic-handler.js": "d96838e804b5fe67ac7d616ae00945a3f859db65763666c842055432ec73cec6",
+      "packages/dingtalk-dsh-assistant/fixed-topics.js": "2e69219ea8affdd36253b488d2a1fed924cb8c00454e2927302b0a67933dab09",
+      "packages/dingtalk-dsh-assistant/group-coordinator-session.js": "7676e64bd6c6913a9ad64d86e72183b20c1d1d59edbd5156ed16a43a2c312d06",
+      "packages/dingtalk-dsh-assistant/group-message.js": "5da36d4541971a166a60ecffd7d437838488e4ed98b5f58f40fc592d91bd60ef",
+      "packages/dingtalk-dsh-assistant/group-notification.js": "854cce96c76798bbcf4093ef94ccb8a145360bc4e1790e5d5cd77847a0b816c1",
+      "packages/dingtalk-dsh-assistant/group-person-aliases.js": "8b8e0dabd2afda1505b572cf81bd2ddc9c15e8ac8de51eda646a2f7d3c1abd76",
+      "packages/dingtalk-dsh-assistant/group-reply-format.js": "ba650e68d1538e68796fa9125b90f2e35298c89374d334f9873c74624cf55efd",
+      "packages/dingtalk-dsh-assistant/host-context.js": "497fe3a542249276f3ad549c7785fc033f616713daee0cac68d3239ad0a0942a",
+      "packages/dingtalk-dsh-assistant/http.js": "609f23ecd3fab017fed079dfc6289676b88531b8caa05d4bef4781404fc168be",
+      "packages/dingtalk-dsh-assistant/index.js": "d9c9a99ec280fa37af3f1ec956db1497caa76d0e882ac95b44978b5a00a70ee7",
+      "packages/dingtalk-dsh-assistant/model-context.js": "4b87ea6078341f727440c6015b9e27229255b7c044a8c85160863ff8e7cbbd23",
+      "packages/dingtalk-dsh-assistant/native-dws-send.js": "aebd551bdd7c2ed559c20eb90aad63dd8df48524b21557c24eaae68b6bc88723",
+      "packages/dingtalk-dsh-assistant/native-maintenance-drain.js": "d27fb5593606dc74b1b3efffa3d05245b0dadfd0955aa6efce5f8ea51f63aacb",
+      "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js": "e2ea17ed3321c34c1696286122f51649984e980b00ba05d4b077dd67122bcf54",
+      "packages/dingtalk-dsh-assistant/native-restart-isolation.js": "b7cac828e576ba88cc392e1b7ee002aed0653cf36ddd7fdf2b3f5364cc5bbadd",
+      "packages/dingtalk-dsh-assistant/native-restart-scope-probe.js": "f073b53dae7af595035319c45845aa2c34b22f1054795317eee76239a990d70a",
+      "packages/dingtalk-dsh-assistant/notification-delivery.js": "266538c8eca17a179f9a6c5174eea57e902ef7eea37064925f949c2bf34fa28d",
+      "packages/dingtalk-dsh-assistant/observer-alert-pages.js": "c94be5045799b80088862310256c8e3170c595ed9a5a273d1130e6e667ace4fc",
+      "packages/dingtalk-dsh-assistant/observer-artifact-bindings.js": "cadb1a6f6c8e6a2612655715e0ea305d3eca7e2493e00a2ee829f88e717279cc",
+      "packages/dingtalk-dsh-assistant/observer-artifact-pages.js": "d0fa2ced3d52f664b80599baf00f8a9c5156eb8c8aace5039063b701338b7699",
+      "packages/dingtalk-dsh-assistant/observer-evidence-pages.js": "ddbf127f64d9d03848eb168e69b8fe891069d9627f6073383b6e7b06da64de79",
+      "packages/dingtalk-dsh-assistant/observer-fixed-topic-pages.js": "446d7302532c1193dff6baa5e183b21015ccfa40652ec22e4a25cf7c4224a682",
+      "packages/dingtalk-dsh-assistant/observer-group-pages.js": "9e646fcd24f61c95f3808835d05f79f7f217937eb40c3e8430458487d366892e",
+      "packages/dingtalk-dsh-assistant/observer-legacy-execution-pages.js": "2846b7fe8829cec9eb942571752a3685fb75acedca33cd0da78c6c322c4f717a",
+      "packages/dingtalk-dsh-assistant/observer-memory-pages.js": "67d1acbeb2fb6627bfb927b03b547496c7bba1383eccffbe67484e09b66d32d7",
+      "packages/dingtalk-dsh-assistant/observer-message-projection.js": "50fb135783ccb488c54697d5a05c9dac4ca4d5d18e8fa80ddca9c41f5d67710d",
+      "packages/dingtalk-dsh-assistant/observer-outbox-state.js": "10f40c5df9f2f6f4a6a8a49dcf04569701ee9f0fba85192cc0b4f1a2f257c775",
+      "packages/dingtalk-dsh-assistant/observer-pagination.js": "06d649946f3a03c7916937336ae64b0e1fe383a144da3a75d6d3ed38612cded1",
+      "packages/dingtalk-dsh-assistant/observer-trace-pages.js": "00672ab3a38322b376f38650bd536d5cde66c3fba1442c38beeb1ea10bf58710",
+      "packages/dingtalk-dsh-assistant/observer-work-index.js": "78865186da6478bdb92409b802d4ff2336f824c5bc6e4f61a1788e1048de15a0",
+      "packages/dingtalk-dsh-assistant/package.json": "fdd5f7b67e185a736f8558d6438f85e469edb64fce7d88570b3baa9ba74b5314",
+      "packages/dingtalk-dsh-assistant/performance.js": "53aa9b78d600f72bb75fe5c3d228bb24b973ff064fabd8f054f97f836ae174e2",
+      "packages/dingtalk-dsh-assistant/platform-notification.js": "5870e5419020eb57bdec03c9dc0bcd3abd4f8e40684829b5f9f27796aaea5537",
+      "packages/dingtalk-dsh-assistant/platform-schedule.js": "fd4bce7a4fbcdbbcfb5e958f670a4e3930ba9db51f912687f37681ad49143979",
+      "packages/dingtalk-dsh-assistant/resident.js": "5322ac56bd6d421b663089761096934d457904f56cf9d531b4efb688393859e8",
+      "packages/dingtalk-dsh-assistant/resource-close.js": "f3f0036fccde60b4ec2afb2b1ec270e0977f4219a811745648449a7728103aa3",
+      "packages/dingtalk-dsh-assistant/session-persistence.js": "7c7ae2f4f45d3524798352da2adaebba95e9d9fffb9bb3cb790ba6665b5993b4",
+      "packages/dingtalk-dsh-assistant/session-skill-refresh.js": "f8d9fdf2c555961aca5f5d684b49ac351d7939118cdd1c5ddba4d997188d7dfd",
+      "packages/dingtalk-dsh-assistant/session-workspaces.js": "890ce278e7926426623365d8beffa4e6a25ec3483d2b96227d478abd881bb19b",
+      "packages/dingtalk-dsh-assistant/startup-metrics.js": "672efece17c202ccfbd090c337d8e1bd11c4a529cf502cdfa1442e811fb0667d",
+      "packages/dingtalk-dsh-assistant/store.js": "9d47546e7e88bf3728fa730148215a650b1045c0ae592be532bcc1484f1d333f",
+      "packages/dingtalk-dsh-assistant/task-archive.js": "e1a17ba8b56dc29d1a77f1c68ae9a20f1842e3196bbe92d14ca998045f7eac78",
+      "packages/dingtalk-dsh-assistant/task-artifact-files.js": "23d1c8d935a186285724ccad78c47a2667e1913895783fe9e44f68b620635186",
+      "packages/dingtalk-dsh-assistant/task-artifact-scope.js": "9ce3b6b9d08dc7bb39c7f28eb272a0b24202a3b45651d6a3b0c19ed2f3f86c39",
+      "packages/dingtalk-dsh-assistant/task-boundary-instructions.js": "d73ed5c39725e31dc7b6b46e710ee4ae5e952a93a211f7eab8be59f174ea28af",
+      "packages/dingtalk-dsh-assistant/task-execution-timeline.js": "2fd85f17afe986046b8b0e2672a0a457ff1cced9c123caf6b1cdf09db9898397",
+      "packages/dingtalk-dsh-assistant/task-final-delivery.js": "9e41a51acf01ba733ecccfb052d9760e639bdd2666a956f772d46d4af67e7710",
+      "packages/dingtalk-dsh-assistant/task-input-contract.js": "ca8cf972770185bdcacff2573a81efe0097ee78ae836df2903ef68595cc0151b",
+      "packages/dingtalk-dsh-assistant/task-input-revision.js": "83dd88b74c3b2d3342b95bbd1852526089af574cb67ff6eb87f33b4b30fab9f2",
+      "packages/dingtalk-dsh-assistant/task-message-projections.js": "475ab2e2307f82a2be84bfcba1df0d3b6dcb8dc53a4bfdb1d25c413697d2b4f0",
+      "packages/dingtalk-dsh-assistant/task-model-config.js": "ef3331c7980477af8e5058fe6ce0172e9bc294240d6a60d7ba53fc2fdd8ab146",
+      "packages/dingtalk-dsh-assistant/task-notification-readback.js": "730b4dff2fc647780265122135d024d7e37ee4a4a76aaeaaadc885dce37784e8",
+      "packages/dingtalk-dsh-assistant/task-plan.js": "a8cb370dc6b21446d96b72242624d44de2807a00682b3b7a48f289aca05afe99",
+      "packages/dingtalk-dsh-assistant/task-progress.js": "271058bfda0091161c69ecd98217702de666c39cd10e187983edc4b52cb8a00c",
+      "packages/dingtalk-dsh-assistant/task-report-step-gate.js": "dc5b78439992707c304321e64a8eaaf282fad27408cc2e6640cf3defaeeacc5f",
+      "packages/dingtalk-dsh-assistant/task-resident-runtime.js": "5167e1f7893a0bee36dc98c6c7155570baf061a564123ed9e7f0cde4b8e7b620",
+      "packages/dingtalk-dsh-assistant/task-result.js": "6caca1326450fa7a9fb3fa2cc0a37b0fb985b8240fd6f1739da4ee687e9592e2",
+      "packages/dingtalk-dsh-assistant/task-session-observability.js": "783b8bc4bd77bcfe1cd6b1867ab3c2e9baa82b78f46aba329ecf1feaebf53b4b",
+      "packages/dingtalk-dsh-assistant/task-session-persistence.js": "d91c1c0bb59c89b4b6a3dc0e378a1047d3074daec7fc64b5a5d41c0f2ae8737f",
+      "packages/dingtalk-dsh-assistant/task-session-service.js": "728dd2260c531953372332f2d459ea7eff8ce4c34457f5cdcfe1edc9005016ca",
+      "packages/dingtalk-dsh-assistant/task-session.js": "7f45bd23ce2a826e69389c41025ddee10ebfaa0cf5fa55b5f2e1d17e888f70e8",
+      "packages/dingtalk-dsh-assistant/task-source-instructions.js": "c2bb432df1d80d97bedc25bb43dbd480ce3dc1144b6b2f37ed88244e44a2cd79",
+      "packages/dingtalk-dsh-assistant/task-store-integrity-worker.js": "38f15691fea20f633c04c38023d88e381e6429a03a79a0f71ae415b2ac852e5a",
+      "packages/dingtalk-dsh-assistant/task-store-integrity.js": "cea259dc79d3eb6ad9c40db27952be93fd7023b146457cb7d7056278d3589d01",
+      "packages/dingtalk-dsh-assistant/task-topic-coordinator.js": "6b8686e373ef2b3b495ae0be8ce606c3d46ab2f00709867bfbc5f3cf7644450d",
+      "packages/dingtalk-dsh-assistant/tool-schema.js": "ead7caba335c0fd04f1a9126fc65217c56f372f490e8a55ca25792894847559b",
+      "packages/dingtalk-dsh-assistant/topic-facts.js": "8ae8a96e8bdcfb3d7fa82dfeaf8b7a69a61df02ed3ff072f550a0b96090fe256",
+      "packages/dingtalk-dsh-assistant/topic-model.js": "75366b05230258075fdb37a2cbbbb9df11acd55b5a3521cfc7a907b751b31aac",
+      "packages/dingtalk-dsh-assistant/topic-runtime.js": "c2d87b5647625b3fc6510f0e7c094a51e0b26eedd25e62a24edb904b8e304596",
+      "packages/dingtalk-dsh-assistant/version-check.js": "368bc54d77b80a3e0cc2bd13c04bca712b24db4302d6fee45cfd72f3a1f58bca",
+      "packages/dingtalk-dsh-assistant/web-client.js": "6cc01c9843416fa1b2c79d3f0d8a180c4a27add3fbd1599361fc704fea5d91cb",
+      "packages/dingtalk-dsh-observer/cordis.patch.yml": "a598a7886fad50dad14b6a97aa0ee9b7aa9df5aad764a1832e32f71af2a48fbc",
+      "packages/dingtalk-dsh-observer/index.js": "6e8cf925682f5bc357d8c06e3fda0059f743f60dabfd2207a47c6ad875b8b546",
+      "packages/dingtalk-dsh-observer/package.json": "fce859096cc09edb1eea2b243da207e4d9a54f6321cf2c19b36691b54a01f98b",
+      "packages/dingtalk-dsh-observer/web-client.js": "f27ed5c5b536c611b7097f44272fa0c2b7db6b7577ecdac79a2fd49632c4119e",
+      "pnpm-lock.yaml": "3501a70b9f1c43af3b76364400ac700a708ac4dc72ae620644b21b02d635be3b",
+      "scripts/build-web-client.mjs": "bbe91f6eb112d19a2c882f2847092b20b6416cac922e6d1bc1d6573f990d6007",
+      "test/fixtures/lifecycle-stages.js": "e85a1d9070972f89d1d0ed12543889a34b89329d0d780d03fc2aa1c4a0c7b4fe",
+      "test/fixtures/native-lifecycle.js": "96124798772804ca22acc6a5e44807cd84c3358833750338555878acda1ae114",
+      "test/fixtures/native-profile/package.json": "805ac281ef4c48a462a46652e6e286080c4ce562b5a57a5b3e5493eeddf1d16e",
+      "test/fixtures/task-session-native-host.js": "c26df535d39f430fda86a022fe24f624f77010afbc424d3117c4c4da57b57b75",
+      "test/release-artifacts.test.js": "71933d7400122e16aeb6cf1a490d6e3ee4bdc9ac986d12e100db0df5fbf28f87",
+      "test/release-workflow.test.js": "36d5bd66da97b534c75073839932dbf8788622f7322397e4dc600160fe8bf86e",
+      "test/task-session-package-native.test.js": "59ea963f1973e41b860c4a55e8c975270a96fb659ab05c572c08e83fd80c138a"
+    },
+    "sourceCheckpoints": {
+      "beforePack": {
+        "at": "2026-11-07T02:01:51+08:00",
+        "files": 116,
+        "sha256": "268416a6de46cb26f0e8fffacc818c08746ec381887f8e753ab48a4b42c9a922"
+      },
+      "afterPack": {
+        "at": "2026-11-07T02:03:48+08:00",
+        "files": 116,
+        "sha256": "268416a6de46cb26f0e8fffacc818c08746ec381887f8e753ab48a4b42c9a922",
+        "allMatch": true
+      },
+      "beforeSmoke": {
+        "at": "2026-11-07T02:37:53+08:00",
+        "files": 116,
+        "allMatch": true,
+        "packageSha256Match": true
+      },
+      "afterSmokeFirst": {
+        "at": "2026-11-07T02:39:35+08:00",
+        "files": 116,
+        "allMatch": true,
+        "packageSha256Match": true
+      },
+      "beforeFinalSmoke": {
+        "at": "2026-11-07T03:10:00+08:00",
+        "files": 116,
+        "allMatch": true,
+        "packageSha256Match": true,
+        "validationInputUpdates": 1,
+        "suiteMapSha256": "959f1654b665bba7caf4783b3dbf4a84ce80607b657e72126647a74b38ef6602"
+      },
+      "afterFinalSmoke": {
+        "at": "2026-11-07T03:12:44+08:00",
+        "files": 116,
+        "allMatch": true,
+        "packageSha256Match": true,
+        "suiteMapSha256": "959f1654b665bba7caf4783b3dbf4a84ce80607b657e72126647a74b38ef6602"
+      }
+    },
+    "priorAttempt": {
+      "run": "byji68r00",
+      "result": "三包生成后摘要脚本SyntaxError导致exit1；未保留首hash，未跑smoke；后Router源码变化，三tgz已精确清理",
+      "packages": [
+        {
+          "name": "dingtalk-dsh-assistant-2.3.0.tgz",
+          "bytes": 55359,
+          "sha256": "afa324493fc8c9c17279d85507f0d41f90317743fb2b79ef09d66851908bafd5"
+        },
+        {
+          "name": "zzusp-dingtalk-dsh-assistant-2.3.0.tgz",
+          "bytes": 549522,
+          "sha256": "41c57c8a33c4ec0a5e777cb441fd419954d4badaf0b67ba28864e5e2322b6653"
+        },
+        {
+          "name": "zzusp-dingtalk-dsh-observer-2.3.0.tgz",
+          "bytes": 62783,
+          "sha256": "d147a380d7e982e4a66280d65f024628ee2759118e53bca2718db3479dad961f"
+        }
+      ]
+    },
+    "packages": [
+      {
+        "name": "dingtalk-dsh-assistant-2.3.0.tgz",
+        "bytes": 55196,
+        "sha256": "88be77b79c0b7ac141d26ee73d7888d803990a192125668b0ce2750ed49d73a0",
+        "files": 5
+      },
+      {
+        "name": "zzusp-dingtalk-dsh-assistant-2.3.0.tgz",
+        "bytes": 550098,
+        "sha256": "ab0a4dc665b00334d44d94a2806ffaf4f8c5473612b161c73d5b244ee4602ed5",
+        "files": 98
+      },
+      {
+        "name": "zzusp-dingtalk-dsh-observer-2.3.0.tgz",
+        "bytes": 62783,
+        "sha256": "d147a380d7e982e4a66280d65f024628ee2759118e53bca2718db3479dad961f",
+        "files": 4
+      }
+    ],
+    "smoke": {
+      "attempts": [
+        {
+          "taskId": "bw6m1aswe",
+          "exitCode": 1,
+          "tests": 14,
+          "pass": 13,
+          "fail": 1,
+          "cancelled": 0,
+          "skipped": 0,
+          "durationMs": 49472.1985,
+          "onlyFailure": "test_suite_map_stale",
+          "nativePersonalSkillPassed": true,
+          "residentHealthPassed": true,
+          "nativeBusinessMs": [
+            24890,
+            8268
+          ],
+          "nativeLifecycleAborted": false,
+          "sourceFilesBeforeAfterMatch": 116,
+          "packageSha256BeforeAfterMatch": true
+        },
+        {
+          "taskId": "bqsx8aqyw",
+          "command": "pnpm test:release-smoke",
+          "explicitNativeProfile": "test/fixtures/native-profile/package.json",
+          "actualPackageDirectory": "final-packages",
+          "exitCode": 0,
+          "tests": 14,
+          "pass": 14,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0,
+          "durationMs": 58019.0007,
+          "nativePersonalSkillPassed": true,
+          "residentHealthPassed": true,
+          "nativeBusinessMs": [
+            27662,
+            8144
+          ],
+          "nativeLifecycleAborted": false,
+          "sourceFilesBeforeAfterMatch": 116,
+          "packageSha256BeforeAfterMatch": true,
+          "suiteMapBeforeAfterMatch": true,
+          "originalBusinessTimeoutMs": 30000
+        }
+      ],
+      "finalStatus": "passed"
+    },
+    "packedFilesMatchCurrentSource": [
+      "index.js",
+      "CHANGELOG.md",
+      "README.md",
+      "cordis.patch.yml",
+      "packages/dingtalk-dsh-assistant/artifact-json.js",
+      "packages/dingtalk-dsh-assistant/claude-execution-session.js",
+      "packages/dingtalk-dsh-assistant/conversation-router-session.js",
+      "packages/dingtalk-dsh-assistant/conversation-router.js",
+      "packages/dingtalk-dsh-assistant/coordination-context.js",
+      "packages/dingtalk-dsh-assistant/coordination-migration-state.js",
+      "packages/dingtalk-dsh-assistant/coordination-resources.js",
+      "packages/dingtalk-dsh-assistant/coordination-retirement.js",
+      "packages/dingtalk-dsh-assistant/coordination-sessions.js",
+      "packages/dingtalk-dsh-assistant/decision.js",
+      "packages/dingtalk-dsh-assistant/dws-adapter.js",
+      "packages/dingtalk-dsh-assistant/dws-bridge.js",
+      "packages/dingtalk-dsh-assistant/dws-runner.js",
+      "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js",
+      "packages/dingtalk-dsh-assistant/dynamic-native-job.js",
+      "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js",
+      "packages/dingtalk-dsh-assistant/dynamic-process-scope.js",
+      "packages/dingtalk-dsh-assistant/dynamic-task-store.js",
+      "packages/dingtalk-dsh-assistant/environment.js",
+      "packages/dingtalk-dsh-assistant/execution-context.js",
+      "packages/dingtalk-dsh-assistant/execution-provider-failure.js",
+      "packages/dingtalk-dsh-assistant/execution-resource-catalog.js",
+      "packages/dingtalk-dsh-assistant/execution-session.js",
+      "packages/dingtalk-dsh-assistant/fake-llm.js",
+      "packages/dingtalk-dsh-assistant/fixed-topic-correction.js",
+      "packages/dingtalk-dsh-assistant/fixed-topic-handler.js",
+      "packages/dingtalk-dsh-assistant/fixed-topics.js",
+      "packages/dingtalk-dsh-assistant/group-coordinator-session.js",
+      "packages/dingtalk-dsh-assistant/group-message.js",
+      "packages/dingtalk-dsh-assistant/group-notification.js",
+      "packages/dingtalk-dsh-assistant/group-person-aliases.js",
+      "packages/dingtalk-dsh-assistant/group-reply-format.js",
+      "packages/dingtalk-dsh-assistant/host-context.js",
+      "packages/dingtalk-dsh-assistant/http.js",
+      "packages/dingtalk-dsh-assistant/index.js",
+      "packages/dingtalk-dsh-assistant/model-context.js",
+      "packages/dingtalk-dsh-assistant/native-dws-send.js",
+      "packages/dingtalk-dsh-assistant/native-maintenance-drain.js",
+      "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js",
+      "packages/dingtalk-dsh-assistant/native-restart-isolation.js",
+      "packages/dingtalk-dsh-assistant/native-restart-scope-probe.js",
+      "packages/dingtalk-dsh-assistant/notification-delivery.js",
+      "packages/dingtalk-dsh-assistant/observer-alert-pages.js",
+      "packages/dingtalk-dsh-assistant/observer-artifact-bindings.js",
+      "packages/dingtalk-dsh-assistant/observer-artifact-pages.js",
+      "packages/dingtalk-dsh-assistant/observer-evidence-pages.js",
+      "packages/dingtalk-dsh-assistant/observer-fixed-topic-pages.js",
+      "packages/dingtalk-dsh-assistant/observer-group-pages.js",
+      "packages/dingtalk-dsh-assistant/observer-legacy-execution-pages.js",
+      "packages/dingtalk-dsh-assistant/observer-memory-pages.js",
+      "packages/dingtalk-dsh-assistant/observer-message-projection.js",
+      "packages/dingtalk-dsh-assistant/observer-outbox-state.js",
+      "packages/dingtalk-dsh-assistant/observer-pagination.js",
+      "packages/dingtalk-dsh-assistant/observer-trace-pages.js",
+      "packages/dingtalk-dsh-assistant/observer-work-index.js",
+      "packages/dingtalk-dsh-assistant/performance.js",
+      "packages/dingtalk-dsh-assistant/platform-notification.js",
+      "packages/dingtalk-dsh-assistant/platform-schedule.js",
+      "packages/dingtalk-dsh-assistant/resident.js",
+      "packages/dingtalk-dsh-assistant/resource-close.js",
+      "packages/dingtalk-dsh-assistant/session-persistence.js",
+      "packages/dingtalk-dsh-assistant/session-skill-refresh.js",
+      "packages/dingtalk-dsh-assistant/session-workspaces.js",
+      "packages/dingtalk-dsh-assistant/startup-metrics.js",
+      "packages/dingtalk-dsh-assistant/store.js",
+      "packages/dingtalk-dsh-assistant/task-archive.js",
+      "packages/dingtalk-dsh-assistant/task-artifact-files.js",
+      "packages/dingtalk-dsh-assistant/task-artifact-scope.js",
+      "packages/dingtalk-dsh-assistant/task-boundary-instructions.js",
+      "packages/dingtalk-dsh-assistant/task-execution-timeline.js",
+      "packages/dingtalk-dsh-assistant/task-final-delivery.js",
+      "packages/dingtalk-dsh-assistant/task-input-contract.js",
+      "packages/dingtalk-dsh-assistant/task-input-revision.js",
+      "packages/dingtalk-dsh-assistant/task-message-projections.js",
+      "packages/dingtalk-dsh-assistant/task-model-config.js",
+      "packages/dingtalk-dsh-assistant/task-notification-readback.js",
+      "packages/dingtalk-dsh-assistant/task-plan.js",
+      "packages/dingtalk-dsh-assistant/task-progress.js",
+      "packages/dingtalk-dsh-assistant/task-report-step-gate.js",
+      "packages/dingtalk-dsh-assistant/task-resident-runtime.js",
+      "packages/dingtalk-dsh-assistant/task-result.js",
+      "packages/dingtalk-dsh-assistant/task-session-observability.js",
+      "packages/dingtalk-dsh-assistant/task-session-persistence.js",
+      "packages/dingtalk-dsh-assistant/task-session-service.js",
+      "packages/dingtalk-dsh-assistant/task-session.js",
+      "packages/dingtalk-dsh-assistant/task-source-instructions.js",
+      "packages/dingtalk-dsh-assistant/task-store-integrity-worker.js",
+      "packages/dingtalk-dsh-assistant/task-store-integrity.js",
+      "packages/dingtalk-dsh-assistant/task-topic-coordinator.js",
+      "packages/dingtalk-dsh-assistant/tool-schema.js",
+      "packages/dingtalk-dsh-assistant/topic-facts.js",
+      "packages/dingtalk-dsh-assistant/topic-model.js",
+      "packages/dingtalk-dsh-assistant/topic-runtime.js",
+      "packages/dingtalk-dsh-assistant/version-check.js",
+      "packages/dingtalk-dsh-assistant/web-client.js",
+      "packages/dingtalk-dsh-assistant/README.md",
+      "packages/dingtalk-dsh-assistant/cordis.patch.yml",
+      "packages/dingtalk-dsh-observer/index.js",
+      "packages/dingtalk-dsh-observer/web-client.js",
+      "packages/dingtalk-dsh-observer/cordis.patch.yml"
+    ],
+    "packageNameVersionMatch": true,
+    "packRun": {
+      "taskId": "b54b0z6bc",
+      "exitCode": 0
+    },
+    "validationInputUpdates": [
+      {
+        "file": "test/release-workflow.test.js",
+        "beforeSha256": "36d5bd66da97b534c75073839932dbf8788622f7322397e4dc600160fe8bf86e",
+        "afterSha256": "40d8702b4afb76cf4af3b03624172ba021984e68452ea9b641f72b9fecbfa92d",
+        "at": "2026-11-07T02:43:04+08:00",
+        "reason": "release门禁同步两个已逐注册审定的历史入口，并显式保留两个当前Native文件在Release；仅测试输入，不属于任何tgz内文件",
+        "afterFirstSmoke": true
+      }
+    ],
+    "releaseMap": {
+      "files": 345,
+      "historicalFiles": [
+        "test/execution-local-acceptance-history.test.js",
+        "test/runtime-history.test.js",
+        "test/task-session-service-history.test.js",
+        "test/task-topic-routing-history.test.js",
+        "test/workflow-engineering-history.test.js"
+      ],
+      "existingFilesNewlyExcluded": [],
+      "deletedFiles": [],
+      "currentNativeRetained": [
+        "test/task-session-service-native.test.js",
+        "test/task-topic-routing-native.test.js"
+      ],
+      "sha256": "959f1654b665bba7caf4783b3dbf4a84ce80607b657e72126647a74b38ef6602",
+      "targetedCheck": {
+        "command": "node --test --test-name-pattern='every test file is mapped once' test/release-workflow.test.js",
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "durationMs": 2183.6503,
+        "releaseWorkflowSha256": "40d8702b4afb76cf4af3b03624172ba021984e68452ea9b641f72b9fecbfa92d"
+      }
+    },
+    "effectiveSourceSha256": {
+      "CHANGELOG.md": "e3f8b4c4bceb5f296cb7d5ec852ac913c30460f9ebb312d70cfd6df3478db749",
+      "README.md": "b0e886997360bf7ec28921d258c8bdccb6aa6021902a0ab4db1f3fbccc4dbc18",
+      "cordis.patch.yml": "d7136a2ce7a424a43a9ba13b1f41175e52573c08a11a1e5ad952c9e631d6d658",
+      "index.js": "1a39b16ee590d351091b02c6bc6f52c43371f9be83511eb7a51b70db31d51ab3",
+      "package.json": "cefb0f5501dc2984e78c6be6d933fb5835d6079e06e4468f650b799838d00e84",
+      "packages/dingtalk-dsh-assistant/README.md": "24320f8f80f5f30302e382ad7369cd3f4552b268df831e8d4bde75d79590e76a",
+      "packages/dingtalk-dsh-assistant/artifact-json.js": "51b9ab4d8e6a6b524ed3caa0a076de359a759c56f45cdf50ead403b13770156f",
+      "packages/dingtalk-dsh-assistant/claude-execution-session.js": "b3cc15e04ad5f66eac66f17b4063033e3d49e8ccea4cc07b4e8a1c47a541e3a1",
+      "packages/dingtalk-dsh-assistant/conversation-router-session.js": "bd52802a8789ccc39a38e2e0291fded327fb7005dd8900ef738eceb6db4cdfab",
+      "packages/dingtalk-dsh-assistant/conversation-router.js": "e7ed839b4b33829a26403aaa380cd9e04e5dd0589d1758d44b86245cb4561440",
+      "packages/dingtalk-dsh-assistant/coordination-context.js": "b09960a88ff53c3583559f19c001470dfffbb09b9e6e76f01f093b6cd02bd217",
+      "packages/dingtalk-dsh-assistant/coordination-migration-state.js": "e5d49740827bff2345a0b212cfebd88b0ab26813b34a9123d5c0b086076ee7c7",
+      "packages/dingtalk-dsh-assistant/coordination-resources.js": "3f38c4e355f7b4b0b0251a9be1efa439c3e46acbb7168f2b6b52bf97a11d14ec",
+      "packages/dingtalk-dsh-assistant/coordination-retirement.js": "75ac1ebccff0def954de65ef20f4f9729119b53febdd9830e712168546a43062",
+      "packages/dingtalk-dsh-assistant/coordination-sessions.js": "18616fdfb109d1d50a276b314d383d3bb8b8c7592494d3e8947d16d9f4ed5d42",
+      "packages/dingtalk-dsh-assistant/cordis.patch.yml": "417cb0b4ca02f4ea6518bff167d630e9aff7c4ef63168c06eed3581aa0408944",
+      "packages/dingtalk-dsh-assistant/decision.js": "bc0cf51e20d12e99b805db8e8df3334e9de6449328f40a4fc0aa5ba0519cc45a",
+      "packages/dingtalk-dsh-assistant/dws-adapter.js": "ff4924f52ee454fb0fefc412b56fcefb7eb709c18be4e09ab4ae5f0a742d6044",
+      "packages/dingtalk-dsh-assistant/dws-bridge.js": "b740a9d4bbcf208a92c0ed19e45e1d0bb95f33ac08ba678e2839fbd2fbdf6e11",
+      "packages/dingtalk-dsh-assistant/dws-runner.js": "ec3d0368b17d1e84df064d2fd76c185de791fbb5a9d94959fe4b586ac8d69cad",
+      "packages/dingtalk-dsh-assistant/dynamic-filesystem-scope.js": "ee6bc1469be87c34bd41d23434ed5251cf7fbc05f35f3358976c0cdd9b0b4cf7",
+      "packages/dingtalk-dsh-assistant/dynamic-native-job.js": "765c32fd7b226ff083595838a9617123eb859109cd246b46c19e6df2ebbc1a53",
+      "packages/dingtalk-dsh-assistant/dynamic-operation-readback.js": "f17f4ee8a15684ae67e748af0c00484781158c376e75d74639c49fdf84d73900",
+      "packages/dingtalk-dsh-assistant/dynamic-process-scope.js": "f6b43410d3850570a2a93c3e44fc91557a5f62ebb73213e95e20b383678a7039",
+      "packages/dingtalk-dsh-assistant/dynamic-task-store.js": "bff4778e81386a73bf4e7aef36b94c5f15acbc18ba263d39b752128dc9c6e52a",
+      "packages/dingtalk-dsh-assistant/environment.js": "7f55a26ab86396e342b2d10d4834fb339f823e82f39fff33669042407be0d13a",
+      "packages/dingtalk-dsh-assistant/execution-context.js": "e62df40af1c0648390b2f72dca3fae0bc6dfa216c43e3bfc681c59dd3b4b4335",
+      "packages/dingtalk-dsh-assistant/execution-provider-failure.js": "f0d24b3c1ddc3a9300da7aa14a109d528eea6db6bca266b1f1d6767682d0a59e",
+      "packages/dingtalk-dsh-assistant/execution-resource-catalog.js": "5777b892709d9ef3152633484de802a3544b7cdda734512748f4d7eae7febedf",
+      "packages/dingtalk-dsh-assistant/execution-session.js": "2dd152f6005f8492e2536604dde1a19b321f39790b1c793a3908cca422578dca",
+      "packages/dingtalk-dsh-assistant/fake-llm.js": "f6114d893e014c36a09ff86a123725b04206c2b88e4556becc943bc4506e6c6e",
+      "packages/dingtalk-dsh-assistant/fixed-topic-correction.js": "5ace7543abec034f3745f97fb58d028cb5da8d7680763cc3d8de5b0b341cf47a",
+      "packages/dingtalk-dsh-assistant/fixed-topic-handler.js": "d96838e804b5fe67ac7d616ae00945a3f859db65763666c842055432ec73cec6",
+      "packages/dingtalk-dsh-assistant/fixed-topics.js": "2e69219ea8affdd36253b488d2a1fed924cb8c00454e2927302b0a67933dab09",
+      "packages/dingtalk-dsh-assistant/group-coordinator-session.js": "7676e64bd6c6913a9ad64d86e72183b20c1d1d59edbd5156ed16a43a2c312d06",
+      "packages/dingtalk-dsh-assistant/group-message.js": "5da36d4541971a166a60ecffd7d437838488e4ed98b5f58f40fc592d91bd60ef",
+      "packages/dingtalk-dsh-assistant/group-notification.js": "854cce96c76798bbcf4093ef94ccb8a145360bc4e1790e5d5cd77847a0b816c1",
+      "packages/dingtalk-dsh-assistant/group-person-aliases.js": "8b8e0dabd2afda1505b572cf81bd2ddc9c15e8ac8de51eda646a2f7d3c1abd76",
+      "packages/dingtalk-dsh-assistant/group-reply-format.js": "ba650e68d1538e68796fa9125b90f2e35298c89374d334f9873c74624cf55efd",
+      "packages/dingtalk-dsh-assistant/host-context.js": "497fe3a542249276f3ad549c7785fc033f616713daee0cac68d3239ad0a0942a",
+      "packages/dingtalk-dsh-assistant/http.js": "609f23ecd3fab017fed079dfc6289676b88531b8caa05d4bef4781404fc168be",
+      "packages/dingtalk-dsh-assistant/index.js": "d9c9a99ec280fa37af3f1ec956db1497caa76d0e882ac95b44978b5a00a70ee7",
+      "packages/dingtalk-dsh-assistant/model-context.js": "4b87ea6078341f727440c6015b9e27229255b7c044a8c85160863ff8e7cbbd23",
+      "packages/dingtalk-dsh-assistant/native-dws-send.js": "aebd551bdd7c2ed559c20eb90aad63dd8df48524b21557c24eaae68b6bc88723",
+      "packages/dingtalk-dsh-assistant/native-maintenance-drain.js": "d27fb5593606dc74b1b3efffa3d05245b0dadfd0955aa6efce5f8ea51f63aacb",
+      "packages/dingtalk-dsh-assistant/native-postgres-wrapper.js": "e2ea17ed3321c34c1696286122f51649984e980b00ba05d4b077dd67122bcf54",
+      "packages/dingtalk-dsh-assistant/native-restart-isolation.js": "b7cac828e576ba88cc392e1b7ee002aed0653cf36ddd7fdf2b3f5364cc5bbadd",
+      "packages/dingtalk-dsh-assistant/native-restart-scope-probe.js": "f073b53dae7af595035319c45845aa2c34b22f1054795317eee76239a990d70a",
+      "packages/dingtalk-dsh-assistant/notification-delivery.js": "266538c8eca17a179f9a6c5174eea57e902ef7eea37064925f949c2bf34fa28d",
+      "packages/dingtalk-dsh-assistant/observer-alert-pages.js": "c94be5045799b80088862310256c8e3170c595ed9a5a273d1130e6e667ace4fc",
+      "packages/dingtalk-dsh-assistant/observer-artifact-bindings.js": "cadb1a6f6c8e6a2612655715e0ea305d3eca7e2493e00a2ee829f88e717279cc",
+      "packages/dingtalk-dsh-assistant/observer-artifact-pages.js": "d0fa2ced3d52f664b80599baf00f8a9c5156eb8c8aace5039063b701338b7699",
+      "packages/dingtalk-dsh-assistant/observer-evidence-pages.js": "ddbf127f64d9d03848eb168e69b8fe891069d9627f6073383b6e7b06da64de79",
+      "packages/dingtalk-dsh-assistant/observer-fixed-topic-pages.js": "446d7302532c1193dff6baa5e183b21015ccfa40652ec22e4a25cf7c4224a682",
+      "packages/dingtalk-dsh-assistant/observer-group-pages.js": "9e646fcd24f61c95f3808835d05f79f7f217937eb40c3e8430458487d366892e",
+      "packages/dingtalk-dsh-assistant/observer-legacy-execution-pages.js": "2846b7fe8829cec9eb942571752a3685fb75acedca33cd0da78c6c322c4f717a",
+      "packages/dingtalk-dsh-assistant/observer-memory-pages.js": "67d1acbeb2fb6627bfb927b03b547496c7bba1383eccffbe67484e09b66d32d7",
+      "packages/dingtalk-dsh-assistant/observer-message-projection.js": "50fb135783ccb488c54697d5a05c9dac4ca4d5d18e8fa80ddca9c41f5d67710d",
+      "packages/dingtalk-dsh-assistant/observer-outbox-state.js": "10f40c5df9f2f6f4a6a8a49dcf04569701ee9f0fba85192cc0b4f1a2f257c775",
+      "packages/dingtalk-dsh-assistant/observer-pagination.js": "06d649946f3a03c7916937336ae64b0e1fe383a144da3a75d6d3ed38612cded1",
+      "packages/dingtalk-dsh-assistant/observer-trace-pages.js": "00672ab3a38322b376f38650bd536d5cde66c3fba1442c38beeb1ea10bf58710",
+      "packages/dingtalk-dsh-assistant/observer-work-index.js": "78865186da6478bdb92409b802d4ff2336f824c5bc6e4f61a1788e1048de15a0",
+      "packages/dingtalk-dsh-assistant/package.json": "fdd5f7b67e185a736f8558d6438f85e469edb64fce7d88570b3baa9ba74b5314",
+      "packages/dingtalk-dsh-assistant/performance.js": "53aa9b78d600f72bb75fe5c3d228bb24b973ff064fabd8f054f97f836ae174e2",
+      "packages/dingtalk-dsh-assistant/platform-notification.js": "5870e5419020eb57bdec03c9dc0bcd3abd4f8e40684829b5f9f27796aaea5537",
+      "packages/dingtalk-dsh-assistant/platform-schedule.js": "fd4bce7a4fbcdbbcfb5e958f670a4e3930ba9db51f912687f37681ad49143979",
+      "packages/dingtalk-dsh-assistant/resident.js": "5322ac56bd6d421b663089761096934d457904f56cf9d531b4efb688393859e8",
+      "packages/dingtalk-dsh-assistant/resource-close.js": "f3f0036fccde60b4ec2afb2b1ec270e0977f4219a811745648449a7728103aa3",
+      "packages/dingtalk-dsh-assistant/session-persistence.js": "7c7ae2f4f45d3524798352da2adaebba95e9d9fffb9bb3cb790ba6665b5993b4",
+      "packages/dingtalk-dsh-assistant/session-skill-refresh.js": "f8d9fdf2c555961aca5f5d684b49ac351d7939118cdd1c5ddba4d997188d7dfd",
+      "packages/dingtalk-dsh-assistant/session-workspaces.js": "890ce278e7926426623365d8beffa4e6a25ec3483d2b96227d478abd881bb19b",
+      "packages/dingtalk-dsh-assistant/startup-metrics.js": "672efece17c202ccfbd090c337d8e1bd11c4a529cf502cdfa1442e811fb0667d",
+      "packages/dingtalk-dsh-assistant/store.js": "9d47546e7e88bf3728fa730148215a650b1045c0ae592be532bcc1484f1d333f",
+      "packages/dingtalk-dsh-assistant/task-archive.js": "e1a17ba8b56dc29d1a77f1c68ae9a20f1842e3196bbe92d14ca998045f7eac78",
+      "packages/dingtalk-dsh-assistant/task-artifact-files.js": "23d1c8d935a186285724ccad78c47a2667e1913895783fe9e44f68b620635186",
+      "packages/dingtalk-dsh-assistant/task-artifact-scope.js": "9ce3b6b9d08dc7bb39c7f28eb272a0b24202a3b45651d6a3b0c19ed2f3f86c39",
+      "packages/dingtalk-dsh-assistant/task-boundary-instructions.js": "d73ed5c39725e31dc7b6b46e710ee4ae5e952a93a211f7eab8be59f174ea28af",
+      "packages/dingtalk-dsh-assistant/task-execution-timeline.js": "2fd85f17afe986046b8b0e2672a0a457ff1cced9c123caf6b1cdf09db9898397",
+      "packages/dingtalk-dsh-assistant/task-final-delivery.js": "9e41a51acf01ba733ecccfb052d9760e639bdd2666a956f772d46d4af67e7710",
+      "packages/dingtalk-dsh-assistant/task-input-contract.js": "ca8cf972770185bdcacff2573a81efe0097ee78ae836df2903ef68595cc0151b",
+      "packages/dingtalk-dsh-assistant/task-input-revision.js": "83dd88b74c3b2d3342b95bbd1852526089af574cb67ff6eb87f33b4b30fab9f2",
+      "packages/dingtalk-dsh-assistant/task-message-projections.js": "475ab2e2307f82a2be84bfcba1df0d3b6dcb8dc53a4bfdb1d25c413697d2b4f0",
+      "packages/dingtalk-dsh-assistant/task-model-config.js": "ef3331c7980477af8e5058fe6ce0172e9bc294240d6a60d7ba53fc2fdd8ab146",
+      "packages/dingtalk-dsh-assistant/task-notification-readback.js": "730b4dff2fc647780265122135d024d7e37ee4a4a76aaeaaadc885dce37784e8",
+      "packages/dingtalk-dsh-assistant/task-plan.js": "a8cb370dc6b21446d96b72242624d44de2807a00682b3b7a48f289aca05afe99",
+      "packages/dingtalk-dsh-assistant/task-progress.js": "271058bfda0091161c69ecd98217702de666c39cd10e187983edc4b52cb8a00c",
+      "packages/dingtalk-dsh-assistant/task-report-step-gate.js": "dc5b78439992707c304321e64a8eaaf282fad27408cc2e6640cf3defaeeacc5f",
+      "packages/dingtalk-dsh-assistant/task-resident-runtime.js": "5167e1f7893a0bee36dc98c6c7155570baf061a564123ed9e7f0cde4b8e7b620",
+      "packages/dingtalk-dsh-assistant/task-result.js": "6caca1326450fa7a9fb3fa2cc0a37b0fb985b8240fd6f1739da4ee687e9592e2",
+      "packages/dingtalk-dsh-assistant/task-session-observability.js": "783b8bc4bd77bcfe1cd6b1867ab3c2e9baa82b78f46aba329ecf1feaebf53b4b",
+      "packages/dingtalk-dsh-assistant/task-session-persistence.js": "d91c1c0bb59c89b4b6a3dc0e378a1047d3074daec7fc64b5a5d41c0f2ae8737f",
+      "packages/dingtalk-dsh-assistant/task-session-service.js": "728dd2260c531953372332f2d459ea7eff8ce4c34457f5cdcfe1edc9005016ca",
+      "packages/dingtalk-dsh-assistant/task-session.js": "7f45bd23ce2a826e69389c41025ddee10ebfaa0cf5fa55b5f2e1d17e888f70e8",
+      "packages/dingtalk-dsh-assistant/task-source-instructions.js": "c2bb432df1d80d97bedc25bb43dbd480ce3dc1144b6b2f37ed88244e44a2cd79",
+      "packages/dingtalk-dsh-assistant/task-store-integrity-worker.js": "38f15691fea20f633c04c38023d88e381e6429a03a79a0f71ae415b2ac852e5a",
+      "packages/dingtalk-dsh-assistant/task-store-integrity.js": "cea259dc79d3eb6ad9c40db27952be93fd7023b146457cb7d7056278d3589d01",
+      "packages/dingtalk-dsh-assistant/task-topic-coordinator.js": "6b8686e373ef2b3b495ae0be8ce606c3d46ab2f00709867bfbc5f3cf7644450d",
+      "packages/dingtalk-dsh-assistant/tool-schema.js": "ead7caba335c0fd04f1a9126fc65217c56f372f490e8a55ca25792894847559b",
+      "packages/dingtalk-dsh-assistant/topic-facts.js": "8ae8a96e8bdcfb3d7fa82dfeaf8b7a69a61df02ed3ff072f550a0b96090fe256",
+      "packages/dingtalk-dsh-assistant/topic-model.js": "75366b05230258075fdb37a2cbbbb9df11acd55b5a3521cfc7a907b751b31aac",
+      "packages/dingtalk-dsh-assistant/topic-runtime.js": "c2d87b5647625b3fc6510f0e7c094a51e0b26eedd25e62a24edb904b8e304596",
+      "packages/dingtalk-dsh-assistant/version-check.js": "368bc54d77b80a3e0cc2bd13c04bca712b24db4302d6fee45cfd72f3a1f58bca",
+      "packages/dingtalk-dsh-assistant/web-client.js": "6cc01c9843416fa1b2c79d3f0d8a180c4a27add3fbd1599361fc704fea5d91cb",
+      "packages/dingtalk-dsh-observer/cordis.patch.yml": "a598a7886fad50dad14b6a97aa0ee9b7aa9df5aad764a1832e32f71af2a48fbc",
+      "packages/dingtalk-dsh-observer/index.js": "6e8cf925682f5bc357d8c06e3fda0059f743f60dabfd2207a47c6ad875b8b546",
+      "packages/dingtalk-dsh-observer/package.json": "fce859096cc09edb1eea2b243da207e4d9a54f6321cf2c19b36691b54a01f98b",
+      "packages/dingtalk-dsh-observer/web-client.js": "f27ed5c5b536c611b7097f44272fa0c2b7db6b7577ecdac79a2fd49632c4119e",
+      "pnpm-lock.yaml": "3501a70b9f1c43af3b76364400ac700a708ac4dc72ae620644b21b02d635be3b",
+      "scripts/build-web-client.mjs": "bbe91f6eb112d19a2c882f2847092b20b6416cac922e6d1bc1d6573f990d6007",
+      "test/fixtures/lifecycle-stages.js": "e85a1d9070972f89d1d0ed12543889a34b89329d0d780d03fc2aa1c4a0c7b4fe",
+      "test/fixtures/native-lifecycle.js": "96124798772804ca22acc6a5e44807cd84c3358833750338555878acda1ae114",
+      "test/fixtures/native-profile/package.json": "805ac281ef4c48a462a46652e6e286080c4ce562b5a57a5b3e5493eeddf1d16e",
+      "test/fixtures/task-session-native-host.js": "c26df535d39f430fda86a022fe24f624f77010afbc424d3117c4c4da57b57b75",
+      "test/release-artifacts.test.js": "71933d7400122e16aeb6cf1a490d6e3ee4bdc9ac986d12e100db0df5fbf28f87",
+      "test/release-workflow.test.js": "40d8702b4afb76cf4af3b03624172ba021984e68452ea9b641f72b9fecbfa92d",
+      "test/task-session-package-native.test.js": "59ea963f1973e41b860c4a55e8c975270a96fb659ab05c572c08e83fd80c138a"
+    },
+    "candidateState": "superseded-for-confirmed-web-stage-repair",
+    "deliveryEligible": false,
+    "supersession": {
+      "at": "2026-11-07T03:32:46+08:00",
+      "reason": "现行Web direct producer漏记host/old-drain等阶段，D与Lead核实需Service最小修复；旧候选仅保留Service16738字节的14/14证据，修后必须重打/重验",
+      "oldServiceBlob": "16738d19f566135bd676c40573984d6f881184be",
+      "newServiceBlob": "f416b37260764fce810c10c77d1a2e5aeae66511",
+      "repairOwner": "routing-eval",
+      "nativeWindow": "quiescent; A confirmed all native processes exited",
+      "oldArtifactsRemovedAt": "2026-11-07T03:34:36+08:00",
+      "oldArtifactsRemoved": true,
+      "newServiceSha256": "a6211c82052ea39a0ea6f9b95ef27dcce9fcd1722ee9767896cabf866b38f187"
+    }
+  },
+  "releaseMap": {
+    "files": 345,
+    "historical": 5,
+    "deleted": 0,
+    "currentNativeFilesRelease": true
+  },
+  "runs": [
+    {
+      "taskId": "bg58esqfd",
+      "outputSha256": "e799f47b93e3e674c63dd8eaaa728f05e7918798cbf2f7d1d77a0235f745ad21",
+      "tests": 1,
+      "pass": 0,
+      "fail": 1,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 3795.0282,
+      "exitCode": 1,
+      "recordedBlobLines": [
+        "29412e27b46ad11f5426cba2b8db2f4439b00a21",
+        "fb760c544768c02cff54a5ec261e067454602922",
+        "f416b37260764fce810c10c77d1a2e5aeae66511",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "29412e27b46ad11f5426cba2b8db2f4439b00a21",
+        "fb760c544768c02cff54a5ec261e067454602922",
+        "f416b37260764fce810c10c77d1a2e5aeae66511",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1505,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 579,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 139,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "b13x6eb2x",
+      "outputSha256": "51438c0e71c58546a05bf73ade2796d524ae9d96a2879eadb2218ea6c896feb0",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 2310.3582,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "9a9dfcd7a75c92e80da45c80f6c6f5ea93dd14c4",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "9a9dfcd7a75c92e80da45c80f6c6f5ea93dd14c4",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1021,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 306,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 38,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "bwfd6213a",
+      "outputSha256": "e7195624b1186f591f5b543c35b35108a8e5e4c69d07efdb87e7cae683a19beb",
+      "tests": 43,
+      "pass": 41,
+      "fail": 2,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 125868.0297,
+      "exitCode": 1,
+      "recordedBlobLines": [
+        "38d349529b15942091f74e3ba928d1db4c272409",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "38d349529b15942091f74e3ba928d1db4c272409",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1121,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 835,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 34,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 454,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 973,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 68,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 5,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2841,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 85,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3479,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 269,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 10,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 7284,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 139,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3392,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 100,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3467,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 105,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 666,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 777,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 160,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 565,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 999,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 126,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 562,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 525,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 102,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2482,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 265,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 493,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 587,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 115,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 607,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2653,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 114,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 516,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2017,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 160,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 490,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2462,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 204,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 517,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 5656,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 155,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 591,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1227,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 140,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 522,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1401,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 137,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 4,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1961,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 105,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 4,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1340,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 82,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1168,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 91,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1087,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 63,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1149,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 76,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 4,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 7182,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 162,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2070,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 178,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2440,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 169,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 4,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1414,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 129,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 4,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1591,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 99,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1892,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 172,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 4,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1430,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 125,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2033,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 102,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 5,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1146,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 93,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 554,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2119,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 166,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 625,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2160,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 121,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 554,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 15084,
+          "aborted": true
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 137,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 639,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 5310,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 150,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 549,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1473,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 125,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 638,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1840,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 190,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 608,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1483,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 388,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 565,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 829,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 121,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3110,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 176,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 629,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1923,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 147,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "b1lb80f2z",
+      "outputSha256": "9be61e2713f578d6ab28d4de7a512364ea5d00475b5ee9f47d2c8adb929a05d3",
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 2881.1702,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "4f0460c33436267aa0b1e2349f57ce91bf2f09de",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "4f0460c33436267aa0b1e2349f57ce91bf2f09de",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1611,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 34,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 171,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 393,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 26,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "bw34kef89",
+      "outputSha256": "eff8109d90a98fdd3df02358ff9470f1e24464ac7e55985545e092f5bd279753",
+      "tests": 43,
+      "pass": 43,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 102484.4565,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "ad6065fac839d96d50311c62afcd64bdc601668b",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "ad6065fac839d96d50311c62afcd64bdc601668b",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 744,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 760,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 32,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 185,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 222,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 19,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1935,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 108,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2427,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 89,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2606,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 71,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3183,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 98,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3602,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 85,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 563,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 789,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 187,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 512,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 889,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 121,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 517,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 436,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 99,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 6,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2825,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 142,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 576,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 645,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 118,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 603,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2668,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 203,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 564,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1677,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 202,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 638,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2518,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 229,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 629,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 5651,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 134,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 519,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1300,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 145,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 673,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1302,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 122,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 4,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1971,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 111,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1329,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 82,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1192,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 101,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 4,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1079,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 119,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1112,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 68,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 6,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 7057,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 140,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1872,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 162,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2573,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 169,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 981,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 88,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1512,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 79,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1673,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 102,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 4,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1555,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 109,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 6,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1857,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 66,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1072,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 119,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 657,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2128,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 177,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 537,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1846,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 122,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 610,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1478,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 98,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 516,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 5346,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 199,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 621,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1511,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 109,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 633,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1865,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 156,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 560,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1588,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 338,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 644,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 879,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 134,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3334,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 148,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 653,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1814,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 179,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "b0i0ojr6h",
+      "outputSha256": "93d9431a73cb79b621bce53f00293eea60f44a6ad184f337f98b871c7699306a",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 2066.4997,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "7dd348be7c0a68757f1d0871285ba70e3dc481ab",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "7dd348be7c0a68757f1d0871285ba70e3dc481ab",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1362,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 31,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "bn7newejw",
+      "outputSha256": "d3441916eb1b3c60a935fdbac0ac3d2c346d611df0fb1047f0cebe4c6fd5a200",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 1862.5307,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "5d93242950c40dc21b0eb313af7bbe68aaa42429",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "5d93242950c40dc21b0eb313af7bbe68aaa42429",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1247,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 42,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "bsj2avd80",
+      "outputSha256": "425a34526b7d573004d5ea70cd025759ef78fc1fcad5e724b5953cbe8a1e1dc8",
+      "tests": 5,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 22587.0145,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "736a53b0f5729ada410378e46f09addc3ffd8048",
+        "fb760c544768c02cff54a5ec261e067454602922",
+        "f416b37260764fce810c10c77d1a2e5aeae66511",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "736a53b0f5729ada410378e46f09addc3ffd8048",
+        "fb760c544768c02cff54a5ec261e067454602922",
+        "f416b37260764fce810c10c77d1a2e5aeae66511",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 7,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 6692,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 131,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3782,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 114,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3876,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 115,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 3838,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 137,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 2606,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 86,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "bahi0lggx",
+      "outputSha256": "0cf7cd1a6116ff243bd59fe882413fdcc6b64e23679498f99d6185629f50b5a1",
+      "tests": 4,
+      "pass": 0,
+      "fail": 4,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 31063.2759,
+      "exitCode": 1,
+      "recordedBlobLines": [
+        "736a53b0f5729ada410378e46f09addc3ffd8048",
+        "fb760c544768c02cff54a5ec261e067454602922",
+        "f416b37260764fce810c10c77d1a2e5aeae66511",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "736a53b0f5729ada410378e46f09addc3ffd8048",
+        "fb760c544768c02cff54a5ec261e067454602922",
+        "f416b37260764fce810c10c77d1a2e5aeae66511",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 27,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 9208,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 306,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 12,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 6421,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 59,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 6076,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 185,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 32,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 6531,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 88,
+          "aborted": false
+        }
+      ],
+      "sourceBindingLimit": "Test tree changed after invocation; recorded lines are not a final-worktree equality claim"
+    },
+    {
+      "taskId": "borylv111",
+      "outputSha256": "8f7be81cc5c330dd97bd3710287df3210a4720a9b57039e9c313d63a3c3158ed",
+      "tests": 4,
+      "pass": 0,
+      "fail": 4,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 24933.1566,
+      "exitCode": 1,
+      "recordedBlobLines": [
+        "d1c2af5b6939e22de9865a938dd7cd0c4e6549f4",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "d1c2af5b6939e22de9865a938dd7cd0c4e6549f4",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 5,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1373,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 30,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 419,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 29,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 10778,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 126,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 10,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 11101,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 59,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "b4qn8ycl0",
+      "outputSha256": "84228823202c4045cee75d185b3faf4f9a6abdff80901589982baf1e251be8db",
+      "tests": 4,
+      "pass": 4,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 6371.3088,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "5effd4686c1d5833b77ca8132154b311b0be7fb6",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "5effd4686c1d5833b77ca8132154b311b0be7fb6",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 8,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1722,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 27,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1010,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 48,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1171,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 58,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 1006,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 65,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "b14k2ruac",
+      "outputSha256": "4ecafae3e92a25687adaa4381c7766c836d4a52e670c8a85fb664f42153bcb0a",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 2446.7954,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "c78eceb73c2a56fbcb6144ad7a258afed3fc6542",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "c78eceb73c2a56fbcb6144ad7a258afed3fc6542",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 971,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 443,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 86,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "bjrd76x9x",
+      "outputSha256": "2d1bacc9554d9ab534fd90a2fabd4aefa50bdd8d996c14b90617772402744da0",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 2377.1478,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "38d349529b15942091f74e3ba928d1db4c272409",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "38d349529b15942091f74e3ba928d1db4c272409",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 964,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 460,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 44,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "b8n1j4dem",
+      "outputSha256": "1ade86acdb470d48a5e2b215f5ce0a329acf1ee90686d86bdd89252096921b30",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 14116.2661,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "7dfb958bc564c75b176184202b75e7d9fe91c983",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082",
+        "7dfb958bc564c75b176184202b75e7d9fe91c983",
+        "b31df735ebdd4e1e31ad29af0804e1cdaa9d6c6c",
+        "15ea0896181941537aa39012fff084a8702d2d28",
+        "f838eff3e3f0c2af3c397d6d4af5836caf3290ec",
+        "9ae1c0e4289e2dc4b2b6c960b8ea87f525feb082"
+      ],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 3,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 12718,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 514,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "b05ij987a",
+      "outputSha256": "6cf04f73981e5f3b07a8cdf9b0c9ad2172173861dc023aed5552d602a3ed8e26",
+      "tests": 23,
+      "pass": 23,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 10378.6568,
+      "exitCode": 0,
+      "recordedBlobLines": [
+        "a25cf02059f51f62a8f4868c6e232801922844c5",
+        "a3a44efd81ecc979e8cd9dd0806eda991fd2f82e",
+        "4d4ffc127ba7682d1eca6a492b94e18df003f50f",
+        "6f169408a0e0968f9aab6aca07b05b076d5d3cf1",
+        "f4dafc61bda2cf46ca401b2766c9bd00892d0ad1",
+        "989ce75edc3c5c10b5d00e146d287698a9ac9f37",
+        "6f75e80c136d1f9b2a7a49c25be8b6db304a8e74",
+        "a16de14d0ab2a103be34168d1c2dded9b86460a1",
+        "a25cf02059f51f62a8f4868c6e232801922844c5",
+        "a3a44efd81ecc979e8cd9dd0806eda991fd2f82e",
+        "4d4ffc127ba7682d1eca6a492b94e18df003f50f",
+        "6f169408a0e0968f9aab6aca07b05b076d5d3cf1",
+        "f4dafc61bda2cf46ca401b2766c9bd00892d0ad1",
+        "989ce75edc3c5c10b5d00e146d287698a9ac9f37",
+        "6f75e80c136d1f9b2a7a49c25be8b6db304a8e74",
+        "a16de14d0ab2a103be34168d1c2dded9b86460a1"
+      ],
+      "lifecycleStages": []
+    },
+    {
+      "taskId": "bw6m1aswe",
+      "outputSha256": "2264255911cbdfc574fda950ef5c92c6192ec26f61a9c79dff20abfa6ab90a96",
+      "tests": 14,
+      "pass": 13,
+      "fail": 1,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 49472.1985,
+      "exitCode": 1,
+      "recordedBlobLines": [],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 24890,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 610,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 8268,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 267,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "bqsx8aqyw",
+      "outputSha256": "cdcc3cb5d6464c71c0369687719519626dc382e3d76ac4919ee52d516c450440",
+      "tests": 14,
+      "pass": 14,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 58019.0007,
+      "exitCode": 0,
+      "recordedBlobLines": [],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 27662,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 493,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 8144,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 183,
+          "aborted": false
+        }
+      ]
+    },
+    {
+      "taskId": "b4l2lvsub",
+      "outputSha256": "d614ba2e1af4ea87302b0fa74a0b42824fcaebe376691386e348c5a3cb75454b",
+      "tests": 14,
+      "pass": 14,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "duration_ms": 50755.8612,
+      "exitCode": 0,
+      "recordedBlobLines": [],
+      "lifecycleStages": [
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 1,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 26295,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 593,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "prepare",
+          "elapsedMs": 2,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "business",
+          "elapsedMs": 8178,
+          "aborted": false
+        },
+        {
+          "lifecyclePhase": "cleanup",
+          "elapsedMs": 184,
+          "aborted": false
+        }
+      ]
+    }
+  ],
+  "regeneration": {
+    "requirements": "Node 24+, pnpm 10.13.1, pnpm install --frozen-lockfile, existing isolated native profile; fresh empty directory under docs/tmp",
+    "commands": [
+      "pnpm pack --pack-destination <absolute-empty-directory>",
+      "pnpm --dir packages/dingtalk-dsh-assistant pack --pack-destination <same-directory>",
+      "pnpm --dir packages/dingtalk-dsh-observer pack --pack-destination <same-directory>",
+      "$env:DSH_NATIVE_TEST_PROFILE = (Resolve-Path 'test/fixtures/native-profile/package.json').Path",
+      "$env:RELEASE_PACKAGE_DIRECTORY = (Resolve-Path '<same-directory>').Path",
+      "pnpm test:release-smoke"
+    ],
+    "scope": "Local verification only; do not publish, install, tag or trigger CI",
+    "tarballRetention": "Tgz not committed. Hashes and recipe retained; regeneration is a new candidate, not a byte-identical gzip claim."
+  },
+  "cleanup": {
+    "packageTarballsRemoved": true,
+    "obsoleteTemporaryJsonRemoved": true,
+    "unknownFilesUntouched": true,
+    "prBodyStillNeeded": false,
+    "checkModeRun": true,
+    "finalEvidence": "round-24.md; round-24/validation.json; matrix.csv",
+    "prBodyRemovedAfterRemoteReadback": true,
+    "temporaryBucketRemoved": true
+  },
+  "testedCodeCommit": "442347ffc1fc311df9bdc6e2da2d2985cc32e2d2",
+  "commitBindingCheckedFiles": 154,
+  "prInitialReadback": {
+    "baseRefName": "main",
+    "headRefName": "worktree-resident-router-direct-tasks",
+    "headRefOid": "442347ffc1fc311df9bdc6e2da2d2985cc32e2d2",
+    "mergeable": "MERGEABLE",
+    "number": 348,
+    "state": "OPEN",
+    "title": "feat(router): 消息直达任务并接入常驻会话 Router",
+    "url": "https://github.com/HiQ-AI/dingtalk-dsh-assistant/pull/348",
+    "snapshotScope": "Created PR after code commit, before documentation-only closeout; final doc head is reported separately"
+  },
+  "prBodyNormalizedSha256": "9687170976c8ecc6ec4bb055f408b2c4ec5ae09cba016c7ccc43fbaa53eb2e13"
+}

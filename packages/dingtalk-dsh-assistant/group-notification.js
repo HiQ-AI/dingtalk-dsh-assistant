@@ -47,9 +47,9 @@ export function groupNotificationParts(notification, artifactFiles = []) {
     parts.push({ id, notificationId: id, kind: notification.kind, taskId: file.artifact.taskId ?? null,
       requirementRevision: file.artifact.requirementRevision ?? notification.requirementRevision,
       state: 'prepared', createdAt: notification.createdAt, updatedAt: notification.updatedAt,
-      payload: { ...Object.fromEntries(['conversationId', 'replyTopicId', 'topicRefs', 'taskIds', 'coveredEventIds'].filter(key => p[key] !== undefined).map(key => [key, p[key]])), replyKind: 'substantive',
+      payload: { ...Object.fromEntries(['groupId', 'conversationId', 'conversationType', 'recipientActorId', 'replyTopicId', 'topicRefs', 'taskIds', 'coveredEventIds'].filter(key => p[key] !== undefined).map(key => [key, p[key]])), replyKind: 'substantive',
         deliveryId: notification.id, afterNotificationId: parts.at(-1).id,
-        text: `${file.artifact.fileName}：${file.caption}`, artifact: file.artifact, fact: p.fact,
+        text: `${file.artifact.fileName}：${file.caption}`, artifact: file.artifact, ...(p.fact ? { fact: p.fact } : {}),
         ...(p.sourceRef ? { sourceRef: p.sourceRef, sourceId: p.sourceId, sourceVersion: p.sourceVersion } : {}) } })
   }
   return parts

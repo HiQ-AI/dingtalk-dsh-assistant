@@ -46,6 +46,18 @@ async function fixture(t) {
     await writeFile(join(skillRoot, name, 'SKILL.md'), `---\nname: ${name}\ndescription: Routing summary for ${name}.\n---\nBODY_ONLY_${name}\nRead references/procedure.md only when needed.\n`)
     await writeFile(join(skillRoot, name, 'references/procedure.md'), `REFERENCE_ONLY_${name}`)
   }
+  t.onCancel(() => {
+    for (const host of hosts) {
+      const taskIds = new Set(); let unresolvedInputs = 0
+      for (const request of host.requests) {
+        try { const taskId = latestInput(request).task?.taskId; if (taskId) taskIds.add(taskId) } catch { unresolvedInputs++ }
+      }
+      t.diagnostic(JSON.stringify({ skillFailure: { taskIds: [...taskIds], unresolvedInputs,
+        requests: host.requests.slice(-4).map(request => request.tools.map(tool => tool.name)),
+        results: host.toolResults.slice(-8).map(item => ({ sessionId: item.sessionId, name: item.name, isError: item.result.isError, value: item.result.value })),
+      } }))
+    }
+  })
   t.after(async () => { try { for (const host of hosts.toReversed()) await host.close() } finally { await rm(root, { recursive: true, force: true }) } })
   return { root, skillRoot, async host(decide, options = {}) {
     const host = await nativeTaskHost(root, async (...args) => {
@@ -62,8 +74,8 @@ test('native personal skills are discovered cheaply, loaded independently by bot
     const input = latestInput(request), tools = request.tools.map(tool => tool.name)
     const topicCalls = topicTaskCalls(request)
     if (topicCalls) {
-      assert.ok(!JSON.stringify(request).includes('BODY_ONLY_'), 'Topic coordination does not acquire personal workflow bodies')
-      assert.ok(!tools.includes(nativeShell) && !tools.includes('write'), 'Topic coordination cannot execute business work')
+      assert.ok(!JSON.stringify(request).includes('BODY_ONLY_'), '首筛/Router不取得个人工作流正文')
+      assert.ok(!tools.includes(nativeShell) && !tools.includes('write'), '首筛/Router不能执行事项工作')
       return topicCalls
     }
     const role = tools.includes('task_delegate') ? 'owner' : 'execution'
@@ -100,8 +112,14 @@ test('native personal skills are discovered cheaply, loaded independently by bot
   const [task] = await t.step(async () => h.query('task.list')), [execution] = await t.step(async () => h.query('execution.list'))
   assert.equal(task.status, 'completed')
   assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
-  assert.equal(task.topicRefs.length, 1)
-  assert.equal(h.residentStore.listTopics('native-group').length, 1)
+  assert.deepEqual(task.topicRefs, [])
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
+  assert.equal(task.sourceRefs.length, 1)
+  const source = await t.step(() => h.query('source.get', { sourceId: task.sourceRefs[0] }))
+  assert.equal(source.groupId, message.groupId)
+  assert.equal(source.messageId, message.messageId)
+  assert.equal(source.actorId, message.senderOpenDingTalkId)
+  assert.equal(source.version, 1)
   assert.notEqual(task.sessionId, execution.sessionId)
   assert.deepEqual(execution.input.skillNames, [names[0]])
   assert.equal(first.size, 2)

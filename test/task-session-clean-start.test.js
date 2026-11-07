@@ -2,6 +2,7 @@ import { nativeLifecycle, nativeLifecycleTimeout, nativeTemporaryDirectory as mk
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
+import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { get as httpGet, request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -94,6 +95,53 @@ test('active transport facade exposes notification read models without legacy DW
     assert.deepEqual({ group, tasks }, snapshot)
   } finally { await stop(); await runtime.close() }
   assert.equal(closed, 1)
+})
+
+test('历史背景导入经真实Domain保留已有处置，不进入Topic或Router', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'task-history-background-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const snapshot = { tables: {}, global: null }
+  const storage = () => new DomainFacility({ emit() {}, storage: { backend: { get: () => ({ kv: { async open() { return {
+    loadAll: async () => structuredClone(snapshot), close: async () => {},
+    async putRecord(table, key, value) { (snapshot.tables[table] ??= {})[key] = structuredClone(value) },
+    async deleteRecord(table, key) { delete snapshot.tables[table][key] },
+  } } } }) } } }, { backend: 'isolated' })
+  const store = await openResidentStore(storage())
+  await store.subscribe({ groupId: 'history-group' })
+  const direct = await store.ensureDirectConversation({ conversationId: 'real-direct-conversation', actorId: 'real-peer' })
+  const message = { groupId: 'history-group', messageId: 'existing', text: '待正常初筛', senderOpenDingTalkId: 'real-peer', occurredAt: epoch }
+  await store.ingest(message)
+  const existing = structuredClone(store.getGroup(message.groupId).messages[0])
+  const runtime = await openTaskResidentRuntime({ agentDefaultModel: { currentSelection: () => ({ provider: 'fixture', model: 'fixture' }) } }, store, root)
+  t.after(() => runtime.close())
+  const messages = [
+    { ...message, messageId: 'old-group', text: '仅历史背景' },
+    { ...message, groupId: direct.groupId, messageId: 'old-direct', text: '私聊历史', conversationId: direct.conversationId, conversationType: 'direct' },
+    { ...message, text: '历史不得覆盖当前已接纳版本' },
+    { ...message, groupId: 'unsubscribed', messageId: 'outside' },
+  ]
+  assert.deepEqual(await runtime.backfill(messages), { accepted: 2, backgroundOnly: true })
+  assert.deepEqual(await runtime.backfill(messages), { accepted: 0, backgroundOnly: true })
+  assert.deepEqual(store.getGroup(message.groupId).messages.find(item => item.messageId === message.messageId), existing)
+  for (const groupId of [message.groupId, direct.groupId]) {
+    const group = store.getGroup(groupId)
+    assert.equal(group.routeHistory.length, 0)
+    assert.equal(group.topics.length, 0)
+    assert.deepEqual(store.getRouterState(groupId).queue, [])
+    assert.deepEqual(store.getRouterState(groupId).triage, [])
+  }
+  assert.deepEqual(await runtime.hydrateGroupHistory({ groupId: direct.groupId }), {
+    historyOnly: true, conversationType: 'direct', conversationId: 'real-direct-conversation', messages: 1,
+  })
+  await runtime.close()
+  const reopened = await openResidentStore(storage())
+  try {
+    const history = reopened.getGroup(direct.groupId).messages[0]
+    assert.equal(history.routingStatus, 'routed')
+    assert.equal(history.agentDeliveryStatus, 'skipped')
+    assert.deepEqual(reopened.getRouterState(direct.groupId).queue, [])
+    assert.deepEqual(reopened.getGroup(message.groupId).messages.find(item => item.messageId === message.messageId), existing)
+  } finally { await reopened.close() }
 })
 
 // Real resident entry, native Cordis/storage/persistence, HTTP and SQLite. The model is

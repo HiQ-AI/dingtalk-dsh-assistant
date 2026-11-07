@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { listPerformance } from './performance.js'
 import { normalizeReplySignature } from './group-reply-format.js'
-import { taskModelConfig, taskModelSelection, topicModelConfig } from './task-model-config.js'
+import { taskModelConfig, taskModelSelection, routingModelConfig } from './task-model-config.js'
 
 const retired = () => { throw Object.assign(new Error('WORKFLOW_RETIRED'), { code: 'WORKFLOW_RETIRED' }) }
 const validateExecutionBackend = value => {
@@ -37,8 +37,8 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
   const taskSelection = () => taskModelConfig(store.getTaskSessionModelConfig?.() ?? taskSessionModel)
   const getAgentConfig = () => ({ agentNames: store.getAgentNames?.() ?? [], agentPreset, workspaceDir: store.getAgentWorkspaceDir?.() ?? root, ...selection(),
     taskSessionModel: taskSelection(),
-    topicRouteModel: store.getTopicRouteModelConfig?.() ?? null,
-    topicDecisionModel: store.getTopicDecisionModelConfig?.() ?? null,
+    triageModel: store.getTriageModelConfig?.() ?? null,
+    routerModel: store.getRouterModelConfig?.() ?? null,
     executionBackend: store.getExecutionBackend?.() ?? initialExecutionBackend,
     replySignature: store.getReplySignature?.() ?? initialSignature,
     proxyUrl: store.getProxyUrl?.() ?? '', maxConcurrentTasks: store.getMaxConcurrentTasks?.() ?? maxConcurrentTasks })
@@ -63,6 +63,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
       configSaving = true
       try {
         if (Object.hasOwn(input,'coordinationModel')) throw new Error('INDEPENDENT_COORDINATION_RETIRED')
+        if (['topicRouteModel', 'topicDecisionModel'].some(key => Object.hasOwn(input, key))) throw new Error('TOPIC_MODEL_FIELDS_RETIRED')
         if (['taskPrompts','taskPromptsVersion','leafSessionPrompt','workflowVariables','workflowBindings'].some(key => Object.hasOwn(input,key))) retired()
         const patch = {}
         if (Object.hasOwn(input, 'executionBackend')) patch.executionBackend = validateExecutionBackend(input.executionBackend)
@@ -86,8 +87,8 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
           patch.proxyUrl = input.proxyUrl.trim()
         }
         if (input.taskSessionModel !== undefined) patch.taskSessionModel = taskModelConfig(input.taskSessionModel)
-        for (const key of ['topicRouteModel', 'topicDecisionModel'])
-          if (Object.hasOwn(input, key)) patch[key] = topicModelConfig(input[key])
+        for (const key of ['triageModel', 'routerModel'])
+          if (Object.hasOwn(input, key)) patch[key] = routingModelConfig(input[key])
         const old = selection(), changesDefault = input.provider !== undefined || input.model !== undefined || input.reasoningEffort !== undefined
         if (input.model !== undefined && typeof input.model !== 'string') throw new Error('agent_model_required')
         if (input.reasoningEffort !== undefined && typeof input.reasoningEffort !== 'string') throw new Error('agent_reasoning_effort_invalid')
@@ -99,7 +100,7 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
         // Preflight the complete requested state before either independent store is written.
         if (changesDefault) await ctx.llm.resolveCallConfig(proposedSelection)
         if (patch.taskSessionModel || input.reasoningEffort !== undefined) await ctx.llm.resolveCallConfig(taskModelSelection(proposedSelection, patch.taskSessionModel ?? taskSelection()))
-        for (const key of ['topicRouteModel', 'topicDecisionModel']) {
+        for (const key of ['triageModel', 'routerModel']) {
           const configured = Object.hasOwn(patch, key) ? patch[key] : getAgentConfig()[key]
           if (configured && (Object.hasOwn(patch, key) || changesDefault)) await ctx.llm.resolveCallConfig(taskModelSelection(proposedSelection, configured))
         }
@@ -159,15 +160,16 @@ export async function openTaskResidentRuntime(ctx, store, cwd, { agentWorkspaceD
       let accepted = 0
       for (const message of messages) {
         if (!store.getGroup(message.groupId)) continue
-        const result = await store.ingest(message)
-        if (result.duplicate) continue
-        accepted++
-        await store.routeMessages({ groupId: message.groupId, routeId: `history:${message.messageId}`, routingRevision: store.getGroup(message.groupId).routingRevision, routes: [{ messageId: message.messageId, messageVersion: result.message?.messageVersion ?? 1, topics: [], reason: '历史背景导入，不执行旧请求' }] })
-        await store.markMessageAgentDelivery({ groupId: message.groupId, messageId: message.messageId, status: 'skipped' })
+        const result = await store.ingestHistory(message)
+        if (!result.duplicate) accepted++
       }
       return { accepted, backgroundOnly: true }
     },
-    hydrateGroupHistory: async ({ groupId }) => { const group = store.getGroup(groupId); if (!group) throw new Error('group_not_subscribed'); return { historyOnly: true, topics: store.listTopics(groupId), messages: group.messages.length } },
+    async hydrateGroupHistory({ groupId }) {
+      const group = store.getGroup(groupId)
+      if (!group) throw new Error('group_not_subscribed')
+      return { historyOnly: true, conversationType: group.conversationType ?? 'group', conversationId: group.conversationId ?? groupId, messages: group.messages.length }
+    },
     recoverInterruptedDecisions: async () => [],
     reportCarrierIssue: async issue => { issues.set(issue.fingerprint ?? issue.groupId ?? randomUUID(), { ...issue, kind: 'transport' }) },
     resolveGroupCarrierIssues: async ({ groupId }) => { for (const [key, issue] of issues) if (issue.groupId === groupId) issues.delete(key) },

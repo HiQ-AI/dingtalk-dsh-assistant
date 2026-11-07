@@ -305,9 +305,30 @@ export function scriptedRouteSilences(routes, reason) {
 }
 
 // Script model decisions only; routing, validation and durable topic state remain real.
-export function topicTaskCalls(request, { title = '原消息交办', objective } = {}) {
+export function topicTaskCalls(request, { title = '原消息交办', objective, needsProcessing = true } = {}) {
   const input = latestInput(request), names = request.tools.map(tool => tool.name)
   const latestResult = modelToolValues(request).at(-1)
+  if (names.includes('triage_submit') || names.includes('router_submit')) {
+    const pages = modelToolValues(request), sources = []
+    for (const source of input.sources ?? []) {
+      let offset = 0, text = ''
+      while (offset < source.totalLength) {
+        const page = pages.find(item => item.batchId === input.batchId && item.sourceId === source.sourceId && item.offset === offset)
+        if (!page) return [{ name: 'router_source_read', args: { sourceId: source.sourceId, offset } }]
+        assert.ok(Number.isSafeInteger(page.nextOffset) && page.nextOffset > offset && page.nextOffset <= source.totalLength
+          && page.totalLength === source.totalLength && typeof page.text === 'string' && page.text.length === page.nextOffset - offset)
+        text += page.text
+        offset = page.nextOffset
+      }
+      const value = JSON.parse(text)
+      assert.equal(value.sourceId, source.sourceId)
+      sources.push(value)
+    }
+    if (names.includes('triage_submit')) return [{ name: 'triage_submit', args: { needsProcessing, reply: null } }]
+    const newSources = sources.filter(source => input.context.newSourceIds.includes(source.sourceId))
+    return [{ name: 'router_submit', args: { actions: newSources.length ? [{ kind: 'new-task', sourceIds: newSources.map(source => source.sourceId),
+      title, objective: objective ?? newSources.map(source => source.text).join('\n') }] : [], continuity: [], reply: null } }]
+  }
   if (latestResult?.status === 'context-required' && latestResult.nextCall?.name === 'group_decision_context_get'
     && latestResult.nextCall.arguments?.requestId === input.requestId) {
     return [{ name: latestResult.nextCall.name, args: latestResult.nextCall.arguments }]

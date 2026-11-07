@@ -11,7 +11,7 @@ import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { get } from 'node:http'
 import { once } from 'node:events'
-import { available, reason, nativeTaskHost, latestInput, topicTaskCalls, modelToolValues, resolveContextInput } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, modelToolValues, resolveContextInput, topicTaskCalls } from './fixtures/task-session-native-host.js'
 
 const exec = promisify(execFile)
 const source = fileURLToPath(new URL('../packages/dingtalk-dsh-assistant/', import.meta.url))
@@ -177,8 +177,12 @@ test('actual npm tarball has only the generic runtime and runs a personal-skill 
     t.signal.throwIfAborted()
     assert.deepEqual(host.toolResults.filter(item => item.result.isError), [], 'The finite package script must not retry a rejected tool indefinitely')
     const input = latestInput(request), names = request.tools.map(tool => tool.name)
-    const topicCalls = topicTaskCalls(request)
-    if (topicCalls) return topicCalls
+    const routed = topicTaskCalls(request, { title: 'Read the external guide', objective: 'Read the external guide' })
+    if (routed) {
+      for (const item of routed) if (item.name === 'router_submit')
+        for (const action of item.args.actions) action.acceptanceCriteria = ['Read the actual user-owned guide.']
+      return routed
+    }
     if (names.includes('task_delegate')) {
       if (input.executions.some(item => !item.drained || ['queued', 'running'].includes(item.status))) {
         if (input.executions.length === 3 && input.executions.some(item => item.status === 'queued' && item.drained)) observedQueuedReview = true
@@ -233,9 +237,16 @@ test('actual npm tarball has only the generic runtime and runs a personal-skill 
   await t.step(async () => h.service.whenIdle())
   t.signal.throwIfAborted()
   f.stage('native-task-idle')
-  assert.equal((await t.step(async () => h.query('task.list')))[0].status, 'completed')
-  assert.equal((await t.step(async () => h.query('task.list')))[0].topicRefs.length, 1)
-  assert.equal(h.residentStore.listTopics('native-group').length, 1)
+  const tasks = await t.step(async () => h.query('task.list'))
+  assert.equal(tasks.length, 1)
+  assert.equal(tasks[0].status, 'completed')
+  assert.deepEqual(tasks[0].topicRefs, [])
+  assert.equal(tasks[0].sourceRefs.length, 1)
+  const source = await t.step(async () => h.query('source.get', { sourceId: tasks[0].sourceRefs[0] }))
+  assert.equal(source.messageId, 'packed-skill')
+  assert.equal(source.groupId, 'native-group')
+  assert.equal(source.version, 1)
+  assert.equal(h.residentStore.listTopics('native-group').length, 0)
   assert.deepEqual(await t.step(async () => h.query('operation.list')), [])
   assert.equal((await t.step(async () => h.query('execution.list'))).length, 3)
   assert.equal(observedQueuedReview, true, 'The Owner must wait for the actual queued/drained review before completing')

@@ -4,14 +4,28 @@ import assert from 'node:assert/strict'
 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { available, reason, nativeTaskHost, latestInput, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
+import { available, reason, nativeTaskHost, latestInput, modelToolValues, topicTaskCalls, waitUntil } from './fixtures/task-session-native-host.js'
 import { openResidentStore } from '../packages/dingtalk-dsh-assistant/store.js'
 import { openTaskResidentRuntime } from '../packages/dingtalk-dsh-assistant/task-resident-runtime.js'
 import { openTaskSessionService } from '../packages/dingtalk-dsh-assistant/task-session-service.js'
 
-// Independent planning was removed. Model isolation remains a current contract:
-// configuration affects later Topic requests, never an in-flight request or the Owner selection.
-test('native Loader model changes affect the next Topic session while active requests and Owner selection stay fixed',
+function unreadSourceCall(request) {
+  const input = latestInput(request)
+  const pages = modelToolValues(request)
+  for (const source of input.sources ?? []) {
+    let offset = source.text.length < source.totalLength ? 0 : source.totalLength
+    while (offset < source.totalLength) {
+      const page = pages.find(item => item.batchId === input.batchId && item.sourceId === source.sourceId && item.offset === offset)
+      if (!page) return [{ name: 'router_source_read', args: { sourceId: source.sourceId, offset } }]
+      assert.ok(page.nextOffset > offset && page.nextOffset <= source.totalLength)
+      offset = page.nextOffset
+    }
+  }
+  return undefined
+}
+
+// 模型配置变更只影响后续会话，不改写在途请求或 Owner 配置。
+test('native Loader model changes affect the next triage session while active requests and Owner selection stay fixed',
   { ...({ skip: !available ? reason : false, timeout: 30000 }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'topic-model-native-'))
     const release = Promise.withResolvers()
@@ -22,12 +36,9 @@ t.onCancel(() => release.resolve())
     await t.beginBusiness()
     h = await t.step(async () => nativeTaskHost(root, async request => {
       const names = request.tools.map(tool => tool.name), input = latestInput(request)
-      if (names.includes('group_topic_route_submit')) {
+      if (names.includes('triage_submit')) {
         if (!held) { held = true; await release.promise }
-        return [{ name: 'group_topic_route_submit', args: { requestId: input.requestId, routes: input.messages.map(message => ({
-          messageId: message.messageId, messageVersion: message.messageVersion, units: [],
-          ignoredRefs: [{ quote: message.text, reason: '仅讨论，无需执行' }],
-        })) } }]
+        return unreadSourceCall(request) ?? [{ name: 'triage_submit', args: { needsProcessing: false, reply: null } }]
       }
       if (names.includes('task_delegate')) {
         const done = input.executions.some(execution => execution.status === 'succeeded' && execution.drained)
@@ -50,8 +61,8 @@ t.onCancel(() => release.resolve())
       text: '仅讨论，无需执行：' + n, timestamp: new Date().toISOString() })
     const before = runtime.getAgentConfig()
     await t.step(async () => ingest(1))
-    await t.step(async () => waitUntil(() => held, 'first Topic routing call', 5000))
-    const active = h.requests.find(request => request.tools.some(tool => tool.name === 'group_topic_route_submit'))
+    await t.step(async () => waitUntil(() => held, 'first triage call', 5000))
+    const active = h.requests.find(request => request.tools.some(tool => tool.name === 'triage_submit'))
     assert.equal(active.model, before.model)
     assert.equal(h.ctx.get('configEditor'), undefined, 'the isolated host does not install a profile editor')
     await t.step(async () => assert.rejects(runtime.updateAgentConfig({ model: 'route-next' }), error => error.message === 'AGENT_CONFIG_SAVE_FAILED'
@@ -68,7 +79,9 @@ t.onCancel(() => release.resolve())
     assert.deepEqual(runtime.getAgentConfig(), saved, 'invalid retired settings cannot partially save other model settings')
     release.resolve(); await t.step(async () => h.service.whenIdle())
     await t.step(async () => ingest(2)); await t.step(async () => h.service.whenIdle())
-    assert.deepEqual(h.requests.filter(request => request.tools.some(tool => tool.name === 'group_topic_route_submit')).map(request => request.model), [before.model, 'route-next'])
+    const triageModels = h.requests.filter(request => request.tools.some(tool => tool.name === 'triage_submit')).map(request => request.model)
+    assert.ok(triageModels.length >= 2)
+    assert.deepEqual([...new Set(triageModels)], [before.model, 'route-next'])
     assert.deepEqual(runtime.getAgentConfig().taskSessionModel, before.taskSessionModel)
     const task = await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'selection-isolation', objective: '核对模型边界' }))
     await t.step(async () => h.service.whenIdle())
@@ -82,7 +95,7 @@ t.onCancel(() => release.resolve())
     assert.ok(h.requests.every(request => !request.tools.some(tool => tool.name === 'coordination_submit')))
   }))
 
-test('native 两级话题模型独立选择并保留 Owner 配置',
+test('native 初筛与 Router 模型独立选择并保留 Owner 配置',
   { skip: !available ? reason : false, timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
     const root = await mkdtemp(join(tmpdir(), 'topic-two-models-'))
     let h, runtime, delegated = false
@@ -97,49 +110,43 @@ test('native 两级话题模型独立选择并保留 Owner 配置',
         return [...calls, { name: 'task_session_submit', args: { decision: { action: done ? 'complete' : 'wait', summary: '核对模型边界', evidence: [], limitations: [] } } }]
       }
       if (names.includes('execution_submit')) return [{ name: 'execution_submit', args: { output: { status: 'completed', summary: '已核对', evidence: [], limitations: [], artifacts: [] } } }]
-      const calls = topicTaskCalls(request)
-      if (request.tools.some(tool => tool.name === 'group_decision_submit')) for (const item of calls ?? []) {
-        item.args.decision.actions = []; item.args.decision.reason = '仅记录讨论'
-        item.args.decision.topicUpdate = { summary: '记录讨论。' }
-        delete item.args.decision.reply; delete item.args.decision.replyToMessageId; delete item.args.decision.replyReview
-      }
-      return calls ?? []
+      if (names.includes('triage_submit')) return unreadSourceCall(request) ?? [{ name: 'triage_submit', args: { needsProcessing: true, reply: null } }]
+      if (names.includes('router_submit')) return unreadSourceCall(request) ?? [{ name: 'router_submit', args: { actions: [], continuity: [], reply: null } }]
+      return topicTaskCalls(request) ?? []
     }, { resident: true }))
     const store = h.residentStore = await t.step(async () => openResidentStore(h.ctx.storageDomain))
     runtime = await t.step(async () => openTaskResidentRuntime(h.ctx, store, root, { agentPreset: 'native-test', taskSessionModel: { provider: 'native-task-test', model: 'owner-model', reasoningEffort: 'low' } }))
     await t.step(async () => runtime.subscribe({ groupId: 'native-group', name: '模型隔离群' }))
     const config = model => ({ provider: 'native-task-test', model, reasoningMode: 'model-default', reasoningEffort: null })
-    await t.step(async () => runtime.updateAgentConfig({ topicRouteModel: config('route-model'), topicDecisionModel: config('decision-model') }))
+    await t.step(async () => runtime.updateAgentConfig({ triageModel: config('route-model'), routerModel: config('decision-model') }))
     h.service = await t.step(async () => openTaskSessionService({ ctx: h.ctx, legacy: runtime, residentStore: store,
       config: { dbPath: join(root, 'dynamic.db'), instanceId: 'topic-two-models', initialize: true, ownerActorId: 'native-user', webActorId: 'native-user' },
       notifications: { async send() { assert.fail('不应发送消息') }, async readback() { assert.fail('不应回读消息') } } }))
     await t.step(async () => h.service.ingest({ groupId: 'native-group', messageId: 'two-models', senderOpenDingTalkId: 'native-user', text: '请记录一个独立业务事项。', timestamp: new Date().toISOString() }))
     await t.step(async () => h.service.whenIdle())
-    const routes = h.requests.filter(request => request.tools.some(tool => tool.name === 'group_topic_route_submit'))
-    const decisions = h.requests.filter(request => request.tools.some(tool => tool.name === 'group_decision_submit'))
+    const routes = h.requests.filter(request => request.tools.some(tool => tool.name === 'triage_submit'))
+    const decisions = h.requests.filter(request => request.tools.some(tool => tool.name === 'router_submit'))
     assert.ok(routes.length); assert.ok(decisions.length)
     assert.ok(routes.every(request => request.model === 'route-model'))
     assert.ok(decisions.every(request => request.model === 'decision-model'))
     assert.equal(runtime.getAgentConfig().taskSessionModel.model, 'owner-model')
-    assert.equal(store.listTopics('native-group')[0].decisions[0].status, 'completed')
+    assert.equal(store.getRouterState('native-group').decisions.length, 1)
     await t.step(async () => h.service.createTask({ groupId: 'native-group', requestId: 'two-models-owner', objective: '核对模型边界' }))
     await t.step(async () => h.service.whenIdle())
     const owners = h.requests.filter(request => request.tools.some(tool => tool.name === 'task_delegate'))
     assert.ok(owners.length); assert.ok(owners.every(request => request.model === 'owner-model'))
   }))
 
-test('retired coordination settings cannot activate planning while ordinary native Topic routing remains available',
+test('retired coordination settings cannot activate planning while ordinary native triage remains available',
   { ...({ skip: !available ? reason : false, timeout: 15000 }), timeout: nativeLifecycleTimeout(15000) }, nativeLifecycle(15000, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'coordination-model-disabled-'))
-    let h, runtime, plans = 0
+    let h, runtime, plans = 0, stage = 'host'
+    t.onCancel(() => t.diagnostic(JSON.stringify({ stage, requestCount: h?.requests.length, requests: h?.requests.slice(-3).map(request => ({ model: request.model, tools: request.tools.map(tool => tool.name) })),
+      toolResults: h?.toolResults.slice(-3).map(item => ({ name: item.name, result: item.result })), alerts: h?.service?.listAlerts() })))
     t.after(async () => { await h?.service?.close(); if (h) h.service = undefined; await runtime?.close(); if (h) h.residentStore = undefined; await h?.close(); await rm(root, { recursive: true, force: true }) })
     await t.beginBusiness()
     h = await t.step(async () => nativeTaskHost(root, request => {
-      const input = latestInput(request)
-      if (request.tools.some(tool => tool.name === 'group_topic_route_submit')) return [{ name: 'group_topic_route_submit', args: {
-        requestId: input.requestId, routes: input.messages.map(message => ({ messageId: message.messageId, messageVersion: message.messageVersion,
-          ignoredRefs: [{ quote: message.text, reason: '只记录讨论，没有交办' }], units: [] })),
-      } }]
+      if (request.tools.some(tool => tool.name === 'triage_submit')) return unreadSourceCall(request) ?? [{ name: 'triage_submit', args: { needsProcessing: false, reply: null } }]
       return []
     }, { resident: true }))
     h.ctx.on('session/created', session => { if (session.id.startsWith('independent-')) plans++ })
@@ -151,11 +158,14 @@ test('retired coordination settings cannot activate planning while ordinary nati
       notifications: { async send() { assert.fail('讨论不应发送消息') }, async readback() { assert.fail('没有发送不得回读') } } }))
     const before = runtime.getAgentConfig()
     await t.step(async () => assert.rejects(runtime.updateAgentConfig({ coordinationModel: { provider: 'native-task-test', model: 'configured-but-retired', reasoningMode: 'explicit', reasoningEffort: 'low' } }), /INDEPENDENT_COORDINATION_RETIRED/))
+    stage = 'ingest'
     await t.step(async () => h.service.ingest({ groupId: 'native-group', messageId: 'disabled', senderOpenDingTalkId: 'native-user', text: 'A完成后B再讨论，不用处理', timestamp: new Date().toISOString() }))
+    stage = 'idle'
     await t.step(async () => h.service.whenIdle())
+    stage = 'assertions'
     assert.deepEqual(runtime.getAgentConfig(), before)
     assert.equal(plans, 0); assert.equal(store.listSourceDispatchOwnership('native-group').length, 0)
-    assert.ok(h.requests.some(request => request.tools.some(tool => tool.name === 'group_topic_route_submit')))
-    assert.equal(store.getGroup('native-group').messages[0].routingStatus, 'routed')
+    assert.ok(h.requests.some(request => request.tools.some(tool => tool.name === 'triage_submit')))
+    assert.ok(store.getRouterState('native-group').triage.some(item => item.sourceRef.messageId === 'disabled' && item.disposition.needsProcessing === false))
     assert.equal((await t.step(async () => h.service.store.query({ kind: 'task.list' }))).length, 0)
   }))

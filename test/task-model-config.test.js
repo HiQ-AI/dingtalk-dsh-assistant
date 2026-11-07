@@ -78,8 +78,8 @@ test('HTTP task settings validate, persist, refresh and reopen without touching 
 })
 
 
-test('两级话题模型经 HTTP 独立预检、保存、重开和继承', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'topic-model-settings-'))
+test('一级初筛与常驻Router模型经 HTTP 独立预检、保存、重开和继承', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'routing-model-settings-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const { facility } = memoryFacility()
   const original = { provider: 'gateway', model: 'sol', reasoningEffort: 'low' }
@@ -97,19 +97,21 @@ test('两级话题模型经 HTTP 独立预检、保存、重开和继承', async
   const read = async () => (await fetch(base + '/state/agent-config')).json()
   const save = body => fetch(base + '/config/agent', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   const initial = await read()
-  assert.equal(initial.topicRouteModel, null); assert.equal(initial.topicDecisionModel, null)
+  assert.equal(initial.triageModel, null); assert.equal(initial.routerModel, null)
+  assert.equal(Object.hasOwn(initial, 'topicRouteModel'), false); assert.equal(Object.hasOwn(initial, 'topicDecisionModel'), false)
+  assert.equal((await save({ topicRouteModel: null, routerModel: null })).status, 400)
   const route = { provider: 'gateway', model: 'pearl', reasoningMode: 'model-default', reasoningEffort: null }
   const decision = { provider: 'gateway', model: 'dew', reasoningMode: 'explicit', reasoningEffort: 'low' }
   for (const invalid of [{}, { ...route, model: '' }, { ...route, provider: '' }, { ...route, model: 'missing' }, { ...route, reasoningMode: 'explicit', reasoningEffort: 'high' }]) {
-    assert.equal((await save({ topicRouteModel: invalid, topicDecisionModel: decision })).status, 400)
-    assert.equal((await read()).topicDecisionModel, null)
+    assert.equal((await save({ triageModel: invalid, routerModel: decision })).status, 400)
+    assert.equal((await read()).routerModel, null)
   }
-  assert.equal((await save({ topicRouteModel: route, topicDecisionModel: decision })).status, 200)
-  assert.deepEqual((await read()).topicRouteModel, route); assert.deepEqual((await read()).topicDecisionModel, decision)
+  assert.equal((await save({ triageModel: route, routerModel: decision })).status, 200)
+  assert.deepEqual((await read()).triageModel, route); assert.deepEqual((await read()).routerModel, decision)
   await runtime.close(); runtime = await openTaskResidentRuntime(ctx, await openResidentStore(facility), root)
-  assert.deepEqual((await read()).topicRouteModel, route); assert.deepEqual((await read()).topicDecisionModel, decision)
-  assert.equal((await save({ topicRouteModel: null })).status, 200)
-  assert.equal((await read()).topicRouteModel, null); assert.deepEqual((await read()).topicDecisionModel, decision)
+  assert.deepEqual((await read()).triageModel, route); assert.deepEqual((await read()).routerModel, decision)
+  assert.equal((await save({ triageModel: null })).status, 200)
+  assert.equal((await read()).triageModel, null); assert.deepEqual((await read()).routerModel, decision)
   assert.deepEqual((await read()).taskSessionModel, initial.taskSessionModel); assert.equal(writes, 0)
 })
 
