@@ -278,6 +278,7 @@ const taskMessageIds = (group, task) => new Set(taskMessages(group, task).map((m
 export function buildReplyReviewCandidates({ group, tasks = [], currentMessages = [], focusTaskIds = [], recentLimit = 6, similarityLimit = 6, candidateLimit = REPLY_REVIEW_CANDIDATE_LIMIT, maxChars = REPLY_REVIEW_MAX_CHARS }) {
   if (group === undefined) return []
   const messages = new Map((group.messages ?? []).map((message) => [message.messageId, message]))
+  const initialReplyIds = new Set((group.routeHistory ?? []).flatMap(receipt => (receipt.initialReplies ?? []).map(reply => reply.outboundId)))
   const taskIdsByMessage = new Map()
   for (const task of tasks) for (const messageId of taskMessageIds(group, task)) taskIdsByMessage.set(messageId, [...new Set([...(taskIdsByMessage.get(messageId) ?? []), task.taskId])])
   const focus = new Set(focusTaskIds)
@@ -339,6 +340,7 @@ export function buildReplyReviewCandidates({ group, tasks = [], currentMessages 
         ...(outbound.matterUnitRefs ? { matterUnitRefs: outbound.matterUnitRefs } : {}),
         ...(outbound.deliveredMessageId ? { deliveredMessageId: outbound.deliveredMessageId } : {}),
         ...(outbound.replyKind ? { replyKind: outbound.replyKind } : {}),
+        ...(initialReplyIds.has(outbound.outboundId) ? { replyPhase: 'initial' } : {}),
         reply: compactText(outbound.text, 360), taskIds: projectedTaskIds, sourceMessages,
         tasks: relatedTasks.map(({ taskId, title, objective, state }) => ({ taskId, ...(title ? { title: compactText(title, 120) } : {}), objective: compactText(objective, 360), state })),
       },

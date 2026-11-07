@@ -1,0 +1,276 @@
+{
+  "recordedAt": "2026-11-06",
+  "round": 23,
+  "scope": "初诊决策审阅、候选请求预算与协调 queue/turn 计时身份契约；定向回归、映射守恒及实际预打包 Assistant smoke。未合并、未部署、未触发 CI、未查询生产、未调用真实模型或发送真实钉钉消息。",
+  "branch": "worktree-first-reply-contract-repair",
+  "testedWorktreeHeadBeforeDocumentation": "825385db44f6c0d73fd47090269a68b43496fefe",
+  "worktreeChangesWereUncommitted": true,
+  "productCommitAfterTests": "7010297ee0eab8fa3c08d578766dffcfcf5bec20",
+  "committedProductAndTestFilesMatchTestedBlobs": true,
+  "testsRerunAfterCommit": false,
+  "sourceBinding": {
+    "packageSourceFiles": 210,
+    "packageSourceDigestSha256": "22da01ccf8b8ad0086e1ad2beecb05bc05e8d67c3f7cfc844d8492d61f370144",
+    "sourceChangedDuringSmoke": false,
+    "assistantPackageBytes": 517355,
+    "assistantPackageSha256": "603c9a452ecd10560bba99eb4e8bb6f38503e62475c5ffcb45dd7aecf4ef00d7",
+    "runtime": {
+      "sourceGitBlob": "87b5cbe135ef736ae6340c972ae0f0f25b1e1865",
+      "testGitBlob": "6e7bb558097e8ce2e1508e01aadc933e35687c8b"
+    },
+    "decision": {
+      "sourceGitBlob": "d795213acd550bce11c1895b3b2213fcbafdf44c",
+      "testGitBlob": "1c44969f15f0136593df47cac6685381bac3312c"
+    },
+    "roleContext": {
+      "coordinatorGitBlob": "423bbf756964fe4f771998c9381643bead654126",
+      "testGitBlob": "4935b2a43a7073e14e23b8bce9ace2c1eacb4c4c"
+    },
+    "coordinationSessions": {
+      "sourceGitBlob": "0c2f4ae295d3e6e5b8cb984301ba3521205b47bb",
+      "testGitBlob": "2e03f078a506c258bafed93358a7701a33e986fa"
+    },
+    "nativeRouting": {
+      "coordinatorGitBlob": "423bbf756964fe4f771998c9381643bead654126",
+      "runtimeGitBlob": "87b5cbe135ef736ae6340c972ae0f0f25b1e1865",
+      "decisionGitBlob": "d795213acd550bce11c1895b3b2213fcbafdf44c",
+      "coordinationSessionsGitBlob": "0c2f4ae295d3e6e5b8cb984301ba3521205b47bb",
+      "serviceGitBlobUnchanged": "56c4bc390ee2f4cfef165e2c1933b04efbbd8ade",
+      "testGitBlob": "ed330f9e19799510425dc9d3f4a274c419a9e56e",
+      "fixtureGitBlob": "a2b928c8e500509dd9bad37f47093bc79b0616d2",
+      "initialCaptureCaveat": "初始采集只留4个blob；运行中7个一致为C报告，结束后独立核对7个一致。不得称首尾均记录完整7个。"
+    }
+  },
+  "finalResults": {
+    "runtimeFile": {
+      "passed": 226,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "durationMs": 27791.1913,
+      "exitCode": 0,
+      "outputRecord": "宿主原始输出bh00smu9c.output，Lead已独立读取最终计数及首尾blob",
+      "boundary": "完整 topic-runtime.test.js 定向运行；不覆盖 runtime-history 旧失败。",
+      "task": "bh00smu9c",
+      "outputSha256": "9a234d317e3817b257336c404add49447abd6f5e0afba61378a13838e05a9d47"
+    },
+    "decisionFile": {
+      "passed": 20,
+      "failed": 0,
+      "durationMs": 506.2793,
+      "sourceGitBlob": "d795213acd550bce11c1895b3b2213fcbafdf44c",
+      "testGitBlob": "1c44969f15f0136593df47cac6685381bac3312c",
+      "outputRecord": "成员前台原工具结果；当前没有独立原始输出文件"
+    },
+    "roleContext": {
+      "passed": 4,
+      "failed": 0,
+      "durationMs": 585.369,
+      "coordinatorGitBlob": "423bbf756964fe4f771998c9381643bead654126",
+      "testGitBlob": "4935b2a43a7073e14e23b8bce9ace2c1eacb4c4c",
+      "outputRecord": "成员前台原工具结果；当前没有独立原始输出文件",
+      "boundary": "只证明角色提示与校验合同，不证明模型行为。"
+    },
+    "coordinationSessions": {
+      "task": "bdfh4pv0j",
+      "passed": 19,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "durationMs": 572.7661,
+      "exitCode": 0,
+      "sourceGitBlob": "0c2f4ae295d3e6e5b8cb984301ba3521205b47bb",
+      "testGitBlob": "2e03f078a506c258bafed93358a7701a33e986fa",
+      "outputSha256": "5216b4b1499071219e3809d0282683075c8787e8d88a89660f54f78d27892155",
+      "coverage": "真实来源账本排队跨度冻结、延迟计时、在途追加不回填旧阶段；包括 eventPrefix=null 时真实队列观察。"
+    },
+    "nativeRouting": {
+      "task": "b9dduzezj",
+      "passed": 45,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "durationMs": 118532.6601,
+      "exitCode": 0,
+      "outputSha256": "399b31d33a9f542dc81ee2117f73a2250201c8ad3e1949354fe15b6440530854",
+      "coordinatorGitBlob": "423bbf756964fe4f771998c9381643bead654126",
+      "runtimeGitBlob": "87b5cbe135ef736ae6340c972ae0f0f25b1e1865",
+      "decisionGitBlob": "d795213acd550bce11c1895b3b2213fcbafdf44c",
+      "coordinationSessionsGitBlob": "0c2f4ae295d3e6e5b8cb984301ba3521205b47bb",
+      "serviceGitBlobUnchanged": "56c4bc390ee2f4cfef165e2c1933b04efbbd8ade",
+      "testGitBlob": "ed330f9e19799510425dc9d3f4a274c419a9e56e",
+      "fixtureGitBlob": "a2b928c8e500509dd9bad37f47093bc79b0616d2",
+      "validated": "三类不合法确认替换均无决策/出箱副作用；合法旧 confirmation 被接受；最终只观察首 turn，未证明后续 turn 存在。"
+    },
+    "testMapping": {
+      "passed": true,
+      "mappedFiles": 343,
+      "eachMappedExactlyOnce": true,
+      "historical": 3,
+      "deleted": 0,
+      "review": "Lead独立核对；Release smoke 中映射合同测试亦通过。"
+    },
+    "releaseSmoke": {
+      "command": "pnpm test:release-smoke",
+      "task": "brxba47bd",
+      "passed": 14,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "durationMs": 54160.243,
+      "exitCode": 0,
+      "outputSha256": "cffec47fc26c3a5bec2a2ab0e7c43e9ef560f95adc391a675b90441806136098",
+      "assistantPackageSha256": "603c9a452ecd10560bba99eb4e8bb6f38503e62475c5ffcb45dd7aecf4ef00d7",
+      "assistantPackageBytes": 517355,
+      "originalBusinessTimeoutMs": 30000,
+      "personalSkillTaskBusinessMs": 26980,
+      "healthBusinessMs": 10905,
+      "cleanupAborted": false,
+      "boundary": "实际冻结 npm tarball 解包运行；预打包隔离 smoke，不是生产/真实模型验收。"
+    }
+  },
+  "preservedFailuresAndCorrections": {
+    "runtimeFirstRun": {
+      "result": "225/226，1 fail",
+      "cause": "测试依赖旧7000字符分页阈值；转义后的完整JSON请求未超过64 KiB",
+      "correction": "仅将测试候选中的双引号由7000个改为35000个，使JSON转义后确实超过64KiB；产品预算与原边界断言不变，最终226/226。",
+      "task": "bzoxyzy8n",
+      "outputSha256": "0bfc6e49302c0e534222a5b2b0f9bd8b7356e6b52c7010ff875550cfa275d9e3"
+    },
+    "coordinationSessionsOldRed": {
+      "task": "bgv44raht",
+      "passed": 0,
+      "failed": 1,
+      "failure": "真实 SQLite 来源账本动态追加触发 DYNAMIC_SOURCE_STAGE_CONFLICT",
+      "outputSha256": "b6aabd7a2a703cbe650b53cc69563b8f55016ad84874165ed4ce4ac899e68b88",
+      "outerWrapperExitCode": 0,
+      "exitCodeCaveat": "宿主外层命令exit0不代表测试通过；原输出明确0/1失败，未单列node测试退出码。"
+    },
+    "nativeFixtureTimeouts": [
+      {
+        "task": "bxeprnpxr",
+        "result": "0/1，TEST_STAGE_TIMEOUT；prepare 22765ms，business 30006ms，cleanup 129ms",
+        "outputSha256": "f516c9401f3f912284cf70e3e8e5baca13203208ca5e551c95246f63e3a693e7"
+      },
+      {
+        "task": "bbw84mbt8",
+        "result": "0/1，TEST_STAGE_TIMEOUT；prepare 895ms，business 30009ms，cleanup 136ms；工具回执显示 candidates=[]",
+        "outputSha256": "6f8f0ecc7b180e0905b52ab0485d6ff82acef2cd12aa2c36d1c77d5d26d99da9"
+      }
+    ],
+    "nativeFailureDiagnosis": "测试种子未关联当前来源，导致审阅候选为空；修复测试fixture后最终全文件45/45。曾失败的‘必须后续turn’断言被修订，SDK可在原turn继续；本轮不声称后续turn已观察。",
+    "mappingFirstCheck": "test_suite_map_stale；更新suite-map后独立映射检查通过，首次失败保留。",
+    "initialCombinedRun": {
+      "task": "bxjrkkv0i",
+      "passed": 242,
+      "failed": 2,
+      "exitCode": 1,
+      "outputSha256": "b969149142c91cbd015358b5efa6dec66b38a3e064887ef5091ba8f95230b728",
+      "cause": "decision旧调用方仍携带退役workflow字段且Route正例缺显式双数组。",
+      "correction": "迁移当前schema正例并明确拒绝退役字段；正负例统一显式传双数组，原来源/版本/授权等负例保留；未修改产品schema，也未在旧产品独立复跑相同失败。"
+    },
+    "nativeIncorrectLaterTurnAssertion": {
+      "task": "blserwqt4",
+      "passed": 1,
+      "failed": 1,
+      "exitCode": 1,
+      "outputSha256": "c638e09c68e5c0bd3cf302591f0707452f469e91252d683c56489edeb1d6302f",
+      "correction": "新增“晚到源必须有后续turn”前提不成立；D核SDK允许同turn逐step消费steer，移除该新增断言，保留首turn完成/shared=false、晚到源不回填及全部原路由断言；不声称已观察后续turn。"
+    }
+  },
+  "notVerified": [
+    "真实模型语义选择、生产首回时延或60秒目标",
+    "真实钉钉收发、生产部署或线上业务终态",
+    "合法动态追加后必然启动后续turn",
+    "历史 runtime-history 7项失败、Store固定摘要失败及第21轮首轮release smoke 12/14已修复"
+  ],
+  "ci": false,
+  "merged": false,
+  "deployed": false,
+  "realModelCalls": false,
+  "realDingTalkMessages": false,
+  "evidenceReceipts": [
+    {
+      "task": "b9dduzezj",
+      "file": "b9dduzezj.output",
+      "sha256": "399b31d33a9f542dc81ee2117f73a2250201c8ad3e1949354fe15b6440530854",
+      "retention": "本轮摘要留于round-23.md；临时任务原日志未复制进仓库。"
+    },
+    {
+      "task": "brxba47bd",
+      "file": "brxba47bd.output",
+      "sha256": "cffec47fc26c3a5bec2a2ab0e7c43e9ef560f95adc391a675b90441806136098",
+      "retention": "本轮摘要留于round-23.md；临时任务原日志未复制进仓库。"
+    },
+    {
+      "task": "bdfh4pv0j",
+      "file": "bdfh4pv0j.output",
+      "sha256": "5216b4b1499071219e3809d0282683075c8787e8d88a89660f54f78d27892155",
+      "retention": "本轮摘要留于round-23.md；临时任务原日志未复制进仓库。"
+    },
+    {
+      "task": "bgv44raht",
+      "file": "bgv44raht.output",
+      "sha256": "b6aabd7a2a703cbe650b53cc69563b8f55016ad84874165ed4ce4ac899e68b88",
+      "retention": "保留首次真实SQLite动态来源失败的计数、错误和SHA，不覆盖。"
+    },
+    {
+      "task": "bxeprnpxr",
+      "file": "bxeprnpxr.output",
+      "sha256": "f516c9401f3f912284cf70e3e8e5baca13203208ca5e551c95246f63e3a693e7",
+      "retention": "保留首次Native空候选门禁超时记录及SHA，不覆盖。"
+    },
+    {
+      "task": "bbw84mbt8",
+      "file": "bbw84mbt8.output",
+      "sha256": "6f8f0ecc7b180e0905b52ab0485d6ff82acef2cd12aa2c36d1c77d5d26d99da9",
+      "retention": "保留第二次Native空候选门禁超时记录及SHA，不覆盖。"
+    },
+    {
+      "task": "bh00smu9c",
+      "file": "bh00smu9c.output",
+      "sha256": "9a234d317e3817b257336c404add49447abd6f5e0afba61378a13838e05a9d47",
+      "retention": "报告自包含结果摘要；原输出由宿主临时任务目录管理，不复制日志或绝对用户目录入Git。"
+    },
+    {
+      "task": "bxjrkkv0i",
+      "file": "bxjrkkv0i.output",
+      "sha256": "b969149142c91cbd015358b5efa6dec66b38a3e064887ef5091ba8f95230b728",
+      "retention": "报告自包含结果摘要；原输出由宿主临时任务目录管理，不复制日志或绝对用户目录入Git。"
+    },
+    {
+      "task": "bzoxyzy8n",
+      "file": "bzoxyzy8n.output",
+      "sha256": "0bfc6e49302c0e534222a5b2b0f9bd8b7356e6b52c7010ff875550cfa275d9e3",
+      "retention": "报告自包含结果摘要；原输出由宿主临时任务目录管理，不复制日志或绝对用户目录入Git。"
+    },
+    {
+      "task": "blserwqt4",
+      "file": "blserwqt4.output",
+      "sha256": "c638e09c68e5c0bd3cf302591f0707452f469e91252d683c56489edeb1d6302f",
+      "retention": "报告自包含结果摘要；原输出由宿主临时任务目录管理，不复制日志或绝对用户目录入Git。"
+    }
+  ],
+  "regeneration": {
+    "sourceCommit": "7010297ee0eab8fa3c08d578766dffcfcf5bec20",
+    "profile": "沿用已安装的隔离Native测试profile，通过进程级DSH_NATIVE_TEST_PROFILE指定；路径与凭据不入库。",
+    "steps": [
+      "pnpm install --frozen-lockfile",
+      "先创建未使用的独立空目录docs/tmp/first-reply-contract-repair-recheck/packages。",
+      "pnpm --dir packages/dingtalk-dsh-assistant pack --pack-destination ../../docs/tmp/first-reply-contract-repair-recheck/packages",
+      "$env:RELEASE_PACKAGE_DIRECTORY=Join-Path $PWD 'docs/tmp/first-reply-contract-repair-recheck/packages'; pnpm test:release-smoke"
+    ],
+    "boundary": "原30秒断言不变；摘要绑定本轮已测字节，不承诺不同机器的时长或压缩包字节相同。"
+  },
+  "intermediateCleanup": {
+    "verifiedAbsent": true,
+    "directory": "docs/tmp/first-reply-contract-repair",
+    "removedFiles": [
+      "source-before.json",
+      "package-verification.json",
+      "pack.log",
+      "packages/zzusp-dingtalk-dsh-assistant-2.3.0.tgz"
+    ],
+    "method": "先--check零副作用核4个白名单文件及SHA，再--apply，独立只读确认目录不存在；最终包/源码身份已汇总本文件，不保留tgz入库。"
+  }
+}

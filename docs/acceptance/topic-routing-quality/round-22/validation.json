@@ -1,0 +1,307 @@
+{
+  "recordedAt": "2026-11-06",
+  "round": 22,
+  "scope": "PR #346合并、已有实例双包更新、安装后独立状态回读；未执行业务消息验收。",
+  "branch": "worktree-first-reply-local-deployment",
+  "merge": {
+    "pullRequest": 346,
+    "state": "MERGED",
+    "mergedAt": "2026-11-06T03:28:05Z",
+    "base": "main",
+    "productCommit": "8320096ae560fdd8318f6f4dda52d7530adb9adb",
+    "mergeCommit": "c0cdff0123d7a5d6d245b964295926a5a8b1dd1c",
+    "testedProductTestScriptGithubAndLockDiff": "none",
+    "prBodySha256": "7550482fa17b1b10769f0d9e0490ba4497d8da4182e8fd23c30a2f9eba0eec83",
+    "remoteBodyMatchedCheckedLocalBody": true,
+    "checksRecord": false,
+    "pullRequestHead": "5b6c6f98db7778ca3491117feb2f3a9c4da8e2f4"
+  },
+  "sourceAndPackages": {
+    "sourceFiles": 210,
+    "sourceDigest": "939539c620933841dff585799b63f64f62a204958699fb1e337d34badd8984e9",
+    "sourceUnchangedPackThroughInstalledReadback": true,
+    "assistant": {
+      "version": "2.3.0",
+      "sha256": "55258971525a052a3e7e5bfa8a5c2565be139608db8c12cf24098090c4817830",
+      "bytes": 516869,
+      "files": 96,
+      "javascriptFilesEqualSource": 93,
+      "equalToRound21TestedPackage": true,
+      "installedFilesVerified": 95
+    },
+    "observer": {
+      "version": "2.3.0",
+      "sha256": "84e114942dab9b4ef60f1b6cf9f40fae889181a5c9d52296bd778aa84d24c1f2",
+      "bytes": 62390,
+      "files": 4,
+      "javascriptFilesEqualSource": 2,
+      "equalToRound20VerifiedPackage": true,
+      "installedFilesVerified": 4
+    },
+    "testsRerun": false,
+    "reasonTestsNotRerun": "两包字节分别等于第21轮及第20轮已验证包；本轮目标为部署和回读，不重复既有包测试。"
+  },
+  "deployment": {
+    "initialCheckTask": "bx6ttshiy",
+    "initialCheck": {
+      "checkOnly": true,
+      "writes": 0,
+      "signals": 0
+    },
+    "firstAttemptTask": "b39zjq34d",
+    "firstAttempt": {
+      "result": "FAIL",
+      "error": "DEPLOY_NATIVE_NOT_QUIESCENT",
+      "phase": "native-dispose",
+      "installationStarted": false,
+      "signalSent": "CTRL_C_EVENT",
+      "signalCount": 1,
+      "drainVerified": false,
+      "autostartAtFailure": false,
+      "failureFactsAndReceiptHashPreserved": true
+    },
+    "independentOldProcessReadback": {
+      "observedAt": "2026-11-06T03:35:32Z",
+      "oldRootPid": 78868,
+      "remainingCapturedPids": [
+        87988,
+        89772
+      ],
+      "remainingDescriptions": [
+        "DWS bus (87988)",
+        "conhost (89772)"
+      ],
+      "offlineCurrentControl": {
+        "quiescent": true,
+        "drained": true,
+        "pendingTasks": 0,
+        "pendingExecutions": 0,
+        "pendingGroups": 0,
+        "ownerReleased": false,
+        "ownerProcessExited": true,
+        "staleOwner": true,
+        "unknownOperations": 3,
+        "unknownNotifications": 0
+      },
+      "noClaimOwnerReleased": true
+    },
+    "resumeCheckTask": "biavm2n5x",
+    "resumeCheck": {
+      "capturedPidsTotal": 8,
+      "capturedPidsPresent": 0,
+      "bothPortsOccupied": false,
+      "checkOnly": true,
+      "writes": 0,
+      "signals": 0,
+      "offlineCandidateOnly": false,
+      "drained": true,
+      "pendingTasks": 0,
+      "pendingExecutions": 0,
+      "pendingGroups": 0,
+      "ownerReleased": false,
+      "ownerProcessExited": true,
+      "staleOwner": true,
+      "unknownOperations": 3,
+      "unknownNotifications": 0
+    },
+    "resumedDeploymentTask": "bbjne709v",
+    "resumedDeployment": {
+      "exitCode": 0,
+      "resumedFrom": "installation stage",
+      "usedOriginalParameters": true,
+      "additionalSignals": 0,
+      "kill": false,
+      "subscriptionStop": false
+    },
+    "naturalBusExitObservedAt": "2026-11-06T03:38:01.9407900Z",
+    "busExactExitTimeKnown": false
+  },
+  "installedReadback": {
+    "observedAt": "2026-11-06T03:46:06.0034523Z",
+    "independentReview": "Lead and D",
+    "pid": 42276,
+    "creationDate": "2026-11-06T11:41:25.271212+08:00",
+    "taskState": "Running",
+    "autostartEnabled": true,
+    "ports": {
+      "3080": 42276,
+      "18998": 42276
+    },
+    "health": {
+      "status": "ok",
+      "inboundProcessing": true,
+      "bridgeHealthy": true,
+      "recoveryIssueCount": 0,
+      "ingressPaused": false,
+      "ingressRecovering": false,
+      "listenersReady": 2,
+      "backfillsOk": 2
+    },
+    "observerReadiness": {
+      "ready": true,
+      "pendingTotal": 0,
+      "taskTotal": 16
+    },
+    "recoveryIssuesEndpoint": {
+      "observedAt": "2026-11-06T03:47:47.642855Z",
+      "path": "/state/recovery-issues",
+      "httpStatus": 200,
+      "parsedArrayItems": 0,
+      "previouslyObservedErrorNowAbsent": "DYNAMIC_SOURCE_STAGE_CONFLICT",
+      "causalResolutionClaimed": false
+    },
+    "anonymousWebRoot": {
+      "observedAt": "2026-11-06T03:48:24.3380063Z",
+      "url": "http://127.0.0.1:3080/",
+      "httpStatus": 401,
+      "expectedBy": "launcher141 contract"
+    },
+    "observer18998ReadinessAndStateTasks": "HTTP 200; distinct endpoints, expected",
+    "backupCreated": false
+  },
+  "installedSchemaProtocolCheck": {
+    "observedAt": "2026-11-06T03:46:41.811Z",
+    "installedDecisionSha256": "462a5a88a577a82cd6a97a7cd17f2d68b6b8b38c49b121018031ad0a9d0b904f",
+    "missingArraysRejected": true,
+    "explicitEmptyArraysAccepted": true,
+    "wireRequiresBothArrays": true,
+    "nonemptySilenceReasonRequired": true,
+    "positiveSourceVersionRequired": true,
+    "scope": "pure installed schema parse; no runtime/store/provider/transport; not Topic coverage or real message verification"
+  },
+  "profileComparison": {
+    "patchSha256BeforeAndAfter": "1f2c3b27f47d2635c5c02c22c5965ec6c1d12b3516c86d77de7a8a4813e59f55",
+    "initializedMarkerSha256BeforeAndAfter": "3eece5a8b4ac7dca755a7067148024172a16c81c9a2d4c31c9c44012d9d61364",
+    "packageJsonSha256Before": "9c186b6db4cd3e472a225b84ff751e8519d6eb265a8ec081872af31652d6ec96",
+    "packageJsonSha256After": "59c073b682c10dd32d830059c50193ee40e1937d1a422b391700b1484ad34a18",
+    "packageJsonChangedByOfficialAdd": true,
+    "oldFullDependencyAndOverridesDeclarationsRetained": false,
+    "claimOnlyAssistantDeclarationChanged": false,
+    "claimWholeProfileUnchanged": false,
+    "verifiedScope": "current two plugin immutable SHA cache paths only"
+  },
+  "priorHealthComparison": {
+    "beforeDeploymentObservedAt": "2026-11-06T03:30:44.7484311Z",
+    "status": "degraded",
+    "inboundProcessing": true,
+    "bridgeHealthy": true,
+    "recoveryIssueCount": 1,
+    "error": "DYNAMIC_SOURCE_STAGE_CONFLICT",
+    "afterDeploymentStatus": "ok",
+    "afterDeploymentRecoveryIssueCount": 0,
+    "rootCauseProvenFixed": false,
+    "nonrecurrenceProven": false
+  },
+  "preservedRound21Boundaries": {
+    "runtimeHistoryFailures": 7,
+    "storeSummaryFailure": true,
+    "initialReleaseSmoke": "12/14 failure retained",
+    "round21PackageSmoke": "2/2 on byte-identical Assistant package; not rerun this round"
+  },
+  "notVerified": [
+    "real new messages or real DingTalk send/receive",
+    "initial reply semantics, references, steer, or 15-item batch behavior in production",
+    "60-second first-reply objective or production latency improvement",
+    "business ledger/task/source changes",
+    "root-cause correction or nonrecurrence of DYNAMIC_SOURCE_STAGE_CONFLICT"
+  ],
+  "ciOrTag": false,
+  "realMessageReplayOrResend": false,
+  "evidenceReceipts": [
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-pack/pr-346-deployed-body.md",
+      "sha256": "7550482fa17b1b10769f0d9e0490ba4497d8da4182e8fd23c30a2f9eba0eec83",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-pack/artifact-verification.json",
+      "sha256": "249767056b952c9c5666b57591d2434fc12f7f1036dbe07ba2a89d867a79a51e",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-pack/source-fingerprint.json",
+      "sha256": "71d9e74a451fd1379aea14de0c92f8ec6893c7efd22d3d041186073cd2059a34",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-pack/preflight.json",
+      "sha256": "efcc63ab04a6f658da1ba70b400e871eeb969412775534b0ac7db1622db22326",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-pack/lead-installed-readback.json",
+      "sha256": "df2950d4b4b045c05179532898fc675962a7dfbe460f2cdadc0fba45f4c2d0b4",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-pack/installed-protocol.json",
+      "sha256": "5f5714f9ce84d9edf469012abc5abc6680b99f22bdc86a658879838bebb59fcd",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/failure.json",
+      "sha256": "60c62e76e52229c577911326c8c469560d123892c086b5afb517e2878806910f",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/signal.json",
+      "sha256": "f279704b1082a2b3c059ff7cb2bcc596222e1fd8fd3d15182d108de99da07795",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/control.json",
+      "sha256": "654adb3c840caf3bc17be95c2a75626f50ea49b493b8740c59435a4a6b409e4b",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/captured-descendants.json",
+      "sha256": "d489cdcbd2c01a4fcd9094b8cb78fe30c3e42d8e1bfc46b1b3b0781f5d507c24",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/quiescent.json",
+      "sha256": "e39e7f70e09befa5a711ad8b075af4aa6974e2d07da571de7e08fa1ed9c9b222",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/resume-native-dispose.json",
+      "sha256": "9181e2c6e7712c4eba1e53c1846348e60ac25768e155a673cd55a36289a313c6",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/installed.json",
+      "sha256": "a83510f6e1e381c32dc6d43379904db549631cbf33ed29cb4e0b5476e19ca3e0",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/observer-installed.json",
+      "sha256": "23fe3773a345995c6ab3632faec61697ca3d6ab4949e88345d202d3d7543ec9f",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/observer-readiness.json",
+      "sha256": "e787912deb841c65f57acf9c6a02ee1d400e2f974f63d8e85181fc7966b7da6b",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    },
+    {
+      "path": "docs/tmp/first-reply-deploy-c0cdff01-evidence/readback.json",
+      "sha256": "ee000b92e55c4db5f64df99b6ad309eee62d17fd97d1fa68196cabb135358b0b",
+      "retention": "原临时附件已清理；事实摘要及本SHA保留于本轮"
+    }
+  ],
+  "evidenceRetention": {
+    "finalEvidence": "本文件及round-22.md保留必要字段、首次失败与原收据SHA256；16条原收据已在删除前逐项核SHA。",
+    "temporaryDirectoriesRemoved": [
+      "docs/tmp/first-reply-deploy-c0cdff01-pack",
+      "docs/tmp/first-reply-deploy-c0cdff01-evidence"
+    ],
+    "filesRemoved": 22,
+    "bytesRemoved": 644330,
+    "preflightMode": "--check (zero deletions), then --apply with fixed snapshot SHA256",
+    "cleanupSnapshotSha256": "1b36938ffa2e322e70a887cb83f83b1e53d483037149c0073048afcf0ab92983",
+    "independentAbsenceVerified": true,
+    "immutableInstalledPackageCacheUntouched": true,
+    "priorRoundReportsAndValidationUntouched": true,
+    "unknownStackdumpAndPrivateBusinessEvidenceUntouched": true
+  }
+}

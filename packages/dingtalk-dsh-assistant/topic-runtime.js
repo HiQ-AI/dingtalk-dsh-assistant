@@ -793,9 +793,8 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
         text: text.slice(0, 600), ...(text.length > 600 ? { textTruncated: true } : {}), sourceKind, messageAiSendFlag })), 4_000, 8).reverse()
     request.clarificationReviewCandidates = reviewCandidates(groupId, messages, [])
     const candidateText = JSON.stringify(request.clarificationReviewCandidates)
-    const inlineCandidates = candidateText.length <= 6_000
     request.clarificationReviewText = candidateText
-    request.clarificationReviewOffset = inlineCandidates ? candidateText.length : 0
+    request.clarificationReviewOffset = 0
     const personAliases = referencedPersonAliases(group, messages)
     const peopleContext = personAliases.length ? { personAliases, personAliasGuide: personAliasInstructions } : {}
     request.metadataPages = new Map()
@@ -806,7 +805,7 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     const visibleMessages = messages.map((message, index) => ({ ...metadata[index], text: '',
       ...(message.text.length ? { textOffset: 0, textTotal: message.text.length, textHasMore: true } : {}) }))
     const envelope = { ...peopleContext, ...(fixedTopicsEnabled ? { fixedTopics: FIXED_TOPICS } : {}), requestId: request.requestId, batchRevision: request.batchRevision, messages: visibleMessages, recentMessages, totalMessages: messages.length, hasMoreMessages: false, topics, relatedTopics, recalledTopics, recallQueries,
-      ...(inlineCandidates ? { clarificationReviewCandidates: request.clarificationReviewCandidates } : { clarificationReviewCandidateCount: request.clarificationReviewCandidates.length, clarificationReviewReadCall: { name: 'group_topic_route_context_get', arguments: { requestId: request.requestId, section: 'clarificationReviewCandidates', offset: 0 } } }),
+      clarificationReviewCandidateCount: request.clarificationReviewCandidates.length, clarificationReviewReadCall: { name: 'group_topic_route_context_get', arguments: { requestId: request.requestId, section: 'clarificationReviewCandidates', offset: 0 } },
       ...(request.recoveryBoundary.length ? { recoveryBoundaryReadCall: { name: 'group_topic_route_context_get', arguments: { requestId: request.requestId, section: 'recoveryBoundary', offset: 0 } } } : {}),
       totalRelatedTopics: allRelatedTopics.length, hasMoreRelatedTopics: relatedTopics.length < allRelatedTopics.length, nextRelatedTopicOffset: relatedTopics.length, totalTopics: allTopics.length, hasMoreTopics: topics.length < allTopics.length, nextTopicOffset: topics.length, ...(reason ? { reason } : {}) }
     if (quotedReminders.size) envelope.quotedReminderGuide = 'quotedReminder 是 Host 按原生引用和已送达回执核验的原提醒，仅为关联背景，不代表本条消息必然订正。只改变原提醒的事项可交 coordination；新增或混合事项仍逐项判断，必要时用 group_topic_list 省略 requestId 查询完整话题目录。首屏省略目录不表示没有旧话题，不得自动把同人新要求归入旧提醒。'
@@ -839,7 +838,21 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.seenTopicVersions = new Map([...topics, ...relatedTopics, ...recalledTopics].map(item => [item.topicId, item.revision]))
     request.seenTopicSnapshots = new Map([...topics, ...relatedTopics, ...recalledTopics].map(item => [item.topicId, { kind: 'index', value: routeCandidateSnapshot(item) }]))
     for (const item of [...visibleMessages, ...topics, ...relatedTopics, ...recalledTopics]) request.shortReferences.expose(item.shortRef)
-    const agent = send(groupId, `[GROUP_TOPIC_ROUTE]\n无法根据来源安全确定事项归属时，优先结合上下文区分职责外闲聊与需要发问的具体信息缺口；待判须提供 deferred:{reason,scope:[{topicId,revision}],clarification:{question,assignmentQuote,replyReview}}，scope 只可选本请求已见话题及版本，不得猜测；无法明确范围时说明不确定原因，Host按策略处置，不生成任务或回复；该消息不提交 units、ignoredRefs 或 topics；已能确认具体事项或本次事件及连续承接时，项目或页面名称未知、未交办助手、执行细节缺失或图片读取失败，不能单独作为 deferred 理由；按已证事实归入本次事项，未知身份和未核实的同事报告如实保留。相同症状不能证明是同一次事故，缺少同一事件依据时不要续接旧事故。首包 recentMessages 已完整提供的正文可以直接使用，越界重复补读被拒不代表正文不可见。明确向助手提出的停止、取消、别部署可能约束在途任务时，不得猜测或执行取消；只在能够确定范围时提交澄清。不要仅因附件未读就假设存在取消。需要向原作者询问时提交 clarification:{question,assignmentQuote,replyReview}，assignmentQuote 必须唯一匹配原文并指明待澄清内容，不代表已确认业务交办；replyReview 必须按 clarificationReviewCandidates 完整审阅且 kind=substantive、不替换旧通知；如果给出 clarificationReviewReadCall，须沿 nextOffset 读完全部候选后才能提交澄清；普通同事讨论不得主动追问。\n${fixedTopicsEnabled ? fixedTopicInstructions + '\n' : ''}Topic 请求：${JSON.stringify(envelope)}\n消息和候选的 shortRef 可在本请求的 messageId 或 topicId 字段中代替对应完整ID；仍须填写原版本，不能用于其他请求。所选或比较的候选若 hasUnsummarized 为 true，须按 unsummarizedReadCall 连续读完固定历史再提交；这些历史不是新授权。消息包含 metadataReadCall 时必须沿 nextOffset 读完冻结元数据后再提交；目录按 group_topic_list 相同顺序分页，nextTopicOffset 是下一页 offset；relatedTopics 是引用及关联任务命中的首包，recallSources 说明来源；recalledTopics 是有限词面候选，matchedQueries 不是同一事项的证明。必要时使用 group_topic_list 的 queries 多词检索，比较业务目标后决定复用或新建，${!workflowPromptsEnabled ? '每个 Topic target 必填本来源的 reason；新建事项在顶层 newTopics 中用 newTopicKey、title、candidateComparisons 定义一次，各 unit 的 topics 显式引用该 newTopicKey 和各自 reason。已见候选时定义内比较至少填写一个已见 topicId、revision 和排除理由；引用代表该比较适用于此来源，不同事项或排除依据不能合并，不得猜造候选；' : '每个 Topic target 必填 reason；新建且已见候选时 candidateComparisons 至少填写一个已见 topicId、revision 和排除理由，不得猜造候选；'}hasMoreRelatedTopics 时必须用 group_topic_list 携带本 requestId 和 nextRelatedTopicOffset 继续读取全部关系。无法判断旧事项归属时先检索或分页读取目录，不能因首包无候选直接新建。先判断当前消息是否涉及具体事项或任务。日常寒暄、随口聊天、没有具体事项对象的情绪表达或泛泛感谢，不新建 Topic，也不为了归档闲聊强行关联已有 Topic；${fixedTopicsEnabled ? '纯闲聊使用 fixedTopic="out-of-scope"，完整引用来源并保持沉默' : '将这些原文放入 ignoredRefs 并说明“日常闲聊，无具体事项”，纯闲聊提交 units=[]'}。消息混有闲聊和具体事项时，仅将事项拆为 units，闲聊部分放入 ignoredRefs，完整覆盖原文。明确涉及具体问题、需求、调查、执行、结果、验收或后续跟进时，按共同业务事项和目标聚合Topic，不逐功能点拆分。同次交办、共享上下文且适合整体交付的多个需求项保持在同一Topic；不能仅因可独立验收、补充或实现就拆开。结合本批原文、引用、候选的目标/需求摘要判断；需要消解“这个也是”等承接时再按现有readCall读取相关近期原文，不读取全执行历史。在符合本群职责的业务事项内优先复用同一事项的已有Topic，后续截图、验收和交付要求沿原事项补充。${fixedTopicsEnabled ? '话题归属与助手动作分开判断：职责内具体事项无论交给谁处理，都保留在对应业务 Topic；他人负责、状态通知或同事信息引用不是转入职责外话题或丢弃原文的理由。是否需要本助手动作或回复由 Topic Decision 再判断，不把归属或状态通知当成新授权。' : '不要用是否出现“任务”等关键词或是否要求助手执行判断事项：群成员讨论具体问题也可形成话题；“谢谢，那个问题修好了”、引用任务后的“收到”“继续”等需结合引用和上下文归入原事项，不能当作闲聊丢掉。'}同一页面或截图只是上下文线索，不是强制合并边界；确有不同业务目标或独立交付约定时可分Topic，共同领域也不能替代目标判断。先定事项归属再划分units；同一事项的多个需求项可用一个unit完整引用，也可按来源需要保留多个unit归同一Topic。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；必须同时提交 initialReplies 和 initialReplySilences 两个数组，每个业务 Topic 根据本批实际来源、版本、unitKey 和所属 Topic 恰好选择一条初诊回复或带具体 reason 的静默；无业务 Topic 时两个数组均为空。需要初步回复时在 initialReplies 按具体消息版本、unitKey 和所属 Topic 提交结构化草稿及完整回复审阅，逐 Topic 绑定真实来源；只能说明初步理解、缺失信息与下一步，不得声称原因已确认、任务已创建或完成、问题已修复；不得替换旧回复。Host 审阅后负责发送，你不得执行任务或直接回复群聊。${reason ? `这是归属复核：${reason}` : ''}`, messages.flatMap((message) => message.imageRefs ?? []).concat(request.recoveryImages), request)
+    const makeRouteBody = () => `[GROUP_TOPIC_ROUTE]\n无法根据来源安全确定事项归属时，优先结合上下文区分职责外闲聊与需要发问的具体信息缺口；待判须提供 deferred:{reason,scope:[{topicId,revision}],clarification:{question,assignmentQuote,replyReview}}，scope 只可选本请求已见话题及版本，不得猜测；无法明确范围时说明不确定原因，Host按策略处置，不生成任务或回复；该消息不提交 units、ignoredRefs 或 topics；已能确认具体事项或本次事件及连续承接时，项目或页面名称未知、未交办助手、执行细节缺失或图片读取失败，不能单独作为 deferred 理由；按已证事实归入本次事项，未知身份和未核实的同事报告如实保留。相同症状不能证明是同一次事故，缺少同一事件依据时不要续接旧事故。首包 recentMessages 已完整提供的正文可以直接使用，越界重复补读被拒不代表正文不可见。明确向助手提出的停止、取消、别部署可能约束在途任务时，不得猜测或执行取消；只在能够确定范围时提交澄清。不要仅因附件未读就假设存在取消。需要向原作者询问时提交 clarification:{question,assignmentQuote,replyReview}，assignmentQuote 必须唯一匹配原文并指明待澄清内容，不代表已确认业务交办；replyReview 必须按 clarificationReviewCandidates 完整审阅且 kind=substantive、不替换旧通知；如果给出 clarificationReviewReadCall，须沿 nextOffset 读完全部候选后才能提交澄清；普通同事讨论不得主动追问。\n${fixedTopicsEnabled ? fixedTopicInstructions + '\n' : ''}Topic 请求：${JSON.stringify(envelope)}\n消息和候选的 shortRef 可在本请求的 messageId 或 topicId 字段中代替对应完整ID；仍须填写原版本，不能用于其他请求。所选或比较的候选若 hasUnsummarized 为 true，须按 unsummarizedReadCall 连续读完固定历史再提交；这些历史不是新授权。消息包含 metadataReadCall 时必须沿 nextOffset 读完冻结元数据后再提交；目录按 group_topic_list 相同顺序分页，nextTopicOffset 是下一页 offset；relatedTopics 是引用及关联任务命中的首包，recallSources 说明来源；recalledTopics 是有限词面候选，matchedQueries 不是同一事项的证明。必要时使用 group_topic_list 的 queries 多词检索，比较业务目标后决定复用或新建，${!workflowPromptsEnabled ? '每个 Topic target 必填本来源的 reason；新建事项在顶层 newTopics 中用 newTopicKey、title、candidateComparisons 定义一次，各 unit 的 topics 显式引用该 newTopicKey 和各自 reason。已见候选时定义内比较至少填写一个已见 topicId、revision 和排除理由；引用代表该比较适用于此来源，不同事项或排除依据不能合并，不得猜造候选；' : '每个 Topic target 必填 reason；新建且已见候选时 candidateComparisons 至少填写一个已见 topicId、revision 和排除理由，不得猜造候选；'}hasMoreRelatedTopics 时必须用 group_topic_list 携带本 requestId 和 nextRelatedTopicOffset 继续读取全部关系。无法判断旧事项归属时先检索或分页读取目录，不能因首包无候选直接新建。先判断当前消息是否涉及具体事项或任务。日常寒暄、随口聊天、没有具体事项对象的情绪表达或泛泛感谢，不新建 Topic，也不为了归档闲聊强行关联已有 Topic；${fixedTopicsEnabled ? '纯闲聊使用 fixedTopic="out-of-scope"，完整引用来源并保持沉默' : '将这些原文放入 ignoredRefs 并说明“日常闲聊，无具体事项”，纯闲聊提交 units=[]'}。消息混有闲聊和具体事项时，仅将事项拆为 units，闲聊部分放入 ignoredRefs，完整覆盖原文。明确涉及具体问题、需求、调查、执行、结果、验收或后续跟进时，按共同业务事项和目标聚合Topic，不逐功能点拆分。同次交办、共享上下文且适合整体交付的多个需求项保持在同一Topic；不能仅因可独立验收、补充或实现就拆开。结合本批原文、引用、候选的目标/需求摘要判断；需要消解“这个也是”等承接时再按现有readCall读取相关近期原文，不读取全执行历史。在符合本群职责的业务事项内优先复用同一事项的已有Topic，后续截图、验收和交付要求沿原事项补充。${fixedTopicsEnabled ? '话题归属与助手动作分开判断：职责内具体事项无论交给谁处理，都保留在对应业务 Topic；他人负责、状态通知或同事信息引用不是转入职责外话题或丢弃原文的理由。是否需要本助手动作或回复由 Topic Decision 再判断，不把归属或状态通知当成新授权。' : '不要用是否出现“任务”等关键词或是否要求助手执行判断事项：群成员讨论具体问题也可形成话题；“谢谢，那个问题修好了”、引用任务后的“收到”“继续”等需结合引用和上下文归入原事项，不能当作闲聊丢掉。'}同一页面或截图只是上下文线索，不是强制合并边界；确有不同业务目标或独立交付约定时可分Topic，共同领域也不能替代目标判断。先定事项归属再划分units；同一事项的多个需求项可用一个unit完整引用，也可按来源需要保留多个unit归同一Topic。每个 unit 提供稳定 unitKey、简短 summary、能在当前消息原文中唯一定位的 sourceRefs.quote、共享约束 contextRefs 和 topics，并由 effectOwner 指定唯一动作主归属；contextRefs.quote 也只能引用当前消息 text 中唯一出现的片段，quotedMessage 是单独提供的背景，不要把被引用消息的正文填入 contextRefs。其余非空原文必须放入 ignoredRefs 并说明原因。纯背景不得冒充事项；需要查询历史资料时不得把资料来源 Topic 加入归属，可以检索资料后只处理当前请求。通过 group_topic_route_submit 一次完整提交本批消息；必须同时提交 initialReplies 和 initialReplySilences 两个数组，每个业务 Topic 根据本批实际来源、版本、unitKey 和所属 Topic 恰好选择一条初诊回复或带具体 reason 的静默；无业务 Topic 时两个数组均为空。需要初步回复时在 initialReplies 按具体消息版本、unitKey 和所属 Topic 提交结构化草稿及完整回复审阅，逐 Topic 绑定真实来源；只能说明初步理解、缺失信息与下一步，不得声称原因已确认、任务已创建或完成、问题已修复；不得替换旧回复。Host 审阅后负责发送，你不得执行任务或直接回复群聊。${reason ? `这是归属复核：${reason}` : ''}`
+    const candidateCount = envelope.clarificationReviewCandidateCount
+    const candidateReadCall = envelope.clarificationReviewReadCall
+    delete envelope.clarificationReviewCandidateCount
+    delete envelope.clarificationReviewReadCall
+    envelope.clarificationReviewCandidates = request.clarificationReviewCandidates
+    let body = makeRouteBody()
+    if (Buffer.byteLength(body, 'utf8') <= DECISION_INITIAL_MAX_BYTES) request.clarificationReviewOffset = candidateText.length
+    else {
+      delete envelope.clarificationReviewCandidates
+      envelope.clarificationReviewCandidateCount = candidateCount
+      envelope.clarificationReviewReadCall = candidateReadCall
+      body = makeRouteBody()
+    }
+    const agent = send(groupId, body, messages.flatMap((message) => message.imageRefs ?? []).concat(request.recoveryImages), request)
     request.routeReady = true
     monitor(agent, request, routes)
     return envelope
@@ -870,9 +883,6 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
     request.metadataPages = new Map()
     request.clarificationReviewCandidates = reviewCandidates(request.groupId, request.messages, [])
     request.clarificationReviewText = JSON.stringify(request.clarificationReviewCandidates)
-    const inlineCandidates = request.clarificationReviewText.length <= 6_000
-    request.batchCandidatesInline = inlineCandidates
-    request.clarificationReviewOffset = inlineCandidates ? request.clarificationReviewText.length : 0
     request.batchVisibleText = new Map()
     const messages = request.messages.map(message => {
       const { text, ...metadata } = message
@@ -915,11 +925,17 @@ export function createTopicCoordinator({ store, getAgent, assertSession, dispatc
       totalRelatedTopics: request.relatedTopics.length, hasMoreRelatedTopics: relatedTopics.length < request.relatedTopics.length, nextRelatedTopicOffset: relatedTopics.length,
       ...(aliases.length ? { personAliases: aliases, personAliasGuide: personAliasInstructions } : {}),
       ...(request.recoveryBoundary.length ? { recoveryBoundaryReadCall: { name: 'group_topic_route_context_get', arguments: { requestId: request.requestId, section: 'recoveryBoundary', offset: 0 } } } : {}),
-      ...(inlineCandidates ? { clarificationReviewCandidates: request.clarificationReviewCandidates } : {
-        clarificationReviewCandidateCount: request.clarificationReviewCandidates.length,
-        clarificationReviewReadCall: { name: 'group_topic_route_context_get', arguments: { requestId: request.requestId, section: 'clarificationReviewCandidates', offset: 0 } },
-      }) }
-    request.batchUpdateText = `[GROUP_TOPIC_ROUTE_UPDATE]\n批次已有新来源；本次完整覆盖以下消息并提交 batchRevision，按原要求补读截断正文、元数据和审阅候选，继续在同一请求中分诊。\nTopic 请求：${JSON.stringify(envelope)}`
+    }
+    const updatePrefix = '[GROUP_TOPIC_ROUTE_UPDATE]\n批次已有新来源；本次完整覆盖以下消息并提交 batchRevision，按原要求补读截断正文、元数据和审阅候选，继续在同一请求中分诊。\nTopic 请求：'
+    const inlineEnvelope = { ...envelope, clarificationReviewCandidates: request.clarificationReviewCandidates }
+    const inlineCandidates = Buffer.byteLength(updatePrefix + JSON.stringify(inlineEnvelope), 'utf8') <= DECISION_INITIAL_MAX_BYTES
+    request.batchCandidatesInline = inlineCandidates
+    request.clarificationReviewOffset = inlineCandidates ? request.clarificationReviewText.length : 0
+    Object.assign(envelope, inlineCandidates ? { clarificationReviewCandidates: request.clarificationReviewCandidates } : {
+      clarificationReviewCandidateCount: request.clarificationReviewCandidates.length,
+      clarificationReviewReadCall: { name: 'group_topic_route_context_get', arguments: { requestId: request.requestId, section: 'clarificationReviewCandidates', offset: 0 } },
+    })
+    request.batchUpdateText = updatePrefix + JSON.stringify(envelope)
     dispatchRouteUpdate(request)
   }
   function routeUpdateVisible(request) {

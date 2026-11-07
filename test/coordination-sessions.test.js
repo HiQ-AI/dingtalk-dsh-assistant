@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { openDynamicTaskStore } from '../packages/dingtalk-dsh-assistant/dynamic-task-store.js'
 import { createCoordinationSessions, createCoordinationStepGate, coordinationTools, triageRole } from '../packages/dingtalk-dsh-assistant/coordination-sessions.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
@@ -270,6 +274,59 @@ test('决策短事务连续三步完成而非每次读取重新排队，超时�
   assert.deepEqual(await createCoordinationStepGate(timed, () => true)({ messages: [], agent: { inbox: {} } }, () => { throw new Error('time budget') }), { kind: 'reject' })
   const preempted = make(); preempted.yieldRequested = true
   assert.deepEqual(await createCoordinationStepGate(preempted, () => true)({ messages: [], agent: { inbox: {} } }, () => { throw new Error('route preempts before budget') }), { kind: 'reject' })
+})
+
+test('排队阶段冻结开始时来源，延迟计时和在途追加不回填旧阶段', async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), seen = []
+  const manager = createCoordinationSessions({ eventPrefix: null, isCurrent: () => true, onError(error) { throw error },
+    onStage: async (request, stage) => {
+      if (!stage.completedAt) { entered.resolve(); await release.promise }
+      seen.push({ completedAt: stage.completedAt, messages: request.messages.map(({ messageId, messageVersion }) => ({ messageId, messageVersion })) })
+    },
+    create: async entry => ({ agent: { session: { id: entry.sessionId, snapshotEvents: () => [] }, inbox: {}, steer() {}, whenIdle: async () => {} }, dispose: async () => {} }) })
+  t.after(async () => { release.resolve(); await manager.close() })
+  const request = { groupId: 'g', requestId: 'coord-route-timing', messages: [{ messageId: 'first', messageVersion: 1 }] }
+  const pending = manager.dispatch(request, { id: 'input' })
+  await entered.promise
+  request.messages.push({ messageId: 'later', messageVersion: 1 })
+  release.resolve()
+  await pending
+  await manager.whenSettled(request)
+  assert.deepEqual(seen.map(item => item.messages), [[{ messageId: 'first', messageVersion: 1 }], [{ messageId: 'first', messageVersion: 1 }]])
+  assert.equal(seen[0].completedAt, null)
+  assert.ok(seen[1].completedAt)
+})
+
+test('真实来源账本中排队跨度不因在途追加改变身份或回溯新来源', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'queue-stage-'))
+  const store = await openDynamicTaskStore({ dbPath: join(root, 'dynamic.sqlite'), instanceId: 'fixture', initialize: true })
+  let sequence = 0
+  const command = (kind, args) => store.command({ id: `command-${++sequence}`, kind, args })
+  for (const sourceId of ['first', 'later']) await command('source.record', { sourceId, groupId: 'g', messageId: sourceId, actorId: 'a', text: 'test' })
+  const opened = Promise.withResolvers(), release = Promise.withResolvers(), errors = []
+  const manager = createCoordinationSessions({ eventPrefix: null, isCurrent: () => true, onError: error => errors.push(error),
+    onStage: async (request, stage) => {
+      const sources = await store.query({ kind: 'source.list', groupId: request.groupId })
+      const matched = sources.filter(source => request.messages.some(ref => ref.messageId === source.messageId && ref.messageVersion === source.version))
+      for (const source of matched) await command('source.stage', { sourceId: source.sourceId, stage: { ...stage, shared: matched.length > 1 } })
+      if (!stage.completedAt) { opened.resolve(); await release.promise }
+    },
+    create: async entry => ({ agent: { session: { id: entry.sessionId, snapshotEvents: () => [] }, inbox: {}, steer() {}, cancel() {}, whenIdle: async () => {} }, dispose: async () => {} }) })
+  t.after(async () => { release.resolve(); await manager.close(); await store.close(); await rm(root, { recursive: true, force: true }) })
+  const request = { groupId: 'g', requestId: 'coord-route-ledger', messages: [{ messageId: 'first', messageVersion: 1 }] }
+  const pending = manager.dispatch(request, { id: 'input' })
+  await opened.promise
+  request.messages.push({ messageId: 'later', messageVersion: 1 })
+  release.resolve()
+  await pending
+  await manager.close()
+  assert.deepEqual(errors.map(error => error.code), [])
+  const first = await store.query({ kind: 'source.get', sourceId: 'first' })
+  const later = await store.query({ kind: 'source.get', sourceId: 'later' })
+  assert.equal(first.stages.length, 1)
+  assert.equal(first.stages[0].shared, false)
+  assert.ok(first.stages[0].completedAt)
+  assert.equal((later.stages ?? []).length, 0)
 })
 
 test('eventPrefix null still observes real queue intervals with no prompt and unchanged dispatch count', async t => {

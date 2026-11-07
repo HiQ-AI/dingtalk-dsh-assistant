@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { registerTopicRoleInstructions } from '../packages/dingtalk-dsh-assistant/task-topic-coordinator.js'
+import { registerTopicRoleInstructions, validateReplyReview } from '../packages/dingtalk-dsh-assistant/task-topic-coordinator.js'
 import { coordinationTools } from '../packages/dingtalk-dsh-assistant/coordination-sessions.js'
 
 for (const role of ['route','decision']) test('role prompt retains semantic boundaries and isolates executable decision details: ' + role, () => {
@@ -29,11 +29,33 @@ for (const role of ['route','decision']) test('role prompt retains semantic boun
     assert.ok(text.includes('task-proposal') && text.includes('inputVersion/runSequence'))
     assert.ok(text.includes('首次回复不必重写完整摘要'))
     assert.ok(text.includes('避免重复已发初诊') && text.includes('真实新事实'))
+    assert.ok(text.includes('replyPhase为initial') && text.includes('缺省表示阶段未知'))
+    assert.ok(text.includes('不代表Task已受理、执行或完成') && text.includes('不因已有初诊省略必要的任务确认'))
     assert.ok(text.includes('承接或静默的判断及分工依据写入规范决策'))
     assert.ok(text.includes('inlineDecisionContext.task 完整可见时可直接使用'))
     assert.ok(text.includes('inlineDecisionContext.replyReview 是同轮完整紧凑审阅'))
   }
   for (const name of ['read','glob','grep','skill','group_task_list','group_task_context_get','group_topic_list','group_topic_context_get','group_message_get','group_resource_get']) assert.ok(coordinationTools(role).includes(name), name)
+})
+
+test('确认只能替换旧确认，订正仍可替换同事项实质结果', () => {
+  const candidates = [
+    { outboundId: 'ack', replyKind: 'confirmation', taskIds: ['task'] },
+    { outboundId: 'result', replyKind: 'substantive', taskIds: ['task'] },
+    { outboundId: 'correction', replyKind: 'correction', taskIds: ['task'] },
+    { outboundId: 'unknown', taskIds: ['task'] },
+  ]
+  const reviewedOutboundIds = candidates.map(item => item.outboundId)
+  const review = (kind, ids) => ({ kind, reviewedOutboundIds, sameMatterOutboundIds: ids, replaceOutboundIds: ids })
+  const before = structuredClone(candidates)
+  for (const id of ['result', 'correction', 'unknown']) {
+    assert.throws(() => validateReplyReview(review('confirmation', ['ack', id]), candidates, { confirmationTaskIds: ['task'] }), /group_reply_review_confirmation_replace_kind_invalid/)
+  }
+  assert.deepEqual(candidates, before)
+  assert.deepEqual(validateReplyReview(review('confirmation', ['ack']), candidates, { confirmationTaskIds: ['task'] }), review('confirmation', ['ack']))
+  assert.deepEqual(validateReplyReview(review('correction', ['result']), candidates), review('correction', ['result']))
+  assert.throws(() => validateReplyReview(review('confirmation', []), candidates, { confirmationTaskIds: ['task'] }), /group_reply_review_same_task_confirmation_missing/)
+  assert.throws(() => validateReplyReview(review('substantive', ['result']), candidates), /group_reply_review_substantive_replace_forbidden/)
 })
 
 // Task事实通知本身不得形成反向Task输入循环；只有真实消息Decision做影响判断。

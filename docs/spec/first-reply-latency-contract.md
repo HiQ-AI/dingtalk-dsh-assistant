@@ -79,3 +79,14 @@
 通知修复先由C在现有隔离Host路径复现扫描/慢gate/发送及回读推进阻塞，至少对照三种候选，并交D查反证；没有责任点证据不先加并发、定时器、放宽许可或硬改等待。必要最小计时用于说明实际等待原因，不把新增计时本身当修复。真正发送串行、限流/来源许可、unknown只回读、已送达不重发保持。既有所有来源/审阅/Task业务门禁保持。
 
 A单写schema/runtime/store/model及相关单测；B单写coordinator角色提示及其直接测试；C单写service/通知及相关Native测试和共享script fixture；D只读独立审；Lead唯一Goal/spec/Git/PR，E在阶段末集中归档与README。代码实施前对齐该最小接口；局部实现/测试及真实包smoke绑定实际工作树，修复前反例失败与修后通过分开。目标交付相关本地验证和PR，不自动续用先前部署授权。
+
+
+## 原因分析后的定向修复（2026-11-06，实施前快照）
+
+用户追加“不修复？”授权实施。起点产品c0cdff01、文档HEAD825385db，分支worktree-first-reply-contract-repair；原因见docs/acceptance/topic-routing-quality/regression-cause-analysis.md。只修本轮已证/可复现缺口，不自动合并部署、真实重放/发信、付费评测或CI。
+
+比较与选择：仅继续加提示不能阻止confirmation错误替换实质结果，故补Host类型校验；删除审阅/旧批次校验会丢来源或接受未读材料，故保持校验并复用现有有界预算前置可容纳候选；全局冻结/拆掉同会话追加改变用户合同，故保留同会话与15条上限；初诊自动代替任务接纳会混淆阶段，故按真实初诊账投影显式阶段并要求二级表达实际新增动作/事实，不直接吞掉合法任务确认。
+
+A单写decision.js/topic-runtime.js及直接测试：有界候选内联，超预算仍完整分页/曝光验证；审阅候选以真实routeHistory初诊关系展示阶段，保留旧数据真实未知值，不按正文或ID猜阶段。B单写task-topic-coordinator.js及直接测试：confirmation只能替换明确confirmation候选，保留correction与substantive原规则；明确初诊与Task受理/结果的承接。C单写task-session-service.js/coordination-sessions.js及直接测试：复现动态追加导致计时span身份不一致，并调查Host开销，先证后改，不放松source.stage身份约束或吞错；需要coordinator生产者调整时交B单写。D独立审，E阶段末一次归档/README，Lead唯一Goal/spec/Git/PR。
+
+验证直接覆盖旧实质结果被confirmation替换的拒绝及无副作用、合法旧confirmation替换、明确初诊阶段与短引用/分页完整性、更新未读/旧batch仍拒绝、动态追加计时起止一致/新来源不被虚构回溯计时。只在实际代码版本运行直接相关单元、Native和项目要求的包smoke；既有失败与生产目标未验分别保留，不以固定脚本措辞或合成耗时宣称真实模型语义或生产60秒达标。

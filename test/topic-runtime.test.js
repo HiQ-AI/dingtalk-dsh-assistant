@@ -16,6 +16,43 @@ import { boundedTopicContext, createTopicCoordinator, projectTopicContext, TASK_
 import { visiblePromptRefs, visibleSectionLength, compactSectionValue } from '../packages/dingtalk-dsh-assistant/coordination-context.js'
 import { stagePlanFor } from '../packages/dingtalk-dsh-assistant/task-input-revision.js'
 
+test('首包正文优先且按完整UTF-8预算内联候选', async t => {
+  const candidates = [{ outboundId: 'candidate', reply: '测'.repeat(7000) }]
+  const h = await setup(t, { reviewCandidates: () => candidates })
+  const text = '业务来源正文'
+  await ingest(h, 'first-budget', { text }); await h.coordinator.schedule('g')
+  const first = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.equal(first.messages[0].text, text)
+  assert.equal(first.clarificationReviewCandidates?.[0].reply.length, 7000)
+  assert.equal(first.clarificationReviewReadCall, undefined)
+  assert.ok(Buffer.byteLength(h.sent.find(item => item.startsWith('[GROUP_TOPIC_ROUTE]')), 'utf8') <= 64 * 1024)
+})
+
+test('首包候选超预算保留正文并提供分页', async t => {
+  const h = await setup(t, { reviewCandidates: () => [{ outboundId: 'candidate', reply: '测'.repeat(30000) }] })
+  const text = '真实来源正文'
+  await ingest(h, 'first-large', { text }); await h.coordinator.schedule('g')
+  const first = h.envelope('[GROUP_TOPIC_ROUTE]')
+  assert.equal(first.messages[0].text, text)
+  assert.equal(first.clarificationReviewCandidates, undefined)
+  assert.equal(first.clarificationReviewReadCall.arguments.offset, 0)
+})
+
+test('批次更新在预算内完整内联审阅候选，超预算仍分页', async t => {
+  const candidates = [{ outboundId: 'candidate', reply: '测'.repeat(7000) }]
+  const h = await setup(t, { reviewCandidates: () => candidates })
+  await ingest(h, 'budget-one'); await h.coordinator.schedule('g')
+  await ingest(h, 'budget-two'); await h.coordinator.schedule('g')
+  const update = h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]')
+  assert.deepEqual(update.clarificationReviewCandidates, candidates)
+  assert.equal(update.clarificationReviewReadCall, undefined)
+  candidates[0].reply = '测'.repeat(30000)
+  await ingest(h, 'budget-three'); await h.coordinator.schedule('g')
+  const large = h.envelope('[GROUP_TOPIC_ROUTE_UPDATE]')
+  assert.equal(large.clarificationReviewCandidates, undefined)
+  assert.equal(large.clarificationReviewReadCall.arguments.offset, 0)
+})
+
 test('调度等待异步错误处理完成', async () => {
   let releaseError, errorStarted
   const errorGate = new Promise(resolve => { releaseError = resolve })
@@ -616,7 +653,7 @@ test('澄清仅接受已曝光话题版本并持久限定范围', async t => {
 })
 
 test('大澄清候选走只读分页且未读完不能提交澄清', async t => {
-  const candidates = [{ outboundId: 'old', reply: '"'.repeat(7_000) }]
+  const candidates = [{ outboundId: 'old', reply: '"'.repeat(35_000) }]
   assert.ok(coordinationTools('route').includes('group_topic_route_context_get'))
   assert.ok(!coordinationTools('route').includes('group_reply_review_get'))
   const h = await setup(t, { reviewCandidates: () => candidates })
