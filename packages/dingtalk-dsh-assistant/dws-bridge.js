@@ -132,7 +132,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     }
   })
   const processMessage = (message) => {
-    if (ingress.paused || stopping) return Promise.resolve()
+    if (ingress.paused || stopping || message.conversationType === 'direct') return Promise.resolve()
     const key = `${message.conversationType ?? 'group'}\u0000${message.groupId}\u0000${message.messageId}`
     const existing = inflightMessages.get(key)
     if (existing !== undefined) return existing
@@ -226,12 +226,12 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     delete entry.nextRetryAt
   }
   const healthSnapshot = () => {
-    const groups = runtime.listGroups().map((group) => {
+    const groups = runtime.listGroups().filter(group => group.conversationType !== 'direct').map((group) => {
       const entry = bridgeEntries.get(group.groupId)
       return {
         groupId: group.groupId,
         listener: {
-          state: group.conversationType === 'direct' ? humanReplyEntry.listenerState : entry?.listenerState ?? 'starting',
+          state: entry?.listenerState ?? 'starting',
           generation: entry?.generation ?? 0,
           ...(entry?.listenerStartedAt ? { startedAt: entry.listenerStartedAt } : {}),
           ...(entry?.listenerReadyAt ? { readyAt: entry.listenerReadyAt } : {}),
@@ -285,12 +285,10 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     try { onHealthChange(healthSnapshot()) } catch (error) { logger.warn(error) }
   }
   const queueGroupBackfill = (groupId, { queueAfterActive = false, recovery = false } = {}) => {
+    if (currentGroup(groupId)?.conversationType === 'direct') return Promise.resolve()
     const entry = entryFor(groupId)
     if (ingress.paused || stopping) return entry.backfillPromise
-    const conversation = currentGroup(groupId)
-    const direct = conversation?.conversationType === 'direct'
-    if (direct) entry.listenerState = humanReplyEntry.listenerState
-    if (typeof (direct ? adapter.readConversation : adapter.readGroupRange) !== 'function') {
+    if (typeof adapter.readGroupRange !== 'function') {
       entry.backfillState = 'unavailable'
       publishHealth()
       return entry.backfillPromise
@@ -313,27 +311,20 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
         const end = new Date().toISOString()
         const start = earlierIso(defaultBackfillStart(groupId), isRecovery ? entry.recoveryFromAt : undefined)
         entry.activeBackfillStartAt = start
-        const history = direct
-          ? { messages: await adapter.readConversation(conversation.conversationId, { start, end }), complete: true }
-          : await adapter.readGroupRange(groupId, { start, end })
+        const history = await adapter.readGroupRange(groupId, { start, end })
         if (stopping || ingress.paused || entry.recoveryEpoch !== recoveryEpoch || currentGroup(groupId) === undefined) return
         if (!Array.isArray(history.messages) || history.complete !== true || history.hasMore === true || (history.failedCount ?? 0) !== 0) throw new Error(`dws_backfill_partial:${groupId}`)
         const ordered = [...history.messages].sort((left, right) => String(left.createTime ?? '').localeCompare(String(right.createTime ?? '')))
         for (const message of ordered) {
           if (stopping || ingress.paused || entry.recoveryEpoch !== recoveryEpoch || currentGroup(groupId) === undefined) return
           entry.activeBackfillMessageId = message.messageId
-          if (direct) {
-            if (message.conversationId !== conversation.conversationId) throw new Error('dws_direct_history_identity_mismatch')
-            if ((message.senderOpenDingTalkId ?? message.senderId) !== conversation.recipientActorId) continue
-            const normalized = normalizeHistoryMessage(message, conversation.conversationId, 'direct')
-            if (!await processHumanReplyMessage(normalized)) await processMessage(normalized)
-          } else await processMessage(normalizeHistoryMessage(message, groupId))
+          await processMessage(normalizeHistoryMessage(message, groupId))
         }
         entry.backfillState = 'ok'
         entry.lastBackfillAt = now()
         entry.lastSuccessfulBackfillEndAt = end
         let recoveryCompleted = false
-        if (isRecovery && entry.recoveryEpoch === recoveryEpoch && (direct ? humanReplyEntry.listenerState : entry.listenerState) === 'ready') {
+        if (isRecovery && entry.recoveryEpoch === recoveryEpoch && entry.listenerState === 'ready') {
           entry.recoveryRequired = false
           delete entry.recoveryFromAt
           recoveryCompleted = true
@@ -347,7 +338,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
           const completedRecoveryEpoch = entry.recoveryEpoch
           entry.carrierIssueTail = entry.carrierIssueTail
             .then(async () => {
-              if (stopping || bridgeEntries.get(groupId) !== entry || (direct ? humanReplyEntry.listenerState : entry.listenerState) !== 'ready' || entry.recoveryRequired || entry.recoveryEpoch !== completedRecoveryEpoch) return
+              if (stopping || bridgeEntries.get(groupId) !== entry || entry.listenerState !== 'ready' || entry.recoveryRequired || entry.recoveryEpoch !== completedRecoveryEpoch) return
               await runtime.resolveGroupCarrierIssues?.({ groupId })
             })
             .catch((error) => logger.warn(error))
@@ -506,8 +497,8 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   }
   const processHumanReplyEvent = async event => {
     const message = normalizeEvent(event, 'direct')
-    // 已匹配人工答复只走原许可链，普通私聊才进入业务首筛。
-    if (!await processHumanReplyMessage(message) && runtime.isTaskSessionMode?.()) await processMessage(message)
+    // 私聊仅用于原有人工答复，不作为普通业务来源。
+    await processHumanReplyMessage(message)
   }
   const recallInactiveAuthorization = async (authorization) => {
     if (authorization?.kind === 'workflow-approval') {
@@ -702,7 +693,7 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     queueGroupBackfill(entry.groupId, { queueAfterActive: true, recovery: entry.recoveryRequired })
   }
   attach = (group) => {
-    // 私聊共用 all-direct 长连接，内部会话 key 不能用于群订阅。
+    // 已登记私聊保留历史，但不再接入普通消息或群订阅。
     if (group.conversationType === 'direct') return
     const entry = entryFor(group.groupId)
     if (stopping || ingress.paused || entry.subscription !== undefined || entry.retryTimer !== undefined) return
@@ -789,14 +780,6 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
     humanReplyEntry.lastListenerExitAt = now()
     humanReplyEntry.lastListenerError = error ? describeError(error) : `dws_human_reply_consumer_exit:${result?.exitCode ?? 'null'}:${result?.signal ?? 'none'}`
     humanReplyEntry.reconnectAttempt += 1
-    // all-direct 承载普通来源；断线时冻结各私聊下界，旧补拉不得覆盖新恢复代次。
-    for (const group of runtime.listGroups()) if (group.conversationType === 'direct') {
-      const entry = entryFor(group.groupId)
-      entry.recoveryRequired = true
-      entry.recoveryEpoch += 1
-      entry.recoveryFromAt = earlierIso(entry.recoveryFromAt,
-        entry.activeBackfillStartAt ?? beforeOverlap(entry.lastSuccessfulBackfillEndAt) ?? defaultBackfillStart(group.groupId))
-    }
     publishHealth()
     scheduleHumanReplyReconnect()
   }
@@ -835,8 +818,6 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
       humanReplyEntry.listenerReadyAt = now()
       humanReplyEntry.reconnectAttempt = 0
       delete humanReplyEntry.lastListenerError
-      for (const group of runtime.listGroups()) if (group.conversationType === 'direct')
-        queueGroupBackfill(group.groupId, { queueAfterActive: true, recovery: entryFor(group.groupId).recoveryRequired })
       publishHealth()
     }
     subscription.lifecycle?.on?.('ready', ready)
@@ -876,9 +857,9 @@ export function startDwsBridge({ runtime, adapter, logger, humanUserId, currentD
   }
 
   const recoveryComplete = () => !stopping && !ingress.paused && !!ingress.recoveryFromAt
-    && runtime.listGroups().every(group => {
+    && runtime.listGroups().filter(group => group.conversationType !== 'direct').every(group => {
       const entry = bridgeEntries.get(group.groupId)
-      return (group.conversationType === 'direct' ? humanReplyEntry.listenerState : entry?.listenerState) === 'ready'
+      return entry?.listenerState === 'ready'
         && entry?.backfillState === 'ok' && !entry.backfillRunning && !entry.recoveryRequired
     })
   const finishIngressRecovery = () => {

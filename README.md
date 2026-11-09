@@ -2,7 +2,7 @@
 
 # DingTalk DSH Assistant
 
-**当前消息路径**：普通群消息和私聊先做轻量处理/回复判断，再进入真实会话身份绑定的常驻 Router；Router 直接把消息来源关联到一个或多个 Task，不再经 Topic/Unit 中间层。旧 Topic 与 Unit 记录保留作历史证据，旧只读历史入口不代表新消息继续走旧路由。接口与看板边界见下方[常驻 Router 与直接 Task 路由](#常驻-router-与直接-task-路由)。
+**当前消息路径**：普通群消息先做轻量处理/回复判断，再进入真实会话身份绑定的常驻 Router；Router 直接把消息来源关联到一个或多个 Task，不再经 Topic/Unit 中间层。旧 Topic 与 Unit 记录保留作历史证据，旧只读历史入口不代表新消息继续走旧路由。接口与看板边界见下方[常驻 Router 与直接 Task 路由](#常驻-router-与直接-task-路由)。
 
 独立协调功能已移除（2026-10-29）：旧协调页面、配置、创建和操作接口不再开放。Task Owner、执行会话及直接 Router 继续运行。启动时幂等退役历史协调等待，结清其来源投影，保留原问题、原状态、已发通知和审计；关联业务 Task 不取消、不宣称完成。仅尚未获得发送许可的 prepared 协调通知停止等待，sending/unknown/delivered 保留原证据且不重放。共享话题会话模块与历史产物归属仍保留；旧独立协调实现仅留在仓库供历史合同核对，不再发布或装配。部署边界见[启动说明](docs/ops/task-session-clean-start.md#独立协调会话整体暂停)。
 
@@ -12,13 +12,14 @@
 
 历史协调数据保留底层只读审计；旧协调页面和退役管理 HTTP 接口均返回 410。本次升级自动停止协调等待，无需逐条调用过期澄清管理接口；来源结清表达功能退役，不表达业务完成。
 
-`dingtalk-dsh-assistant` 把钉钉群聊接入 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness)。轻量首筛识别是否需要处理及是否简答；每个真实群聊/私聊由独立常驻 Router 处理后续来源，并直接关联 Task。Task Owner 持续负责完整目标，独立执行会话使用所选后端的实际工具完成受托工作。
+`dingtalk-dsh-assistant` 把钉钉群聊接入 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness)。轻量首筛识别是否需要处理及是否简答；每个已订阅真实群聊由独立常驻 Router 处理后续来源，并直接关联 Task。Task Owner 持续负责完整目标，独立执行会话使用所选后端的实际工具完成受托工作。
 
 当前源码不再装配固定 workflow、DAG、阶段或节点调度器，也不以 Topic/Unit 作为新消息路由层。任务会话体系按[任务会话清洁启动 Runbook](docs/ops/task-session-clean-start.md)使用全新任务库与 Resident domain，保留隔离的旧数据，不导入旧任务或重发旧通知；已经使用任务会话体系的实例保留原任务库，按已初始化实例更新流程升级，不重做历史清洁启动。旧[协调账本迁移文档](docs/ops/coordination-ledger-migration.md)仅留作历史说明。本文描述源码行为，不表示已发布、已部署或通过真实钉钉验收。
 
 ## 常驻 Router 与直接 Task 路由
 
-- 路由身份使用真实 `conversationType` 与 `conversationId`，群聊和私聊隔离；私聊内部存储键不是发送目标。首筛只决定是否交 Router、是否先简短答复，不创建 Task 或执行业务动作。
+- 普通私聊消息接入已关闭：不进入首筛、不自动建立 Router、不补拉普通私聊历史；旧私聊记录和已有 Task 保留。共享 `all-direct` 通道仅用于原有审批、技术介入等人工答复，仍校验真实会话、作者和引用。
+- 群消息路由使用真实 `conversationType` 与 `conversationId`，不拿内部存储键作为发送目标。首筛只决定是否交 Router、是否先简短答复，不创建 Task 或执行业务动作。
 - 常驻 Router 直接消费消息来源及 Task 回流，按来源 `sourceId`、消息 ID 和版本关联 Task。Task Owner 与执行会话仍负责任务统筹及具体工作，Router 不替代任务权限、版本 CAS、操作对账或通知送达校验。
 - 逻辑 Router 常驻，物理会话按空闲轮次换代：本轮保留必要的意图、顺序和条件，过滤可通过工具重查的事实；Host 同时确认原生 Inbox、业务队列、待应用动作和在途操作均已排空，再启用干净上下文。晚到输入不能因换代丢失。
 - 同一目标的阶段沿原 Task 继续；独立目标才另建 Task。跨 Task 的先后安排另行持久保存，不只放在模型摘要里；前置任务完成、执行排空且版本仍匹配后，由 Router 重读事实并判断是否启动后续事项。
