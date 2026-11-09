@@ -795,6 +795,93 @@ testRunner('direct Router reads archived Task identity only within its current g
   assert.equal(h.sent.length, 0)
 }))
 
+for (const recovery of ['retry', 'same-turn']) testRunner('Router failed task action cannot become empty success; recovery=' + recovery, { timeout: nativeLifecycleTimeout(30000), ...(!available ? { skip: reason } : {}) }, nativeLifecycle(30000, async t => {
+  let original, retrying = false, taskReadForRetry = false, retryAttempts = 0, attempts = 0
+  const ownerInputs = []
+  const h = await extraHost(t, 'router-task-contract-', async (request, host) => {
+    const names = request.tools.map(tool => tool.name), input = latestInput(request)
+    if (names.includes('triage_submit') || names.includes('router_submit')) {
+      const missing = missingSourceRead(request, input)
+      if (missing) return [call('router_source_read', missing)]
+      if (names.includes('triage_submit')) return [call('triage_submit', { needsProcessing: true, reply: null })]
+      const sourceIds = input.context?.newSourceIds ?? []
+      if (!sourceIds.length || input.sources.some(source => source.text.includes('无需新任务')))
+        return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      if (retrying && ++retryAttempts === 1) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      if (retrying && !taskReadForRetry) { taskReadForRetry = true; return [call('router_task_get', { taskId: original.taskId })] }
+      const loaded = modelToolValues(request).findLast(value => value.task?.taskId === original.taskId)
+      if (!loaded) return [call('router_task_get', { taskId: original.taskId })]
+      const task = loaded.task
+      const action = { kind: 'task-reopen', taskId: task.taskId, inputVersion: task.requirementRevision,
+        runSequence: task.runSequence, expectedControlRevision: task.controlRevision, context: '按已批准的方案开始开发，保留原任务和会话。', sourceIds }
+      if (!retrying && ++attempts === 1) return [call('router_submit', { actions: [{ ...action, kind: 'update-task' }], continuity: [], reply: null })]
+      if (!retrying && attempts === 2) return [call('router_submit', { actions: [], continuity: [], reply: null })]
+      if (!retrying && recovery === 'retry') {
+        host.ctx.agents.get(host.residentStore.getRouterState('native-group').sessionId).cancel({ kind: 'user' })
+        return []
+      }
+      const schema = request.tools.find(tool => tool.name === 'router_submit').parameters.properties.actions.items
+      const branches = schema.oneOf ?? [schema]
+      assert.deepEqual([...new Set(branches.flatMap(branch => branch.properties.kind.enum ?? [branch.properties.kind.const]))].sort(),
+        ['new-task', 'task-cancel', 'task-context', 'task-reopen'])
+      const reopen = branches.find(branch => branch.properties.kind.const === 'task-reopen')
+      assert.ok(reopen.required.includes('expectedControlRevision'))
+      assert.ok(reopen.required.includes('context'))
+      return [call('router_submit', { actions: [action], continuity: [], reply: null })]
+    }
+    if (names.includes('task_session_submit')) {
+      ownerInputs.push({ task: input.task, visible: JSON.stringify([input, request.messages, modelToolValues(request)]) })
+      return [call('task_session_submit', { decision: { action: 'complete', summary: '已收到当前输入并完成隔离核验', evidence: ['真实原生Owner输入'], limitations: [] } })]
+    }
+    throw new Error(`Unexpected tools: ${names.join(', ')}`)
+  })
+  t.onCancel(() => t.diagnostic(JSON.stringify({ attempts, retrying, failure: h.residentStore.getRouterState('native-group').failures, tools: h.toolResults.slice(-5), owner: ownerInputs.map(item => item.task) })))
+  await t.beginBusiness()
+  const created = await t.step(() => h.service.createTask({ groupId: 'native-group', requestId: 'seed-contract', title: '原方案', objective: '完成方案分析' }))
+  await t.step(() => h.service.whenIdle())
+  original = await t.step(() => h.query('task.get', { taskId: created.taskId }))
+  assert.equal(original.status, 'completed')
+  ownerInputs.length = 0
+  const source = message('develop-approved', '方案已批准，开发吧。')
+  await t.step(() => h.service.ingest(source))
+  await t.step(() => h.service.whenIdle())
+  if (recovery === 'retry') {
+    const state = h.residentStore.getRouterState('native-group')
+    assert.equal(state.decisions.some(item => item.inputs.some(input => input.kind === 'source' && input.sourceRef.messageId === source.messageId)), false)
+    const failure = state.failures.find(item => item.sourceRef.messageId === source.messageId && item.status === 'failed')
+    assert.ok(failure, 'must persist a retryable failure instead of completing the source')
+    assert.equal(failure.code, 'router_task_action_unresolved')
+    const storedSource = (await t.step(() => h.query('source.list'))).find(item => item.messageId === source.messageId)
+    assert.equal(storedSource.processingCompleted, undefined)
+    assert.equal((await t.step(() => h.query('task.get', { taskId: original.taskId }))).requirementRevision, original.requirementRevision)
+    assert.equal(ownerInputs.length, 0)
+    retrying = true
+    await t.step(() => h.service.retryMessageProcessing({ groupId: 'native-group', messageId: source.messageId,
+      messageVersion: 1, phase: failure.phase, requestId: failure.requestId, token: failure.retryToken }))
+    await t.step(() => h.service.whenIdle())
+  }
+  const tasks = await t.step(() => h.query('task.list'))
+  assert.equal(tasks.length, 1)
+  assert.equal(tasks[0].taskId, original.taskId)
+  assert.equal(tasks[0].sessionId, original.sessionId)
+  assert.equal(tasks[0].runSequence, original.runSequence + 1)
+  assert.equal(tasks[0].requirementRevision, original.requirementRevision + 1)
+  assert.equal(ownerInputs.length, 1)
+  assert.equal(ownerInputs[0].task.requirementRevision, original.requirementRevision + 1)
+  assert.ok(tasks[0].request.includes('按已批准的方案开始开发'))
+  assert.ok(ownerInputs[0].visible.includes('方案已批准，开发吧'))
+  assert.ok(h.toolResults.some(item => item.name === 'router_submit' && JSON.stringify(item.result).includes('router_task_action_unresolved')))
+  await t.step(() => h.service.ingest(source))
+  await t.step(() => h.service.recover())
+  await t.step(() => h.service.whenIdle())
+  assert.equal(ownerInputs.length, 1)
+  await t.step(() => h.service.ingest(message('benign-after-error', '无需新任务，仅记录讨论。')))
+  await t.step(() => h.service.whenIdle())
+  const benign = (await t.step(() => h.query('source.list'))).find(item => item.messageId === 'benign-after-error')
+  assert.ok(benign.processingCompleted, 'prior batch failures must not forbid a legitimate empty decision')
+  assert.equal(h.sent.length, 0)
+}))
+
 testRunner('native direct Router batch followup reopens each original completed task and session once', { ...({ timeout: 30000, ...(!available ? { skip: reason } : {}) }), timeout: nativeLifecycleTimeout(30000) }, nativeLifecycle(30000, async t => {
   const reopenedInputs = []
   const h = await extraHost(t, 'direct-task-batch-followup-', async request => {

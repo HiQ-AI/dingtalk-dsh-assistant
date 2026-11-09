@@ -2,6 +2,8 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
+import { toToolJsonSchema } from './tool-schema.js'
+import { acceptanceCriteriaSchema, taskContextProgressImpactSchema, assertTaskContextSemantics } from './task-input-contract.js'
 import { createConversationRouterSessions } from './conversation-router-session.js'
 import { sessionWorkspace } from './session-workspaces.js'
 import { taskModelSelection } from './task-model-config.js'
@@ -86,6 +88,56 @@ export function createRouterSourceExposure({ batchId, sources, context }) {
   }
   return { message, admit, read, tool, assertVisible, assertContextVisible, source: id => structuredClone(snapshots.get(id)),
     sources: () => structuredClone([...snapshots.values()]) }
+}
+
+const routerText = z.string().trim().min(1)
+const routerDependencies = z.array(z.strictObject({ taskId: routerText, requirementRevision: z.number().int().positive(),
+  contextRevision: z.number().int().nonnegative(), controlRevision: z.number().int().positive(), runSequence: z.number().int().positive() })).min(1)
+const routerActionBasis = { sourceIds: z.array(routerText).min(1), dependencies: routerDependencies.optional(), retryOfOperationId: routerText.optional() }
+const routerTaskVersion = { taskId: routerText, inputVersion: z.number().int().positive().describe('router_task_get 返回的 requirementRevision'),
+  runSequence: z.number().int().positive(), expectedControlRevision: z.number().int().positive().describe('router_task_get 返回的 controlRevision') }
+const routerTaskChanges = { title: routerText.optional(), objective: routerText.optional(), acceptanceCriteria: acceptanceCriteriaSchema.optional() }
+const routerNewTask = { kind: z.literal('new-task').describe('独立交付才新建；同一事项按任务状态使用 task-context 或 task-reopen。'),
+  title: routerText, objective: routerText, acceptanceCriteria: acceptanceCriteriaSchema.optional(), ...routerActionBasis }
+const routerActionSchema = z.union([
+  z.strictObject(routerNewTask),
+  z.strictObject({ kind: z.literal('new-task'), sourceIds: routerActionBasis.sourceIds, arrangementId: routerText, dependencies: routerDependencies })
+    .describe('激活已保存安排：仅填写安排身份、原来源及已读取的前置任务版本，不另填任务标题、目标或taskId。'),
+  z.strictObject({ ...routerNewTask, taskId: routerText, arrangementId: routerText.optional(), retryOfOperationId: routerText })
+    .describe('重试明确未执行的新建动作：保留 context.retries 中原动作及任务身份，仅更新 dependencies。'),
+  z.strictObject({ kind: z.literal('task-context').describe('向未完成原任务补充上下文；必须明确 preserve 或 replan。'),
+    ...routerTaskVersion, ...routerActionBasis, context: routerText, ...routerTaskChanges, progressImpact: taskContextProgressImpactSchema,
+    authorizationChange: z.enum(['none', 'changed']).optional(), stageTasks: z.array(routerText).optional(),
+    impactEvidence: z.strictObject({ basisMessageIds: z.array(routerText).min(1), reason: routerText, affectedStageIds: z.array(routerText).min(1) }).optional(),
+    factFeedback: z.literal(true).optional() }),
+  z.strictObject({ kind: z.literal('task-reopen').describe('已完成原任务获得开发、修订或提测等后续授权时重开，复用原Task和会话。'),
+    ...routerTaskVersion, ...routerActionBasis, context: routerText, ...routerTaskChanges }),
+  z.strictObject({ kind: z.literal('task-cancel').describe('按真实来源权限取消原任务。'), ...routerTaskVersion, ...routerActionBasis, reason: routerText }),
+])
+
+function assertFailedTaskActionsHandled(agent, current, candidate) {
+  const messages = agent.session.deriveMessages()
+  const start = messages.findLastIndex(message => message.id === current.exposure.message.id)
+  if (start < 0) throw new Error('router_batch_unread')
+  const calls = new Map(), failedSourceIds = new Set(current.unresolvedTaskSources ?? [])
+  // 从真实工具历史读取，包含进入 execute 前被原生 Schema 拒绝的候选；只看当前批次。
+  for (const message of messages.slice(start + 1)) {
+    if (message.role === 'assistant') for (const block of message.content ?? []) {
+      if (block.type === 'tool-call' && block.name === 'router_submit') calls.set(block.id, block.arguments)
+    }
+    if (message.role !== 'tool' || !message.isError || !calls.has(message.toolCallId)) continue
+    let failed
+    try { failed = JSON.parse(calls.get(message.toolCallId)) } catch { continue }
+    if (!Array.isArray(failed.actions) || !failed.actions.length) continue
+    const ids = failed.actions.flatMap(action => Array.isArray(action?.sourceIds) ? action.sourceIds : [])
+      .filter(id => typeof id === 'string' && current.exposure.source(id))
+    for (const id of ids.length ? ids : current.batch.inputs.filter(item => item.kind === 'source').map(item => item.sourceRef.sourceId)) failedSourceIds.add(id)
+  }
+  const handled = new Set([...candidate.actions, ...(candidate.arrangements ?? [])].flatMap(item => item.sourceIds))
+  if ([...failedSourceIds].some(id => !handled.has(id))) {
+    current.submissionError = new Error('router_task_action_unresolved')
+    throw current.submissionError
+  }
 }
 
 const output = { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
@@ -214,7 +266,7 @@ export function createConversationRouter({ ctx, store, workspaceRoot, agentPrese
     const preset = await presets.mount(agentCtx, presetId)
     if (preset?.id !== undefined && preset.id !== presetId) throw new Error('coordination_agent_preset_invalid')
     agentCtx.systemPrompt.section({ name: 'dingtalk:conversation-router', order: 0,
-      text: `你负责本会话任务安排。同一目标的阶段留在同一 Task。等待前置任务的后续新任务写入 arrangements：sourceIds、title、objective、dependsOnTaskIds；Host 固定安排和后续 taskId。激活已保存安排时，提交 action，包含 arrangementId、sourceIds 和 dependencies；依赖任务必须先读取当前版本。context.retries 是明确未执行的旧动作：重新核实依赖后保留原 action 字段和任务身份，仅更新 dependencies，并附 retryOfOperationId、sourceIds 和原 arrangementId；已成功动作不可重做。普通 new-task 用于独立事项。若需回复，先以真实 sourceId 读取完整来源并调用 router_reply_review_get，再提交 reply:{sourceId,text,review}；review 包含 kind、reviewedOutboundIds、sameMatterOutboundIds、replaceOutboundIds。确认不得替换实质答复。reply 可选 replyToMessageId、atOpenDingTalkIds、atAll；引用与成员身份必须来自同会话完整已读来源。${groupNotificationInstructions} 三个通知字段均省略时沿用当前来源的默认定向；明确不提及时填写空数组。若交付本批 completed fact 中的文件，reply 可含 completion:{factId,taskId,artifactIds}，文件 ID 必须来自可见完成事实，Host 固定并核验真实文件。摘要不能作为来源授权。提交候选由 Host 核验并执行，不声称已执行。` })
+      text: `你负责本会话任务安排。同一目标的阶段留在同一 Task。等待前置任务的后续新任务写入 arrangements：sourceIds、title、objective、dependsOnTaskIds；Host 固定安排和后续 taskId。激活已保存安排时，提交 action，包含 arrangementId、sourceIds 和 dependencies；依赖任务必须先读取当前版本。context.retries 是明确未执行的旧动作：重新核实依赖后保留原 action 字段和任务身份，仅更新 dependencies，并附 retryOfOperationId、sourceIds 和原 arrangementId；已成功动作不可重做。任务动作仅支持 new-task、task-context、task-reopen、task-cancel。普通 new-task 用于独立事项；未完成原任务补充用 task-context，显式 progressImpact:preserve/replan；已完成原任务收到开发、修订或重新提测授权用 task-reopen，不新建重复Task。操作已有Task先 router_task_get，填写 taskId、inputVersion=requirementRevision、runSequence、expectedControlRevision=controlRevision；task-context/task-reopen 必须填写 context，task-cancel 填写 reason。动作失败时纠正候选或保留失败，不得用空 actions 或连续性摘要代替未成功的派工。若需回复，先以真实 sourceId 读取完整来源并调用 router_reply_review_get，再提交 reply:{sourceId,text,review}；review 包含 kind、reviewedOutboundIds、sameMatterOutboundIds、replaceOutboundIds。确认不得替换实质答复。reply 可选 replyToMessageId、atOpenDingTalkIds、atAll；引用与成员身份必须来自同会话完整已读来源。${groupNotificationInstructions} 三个通知字段均省略时沿用当前来源的默认定向；明确不提及时填写空数组。若交付本批 completed fact 中的文件，reply 可含 completion:{factId,taskId,artifactIds}，文件 ID 必须来自可见完成事实，Host 固定并核验真实文件。摘要不能作为来源授权。提交候选由 Host 核验并执行，不声称已执行。` })
     const allowed = new Set(['router_source_read', 'router_task_list', 'router_task_get', 'router_reply_review_get', 'router_submit'])
     const turn = () => {
       const value = turns.get(binding.groupId)
@@ -255,7 +307,7 @@ export function createConversationRouter({ ctx, store, workspaceRoot, agentPrese
         return { sourceId, candidates }
       } })
     agentCtx.tools.register({ name: 'router_submit', description: '提交本批任务动作和必要连续性。',
-      parameters: { type: 'object', properties: { actions: { type: 'array', items: { type: 'object' } }, arrangements: { type: 'array', items: { type: 'object' } }, continuity: { type: 'array', items: { type: 'object' } }, reply: { anyOf: [{ type: 'object' }, { type: 'null' }] } },
+      parameters: { type: 'object', properties: { actions: { type: 'array', items: toToolJsonSchema(routerActionSchema) }, arrangements: { type: 'array', items: { type: 'object' } }, continuity: { type: 'array', items: { type: 'object' } }, reply: { anyOf: [{ type: 'object' }, { type: 'null' }] } },
         required: ['actions', 'continuity', 'reply'], additionalProperties: false }, output,
       async execute(candidate, exec) {
         await check(exec.agent)
@@ -277,6 +329,9 @@ export function createConversationRouter({ ctx, store, workspaceRoot, agentPrese
         }
         const applications = []
         for (const proposed of candidate.actions) {
+          const parsed = routerActionSchema.safeParse(proposed)
+          if (!parsed.success) throw new Error(`router_action_invalid: ${parsed.error.message}`)
+          if (proposed.kind === 'task-context') assertTaskContextSemantics(proposed)
           if (!proposed || !['new-task', 'task-context', 'task-reopen', 'task-cancel'].includes(proposed.kind)
             || !Array.isArray(proposed.sourceIds) || !proposed.sourceIds.length || new Set(proposed.sourceIds).size !== proposed.sourceIds.length) throw new Error('router_action_invalid')
           current.exposure.assertVisible(exec.agent, proposed.sourceIds)
@@ -362,6 +417,7 @@ export function createConversationRouter({ ctx, store, workspaceRoot, agentPrese
             replyReview: { candidates: read.candidates, review }, ...(completion ? { completion } : {}), ...(notificationRouting ? { notificationRouting } : {}) })
         }
         await check(exec.agent)
+        assertFailedTaskActionsHandled(exec.agent, current, candidate)
         current.decision = await store.routerCommit({ groupId: binding.groupId, binding: current.binding, batchId: current.batch.batchId,
           decision: candidate, continuity: candidate.continuity, applications, arrangements })
         exec.concludeTurn()
@@ -574,11 +630,12 @@ export function createConversationRouter({ ctx, store, workspaceRoot, agentPrese
         arrangements: (store.getRouterState(groupId).arrangements ?? []).filter(item => item.status === 'waiting') } })
       const turn = { ...claim, exposure, facts, taskReads: new Map(), replyReads: new Map(), decision: null }
       const batchFailures = (store.getRouterState(groupId).failures ?? []).filter(item => item.phase === 'decision' && item.requestId === claim.batch.batchId)
+      turn.unresolvedTaskSources = batchFailures.filter(item => item.code === 'router_task_action_unresolved').map(item => item.sourceRef.sourceId)
       if (batchFailures.some(item => item.status === 'failed') && !batchFailures.some(item => item.status === 'retrying')) break
       turns.set(groupId, turn)
       try {
         await sessions.run({ binding: claim.binding, input: exposure.message })
-        if (!turn.decision) throw new Error('router_no_submission')
+        if (!turn.decision) throw turn.submissionError ?? new Error('router_no_submission')
         for (const source of sources) await store.routerResolveFailure({ groupId, sourceId: source.sourceId, phase: 'decision', requestId: claim.batch.batchId })
       } catch (error) {
         if (interrupted(error)) throw error

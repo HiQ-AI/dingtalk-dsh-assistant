@@ -1252,6 +1252,7 @@
         "packages/dingtalk-dsh-assistant/session-persistence.js",
         "packages/dingtalk-dsh-assistant/session-workspaces.js",
         "packages/dingtalk-dsh-assistant/store.js",
+        "packages/dingtalk-dsh-assistant/task-input-contract.js",
         "packages/dingtalk-dsh-assistant/task-input-revision.js",
         "packages/dingtalk-dsh-assistant/task-message-projections.js",
         "packages/dingtalk-dsh-assistant/task-model-config.js",
