@@ -1337,7 +1337,7 @@ test('暂停成功回执等待已开始的可靠接收排空，不把已调度�
   assert.deepEqual(received.map(item => item.messageId), ['inflight'])
 })
 
-test('普通私聊经真实all-direct入口进入首筛，人工答复不重复进入业务', async t => {
+test('普通私聊不进入业务首筛，all-direct仅恢复匹配的人工答复', async t => {
   const received = [], approved = [], warnings = [], done = Promise.withResolvers()
   let onDirect
   const request = { taskSessionRequest: true, audience: 'operator', status: 'waiting-reply',
@@ -1351,98 +1351,76 @@ test('普通私聊经真实all-direct入口进入首筛，人工答复不重复�
   t.after(stop)
   const event = { conversation_id: 'private-cid', message_id: 'new-private', sender_open_dingtalk_id: 'peer', content: '请检查这个问题' }
   await onDirect(event)
-  assert.equal(received.length, 1)
-  assert.equal(received[0].conversationId, 'private-cid')
-  assert.equal(received[0].conversationType, 'direct')
-  assert.equal(received[0].senderOpenDingTalkId, 'peer')
+  assert.deepEqual(received, [])
   for (const sender of ['peer', 'wrong-peer']) await onDirect({ ...event, message_id: `reply-${sender}`,
     sender_open_dingtalk_id: sender, quotedMessage: { messageId: 'approval-source' } })
   assert.equal(approved.length, 1)
-  assert.equal(received.length, 1, '匹配人工问题的错误作者也不能绕过人工入口变成新任务来源')
+  assert.deepEqual(received, [], '普通私聊和错配的人工答复都不能变成新任务来源')
   assert.deepEqual(warnings, [])
 })
 
-test('已登记私聊不启动群订阅，ready后按真实会话补拉并排除自己发送的消息', async t => {
+test('已登记私聊在启动、周期补拉和暂停恢复后均不读取普通历史', async t => {
   const group = { groupId: 'direct:internal-key', conversationType: 'direct', conversationId: 'private-cid', recipientActorId: 'peer', messages: [] }
-  const received = [], warnings = [], resolved = [], done = Promise.withResolvers(), delivered = Promise.withResolvers()
-  const lifecycle = new EventEmitter()
+  const reads = [], received = [], warnings = [], resolved = [], done = Promise.withResolvers()
+  const lifecycle = new EventEmitter(), ticks = [], saved = []
+  let health
+  t.mock.method(globalThis, 'setInterval', callback => { ticks.push(callback); return { unref() {} } })
+  t.mock.method(globalThis, 'clearInterval', () => {})
   const stop = startDwsBridge({ runtime: { listGroups: () => [group], getGroup: id => id === group.groupId ? group : undefined,
     isTaskSessionMode: () => true, listAuthorizationRequests: async () => [],
-    onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {}, ingest: async message => { received.push(message); delivered.resolve() },
+    onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {}, ingest: async message => { received.push(message) },
     async resolveGroupCarrierIssues({ groupId }) { resolved.push(groupId) } },
     adapter: { startGroupSubscription() { throw new Error('私聊不能启动群订阅') },
       startHumanReplySubscription() { return { lifecycle, done: done.promise, stop() { done.resolve() } } },
-      async readConversation(id) { assert.equal(id, 'private-cid'); return [
-        { conversationId: id, messageId: 'outgoing', senderOpenDingTalkId: 'self', text: '已完成' },
+      async readConversation(id) { reads.push(id); return [
         { conversationId: id, messageId: 'incoming', senderOpenDingTalkId: 'peer', text: '继续核对' },
-      ] } }, logger: { warn(error) { warnings.push(error.message) } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 0, outboxRetryIntervalMs: 0 })
+      ] } }, logger: { warn(error) { warnings.push(error.message) } }, humanPollIntervalMs: 0, groupBackfillIntervalMs: 10, outboxRetryIntervalMs: 0,
+    onHealthChange(value) { health = value },
+    ingressState: { paused: false, recoveryFromAt: '2026-11-06T07:59:00Z' }, saveIngressState: async value => { saved.push(value) } })
   t.after(stop)
   lifecycle.emit('ready')
-  await delivered.promise
-  assert.deepEqual(received.map(message => [message.messageId, message.conversationType, message.conversationId]), [['incoming', 'direct', 'private-cid']])
+  await ticks[0]()
+  await stop.setIngressPaused(true)
+  await stop.setIngressPaused(false)
+  await ticks[0]()
   await new Promise(resolve => setImmediate(resolve))
-  assert.deepEqual(resolved, [group.groupId], '私聊须在真实监听和补拉恢复后结清自身carrier告警')
+  assert.deepEqual(reads, [])
+  assert.deepEqual(received, [])
+  assert.deepEqual(resolved, [], '停用普通私聊不能结清旧carrier告警')
+  assert.deepEqual(health.groups, [])
+  assert.equal(health.healthy, true)
+  assert.deepEqual(saved.at(-1), { paused: false }, '停用的私聊不应阻塞群接入恢复')
   assert.deepEqual(warnings, [])
 })
 
-test('私聊断线时冻结慢补拉边界，ready后的实时输入不能越过断线消息或提前报健康', { timeout: 5000 }, async t => {
-  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-06T08:00:00Z') })
-  const group = { groupId: 'direct:recovery-key', conversationType: 'direct', conversationId: 'private-real', recipientActorId: 'peer',
-    messages: [{ messageId: 'before-gap', occurredAt: '2026-11-06T07:59:00Z' }] }
-  const listeners = [], ranges = [], received = [], warnings = [], resolutions = []
-  const initialRead = Promise.withResolvers(), recoveryRead = Promise.withResolvers(), recoveryStarted = Promise.withResolvers(), reconnected = Promise.withResolvers()
-  let tick, health, stop
-  const originalSetInterval = globalThis.setInterval
-  globalThis.setInterval = callback => { tick = callback; return { unref() {} } }
-  const gap = { conversationId: group.conversationId, messageId: 'during-gap', senderOpenDingTalkId: 'peer', text: '断线期间的需求', createTime: '2026-11-06T08:05:00Z' }
-  try {
-    stop = startDwsBridge({ runtime: { listGroups: () => [group], getGroup: () => group, isTaskSessionMode: () => true,
-      onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {}, listAuthorizationRequests: async () => [],
-      async ingest(message) { received.push(message.messageId); group.messages.push(message) },
-      async resolveGroupCarrierIssues({ groupId }) { resolutions.push(groupId) } },
-      adapter: {
-        startHumanReplySubscription(callback) {
-          const lifecycle = new EventEmitter(), done = Promise.withResolvers()
-          const listener = { callback, lifecycle, done }
-          listeners.push(listener)
-          if (listeners.length === 2) reconnected.resolve()
-          return { lifecycle, ready: new Promise(() => {}), done: done.promise, stop() { done.resolve() } }
-        },
-        async readConversation(id, range) {
-          assert.equal(id, group.conversationId); ranges.push(range)
-          if (ranges.length === 1) return initialRead.promise
-          if (ranges.length === 2) { recoveryStarted.resolve(); await recoveryRead.promise }
-          return Date.parse(range.start) <= Date.parse(gap.createTime) && Date.parse(range.end) >= Date.parse(gap.createTime) ? [gap] : []
-        },
-      }, logger: { warn(error) { warnings.push(error.message) } }, onHealthChange(value) { health = value },
-      humanPollIntervalMs: 0, outboxRetryIntervalMs: 0, groupBackfillIntervalMs: 1,
-      listenerReconnectBaseMs: 0, listenerReconnectMaxMs: 0, listenerReadyTimeoutMs: 0 })
-    listeners[0].lifecycle.emit('ready')
-    assert.equal(ranges.length, 1)
-    listeners[0].done.resolve({ exitCode: 7 })
-    await reconnected.promise
-    assert.equal(health.healthy, false)
-    t.mock.timers.setTime(Date.parse('2026-11-06T08:10:00Z'))
-    listeners[1].lifecycle.emit('ready')
-    await listeners[1].callback({ conversation_id: group.conversationId, message_id: 'after-gap', content: '重连后正常实时输入',
-      sender_open_dingtalk_id: 'peer', event_time: '2026-11-06T08:10:00Z' })
-    initialRead.resolve([])
-    await recoveryStarted.promise
-    assert.ok(Date.parse(ranges[1].start) <= Date.parse(ranges[0].start), '恢复读取须沿断线时冻结下界，不能被08:10实时水位推进')
-    assert.equal(health.healthy, false)
-    assert.equal(health.groups[0].backfill.recoveryRequired, true)
-    assert.deepEqual(resolutions, [])
-    recoveryRead.resolve()
-    await tick()
-    await new Promise(resolve => setImmediate(resolve))
-    assert.ok(received.includes('during-gap'), '断线消息须真正进入原业务入口，不能仅判补拉成功')
-    assert.equal(health.healthy, true)
-    assert.deepEqual(resolutions, [group.groupId])
-    await tick()
-    assert.deepEqual(warnings, [])
-  } finally {
-    initialRead.resolve([]); recoveryRead.resolve()
-    await stop?.()
-    globalThis.setInterval = originalSetInterval
-  }
+test('人工答复通道断线重连后仍拒绝普通私聊，且不补拉历史来源', async t => {
+  const group = { groupId: 'direct:recovery-key', conversationType: 'direct', conversationId: 'private-real', recipientActorId: 'peer', messages: [] }
+  const listeners = [], reads = [], received = [], warnings = [], reconnected = Promise.withResolvers()
+  let health
+  const stop = startDwsBridge({ runtime: { listGroups: () => [group], getGroup: () => group, isTaskSessionMode: () => true,
+    onGroupSubscribed: () => () => {}, onOutboxAppended: () => () => {}, listAuthorizationRequests: async () => [],
+    async ingest(message) { received.push(message) } },
+    adapter: { startHumanReplySubscription(callback) {
+      const lifecycle = new EventEmitter(), done = Promise.withResolvers()
+      listeners.push({ callback, lifecycle, done })
+      if (listeners.length === 2) reconnected.resolve()
+      return { lifecycle, ready: new Promise(() => {}), done: done.promise, stop() { done.resolve() } }
+    }, async readConversation(id) { reads.push(id); return [] } },
+    logger: { warn(error) { warnings.push(error.message) } },
+    humanPollIntervalMs: 0, outboxRetryIntervalMs: 0, groupBackfillIntervalMs: 0,
+    onHealthChange(value) { health = value },
+    listenerReconnectBaseMs: 0, listenerReconnectMaxMs: 0, listenerReadyTimeoutMs: 0 })
+  t.after(stop)
+  listeners[0].lifecycle.emit('ready')
+  listeners[0].done.resolve({ exitCode: 7 })
+  // 重连定时器不保活；此handle仅等待真实重连回调。
+  const waiting = setInterval(() => {}, 1000)
+  try { await reconnected.promise } finally { clearInterval(waiting) }
+  assert.equal(health.healthy, false)
+  listeners[1].lifecycle.emit('ready')
+  await listeners[1].callback({ conversation_id: group.conversationId, message_id: 'after-gap', content: '重连后普通私聊', sender_open_dingtalk_id: 'peer' })
+  assert.deepEqual(received, [])
+  assert.deepEqual(reads, [])
+  assert.equal(health.healthy, true)
+  assert.deepEqual(warnings, [])
 })
