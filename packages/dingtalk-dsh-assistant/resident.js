@@ -182,6 +182,7 @@ export async function apply(ctx, config = {}) {
   runtime.hasPendingTopicFacts = tasks.hasPendingTopicFacts
   runtime.messageProcessingSources = tasks.messageProcessingSources
   runtime.messageProcessingRequests = tasks.messageProcessingRequests
+  runtime.sourceTaskRefs = tasks.sourceTaskRefs
   runtime.getTaskSessionDetail = tasks.taskDetail
   runtime.getTaskSessionIdentity = tasks.taskIdentity
   runtime.getTaskSessionExecutions = tasks.taskExecutions

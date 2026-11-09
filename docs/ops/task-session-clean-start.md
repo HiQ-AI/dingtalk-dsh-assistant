@@ -19,7 +19,7 @@ Router 直接回信复用 Host 锁内审阅与持久通知链路，分项隔离 
 升级核验时按当前本机实例既有更新流程执行，不清库、不删除历史 Topic/Task、不手改 Resident 或 Dynamic 账本，也不为制造状态发送真实消息或重放旧请求。复用现有 Resident 与 Dynamic 持久账；本次路径没有要求单独重建任务库。
 
 - 只读回读 `GET /state/groups?summary=true`：群与私聊分别呈现真实会话类型/ID；Router 会话入口、generation、排队数量及活动输入数量与当前运行态一致，不暴露原始队列内容。
-- 只读读取有限消息页：每条当前消息的来源按 messageId/version 精确匹配；关联 Task 由该页 sourceId 有界分批查询，过期版本、跨会话和仅标题相同的任务不应挂接。验证下一页时确认没有为页面外来源额外全量扫描。
+- 只读读取有限消息页：每条当前消息的来源按 messageId/version 精确匹配；关联 Task 由该页 sourceId 有界分批查询，过期版本、跨会话和仅标题相同的任务不应挂接。验证下一页时确认没有为页面外来源额外全量扫描。 必须选取已有 sourceRefs 的消息页，确认 HTTP 200 与真实关联任务；仅空页或群摘要成功不能证明查询已接线。`observer_source_task_refs_unavailable` 表示 Resident 未接入 Task 服务查询，不能靠清库、重放消息或吞错恢复。
 - 只读读取 Task 列表与 `/state/tasks/:taskId/detail`：来源列表应从 Task 自身已保存的 sourceRefs 直接读取并展示 sourceId、groupId、messageId、version；不以反向匹配、标题或历史 Topic 关系推断来源。历史 Task 的关联仍只读。
 - 对照来源处理终态和 Task 业务状态：Router 已处理不代表 Task 完成；Task 完成也不代表群通知送达。队列中来源应显示处理中，旧 Topic 完成记录不得覆盖直接来源未完成状态。
 - 核对配置回读：`triageModel`、`routerModel` 分别表示轻量首筛与常驻 Router，`null` 继承默认处理模型，不改变 `taskSessionModel` 或执行模型。旧 Topic 模型字段仅在新字段缺失时迁移；新值及显式 `null` 不被旧值覆盖，保存接口拒绝旧字段。
