@@ -2790,16 +2790,39 @@ test('resident.apply boots and disposes with only its declared native service de
   await t.step(async () => new Promise(resolve => probe.close(resolve)))
   const env = Object.fromEntries(['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy'].map(key => [key, process.env[key]]))
   t.after(() => { for (const [key, value] of Object.entries(env)) if (value === undefined) delete process.env[key]; else process.env[key] = value })
+  const taskSessions = { dbPath: join(fixture.root, 'resident.db'), instanceId: 'resident-native', ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', initialize: true, recoveryIntervalMs: 60000 }
+  // 用持久来源及已取消任务覆盖真实 Resident 接线，不触发模型或通知。
+  const { openResidentStore } = await t.step(() => import('../packages/dingtalk-dsh-assistant/store.js'))
+  const store = await t.step(() => openResidentStore(h.ctx.storageDomain))
+  await t.step(() => store.subscribe({ groupId: 'native-group', name: 'native group', responsibility: 'native startup test' }))
+  await t.step(() => store.ingestHistory({ groupId: 'native-group', messageId: 'resident-message', messageVersion: 2,
+    senderOpenDingTalkId: 'native-user', text: '已取消任务的来源', occurredAt: '2026-10-13T10:00:00Z' }))
+  await t.step(() => store.close())
+  const seed = await t.step(() => openDynamicTaskStore(taskSessions))
+  try {
+    const command = (kind, args) => t.step(() => seed.command({ kind, args, id: `resident-fixture:${kind}` }))
+    await command('source.record', { sourceId: 'resident-source', groupId: 'native-group', messageId: 'resident-message', version: 2,
+      actorId: 'native-user', text: '已取消任务的来源', timestamp: '2026-10-13T10:00:00Z' })
+    await command('source.directProcessed', { sourceId: 'resident-source', groupId: 'native-group', messageVersion: 2, phase: 'router', decisionId: 'resident-decision' })
+    await command('task.create', { taskId: 'resident-task', groupId: 'native-group', request: '保留来源关联', sourceRefs: ['resident-source'] })
+    await command('task.control', { taskId: 'resident-task', control: 'cancelled' })
+  } finally { await t.step(() => seed.close()) }
   const fiber = await t.step(async () => h.ctx.plugin(resident, { host: '127.0.0.1', port, agentWorkspaceDir: fixture.root, agentPreset: 'native-test', proxyUrl: '',
     groups: [{ groupId: 'native-group', name: 'native group', responsibility: 'native startup test' }], dws: { enabled: false },
-    taskSessions: { dbPath: join(fixture.root, 'resident.db'), instanceId: 'resident-native', ownerActorId: 'native-user', webActorId: 'native-user', ingressEpoch: '2026-10-13T00:00:00Z', initialize: true, recoveryIntervalMs: 60000 } }))
+    taskSessions: { ...taskSessions, initialize: false } }))
   const read = path => new Promise((resolve, reject) => httpGet(`http://127.0.0.1:${port}${path}`, { agent: false }, response => {
     let body = ''; response.on('data', chunk => { body += chunk }); response.on('end', () => { try { resolve({ status: response.statusCode, body: JSON.parse(body) }) } catch (error) { reject(error) } })
   }).on('error', reject))
   assert.deepEqual((await t.step(async () => read('/health'))).body.status, 'ok')
+  const messages = await t.step(() => read('/state/groups/native-group/messages?limit=1'))
+  assert.equal(messages.status, 200, JSON.stringify(messages.body))
   const groups = await t.step(async () => read('/state/groups'))
   assert.equal(groups.status, 200)
   assert.equal(groups.body[0].groupId, 'native-group')
+  assert.deepEqual(messages.body.items[0].taskRefs, [{ sourceId: 'resident-source', messageId: 'resident-message', version: 2,
+    taskId: 'resident-task', title: '保留来源关联', status: 'cancelled', archivedAt: null }])
+  assert.equal(groups.body[0].messages[0].taskRefs[0].taskId, 'resident-task')
+  assert.equal(groups.body[0].messages[0].taskRefs[0].version, 2)
   assert.equal((await t.step(async () => read('/state/agent-config'))).body.workspaceDir, fixture.root)
   assert.equal(h.requests.length, 0)
   await t.step(async () => fiber.dispose())

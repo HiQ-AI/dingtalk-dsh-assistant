@@ -22,7 +22,7 @@
 - 常驻 Router 直接消费消息来源及 Task 回流，按来源 `sourceId`、消息 ID 和版本关联 Task。Task Owner 与执行会话仍负责任务统筹及具体工作，Router 不替代任务权限、版本 CAS、操作对账或通知送达校验。
 - 逻辑 Router 常驻，物理会话按空闲轮次换代：本轮保留必要的意图、顺序和条件，过滤可通过工具重查的事实；Host 同时确认原生 Inbox、业务队列、待应用动作和在途操作均已排空，再启用干净上下文。晚到输入不能因换代丢失。
 - 同一目标的阶段沿原 Task 继续；独立目标才另建 Task。跨 Task 的先后安排另行持久保存，不只放在模型摘要里；前置任务完成、执行排空且版本仍匹配后，由 Router 重读事实并判断是否启动后续事项。
-- `/state/groups?summary=true` 返回真实会话身份及 Router 的会话 ID、代次、排队数量和活动输入数量，不返回原始队列内容。消息分页只用当前页的来源 ID 查询关联 Task，按不超过 100 个来源 ID 分批；对外链接要求 sourceId、messageId 和版本精确匹配，归档 Task 可作为关联事实展示。
+- `/state/groups?summary=true` 返回真实会话身份及 Router 的会话 ID、代次、排队数量和活动输入数量，不返回原始队列内容。消息分页只用当前页的来源 ID 查询关联 Task，按不超过 100 个来源 ID 分批；对外链接要求 sourceId、messageId 和版本精确匹配，归档 Task 可作为关联事实展示。 Resident 启动时接入 Task 服务的 `sourceTaskRefs` 查询；若出现 `observer_source_task_refs_unavailable`，应检查服务接线与安装包，不将关联查询失败当作空任务列表。
 - Router 回复的 `sourceId` 绑定业务来源及恢复身份；群通知可显式选择 `replyToMessageId`、`atOpenDingTalkIds` 和 `atAll`，按本轮同群完整已读来源校验。显式收件人且不填引用消息时发送普通 Markdown；引用作者必须在收件人中，全群通知与引用/成员提及互斥。三项全省略时保持来源定向回复；私聊禁止成员提及与全群通知。发送、投影、回读和原 ID 恢复使用同一持久路由，不将业务来源自动当作显式引用。
 - 首筛和 Router 在持久接纳前校验公开正文；同批 Task 动作不能先于非法回复落账。旧回复的原来源严格变为同群/同消息/同作者的更高版本时，可沿原准备与退役流程补账，ACK 后清除原失败；当前版本失败仍需精确重试，Task 动作及未知发送不借此自动重放。
 - Router 直接回信沿 Host 锁内审阅及持久通知链路执行。本轮隔离合成模型/Host 的分项结果及未完成项见[当前验收检查点](docs/acceptance/topic-routing-quality/goal.md)；真实 DWS 传输和真实模型语义未验证，本地结果不代表已发布、已部署或真实钉钉验收。
